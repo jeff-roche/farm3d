@@ -1,0 +1,51 @@
+// GENERATED FILE — do not edit by hand.
+// Regenerate with `npm run generate:theme` (see scripts/generate-m3-theme.ts).
+import type { Theme } from "../tokens/types";
+import { m3Typography } from "../tokens/typography";
+import { m3Shape } from "../tokens/shape";
+
+export const lightTheme: Theme = {
+  name: "material-light",
+  scheme: "light",
+  color: {
+    primary: "#47672f",
+    onPrimary: "#ffffff",
+    primaryContainer: "#c8eea8",
+    onPrimaryContainer: "#304f1a",
+    secondary: "#56624b",
+    onSecondary: "#ffffff",
+    secondaryContainer: "#dae7c9",
+    onSecondaryContainer: "#3f4a35",
+    tertiary: "#386665",
+    onTertiary: "#ffffff",
+    tertiaryContainer: "#bbecea",
+    onTertiaryContainer: "#1e4e4d",
+    error: "#ba1a1a",
+    onError: "#ffffff",
+    errorContainer: "#ffdad6",
+    onErrorContainer: "#93000a",
+    background: "#f9faef",
+    onBackground: "#191d16",
+    surface: "#f9faef",
+    onSurface: "#191d16",
+    surfaceVariant: "#e0e4d6",
+    onSurfaceVariant: "#44483e",
+    outline: "#74796d",
+    outlineVariant: "#c4c8bb",
+    shadow: "#000000",
+    scrim: "#000000",
+    inverseSurface: "#2e312a",
+    inverseOnSurface: "#f0f2e7",
+    inversePrimary: "#add28e",
+    surfaceDim: "#d9dbd1",
+    surfaceBright: "#f9faef",
+    surfaceContainerLowest: "#ffffff",
+    surfaceContainerLow: "#f3f5ea",
+    surfaceContainer: "#edefe4",
+    surfaceContainerHigh: "#e7e9de",
+    surfaceContainerHighest: "#e2e3d9",
+    surfaceTint: "#47672f",
+  },
+  typography: m3Typography,
+  shape: m3Shape,
+};

@@ -1,0 +1,51 @@
+// GENERATED FILE — do not edit by hand.
+// Regenerate with `npm run generate:theme` (see scripts/generate-m3-theme.ts).
+import type { Theme } from "../tokens/types";
+import { m3Typography } from "../tokens/typography";
+import { m3Shape } from "../tokens/shape";
+
+export const darkTheme: Theme = {
+  name: "material-dark",
+  scheme: "dark",
+  color: {
+    primary: "#add28e",
+    onPrimary: "#1a3705",
+    primaryContainer: "#304f1a",
+    onPrimaryContainer: "#c8eea8",
+    secondary: "#becbae",
+    onSecondary: "#293420",
+    secondaryContainer: "#3f4a35",
+    onSecondaryContainer: "#dae7c9",
+    tertiary: "#a0cfce",
+    onTertiary: "#003736",
+    tertiaryContainer: "#1e4e4d",
+    onTertiaryContainer: "#bbecea",
+    error: "#ffb4ab",
+    onError: "#690005",
+    errorContainer: "#93000a",
+    onErrorContainer: "#ffdad6",
+    background: "#11140e",
+    onBackground: "#e2e3d9",
+    surface: "#11140e",
+    onSurface: "#e2e3d9",
+    surfaceVariant: "#44483e",
+    onSurfaceVariant: "#c4c8bb",
+    outline: "#8e9286",
+    outlineVariant: "#44483e",
+    shadow: "#000000",
+    scrim: "#000000",
+    inverseSurface: "#e2e3d9",
+    inverseOnSurface: "#2e312a",
+    inversePrimary: "#47672f",
+    surfaceDim: "#11140e",
+    surfaceBright: "#373a33",
+    surfaceContainerLowest: "#0c0f09",
+    surfaceContainerLow: "#191d16",
+    surfaceContainer: "#1d211a",
+    surfaceContainerHigh: "#282b24",
+    surfaceContainerHighest: "#33362f",
+    surfaceTint: "#add28e",
+  },
+  typography: m3Typography,
+  shape: m3Shape,
+};
