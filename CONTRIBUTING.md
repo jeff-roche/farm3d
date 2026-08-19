@@ -5,21 +5,21 @@
 See [README.md](./README.md#prerequisites) for prerequisites, then:
 
 ```sh
-npm install
-npm run tauri dev
+just install
+just dev
 ```
 
 ## Before opening a PR
 
 ```sh
-npm run build   # type-checks and builds the frontend
-npm test        # runs the Vitest suite
+just build   # type-checks and builds the frontend
+just test    # runs the Vitest suite
 ```
 
 Both must pass. If you're on Linux and have a display available, also run
-`npm run tauri dev` and manually confirm the app still launches and behaves
-as expected — `npm run build`/`npm test` verify correctness, not that the
-app actually renders right.
+`just dev` and manually confirm the app still launches and behaves as
+expected — `just build`/`just test` verify correctness, not that the app
+actually renders right.
 
 ## Working on the design system
 
@@ -43,6 +43,12 @@ tokens for styling).
   hardcoded colors/sizes) so theme switching actually repaints the
   component. Reuse `components/shared.module.css` (`composes: x from
   "./shared.module.css"`) for cross-component basics like the focus ring.
+
+## Adding a script
+
+If you add a new npm script that contributors would run directly, add a
+matching recipe to the `justfile` too, so `just --list` stays the
+authoritative command list.
 
 ## Code style
 

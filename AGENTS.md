@@ -12,17 +12,21 @@ Frontend in `src/`, Rust backend in `src-tauri/`.
 
 ## Commands
 
+Prefer the `justfile` recipes (`just --list` for the full set); they're
+thin wrappers over the npm scripts, shown here for reference:
+
 ```sh
-npm run build   # tsc typecheck + vite build — run before considering frontend work done
-npm test        # vitest run — run before considering frontend work done
-npm run tauri dev  # full app with hot reload (needs a display)
-npm run dev        # frontend only, browser at localhost:1420 (no Tauri/Rust)
+just build   # (npm run build) tsc typecheck + vite build — run before considering frontend work done
+just test    # (npm test) vitest run — run before considering frontend work done
+just dev     # (npm run tauri dev) full app with hot reload (needs a display)
+just web     # (npm run dev) frontend only, browser at localhost:1420 (no Tauri/Rust)
 ```
 
 `cargo`/`rustc` are installed via rustup but **not on `PATH` in
 non-interactive shells** (`~/.bashrc` only sources `~/.cargo/env` when
-`$-` contains `i`). Prefix Rust-related commands with
-`source "$HOME/.cargo/env" &&` when running them via a non-interactive
+`$-` contains `i`) — this affects `just dev`/`just package` too, since they
+invoke `cargo` transitively via the Tauri CLI. Prefix Rust-related commands
+with `source "$HOME/.cargo/env" &&` when running them via a non-interactive
 shell/tool.
 
 ## Conventions
@@ -38,7 +42,9 @@ shell/tool.
   (`Component.module.css` next to `Component.tsx`). `styles.css` is only
   for the html/body-level base reset.
 - New design-system components: add to `components/index.ts` and to
-  `Showcase.tsx` (visible at `/#showcase` in `npm run dev`).
+  `Showcase.tsx` (visible at `/#showcase` in `just web`).
+- New npm script that a human/agent would run directly: add a matching
+  `just` recipe too.
 - Component tests use `@solidjs/testing-library`. Kobalte's `Select` and
   `DropdownMenu` triggers open on **`pointerdown`** (not `click`), and menu
   item selection fires on **`pointerup`** — use `fireEvent.pointerDown`/
@@ -51,7 +57,6 @@ shell/tool.
 
 ## Before claiming frontend work is done
 
-Run `npm run build` and `npm test`; both must pass. If a display is
-available, also launch `npm run tauri dev` and visually confirm — a
-passing build/test suite does not guarantee the UI actually renders
-correctly.
+Run `just build` and `just test`; both must pass. If a display is
+available, also launch `just dev` and visually confirm — a passing
+build/test suite does not guarantee the UI actually renders correctly.

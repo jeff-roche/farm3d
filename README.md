@@ -6,24 +6,28 @@ A 3D farm simulation/tool built on [Tauri](https://tauri.app) (Rust) with a [Sol
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable, via `rustup`)
 - Node.js + npm
+- [`just`](https://github.com/casey/just) (a command runner — recipes below)
 - Linux system deps for Tauri (Arch/CachyOS): `webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module gtk3 libappindicator-gtk3 librsvg patchelf`. See [Tauri's prerequisites guide](https://tauri.app/start/prerequisites/) for other platforms.
 
 ## Getting started
 
 ```sh
-npm install
-npm run tauri dev   # launches the app with hot reload
+just install
+just dev   # launches the app with hot reload
 ```
 
-## Scripts
+## Commands
 
-| Command | Description |
-| --- | --- |
-| `npm run tauri dev` | Run the full desktop app (Rust + frontend) with hot reload |
-| `npm run dev` | Run just the frontend in a browser at `localhost:1420` (no Tauri/Rust) |
-| `npm run build` | Type-check and build the frontend for production |
-| `npm run tauri build` | Build the distributable desktop app |
-| `npm test` | Run the frontend test suite (Vitest) |
+Run `just` with no argument to list recipes. Each wraps the equivalent npm script (shown for reference):
+
+| Command | npm equivalent | Description |
+| --- | --- | --- |
+| `just install` | `npm install` | Install frontend dependencies |
+| `just dev` | `npm run tauri dev` | Run the full desktop app (Rust + frontend) with hot reload |
+| `just web` | `npm run dev` | Run just the frontend in a browser at `localhost:1420` (no Tauri/Rust) |
+| `just build` | `npm run build` | Type-check and build the frontend for production |
+| `just package` | `npm run tauri build` | Build the distributable desktop app |
+| `just test` | `npm test` | Run the frontend test suite (Vitest) |
 
 ## Project structure
 
@@ -40,8 +44,8 @@ src-tauri/               Rust backend (Tauri)
 The UI is built on a custom pluggable theming system and a small component
 library backed by [Kobalte](https://kobalte.dev/). See
 [DESIGN.md](./DESIGN.md) for the architecture, and visit `/#showcase` in dev
-mode (`npm run dev`, then open `http://localhost:1420/#showcase`) to see
-every component and its states.
+mode (`just web`, then open `http://localhost:1420/#showcase`) to see every
+component and its states.
 
 ## Contributing
 
