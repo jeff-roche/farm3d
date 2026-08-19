@@ -1,87 +1,73 @@
-/** Material Design 3 color roles, as hex strings (e.g. "#3c6e35"). */
+/** A small, editor-style color palette (~19 roles), as hex strings (e.g. "#4c7a2a"). */
 export interface ColorRoles {
-  primary: string;
-  onPrimary: string;
-  primaryContainer: string;
-  onPrimaryContainer: string;
-  secondary: string;
-  onSecondary: string;
-  secondaryContainer: string;
-  onSecondaryContainer: string;
-  tertiary: string;
-  onTertiary: string;
-  tertiaryContainer: string;
-  onTertiaryContainer: string;
-  error: string;
-  onError: string;
-  errorContainer: string;
-  onErrorContainer: string;
-  background: string;
-  onBackground: string;
+  /** Outermost app background, behind panels. */
+  bg: string;
+  /** Base panel/card background. */
   surface: string;
-  onSurface: string;
-  surfaceVariant: string;
-  onSurfaceVariant: string;
-  outline: string;
-  outlineVariant: string;
-  shadow: string;
-  scrim: string;
-  inverseSurface: string;
-  inverseOnSurface: string;
-  inversePrimary: string;
-  surfaceDim: string;
-  surfaceBright: string;
-  surfaceContainerLowest: string;
-  surfaceContainerLow: string;
-  surfaceContainer: string;
-  surfaceContainerHigh: string;
-  surfaceContainerHighest: string;
-  surfaceTint: string;
+  /** Dialog/popover/dropdown/menu background. */
+  surfaceRaised: string;
+  /** Hover background for interactive rows/items. */
+  surfaceHover: string;
+  /** Selected/pressed background for interactive rows/items. */
+  surfaceSelected: string;
+
+  /** Subtle dividers/panel outlines. */
+  border: string;
+  /** More visible border, e.g. default input border. */
+  borderStrong: string;
+
+  text: string;
+  textMuted: string;
+  textDisabled: string;
+
+  accent: string;
+  /** Text/icon color atop an accent-filled surface. */
+  onAccent: string;
+  /** Subtle accent background, e.g. hover on an accent button. */
+  accentMuted: string;
+
+  danger: string;
+  onDanger: string;
+  warning: string;
+  onWarning: string;
+  success: string;
+  onSuccess: string;
+
+  /** Keyboard-focus outline color. */
+  focusRing: string;
 }
 
 export interface TypeStyle {
   fontFamily: string;
   fontWeight: number;
-  /** CSS length, e.g. "2.25rem". */
+  /** CSS length, e.g. "0.875rem". */
   fontSize: string;
-  /** CSS length, e.g. "2.75rem". */
+  /** CSS length, e.g. "1.25rem". */
   lineHeight: string;
   /** CSS length, e.g. "0em". */
   letterSpacing: string;
 }
 
-/** The M3 type scale: 5 roles (display/headline/title/body/label) x 3 sizes. */
+/** A lean type scale: panel headers, body text, help text, form labels, and numeric readouts. */
 export interface TypographyScale {
-  displayLarge: TypeStyle;
-  displayMedium: TypeStyle;
-  displaySmall: TypeStyle;
-  headlineLarge: TypeStyle;
-  headlineMedium: TypeStyle;
-  headlineSmall: TypeStyle;
-  titleLarge: TypeStyle;
-  titleMedium: TypeStyle;
-  titleSmall: TypeStyle;
-  bodyLarge: TypeStyle;
-  bodyMedium: TypeStyle;
+  heading: TypeStyle;
+  body: TypeStyle;
   bodySmall: TypeStyle;
-  labelLarge: TypeStyle;
-  labelMedium: TypeStyle;
-  labelSmall: TypeStyle;
+  label: TypeStyle;
+  /** Monospace, for coordinate/transform/property value readouts. */
+  mono: TypeStyle;
 }
 
-/** The M3 corner-radius scale, as CSS length strings. */
+/** A lean corner-radius scale, as CSS length strings. */
 export interface ShapeScale {
   none: string;
-  extraSmall: string;
-  small: string;
-  medium: string;
-  large: string;
-  extraLarge: string;
+  sm: string;
+  md: string;
   full: string;
 }
 
 export interface Theme {
-  /** Unique registry key, e.g. "material-light". */
+  /** Unique registry key, e.g. "editor-light". */
   name: string;
   /** Whether this theme is meant for light or dark surfaces; used to pick a theme for 'system' mode. */
   scheme: "light" | "dark";

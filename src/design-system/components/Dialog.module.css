@@ -1,0 +1,55 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgb(0 0 0 / 0.5);
+  z-index: 40;
+}
+
+.content {
+  composes: focusRing from "./shared.module.css";
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 20rem;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow: auto;
+  padding: 1rem;
+  border-radius: var(--f3d-radius-md);
+  border: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface-raised);
+  z-index: 41;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  color: var(--f3d-color-text);
+}
+
+.description {
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.closeButton {
+  composes: focusRing from "./shared.module.css";
+  composes: resetButton from "./shared.module.css";
+  display: inline-flex;
+  color: var(--f3d-color-text-muted);
+}
+.closeButton:hover {
+  color: var(--f3d-color-text);
+}

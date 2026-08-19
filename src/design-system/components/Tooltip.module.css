@@ -1,0 +1,10 @@
+.content {
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  border: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface-raised);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  z-index: 50;
+}

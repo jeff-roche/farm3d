@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "./tokens/types";
-import { m3Typography } from "./tokens/typography";
-import { m3Shape } from "./tokens/shape";
+import { editorTypography } from "./tokens/typography";
+import { editorShape } from "./tokens/shape";
 
 /** Minimal mock of matchMedia('(prefers-color-scheme: dark)') that supports firing 'change'. */
 function mockMatchMedia(initialDark: boolean) {
@@ -27,51 +27,34 @@ function mockMatchMedia(initialDark: boolean) {
   };
 }
 
-function makeTheme(name: string, scheme: "light" | "dark", primary: string): Theme {
+function makeTheme(name: string, scheme: "light" | "dark", accent: string): Theme {
   return {
     name,
     scheme,
     color: {
-      primary,
-      onPrimary: "#000000",
-      primaryContainer: "#000000",
-      onPrimaryContainer: "#000000",
-      secondary: "#000000",
-      onSecondary: "#000000",
-      secondaryContainer: "#000000",
-      onSecondaryContainer: "#000000",
-      tertiary: "#000000",
-      onTertiary: "#000000",
-      tertiaryContainer: "#000000",
-      onTertiaryContainer: "#000000",
-      error: "#000000",
-      onError: "#000000",
-      errorContainer: "#000000",
-      onErrorContainer: "#000000",
-      background: "#000000",
-      onBackground: "#000000",
+      bg: "#000000",
       surface: "#000000",
-      onSurface: "#000000",
-      surfaceVariant: "#000000",
-      onSurfaceVariant: "#000000",
-      outline: "#000000",
-      outlineVariant: "#000000",
-      shadow: "#000000",
-      scrim: "#000000",
-      inverseSurface: "#000000",
-      inverseOnSurface: "#000000",
-      inversePrimary: "#000000",
-      surfaceDim: "#000000",
-      surfaceBright: "#000000",
-      surfaceContainerLowest: "#000000",
-      surfaceContainerLow: "#000000",
-      surfaceContainer: "#000000",
-      surfaceContainerHigh: "#000000",
-      surfaceContainerHighest: "#000000",
-      surfaceTint: "#000000",
+      surfaceRaised: "#000000",
+      surfaceHover: "#000000",
+      surfaceSelected: "#000000",
+      border: "#000000",
+      borderStrong: "#000000",
+      text: "#000000",
+      textMuted: "#000000",
+      textDisabled: "#000000",
+      accent,
+      onAccent: "#000000",
+      accentMuted: "#000000",
+      danger: "#000000",
+      onDanger: "#000000",
+      warning: "#000000",
+      onWarning: "#000000",
+      success: "#000000",
+      onSuccess: "#000000",
+      focusRing: "#000000",
     },
-    typography: m3Typography,
-    shape: m3Shape,
+    typography: editorTypography,
+    shape: editorShape,
   };
 }
 
@@ -92,7 +75,7 @@ describe("theme-engine", () => {
     mockMatchMedia(true);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("material-dark");
+    expect(getResolvedThemeName()).toBe("editor-dark");
     expect(document.documentElement.dataset.themeScheme).toBe("dark");
   });
 
@@ -100,7 +83,7 @@ describe("theme-engine", () => {
     mockMatchMedia(false);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("material-light");
+    expect(getResolvedThemeName()).toBe("editor-light");
     expect(document.documentElement.dataset.themeScheme).toBe("light");
   });
 
@@ -108,18 +91,18 @@ describe("theme-engine", () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    setThemeMode("material-dark");
-    expect(getResolvedThemeName()).toBe("material-dark");
-    expect(localStorage.getItem("farm3d.theme-mode")).toBe("material-dark");
-    expect(document.documentElement.style.getPropertyValue("--md-sys-color-primary")).not.toBe("");
+    setThemeMode("editor-dark");
+    expect(getResolvedThemeName()).toBe("editor-dark");
+    expect(localStorage.getItem("farm3d.theme-mode")).toBe("editor-dark");
+    expect(document.documentElement.style.getPropertyValue("--f3d-color-accent")).not.toBe("");
   });
 
   it("reads a persisted mode on init, overriding the current OS preference", async () => {
-    localStorage.setItem("farm3d.theme-mode", "material-dark");
+    localStorage.setItem("farm3d.theme-mode", "editor-dark");
     mockMatchMedia(false); // OS says light, but a dark mode was explicitly persisted
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("material-dark");
+    expect(getResolvedThemeName()).toBe("editor-dark");
   });
 
   it("lets a plugin register and activate a custom theme", async () => {
@@ -131,17 +114,17 @@ describe("theme-engine", () => {
     registerTheme(makeTheme("harvest", "dark", "#ff8800"));
     setThemeMode("harvest");
     expect(getResolvedThemeName()).toBe("harvest");
-    expect(document.documentElement.style.getPropertyValue("--md-sys-color-primary")).toBe(
+    expect(document.documentElement.style.getPropertyValue("--f3d-color-accent")).toBe(
       "#ff8800",
     );
   });
 
-  it("falls back to material-light for an unregistered theme name", async () => {
+  it("falls back to editor-light for an unregistered theme name", async () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
     setThemeMode("does-not-exist");
-    expect(getResolvedThemeName()).toBe("material-light");
+    expect(getResolvedThemeName()).toBe("editor-light");
   });
 
   it("notifies subscribers when the OS preference changes in 'system' mode", async () => {
@@ -153,18 +136,18 @@ describe("theme-engine", () => {
 
     media.setDark(true);
 
-    expect(getResolvedThemeName()).toBe("material-dark");
-    expect(seen).toEqual(["material-dark"]);
+    expect(getResolvedThemeName()).toBe("editor-dark");
+    expect(seen).toEqual(["editor-dark"]);
   });
 
   it("ignores OS preference changes once an explicit mode is set", async () => {
     const media = mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    setThemeMode("material-light");
+    setThemeMode("editor-light");
 
     media.setDark(true);
 
-    expect(getResolvedThemeName()).toBe("material-light");
+    expect(getResolvedThemeName()).toBe("editor-light");
   });
 });

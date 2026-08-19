@@ -1,12 +1,9 @@
 import type { ShapeScale } from "./types";
 
-/** The M3 corner-radius scale (https://m3.material.io/styles/shape/shape-scale-tokens). */
-export const m3Shape: ShapeScale = {
+/** Small, mostly-square corner radii, in the spirit of editor/tool UIs (Blender, Godot, Unity). */
+export const editorShape: ShapeScale = {
   none: "0px",
-  extraSmall: "4px",
-  small: "8px",
-  medium: "12px",
-  large: "16px",
-  extraLarge: "28px",
+  sm: "2px",
+  md: "4px",
   full: "9999px",
 };

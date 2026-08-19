@@ -1,51 +1,38 @@
-// GENERATED FILE — do not edit by hand.
-// Regenerate with `npm run generate:theme` (see scripts/generate-m3-theme.ts).
 import type { Theme } from "../tokens/types";
-import { m3Typography } from "../tokens/typography";
-import { m3Shape } from "../tokens/shape";
+import { editorTypography } from "../tokens/typography";
+import { editorShape } from "../tokens/shape";
 
+/** The light counterpart to darkTheme — same editor aesthetic and farm-green accent. */
 export const lightTheme: Theme = {
-  name: "material-light",
+  name: "editor-light",
   scheme: "light",
   color: {
-    primary: "#47672f",
-    onPrimary: "#ffffff",
-    primaryContainer: "#c8eea8",
-    onPrimaryContainer: "#304f1a",
-    secondary: "#56624b",
-    onSecondary: "#ffffff",
-    secondaryContainer: "#dae7c9",
-    onSecondaryContainer: "#3f4a35",
-    tertiary: "#386665",
-    onTertiary: "#ffffff",
-    tertiaryContainer: "#bbecea",
-    onTertiaryContainer: "#1e4e4d",
-    error: "#ba1a1a",
-    onError: "#ffffff",
-    errorContainer: "#ffdad6",
-    onErrorContainer: "#93000a",
-    background: "#f9faef",
-    onBackground: "#191d16",
-    surface: "#f9faef",
-    onSurface: "#191d16",
-    surfaceVariant: "#e0e4d6",
-    onSurfaceVariant: "#44483e",
-    outline: "#74796d",
-    outlineVariant: "#c4c8bb",
-    shadow: "#000000",
-    scrim: "#000000",
-    inverseSurface: "#2e312a",
-    inverseOnSurface: "#f0f2e7",
-    inversePrimary: "#add28e",
-    surfaceDim: "#d9dbd1",
-    surfaceBright: "#f9faef",
-    surfaceContainerLowest: "#ffffff",
-    surfaceContainerLow: "#f3f5ea",
-    surfaceContainer: "#edefe4",
-    surfaceContainerHigh: "#e7e9de",
-    surfaceContainerHighest: "#e2e3d9",
-    surfaceTint: "#47672f",
+    bg: "#eef0ea",
+    surface: "#f7f8f4",
+    surfaceRaised: "#ffffff",
+    surfaceHover: "#eceee7",
+    surfaceSelected: "#ddebd2",
+
+    border: "#d7dad0",
+    borderStrong: "#b7bcae",
+
+    text: "#1b1e18",
+    textMuted: "#5b5f56",
+    textDisabled: "#9a9e93",
+
+    accent: "#47672f",
+    onAccent: "#ffffff",
+    accentMuted: "#e2ecd7",
+
+    danger: "#c22a2a",
+    onDanger: "#ffffff",
+    warning: "#a3690a",
+    onWarning: "#ffffff",
+    success: "#2f7d52",
+    onSuccess: "#ffffff",
+
+    focusRing: "#47672f",
   },
-  typography: m3Typography,
-  shape: m3Shape,
+  typography: editorTypography,
+  shape: editorShape,
 };

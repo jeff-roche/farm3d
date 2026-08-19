@@ -1,0 +1,21 @@
+.focusRing {
+  outline: none;
+}
+.focusRing:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.resetButton {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.resetButton:disabled {
+  cursor: not-allowed;
+}

@@ -1,51 +1,41 @@
-// GENERATED FILE — do not edit by hand.
-// Regenerate with `npm run generate:theme` (see scripts/generate-m3-theme.ts).
 import type { Theme } from "../tokens/types";
-import { m3Typography } from "../tokens/typography";
-import { m3Shape } from "../tokens/shape";
+import { editorTypography } from "../tokens/typography";
+import { editorShape } from "../tokens/shape";
 
+/**
+ * The default dark theme — an editor/tool aesthetic (Blender/Godot/Unity-inspired)
+ * rather than a consumer-app one: flat, dense, neutral grays with a farm-green accent.
+ */
 export const darkTheme: Theme = {
-  name: "material-dark",
+  name: "editor-dark",
   scheme: "dark",
   color: {
-    primary: "#add28e",
-    onPrimary: "#1a3705",
-    primaryContainer: "#304f1a",
-    onPrimaryContainer: "#c8eea8",
-    secondary: "#becbae",
-    onSecondary: "#293420",
-    secondaryContainer: "#3f4a35",
-    onSecondaryContainer: "#dae7c9",
-    tertiary: "#a0cfce",
-    onTertiary: "#003736",
-    tertiaryContainer: "#1e4e4d",
-    onTertiaryContainer: "#bbecea",
-    error: "#ffb4ab",
-    onError: "#690005",
-    errorContainer: "#93000a",
-    onErrorContainer: "#ffdad6",
-    background: "#11140e",
-    onBackground: "#e2e3d9",
-    surface: "#11140e",
-    onSurface: "#e2e3d9",
-    surfaceVariant: "#44483e",
-    onSurfaceVariant: "#c4c8bb",
-    outline: "#8e9286",
-    outlineVariant: "#44483e",
-    shadow: "#000000",
-    scrim: "#000000",
-    inverseSurface: "#e2e3d9",
-    inverseOnSurface: "#2e312a",
-    inversePrimary: "#47672f",
-    surfaceDim: "#11140e",
-    surfaceBright: "#373a33",
-    surfaceContainerLowest: "#0c0f09",
-    surfaceContainerLow: "#191d16",
-    surfaceContainer: "#1d211a",
-    surfaceContainerHigh: "#282b24",
-    surfaceContainerHighest: "#33362f",
-    surfaceTint: "#add28e",
+    bg: "#17181a",
+    surface: "#1e2023",
+    surfaceRaised: "#262a2e",
+    surfaceHover: "#2c3034",
+    surfaceSelected: "#2f3d24",
+
+    border: "#34383c",
+    borderStrong: "#45494e",
+
+    text: "#e8e6e0",
+    textMuted: "#9a9d98",
+    textDisabled: "#5c5f5b",
+
+    accent: "#8fc46b",
+    onAccent: "#14210b",
+    accentMuted: "#24361b",
+
+    danger: "#e5484d",
+    onDanger: "#ffffff",
+    warning: "#e2a336",
+    onWarning: "#2a1c02",
+    success: "#3fb37f",
+    onSuccess: "#062015",
+
+    focusRing: "#8fc46b",
   },
-  typography: m3Typography,
-  shape: m3Shape,
+  typography: editorTypography,
+  shape: editorShape,
 };

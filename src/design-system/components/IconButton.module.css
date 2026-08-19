@@ -1,0 +1,31 @@
+.button {
+  composes: focusRing from "./shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--f3d-radius-sm);
+  border: 1px solid transparent;
+  background-color: transparent;
+  color: var(--f3d-color-text);
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.button[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.button:not([data-disabled]):hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+.button:not([data-disabled]):active {
+  background-color: var(--f3d-color-surface-selected);
+}
+
+.active {
+  background-color: var(--f3d-color-accent-muted);
+  color: var(--f3d-color-accent);
+}

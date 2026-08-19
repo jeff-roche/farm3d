@@ -5,4 +5,11 @@ import "./styles.css";
 
 initTheme();
 
-render(() => <App />, document.getElementById("root") as HTMLElement);
+const root = document.getElementById("root") as HTMLElement;
+
+if (import.meta.env.DEV && window.location.hash === "#showcase") {
+  const { Showcase } = await import("./design-system/Showcase");
+  render(() => <Showcase />, root);
+} else {
+  render(() => <App />, root);
+}

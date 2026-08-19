@@ -12,11 +12,11 @@ const listeners = new Set<(resolvedThemeName: string) => void>();
 
 function typeStyleToCssVars(kebabRole: string, style: TypeStyle): [string, string][] {
   return [
-    [`--md-sys-typescale-${kebabRole}-font`, style.fontFamily],
-    [`--md-sys-typescale-${kebabRole}-weight`, String(style.fontWeight)],
-    [`--md-sys-typescale-${kebabRole}-size`, style.fontSize],
-    [`--md-sys-typescale-${kebabRole}-line-height`, style.lineHeight],
-    [`--md-sys-typescale-${kebabRole}-tracking`, style.letterSpacing],
+    [`--f3d-type-${kebabRole}-font`, style.fontFamily],
+    [`--f3d-type-${kebabRole}-weight`, String(style.fontWeight)],
+    [`--f3d-type-${kebabRole}-size`, style.fontSize],
+    [`--f3d-type-${kebabRole}-line-height`, style.lineHeight],
+    [`--f3d-type-${kebabRole}-tracking`, style.letterSpacing],
   ];
 }
 
@@ -39,7 +39,7 @@ function prefersDark(): boolean {
 
 function resolveTheme(mode: ThemeMode): Theme {
   if (mode === "system") {
-    const fallback = prefersDark() ? "material-dark" : "material-light";
+    const fallback = prefersDark() ? "editor-dark" : "editor-light";
     return registry.get(fallback) ?? lightTheme;
   }
   return registry.get(mode) ?? lightTheme;
@@ -52,7 +52,7 @@ function applyTheme(theme: Theme): void {
     keyof ColorRoles,
     string,
   ][]) {
-    root.style.setProperty(`--md-sys-color-${camelToKebab(role)}`, value);
+    root.style.setProperty(`--f3d-color-${camelToKebab(role)}`, value);
   }
 
   for (const [role, style] of Object.entries(theme.typography)) {
@@ -62,7 +62,7 @@ function applyTheme(theme: Theme): void {
   }
 
   for (const [role, value] of Object.entries(theme.shape)) {
-    root.style.setProperty(`--md-sys-shape-corner-${camelToKebab(role)}`, value);
+    root.style.setProperty(`--f3d-radius-${camelToKebab(role)}`, value);
   }
 
   root.dataset.themeScheme = theme.scheme;

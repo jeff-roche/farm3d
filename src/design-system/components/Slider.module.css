@@ -1,0 +1,55 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.labelRow {
+  display: flex;
+  justify-content: space-between;
+}
+
+.label {
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.valueLabel {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.track {
+  position: relative;
+  height: 3px;
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-border-strong);
+}
+
+.fill {
+  position: absolute;
+  height: 100%;
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-accent);
+}
+
+.thumb {
+  composes: focusRing from "./shared.module.css";
+  position: absolute;
+  top: 50%;
+  width: 0.75rem;
+  height: 0.75rem;
+  transform: translate(-50%, -50%);
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-accent);
+  border: 2px solid var(--f3d-color-on-accent);
+  cursor: grab;
+}
+
+.thumb[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

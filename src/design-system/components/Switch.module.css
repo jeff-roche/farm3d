@@ -1,0 +1,48 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.control {
+  composes: focusRing from "./shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  width: 1.75rem;
+  height: 1rem;
+  padding: 0.125rem;
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-surface-raised);
+  border: 1px solid var(--f3d-color-border-strong);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.control[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.control[data-checked] {
+  background-color: var(--f3d-color-accent);
+  border-color: var(--f3d-color-accent);
+}
+
+.thumb {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-text);
+  transition: transform 0.12s;
+}
+
+.control[data-checked] .thumb {
+  background-color: var(--f3d-color-on-accent);
+  transform: translateX(0.75rem);
+}
+
+.label {
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text);
+}

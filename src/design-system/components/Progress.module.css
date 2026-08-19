@@ -1,0 +1,50 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.labelRow {
+  display: flex;
+  justify-content: space-between;
+}
+
+.label {
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.valueLabel {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.track {
+  height: 4px;
+  border-radius: var(--f3d-radius-full);
+  background-color: var(--f3d-color-surface-raised);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  background-color: var(--f3d-color-accent);
+  transition: width 0.15s;
+}
+
+.track[data-indeterminate] .fill {
+  width: 40% !important;
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}

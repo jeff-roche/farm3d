@@ -6,14 +6,22 @@
   filter: drop-shadow(0 0 2em #2d79c7);
 }
 
-:root {
-  font-family: var(--md-sys-typescale-body-large-font);
-  font-size: var(--md-sys-typescale-body-large-size);
-  line-height: var(--md-sys-typescale-body-large-line-height);
-  font-weight: var(--md-sys-typescale-body-large-weight);
+.logo.tauri:hover {
+  filter: drop-shadow(0 0 2em #24c8db);
+}
 
-  color: var(--md-sys-color-on-surface);
-  background-color: var(--md-sys-color-surface);
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  line-height: var(--f3d-type-body-line-height);
+  font-weight: var(--f3d-type-body-weight);
+
+  color: var(--f3d-color-text);
+  background-color: var(--f3d-color-bg);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -24,84 +32,10 @@
   transition: background-color 0.2s, color 0.2s;
 }
 
-.container {
+body {
   margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-  gap: 0.5em;
-  align-items: center;
-}
-
-.theme-switcher {
-  align-self: center;
-  font: var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-sys-typescale-label-large-font);
 }
 
 a {
-  font-weight: 500;
-  color: var(--md-sys-color-primary);
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: var(--md-sys-color-tertiary);
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button,
-select {
-  border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid var(--md-sys-color-outline);
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: var(--md-sys-color-on-surface);
-  background-color: var(--md-sys-color-surface-container);
-  transition: border-color 0.25s, background-color 0.2s, color 0.2s;
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--md-sys-color-primary);
-}
-button:active {
-  border-color: var(--md-sys-color-primary);
-  background-color: var(--md-sys-color-surface-container-high);
-}
-
-input,
-button,
-select {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
+  color: var(--f3d-color-accent);
 }

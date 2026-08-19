@@ -1,0 +1,71 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.label {
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+}
+
+.trigger {
+  composes: focusRing from "./shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  border: 1px solid var(--f3d-color-border-strong);
+  background-color: var(--f3d-color-surface-raised);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  cursor: pointer;
+}
+
+.trigger[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.content {
+  min-width: var(--kb-select-trigger-width);
+  border-radius: var(--f3d-radius-md);
+  border: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface-raised);
+  overflow: hidden;
+  z-index: 50;
+}
+
+.listbox {
+  padding: 0.25rem;
+  overflow-y: auto;
+  max-height: 16rem;
+}
+
+.item {
+  composes: focusRing from "./shared.module.css";
+  display: flex;
+  align-items: center;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  cursor: pointer;
+}
+
+.item[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.item[data-highlighted] {
+  background-color: var(--f3d-color-surface-hover);
+}

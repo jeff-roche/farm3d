@@ -1,0 +1,41 @@
+.chip {
+  composes: focusRing from "./shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.375rem;
+  padding: 0 0.5rem;
+  border-radius: var(--f3d-radius-full);
+  border: 1px solid var(--f3d-color-border-strong);
+  background-color: var(--f3d-color-surface-raised);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.chip[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chip:not([data-disabled]):hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.chip[data-pressed] {
+  background-color: var(--f3d-color-accent-muted);
+  border-color: var(--f3d-color-accent);
+  color: var(--f3d-color-accent);
+}
+
+.remove {
+  composes: resetButton from "./shared.module.css";
+  display: inline-flex;
+  border-radius: var(--f3d-radius-full);
+  padding: 0.0625rem;
+}
+.remove:hover {
+  background-color: var(--f3d-color-surface-selected);
+}
