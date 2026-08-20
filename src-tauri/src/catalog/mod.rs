@@ -66,6 +66,44 @@ pub fn load_snapshot(path: &Path) -> Result<Catalog, String> {
     serde_json::from_str(&contents).map_err(|e| e.to_string())
 }
 
+/// The fully-resolved capability set for one Printer instance — every field
+/// present, whether inherited from the catalog or overridden. Distinct from
+/// `CatalogVariant`, which additionally carries `variant`/`printer_variant`
+/// identity fields that describe the catalog entry, not a resolved instance.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PrinterProfile {
+    pub bed_shape: BedShape,
+    pub printable_height_mm: f64,
+    pub bed_exclude_areas: Vec<PointMm>,
+    pub default_bed_type: String,
+    pub nozzle_diameter_mm: Vec<f64>,
+    pub nozzle_type: String,
+    pub gcode_flavor: String,
+    pub has_auxiliary_fan: bool,
+    pub supports_air_filtration: bool,
+    pub supports_multi_filament: bool,
+    pub suggested_host_type: Option<String>,
+}
+
+impl From<&CatalogVariant> for PrinterProfile {
+    fn from(v: &CatalogVariant) -> Self {
+        Self {
+            bed_shape: v.bed_shape.clone(),
+            printable_height_mm: v.printable_height_mm,
+            bed_exclude_areas: v.bed_exclude_areas.clone(),
+            default_bed_type: v.default_bed_type.clone(),
+            nozzle_diameter_mm: v.nozzle_diameter_mm.clone(),
+            nozzle_type: v.nozzle_type.clone(),
+            gcode_flavor: v.gcode_flavor.clone(),
+            has_auxiliary_fan: v.has_auxiliary_fan,
+            supports_air_filtration: v.supports_air_filtration,
+            supports_multi_filament: v.supports_multi_filament,
+            suggested_host_type: v.suggested_host_type.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;

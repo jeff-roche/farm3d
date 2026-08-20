@@ -1,4 +1,5 @@
 pub mod catalog;
+mod printers;
 mod settings;
 
 use settings::{load_settings, open_settings_file, save_settings};
