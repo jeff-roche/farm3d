@@ -14,6 +14,7 @@ import { DropdownMenu } from "./DropdownMenu";
 import { Chip } from "./Chip";
 import { Logo } from "./Logo";
 import { NumberField } from "./NumberField";
+import { Field } from "./Field";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -289,5 +290,33 @@ describe("DropdownMenu", () => {
     await fireEvent.pointerUp(item, { button: 0 });
 
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Field", () => {
+  it("renders no revert control when not overridden", () => {
+    render(() => <Field label="Printable height">240</Field>);
+    expect(screen.queryByLabelText(/Revert/)).not.toBeInTheDocument();
+  });
+
+  it("renders a revert control when overridden and calls onRevert when clicked", async () => {
+    const onRevert = vi.fn();
+    render(() => (
+      <Field label="Printable height" overridden onRevert={onRevert}>
+        240
+      </Field>
+    ));
+    const revert = screen.getByLabelText("Revert Printable height to inherited");
+    await fireEvent.click(revert);
+    expect(onRevert).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the hint text when not overridden", () => {
+    render(() => (
+      <Field label="Printable height" hint="inherited: 256">
+        240
+      </Field>
+    ));
+    expect(screen.getByText("inherited: 256")).toBeInTheDocument();
   });
 });

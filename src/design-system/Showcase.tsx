@@ -20,6 +20,7 @@ import {
   Progress,
   Logo,
   NumberField,
+  Field,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -167,6 +168,15 @@ export function Showcase() {
           value={numberValue()}
           onChange={setNumberValue}
         />
+      </Panel>
+
+      <Panel title="Field">
+        <div class={styles.row}>
+          <Field label="Printable height">256 mm</Field>
+          <Field label="Printable height" overridden onRevert={() => {}} hint="inherited: 256">
+            240 mm
+          </Field>
+        </div>
       </Panel>
 
       <Panel title="Tabs">

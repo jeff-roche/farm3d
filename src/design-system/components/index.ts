@@ -1,6 +1,7 @@
 export { Button, type ButtonProps } from "./Button";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export { Panel, type PanelProps } from "./Panel";
+export { Field, type FieldProps } from "./Field";
 export { Chip, type ChipProps } from "./Chip";
 export { TextField, type TextFieldProps } from "./TextField";
 export { Select, type SelectProps } from "./Select";
