@@ -48,16 +48,11 @@
 }
 
 .content {
-  /* Not composed from Select's .content: the min-width var below
-     (--kb-combobox-trigger-width) differs from Select's
-     (--kb-select-trigger-width), and composing would leave the composed
-     rule's min-width referencing an undefined var in this component's tree. */
+  composes: content from "./Select.module.css";
+  /* Kobalte's popper sets the popover's width via an inline style
+     (sameWidth: true), so this var is never actually read at runtime —
+     kept only for consistency with Select's equivalent (also inert) rule. */
   min-width: var(--kb-combobox-trigger-width);
-  border-radius: var(--f3d-radius-md);
-  border: 1px solid var(--f3d-color-border);
-  background-color: var(--f3d-color-surface-raised);
-  overflow: hidden;
-  z-index: 50;
 }
 
 .listbox {
