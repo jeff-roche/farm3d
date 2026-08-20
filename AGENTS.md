@@ -7,8 +7,13 @@ under `src/design-system/`.
 
 ## What this is
 
-A Tauri (Rust) + SolidJS (TypeScript) desktop app for 3D farm simulation.
-Frontend in `src/`, Rust backend in `src-tauri/`.
+A Tauri (Rust) + SolidJS (TypeScript) desktop app for managing a 3D-printer
+print farm — connecting to printers, slicing models, and organizing a model
+library. See [CONTEXT.md](./CONTEXT.md) for the domain vocabulary and
+`docs/adr/` for the decisions behind it (this was originally scaffolded
+around a literal-agriculture domain; that's been superseded — see
+`docs/adr/0001-print-farm-not-agriculture.md`). Frontend in `src/`, Rust
+backend in `src-tauri/`.
 
 ## Commands
 
@@ -76,5 +81,5 @@ Default five-label vocabulary (`needs-triage`, `needs-info`,
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (neither exists
-yet). See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
