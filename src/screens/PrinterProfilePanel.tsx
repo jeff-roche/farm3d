@@ -1,7 +1,7 @@
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, on, onCleanup, Show } from "solid-js";
 import { Button, Field, NumberField, Select, Switch } from "../design-system";
 import { overrideField, resolveDrift, revertField } from "../printers/printer-store";
-import type { OverridableField, ResolvedPrinter } from "../printers/types";
+import type { BedShape, OverridableField, ResolvedPrinter } from "../printers/types";
 import styles from "./PrinterProfilePanel.module.css";
 
 export interface PrinterProfilePanelProps {
@@ -14,13 +14,63 @@ function isOverridden(printer: ResolvedPrinter, field: OverridableField): boolea
   return printer.overriddenFields.includes(field);
 }
 
+type RectangularBedShape = Extract<BedShape, { kind: "rectangular" }>;
+
 export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
   let heightTimer: ReturnType<typeof setTimeout> | undefined;
   let bedShapeTimer: ReturnType<typeof setTimeout> | undefined;
+  // Accumulates in-flight bed-size edits (width/depth) so a second edit
+  // within the debounce window merges onto the first instead of re-reading
+  // a stale pre-edit `shape()` snapshot and silently dropping it.
+  let pendingBedShapePatch: Partial<Pick<RectangularBedShape, "widthMm" | "depthMm">> | undefined;
 
-  function debouncedOverride(field: OverridableField, value: unknown, timer: () => ReturnType<typeof setTimeout> | undefined, setTimer: (t: ReturnType<typeof setTimeout>) => void) {
+  // PrinterDashboard's outer <Show when={selected()}> is non-keyed, so
+  // switching the selected printer (a truthy -> truthy transition) does NOT
+  // remount this component -- Solid's <Show> only re-invokes its child on a
+  // falsy<->truthy transition. That means the `let` timer state above, and
+  // any debounced closure reading props.printer.id live, would otherwise
+  // persist across a printer switch: edit height on printer A, switch to
+  // printer B within the debounce window, and the pending write would fire
+  // against whichever printer is selected when the timer expires -- not
+  // the one being edited when it was scheduled. Cancel in-flight writes
+  // whenever the printer identity changes.
+  createEffect(on(
+    () => props.printer.id,
+    (_id, prevId) => {
+      if (prevId === undefined) return;
+      clearTimeout(heightTimer);
+      clearTimeout(bedShapeTimer);
+      heightTimer = undefined;
+      bedShapeTimer = undefined;
+      pendingBedShapePatch = undefined;
+    },
+  ));
+
+  onCleanup(() => {
+    clearTimeout(heightTimer);
+    clearTimeout(bedShapeTimer);
+  });
+
+  function debouncedOverride(
+    field: OverridableField,
+    value: unknown,
+    timer: () => ReturnType<typeof setTimeout> | undefined,
+    setTimer: (t: ReturnType<typeof setTimeout>) => void,
+  ) {
     clearTimeout(timer());
-    setTimer(setTimeout(() => void overrideField(props.printer.id, field, value), DEBOUNCE_MS));
+    const printerId = props.printer.id;
+    setTimer(setTimeout(() => void overrideField(printerId, field, value), DEBOUNCE_MS));
+  }
+
+  function debouncedBedShapeOverride(shape: RectangularBedShape, patch: Partial<Pick<RectangularBedShape, "widthMm" | "depthMm">>) {
+    pendingBedShapePatch = { ...pendingBedShapePatch, ...patch };
+    clearTimeout(bedShapeTimer);
+    const printerId = props.printer.id;
+    const value = { ...shape, ...pendingBedShapePatch };
+    bedShapeTimer = setTimeout(() => {
+      void overrideField(printerId, "bedShape", value);
+      pendingBedShapePatch = undefined;
+    }, DEBOUNCE_MS);
   }
 
   const rectShape = createMemo(() => {
@@ -85,24 +135,14 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
                 value={shape().widthMm}
                 suffix="mm"
                 minValue={1}
-                onChange={(v) =>
-                  debouncedOverride(
-                    "bedShape", { ...shape(), widthMm: v },
-                    () => bedShapeTimer, (t) => (bedShapeTimer = t),
-                  )
-                }
+                onChange={(v) => debouncedBedShapeOverride(shape(), { widthMm: v })}
               />
               <NumberField
                 aria-label="Bed depth"
                 value={shape().depthMm}
                 suffix="mm"
                 minValue={1}
-                onChange={(v) =>
-                  debouncedOverride(
-                    "bedShape", { ...shape(), depthMm: v },
-                    () => bedShapeTimer, (t) => (bedShapeTimer = t),
-                  )
-                }
+                onChange={(v) => debouncedBedShapeOverride(shape(), { depthMm: v })}
               />
             </div>
           </Field>

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { createSignal, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import type { ResolvedPrinter } from "../printers/types";
@@ -88,5 +89,64 @@ describe("PrinterProfilePanel", () => {
     render(() => <PrinterProfilePanel printer={drifted} />);
     await fireEvent.click(screen.getByText("Accept"));
     expect(resolveDrift).toHaveBeenCalledWith("prn-1", "accept");
+  });
+
+  it("cancels a pending debounced edit when the printer switches under a non-keyed Show", async () => {
+    // Mirrors PrinterDashboard.tsx's actual `<Show when={selected()}>{(printer) => (...)}</Show>`
+    // pattern: a truthy->truthy change of `selected()` does NOT remount the
+    // child, so this exercises the same non-remounting path production code
+    // takes (unlike calling `render()` again, which would remount and fail
+    // to reproduce the bug).
+    vi.useFakeTimers();
+    // Distinct printableHeightMm (300) so any call carrying it is unambiguously
+    // B's own current value, never confusable with A's typed-but-uncommitted 240.
+    const printerB: ResolvedPrinter = {
+      ...PRINTER,
+      id: "prn-2",
+      profile: { ...PRINTER.profile, printableHeightMm: 300 },
+    };
+    const [selected, setSelected] = createSignal<ResolvedPrinter>(PRINTER);
+
+    render(() => (
+      <Show when={selected()}>{(printer) => <PrinterProfilePanel printer={printer()} />}</Show>
+    ));
+
+    const input = screen.getByLabelText("Printable height") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "240" } });
+    expect(overrideField).not.toHaveBeenCalled();
+
+    setSelected(printerB);
+    vi.advanceTimersByTime(300);
+
+    // The critical corruption this guards against: A's in-flight edit (240)
+    // must never be committed against B's id (Kobalte's controlled NumberField
+    // does independently resync-fire onChange with B's *own* unedited value
+    // when the identity of the `rawValue` prop's source changes -- that's a
+    // separate, harmless, idempotent quirk unrelated to this bug, so it's not
+    // asserted against here).
+    expect(overrideField).not.toHaveBeenCalledWith("prn-2", "printableHeightMm", 240);
+    expect(overrideField).not.toHaveBeenCalledWith("prn-1", "printableHeightMm", 240);
+  });
+
+  it("merges width and depth edits made within the same debounce window", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterProfilePanel printer={PRINTER} />);
+
+    const width = screen.getByLabelText("Bed width") as HTMLInputElement;
+    const depth = screen.getByLabelText("Bed depth") as HTMLInputElement;
+
+    await fireEvent.input(width, { target: { value: "300" } });
+    await fireEvent.input(depth, { target: { value: "310" } });
+    expect(overrideField).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+
+    const bedShapeCalls = overrideField.mock.calls.filter(([, field]) => field === "bedShape");
+    expect(bedShapeCalls).toHaveLength(1);
+    expect(bedShapeCalls[0]).toEqual([
+      "prn-1",
+      "bedShape",
+      { kind: "rectangular", widthMm: 300, depthMm: 310, originXMm: 0, originYMm: 0 },
+    ]);
   });
 });
