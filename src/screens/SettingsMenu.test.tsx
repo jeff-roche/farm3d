@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe("SettingsMenu", () => {
-  it("lists theme options and an 'Open settings file' action", async () => {
+  it("shows a 'Theme...' item and an 'Open settings file' action", async () => {
     render(() => <SettingsMenu />);
 
     await fireEvent.pointerDown(screen.getByLabelText("Settings"), {
@@ -15,9 +15,23 @@ describe("SettingsMenu", () => {
       button: 0,
     });
 
+    expect(await screen.findByText("Theme...")).toBeInTheDocument();
+    expect(screen.getByText("Open settings file")).toBeInTheDocument();
+  });
+
+  it("opens the theme popover with theme options when 'Theme...' is selected", async () => {
+    render(() => <SettingsMenu />);
+
+    await fireEvent.pointerDown(screen.getByLabelText("Settings"), {
+      pointerType: "mouse",
+      button: 0,
+    });
+    const themeItem = await screen.findByText("Theme...");
+    await fireEvent.pointerUp(themeItem, { button: 0 });
+
     expect(await screen.findByText("System")).toBeInTheDocument();
     expect(screen.getByText("Light")).toBeInTheDocument();
     expect(screen.getByText("Dark")).toBeInTheDocument();
-    expect(screen.getByText("Open settings file")).toBeInTheDocument();
+    expect(screen.getByText("Apply")).toBeInTheDocument();
   });
 });

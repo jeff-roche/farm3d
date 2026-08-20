@@ -1,9 +1,11 @@
 import { createSignal, onCleanup } from "solid-js";
 import {
+  cancelPreview,
   getRegisteredThemes,
   getResolvedThemeName,
   getThemeMode,
   onThemeChange,
+  previewTheme,
   setThemeMode as setThemeModeEngine,
   type ThemeMode,
 } from "./theme-engine";
@@ -25,6 +27,8 @@ export function useTheme() {
     mode,
     resolvedThemeName,
     setThemeMode,
+    previewTheme,
+    cancelPreview,
     availableThemes: getRegisteredThemes,
   };
 }

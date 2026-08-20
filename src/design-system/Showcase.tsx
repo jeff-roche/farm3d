@@ -13,6 +13,7 @@ import {
   Slider,
   Tabs,
   Dialog,
+  Popover,
   Tooltip,
   DropdownMenu,
   Progress,
@@ -158,6 +159,10 @@ export function Showcase() {
             <Button variant="danger">Confirm</Button>
           </div>
         </Dialog>
+      </Panel>
+
+      <Panel title="Popover">
+        <Popover trigger="Open popover">Non-modal popover content.</Popover>
       </Panel>
 
       <Panel title="Tooltip">

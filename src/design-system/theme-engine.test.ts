@@ -113,6 +113,35 @@ describe("theme-engine", () => {
     expect(getResolvedThemeName()).toBe("farm3d-dark");
   });
 
+  it("previewTheme visually applies a theme without changing the committed mode or persisting it", async () => {
+    settingsStoreMock.loadSettings.mockResolvedValue({ themeMode: "farm3d-light" });
+    mockMatchMedia(false);
+    const { initTheme, previewTheme, getThemeMode, getResolvedThemeName } = await import(
+      "./theme-engine"
+    );
+    await initTheme();
+
+    previewTheme("farm3d-dark");
+
+    expect(document.documentElement.dataset.themeName).toBe("farm3d-dark");
+    expect(getThemeMode()).toBe("farm3d-light");
+    expect(getResolvedThemeName()).toBe("farm3d-light");
+    expect(settingsStoreMock.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("cancelPreview reverts to the committed theme", async () => {
+    settingsStoreMock.loadSettings.mockResolvedValue({ themeMode: "farm3d-light" });
+    mockMatchMedia(false);
+    const { initTheme, previewTheme, cancelPreview } = await import("./theme-engine");
+    await initTheme();
+
+    previewTheme("farm3d-dark");
+    expect(document.documentElement.dataset.themeName).toBe("farm3d-dark");
+
+    cancelPreview();
+    expect(document.documentElement.dataset.themeName).toBe("farm3d-light");
+  });
+
   it("lets a plugin register and activate a custom theme", async () => {
     mockMatchMedia(false);
     const { initTheme, registerTheme, setThemeMode, getResolvedThemeName } = await import(

@@ -72,9 +72,15 @@ colors/sizes — that's what makes a theme swap actually repaint everything.
   or any registered theme's `name`. Applies immediately; persists to the
   OS-standard settings file in the background (see
   `src/settings/settings-store.ts`), not `localStorage`.
+- `previewTheme(mode)` / `cancelPreview()` — for live-preview UIs (e.g.
+  `src/screens/ThemePopover.tsx`). `previewTheme` applies a theme's CSS
+  variables visually without changing the committed mode or persisting
+  anything; `cancelPreview` reapplies whatever theme is actually
+  committed, reverting the preview. Neither notifies `onThemeChange`
+  subscribers — only an actual `setThemeMode()` call does.
 - `useTheme()` — a SolidJS primitive (`src/design-system/use-theme.ts`)
-  exposing `mode()`, `resolvedThemeName()`, `setThemeMode()`, and
-  `availableThemes()` reactively.
+  exposing `mode()`, `resolvedThemeName()`, `setThemeMode()`,
+  `previewTheme()`, `cancelPreview()`, and `availableThemes()` reactively.
 
 ### Adding a custom theme
 
@@ -112,6 +118,7 @@ Kobalte-backed is Kobalte's responsibility, not ours to get right by hand.
 | `Slider` | `@kobalte/core/slider` |
 | `Tabs` | `@kobalte/core/tabs` |
 | `Dialog` | `@kobalte/core/dialog` |
+| `Popover` | `@kobalte/core/popover` |
 | `Tooltip` | `@kobalte/core/tooltip` |
 | `DropdownMenu` | `@kobalte/core/dropdown-menu` |
 | `Progress` | `@kobalte/core/progress` |
@@ -123,11 +130,29 @@ Shared low-level CSS (focus ring, button reset) lives in
 `composes: x from "./shared.module.css"` — not a preprocessor, just standard
 CSS Modules.
 
-### `Dialog`/`Tooltip`/`DropdownMenu` trigger content
+### `Dialog`/`Popover`/`Tooltip`/`DropdownMenu` trigger content
 
 Their `trigger` prop is rendered **as the children of Kobalte's own
 `<button>`/trigger element** — pass text or icon content, not another
 `<Button>` component (that would nest a button inside a button).
+`Popover`'s `trigger` is optional — omit it when the popover is opened
+externally instead (its `open`/`onOpenChange` are controlled, and
+`anchorRef` points it at an element outside the component, e.g.
+`ThemePopover` anchoring to the gear icon that opened it via a
+`DropdownMenu` item rather than its own trigger button).
+
+**Opening a `Popover` from inside another overlay's item selection** (e.g. a
+`DropdownMenu` item, like `SettingsMenu`'s "Theme..." → `ThemePopover`) hits
+two Kobalte races that don't show up in jsdom tests, only in a real browser:
+the closing menu's own click can read as an outside-click on the
+freshly-opened popover, and — for a popover with no `trigger` of its own to
+anchor focus-restoration around — Kobalte's non-modal focus-outside handling
+can self-dismiss it immediately since nothing ever moved focus into the
+content. `SettingsMenu` defers the open a tick (`setTimeout(..., 0)`) and
+passes `modal` on that specific `Popover` (no visual backdrop exists on
+`Popover`, so nothing dims — `modal` only firms up focus/dismiss handling).
+A `Popover` with its own `trigger` (the Showcase example) doesn't need
+either workaround.
 
 ## Showcase page
 
@@ -146,10 +171,14 @@ Use it for visual QA whenever you add or change a component.
 
 `src/design-system/components/components.test.tsx` uses
 `@solidjs/testing-library` + jsdom to actually mount components and interact
-with them — not just type-check. Two jsdom gotchas, handled in
-`vitest.setup.ts`/the tests themselves:
+with them — not just type-check. A few jsdom/testing-library gotchas,
+handled in `vitest.setup.ts`/the tests themselves:
 
 - jsdom has no `ResizeObserver` (Kobalte's `Tabs` indicator uses it) — polyfilled with a no-op stub.
+- jsdom has no `matchMedia` (theme-engine's system-preference detection uses
+  it) — polyfilled with a default in `vitest.setup.ts`; tests that care
+  about a specific light/dark preference (e.g. `theme-engine.test.ts`) stub
+  it themselves with `vi.stubGlobal`, which takes precedence.
 - Kobalte's `Select`/`DropdownMenu` triggers open on **`pointerdown`**, not
   `click` (to match native `<select>` behavior), and menu item selection
   fires on **`pointerup`** — tests use `fireEvent.pointerDown`/`pointerUp`

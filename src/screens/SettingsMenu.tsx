@@ -1,13 +1,9 @@
 import { IconSettings } from "@tabler/icons-solidjs";
-import { DropdownMenu, useTheme, type ThemeMode } from "../design-system";
+import { createSignal } from "solid-js";
+import { DropdownMenu } from "../design-system";
 import { openSettingsFile } from "../settings/settings-store";
+import { ThemePopover } from "./ThemePopover";
 import styles from "./SettingsMenu.module.css";
-
-const MODES: { value: ThemeMode; label: string }[] = [
-  { value: "system", label: "System" },
-  { value: "farm3d-light", label: "Light" },
-  { value: "farm3d-dark", label: "Dark" },
-];
 
 function handleOpenSettingsFile() {
   void openSettingsFile().catch((error) => {
@@ -15,25 +11,38 @@ function handleOpenSettingsFile() {
   });
 }
 
-/** Compact settings entry point for the activity bar — theme selection plus opening the settings file. */
+/** Compact settings entry point for the activity bar — opens the theme picker or the settings file. */
 export function SettingsMenu() {
-  const theme = useTheme();
+  let triggerRef: HTMLSpanElement | undefined;
+  const [themePopoverOpen, setThemePopoverOpen] = createSignal(false);
+
+  // The DropdownMenu item's own pointer-up/click (which closes the menu) is still
+  // being processed when onSelect fires; opening the Popover synchronously means its
+  // outside-click detection sees that same click and immediately closes it again.
+  // Deferring past the current event tick avoids that race.
+  function openThemePopover() {
+    setTimeout(() => setThemePopoverOpen(true), 0);
+  }
 
   return (
-    <DropdownMenu
-      trigger={
-        <span class={styles.trigger} aria-label="Settings">
-          <IconSettings size={18} />
-        </span>
-      }
-      items={[
-        ...MODES.map((mode) => ({
-          label: mode.label,
-          onSelect: () => theme.setThemeMode(mode.value),
-        })),
-        { type: "separator" as const },
-        { label: "Open settings file", onSelect: handleOpenSettingsFile },
-      ]}
-    />
+    <>
+      <DropdownMenu
+        trigger={
+          <span ref={triggerRef} class={styles.trigger} aria-label="Settings">
+            <IconSettings size={18} />
+          </span>
+        }
+        items={[
+          { label: "Theme...", onSelect: openThemePopover },
+          { type: "separator" as const },
+          { label: "Open settings file", onSelect: handleOpenSettingsFile },
+        ]}
+      />
+      <ThemePopover
+        open={themePopoverOpen()}
+        onOpenChange={setThemePopoverOpen}
+        anchorRef={() => triggerRef}
+      />
+    </>
   );
 }

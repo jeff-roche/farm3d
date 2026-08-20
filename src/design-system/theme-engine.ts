@@ -98,6 +98,16 @@ export function getThemeMode(): ThemeMode {
   return currentMode;
 }
 
+/** Applies a theme's CSS variables visually, without changing the committed mode or persisting — for live preview UIs. */
+export function previewTheme(mode: ThemeMode): void {
+  applyTheme(resolveTheme(mode));
+}
+
+/** Reverts a preview by reapplying the actually-committed theme. */
+export function cancelPreview(): void {
+  applyCurrentMode();
+}
+
 export function getResolvedThemeName(): string {
   return resolveTheme(currentMode).name;
 }

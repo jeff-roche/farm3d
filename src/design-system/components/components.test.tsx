@@ -8,6 +8,7 @@ import { TextField } from "./TextField";
 import { Select } from "./Select";
 import { Tabs } from "./Tabs";
 import { Dialog } from "./Dialog";
+import { Popover } from "./Popover";
 import { DropdownMenu } from "./DropdownMenu";
 import { Chip } from "./Chip";
 import { Logo } from "./Logo";
@@ -145,6 +146,35 @@ describe("Dialog", () => {
     expect(screen.queryByText("Confirm")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByText("Open"));
     await waitFor(() => expect(screen.getByText("Confirm")).toBeInTheDocument());
+  });
+});
+
+describe("Popover", () => {
+  it("opens on trigger click and shows its content", async () => {
+    render(() => <Popover trigger="Open">Popover content</Popover>);
+
+    expect(screen.queryByText("Popover content")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByText("Open"));
+    await waitFor(() => expect(screen.getByText("Popover content")).toBeInTheDocument());
+  });
+
+  it("shows content when externally controlled open is true", async () => {
+    function Harness() {
+      const [open, setOpen] = createSignal(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>External open</button>
+          <Popover open={open()} onOpenChange={setOpen}>
+            Popover content
+          </Popover>
+        </>
+      );
+    }
+    render(() => <Harness />);
+
+    expect(screen.queryByText("Popover content")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByText("External open"));
+    await waitFor(() => expect(screen.getByText("Popover content")).toBeInTheDocument());
   });
 });
 

@@ -1,0 +1,12 @@
+.content {
+  composes: focusRing from "./shared.module.css";
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 14rem;
+  padding: 0.75rem;
+  border-radius: var(--f3d-radius-md);
+  border: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface-raised);
+  z-index: 50;
+}

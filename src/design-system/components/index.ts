@@ -10,6 +10,7 @@ export { Switch, type SwitchProps } from "./Switch";
 export { Slider, type SliderProps } from "./Slider";
 export { Tabs, type TabsProps, type TabItem } from "./Tabs";
 export { Dialog, type DialogProps } from "./Dialog";
+export { Popover, type PopoverProps } from "./Popover";
 export { Tooltip, type TooltipProps } from "./Tooltip";
 export {
   DropdownMenu,
