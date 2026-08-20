@@ -7,8 +7,6 @@
   border-radius: var(--f3d-radius-sm);
   color: var(--f3d-color-text-muted);
   cursor: pointer;
-  font-size: 0.9375rem;
-  line-height: 1;
   transition: background-color 0.12s, color 0.12s;
 }
 

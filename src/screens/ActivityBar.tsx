@@ -1,6 +1,6 @@
 import { IconBox, IconPrinter } from "@tabler/icons-solidjs";
 import { IconButton } from "../design-system";
-import { ThemeMenu } from "./ThemeMenu";
+import { SettingsMenu } from "./SettingsMenu";
 import styles from "./ActivityBar.module.css";
 
 export type ScreenId = "printers" | "library";
@@ -28,7 +28,7 @@ export function ActivityBar(props: ActivityBarProps) {
         <IconBox size={18} />
       </IconButton>
       <div class={styles.spacer} />
-      <ThemeMenu />
+      <SettingsMenu />
     </nav>
   );
 }
