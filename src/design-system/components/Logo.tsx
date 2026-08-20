@@ -37,7 +37,7 @@ export function Logo(props: LogoProps): JSX.Element {
         <polygon points="88,43 50,64 50,78 88,57" fill="#4c7a3a" />
         <polygon points="88,57 50,78 50,92 88,71" fill="#426b32" />
       </g>
-      <line x1="50" y1="31" x2="50" y2="13" stroke="#4c7a3a" stroke-width="4" stroke-linecap="round" />
+      <line x1="50" y1="31" x2="50" y2="13" stroke="#4c7a3a" stroke-width={size() <= 32 ? 7 : 4} stroke-linecap="round" />
       <path d="M50,19 C36,18 22,9 27,1 C40,4 50,13 50,19 Z" fill="#4c7a3a" />
       <path d="M50,19 C64,18 78,9 73,1 C60,4 50,13 50,19 Z" fill="#4c7a3a" />
     </svg>

@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { IconUsb, IconWifi } from "@tabler/icons-solidjs";
 import { Button, Progress } from "../design-system";
-import styles from "./FleetDashboard.module.css";
+import styles from "./PrinterDashboard.module.css";
 
 export interface Printer {
   id: string;
@@ -13,7 +13,7 @@ export interface Printer {
   bedTempC?: number;
 }
 
-export interface FleetDashboardProps {
+export interface PrinterDashboardProps {
   printers: Printer[];
 }
 
@@ -26,14 +26,14 @@ const STATUS_LABEL: Record<Printer["status"], string> = {
 };
 
 /** "3 printers · 1 printing · 2 idle" — for AppShell's status bar. */
-export function summarizeFleet(printers: Printer[]): string {
+export function summarizePrinters(printers: Printer[]): string {
   if (printers.length === 0) return "No printers";
   const printing = printers.filter((p) => p.status === "printing").length;
   const idle = printers.filter((p) => p.status === "idle").length;
   return `${printers.length} printer${printers.length === 1 ? "" : "s"} · ${printing} printing · ${idle} idle`;
 }
 
-export function FleetDashboard(props: FleetDashboardProps) {
+export function PrinterDashboard(props: PrinterDashboardProps) {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const selected = createMemo(() => props.printers.find((p) => p.id === selectedId()));
 

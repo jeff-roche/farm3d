@@ -115,6 +115,11 @@
   gap: 0.25rem;
 }
 
+.temps {
+  font-family: var(--f3d-type-mono-font);
+  color: var(--f3d-color-text-muted);
+}
+
 .empty {
   grid-column: 1 / -1;
   display: flex;

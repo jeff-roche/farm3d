@@ -2,7 +2,7 @@
 import { createSignal, Show } from "solid-js";
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
-import { FleetDashboard, summarizeFleet, type Printer } from "./screens/FleetDashboard";
+import { PrinterDashboard, summarizePrinters, type Printer } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 
 const PRINTERS: Printer[] = [
@@ -47,7 +47,7 @@ function App() {
       active={active()}
       onSelect={setActive}
       title={SCREEN_TITLE[active()]}
-      statusSummary={summarizeFleet(PRINTERS)}
+      statusSummary={summarizePrinters(PRINTERS)}
     >
       <Show
         when={active() === "printers"}
@@ -58,7 +58,7 @@ function App() {
           />
         }
       >
-        <FleetDashboard printers={PRINTERS} />
+        <PrinterDashboard printers={PRINTERS} />
       </Show>
     </AppShell>
   );

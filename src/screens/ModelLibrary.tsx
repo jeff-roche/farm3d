@@ -51,7 +51,7 @@ export function ModelLibrary(props: ModelLibraryProps) {
         <BuildPlate />
 
         <div class={styles.viewportActions}>
-          <IconButton aria-label="Reset view">
+          <IconButton aria-label="Reset view" disabled title="Viewport controls aren't wired up yet">
             <IconRefresh size={14} />
           </IconButton>
           <Button

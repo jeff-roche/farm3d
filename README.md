@@ -1,6 +1,6 @@
 # farm3d
 
-A 3D farm simulation/tool built on [Tauri](https://tauri.app) (Rust) with a [SolidJS](https://www.solidjs.com/) + TypeScript frontend.
+A Tauri (Rust) + SolidJS (TypeScript) desktop app for managing a 3D-printer print farm — connecting to printers, slicing models, and organizing a model library.
 
 ## Prerequisites
 
@@ -46,6 +46,9 @@ library backed by [Kobalte](https://kobalte.dev/). See
 [DESIGN.md](./DESIGN.md) for the architecture, and visit `/#showcase` in dev
 mode (`just web`, then open `http://localhost:1420/#showcase`) to see every
 component and its states.
+
+Fonts in `public/fonts/` are licensed under the SIL Open Font License 1.1;
+see the accompanying `OFL-*.txt` notices in that directory.
 
 ## Contributing
 
