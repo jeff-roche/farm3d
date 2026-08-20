@@ -148,7 +148,6 @@ button.cardSelected:hover {
 }
 
 .empty {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;

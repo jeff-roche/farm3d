@@ -181,7 +181,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                           </Show>
                         </div>
                         <div class={styles.cardFooter}>
-                          <span class={styles.variant}>{printer.variantLabel}</span>
+                          <span>{printer.variantLabel}</span>
                         </div>
                       </button>
                     )}
