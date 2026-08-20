@@ -1,11 +1,10 @@
 import type { ColorRoles, Theme, TypeStyle } from "./tokens/types";
 import { lightTheme } from "./themes/light";
 import { darkTheme } from "./themes/dark";
+import { loadSettings, updateSettings } from "../settings/settings-store";
 
 /** 'system' follows the OS light/dark preference; any other value is a registered Theme's name. */
 export type ThemeMode = "system" | string;
-
-const STORAGE_KEY = "farm3d.theme-mode";
 
 const registry = new Map<string, Theme>();
 const listeners = new Set<(resolvedThemeName: string) => void>();
@@ -89,8 +88,10 @@ function handleSystemPreferenceChange(): void {
 /** Sets the active theme mode ('system', or a registered theme's name) and persists the choice. */
 export function setThemeMode(mode: ThemeMode): void {
   currentMode = mode;
-  localStorage.setItem(STORAGE_KEY, mode);
   applyCurrentMode();
+  updateSettings({ themeMode: mode }).catch((error) => {
+    console.error("Failed to persist theme mode:", error);
+  });
 }
 
 export function getThemeMode(): ThemeMode {
@@ -108,11 +109,12 @@ export function onThemeChange(listener: (resolvedThemeName: string) => void): ()
 }
 
 /** Applies the persisted (or default 'system') theme mode. Call once at app startup, before render. */
-export function initTheme(): void {
+export async function initTheme(): Promise<void> {
   registerTheme(lightTheme);
   registerTheme(darkTheme);
 
-  currentMode = localStorage.getItem(STORAGE_KEY) ?? "system";
+  const settings = await loadSettings();
+  currentMode = settings.themeMode || "system";
   applyCurrentMode();
 
   if (!mediaQueryListenerAttached) {

@@ -60,14 +60,18 @@ colors/sizes — that's what makes a theme swap actually repaint everything.
 
 ## Theme engine (`theme-engine.ts`)
 
-- `initTheme()` — call once at startup, before render. Registers the two
-  built-ins, applies the persisted (or default `'system'`) mode, and
-  attaches an OS-preference-change listener.
+- `initTheme()` — **async**; call once at startup, before render, and
+  `await` it. Registers the two built-ins, loads the persisted (or
+  default `'system'`) mode from the settings file
+  (`src/settings/settings-store.ts`), applies it, and attaches an
+  OS-preference-change listener.
 - `registerTheme(theme: Theme)` — **the plugin point.** Anyone can construct
   an object matching the `Theme` interface and register it; it becomes
   selectable by name just like the built-ins.
 - `setThemeMode(mode)` — `'system'` (follows `prefers-color-scheme`, live)
-  or any registered theme's `name`. Persists to `localStorage`.
+  or any registered theme's `name`. Applies immediately; persists to the
+  OS-standard settings file in the background (see
+  `src/settings/settings-store.ts`), not `localStorage`.
 - `useTheme()` — a SolidJS primitive (`src/design-system/use-theme.ts`)
   exposing `mode()`, `resolvedThemeName()`, `setThemeMode()`, and
   `availableThemes()` reactively.

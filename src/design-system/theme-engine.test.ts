@@ -3,6 +3,13 @@ import type { Theme } from "./tokens/types";
 import { farm3dTypography } from "./tokens/typography";
 import { farm3dShape } from "./tokens/shape";
 
+const settingsStoreMock = vi.hoisted(() => ({
+  loadSettings: vi.fn(),
+  updateSettings: vi.fn(),
+}));
+
+vi.mock("../settings/settings-store", () => settingsStoreMock);
+
 /** Minimal mock of matchMedia('(prefers-color-scheme: dark)') that supports firing 'change'. */
 function mockMatchMedia(initialDark: boolean) {
   let dark = initialDark;
@@ -60,7 +67,8 @@ function makeTheme(name: string, scheme: "light" | "dark", accent: string): Them
 
 beforeEach(() => {
   vi.resetModules();
-  localStorage.clear();
+  settingsStoreMock.loadSettings.mockReset().mockResolvedValue({ themeMode: "system" });
+  settingsStoreMock.updateSettings.mockReset().mockResolvedValue(undefined);
   document.documentElement.removeAttribute("style");
   delete document.documentElement.dataset.themeScheme;
   delete document.documentElement.dataset.themeName;
@@ -74,7 +82,7 @@ describe("theme-engine", () => {
   it("resolves 'system' mode to the dark built-in theme when the OS prefers dark", async () => {
     mockMatchMedia(true);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     expect(getResolvedThemeName()).toBe("farm3d-dark");
     expect(document.documentElement.dataset.themeScheme).toBe("dark");
   });
@@ -82,7 +90,7 @@ describe("theme-engine", () => {
   it("resolves 'system' mode to the light built-in theme when the OS prefers light", async () => {
     mockMatchMedia(false);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     expect(getResolvedThemeName()).toBe("farm3d-light");
     expect(document.documentElement.dataset.themeScheme).toBe("light");
   });
@@ -90,18 +98,18 @@ describe("theme-engine", () => {
   it("persists an explicit mode and applies it immediately", async () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     setThemeMode("farm3d-dark");
     expect(getResolvedThemeName()).toBe("farm3d-dark");
-    expect(localStorage.getItem("farm3d.theme-mode")).toBe("farm3d-dark");
+    expect(settingsStoreMock.updateSettings).toHaveBeenCalledWith({ themeMode: "farm3d-dark" });
     expect(document.documentElement.style.getPropertyValue("--f3d-color-accent")).not.toBe("");
   });
 
   it("reads a persisted mode on init, overriding the current OS preference", async () => {
-    localStorage.setItem("farm3d.theme-mode", "farm3d-dark");
+    settingsStoreMock.loadSettings.mockResolvedValue({ themeMode: "farm3d-dark" });
     mockMatchMedia(false); // OS says light, but a dark mode was explicitly persisted
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     expect(getResolvedThemeName()).toBe("farm3d-dark");
   });
 
@@ -110,7 +118,7 @@ describe("theme-engine", () => {
     const { initTheme, registerTheme, setThemeMode, getResolvedThemeName } = await import(
       "./theme-engine"
     );
-    initTheme();
+    await initTheme();
     registerTheme(makeTheme("harvest", "dark", "#ff8800"));
     setThemeMode("harvest");
     expect(getResolvedThemeName()).toBe("harvest");
@@ -122,7 +130,7 @@ describe("theme-engine", () => {
   it("falls back to farm3d-light for an unregistered theme name", async () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     setThemeMode("does-not-exist");
     expect(getResolvedThemeName()).toBe("farm3d-light");
   });
@@ -130,7 +138,7 @@ describe("theme-engine", () => {
   it("notifies subscribers when the OS preference changes in 'system' mode", async () => {
     const media = mockMatchMedia(false);
     const { initTheme, getResolvedThemeName, onThemeChange } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     const seen: string[] = [];
     onThemeChange((name) => seen.push(name));
 
@@ -143,7 +151,7 @@ describe("theme-engine", () => {
   it("ignores OS preference changes once an explicit mode is set", async () => {
     const media = mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
-    initTheme();
+    await initTheme();
     setThemeMode("farm3d-light");
 
     media.setDark(true);
