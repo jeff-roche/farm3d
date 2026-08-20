@@ -1,0 +1,44 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.driftBanner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface-hover);
+  border: 1px solid var(--f3d-color-border);
+}
+
+.driftMessage {
+  margin: 0;
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text);
+}
+
+.driftActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.bedSizeRow {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.bedSizeRow > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.readOnlyHint {
+  margin: 0;
+  color: var(--f3d-color-text-disabled);
+  font-size: var(--f3d-type-body-small-size);
+}

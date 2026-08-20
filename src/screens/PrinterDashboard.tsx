@@ -1,7 +1,8 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button } from "../design-system";
+import { Button, Tabs } from "../design-system";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
 import { PrinterAddDialog } from "./PrinterAddDialog";
+import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import styles from "./PrinterDashboard.module.css";
 
 export interface PrinterGroup {
@@ -209,9 +210,32 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                 </Button>
               </div>
               <div class={styles.detailBody}>
-                {/* Task 16 replaces this placeholder with <PrinterProfilePanel>
-                    wrapped in the Status/Profile/Connection Tabs. */}
-                <p class={styles.detailMuted}>Profile — wired up in Task 16.</p>
+                <Tabs
+                  defaultValue="profile"
+                  items={[
+                    {
+                      value: "status",
+                      label: "Status",
+                      content: (
+                        <div class={styles.detailField}>
+                          <span class={styles.detailLabel}>Catalog</span>
+                          <span>{printer().modelLabel} — {printer().variantLabel}</span>
+                          <Show when={printer().catalogStatus !== "ok"}>
+                            <span class={styles.detailMuted}>
+                              Catalog status: {printer().catalogStatus}
+                            </span>
+                          </Show>
+                        </div>
+                      ),
+                    },
+                    { value: "profile", label: "Profile", content: <PrinterProfilePanel printer={printer()} /> },
+                    {
+                      value: "connection",
+                      label: "Connection",
+                      content: <p class={styles.detailMuted}>Configured in a later phase.</p>,
+                    },
+                  ]}
+                />
               </div>
             </aside>
           </>

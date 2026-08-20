@@ -209,3 +209,18 @@ button.cardSelected:hover {
 .detailMuted {
   color: var(--f3d-color-text-disabled);
 }
+
+.detailField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detailLabel {
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+  text-transform: uppercase;
+}
