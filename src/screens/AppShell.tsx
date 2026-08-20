@@ -16,8 +16,6 @@ const VERSION = "farm3d 0.1.0";
 export function AppShell(props: AppShellProps) {
   return (
     <div class={styles.shell}>
-      <ActivityBar active={props.active} onSelect={props.onSelect} />
-
       <header class={styles.topBar}>
         <Logo size={18} />
         <span class={styles.wordmark}>farm3d</span>
@@ -26,6 +24,8 @@ export function AppShell(props: AppShellProps) {
         </span>
         <span class={styles.screenTitle}>{props.title}</span>
       </header>
+
+      <ActivityBar active={props.active} onSelect={props.onSelect} />
 
       <main class={styles.content}>{props.children}</main>
 

@@ -3,7 +3,7 @@
   grid-template-columns: 3rem 1fr;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "activity topbar"
+    "topbar topbar"
     "activity content"
     "activity status";
   width: 100%;
