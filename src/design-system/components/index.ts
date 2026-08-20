@@ -4,6 +4,7 @@ export { Panel, type PanelProps } from "./Panel";
 export { Chip, type ChipProps } from "./Chip";
 export { TextField, type TextFieldProps } from "./TextField";
 export { Select, type SelectProps } from "./Select";
+export { Combobox, type ComboboxProps, type ComboboxGroup } from "./Combobox";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
 export { RadioGroup, type RadioGroupProps, type RadioOption } from "./RadioGroup";
 export { Switch, type SwitchProps } from "./Switch";

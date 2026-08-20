@@ -6,6 +6,7 @@ import { Checkbox } from "./Checkbox";
 import { Switch } from "./Switch";
 import { TextField } from "./TextField";
 import { Select } from "./Select";
+import { Combobox } from "./Combobox";
 import { Tabs } from "./Tabs";
 import { Dialog } from "./Dialog";
 import { Popover } from "./Popover";
@@ -115,6 +116,45 @@ describe("Select", () => {
     await fireEvent.click(option);
 
     expect(onChange).toHaveBeenCalledWith("Banana");
+  });
+});
+
+describe("Combobox", () => {
+  it("filters options via onInputChange and selects one on pointerup", async () => {
+    const onChange = vi.fn();
+    const onInputChange = vi.fn();
+    render(() => (
+      <Combobox
+        label="Model"
+        options={["Elegoo Centauri Carbon", "Prusa MK4", "Voron 2.4"]}
+        onChange={onChange}
+        onInputChange={onInputChange}
+      />
+    ));
+    const input = screen.getByRole("combobox", { name: "Model" }) as HTMLInputElement;
+    await fireEvent.pointerDown(input, { pointerType: "mouse", button: 0 });
+    await fireEvent.input(input, { target: { value: "Prusa" } });
+    expect(onInputChange).toHaveBeenCalledWith("Prusa");
+
+    const item = await screen.findByText("Prusa MK4");
+    await fireEvent.pointerUp(item, { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenCalledWith("Prusa MK4");
+  });
+
+  it("renders grouped options under section headers", async () => {
+    render(() => (
+      <Combobox
+        label="Model"
+        groups={[
+          { label: "Elegoo", options: ["Centauri Carbon", "Neptune 4"] },
+          { label: "Prusa", options: ["MK4", "CORE One"] },
+        ]}
+      />
+    ));
+    const trigger = screen.getByRole("button", { name: /show suggestions/i });
+    await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    expect(await screen.findByText("Elegoo")).toBeInTheDocument();
+    expect(await screen.findByText("Prusa")).toBeInTheDocument();
   });
 });
 

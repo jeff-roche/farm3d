@@ -7,6 +7,7 @@ import {
   Chip,
   TextField,
   Select,
+  Combobox,
   Checkbox,
   RadioGroup,
   Switch,
@@ -98,6 +99,19 @@ export function Showcase() {
 
       <Panel title="Select">
         <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
+      </Panel>
+
+      <Panel title="Combobox">
+        <div class={styles.column}>
+          <Combobox label="Fruit" options={["Apple", "Banana", "Cherry"]} />
+          <Combobox
+            label="Printer model"
+            groups={[
+              { label: "Elegoo", options: ["Centauri Carbon", "Neptune 4"] },
+              { label: "Prusa", options: ["MK4", "CORE One"] },
+            ]}
+          />
+        </div>
       </Panel>
 
       <Panel title="Checkbox">
