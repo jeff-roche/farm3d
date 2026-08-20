@@ -19,6 +19,7 @@
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   padding: 0.5rem 0.75rem 0;
 }
 

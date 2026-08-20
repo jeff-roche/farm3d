@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Tabs } from "../design-system";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
+import { openPrintersFile } from "../printers/printer-store";
 import { PrinterAddDialog } from "./PrinterAddDialog";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import styles from "./PrinterDashboard.module.css";
@@ -109,6 +110,11 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           so the resizable detail aside remains a sibling, not nested here. */}
       <div class={styles.main}>
         <div class={styles.toolbar}>
+          {/* An escape hatch for hand-editing — notably the only way to
+              recover a printer whose catalog ref no longer resolves. */}
+          <Button variant="ghost" onClick={() => void openPrintersFile()}>
+            Open printers.json
+          </Button>
           <PrinterAddDialog
             open={addDialogOpen()}
             onOpenChange={setAddDialogOpen}
