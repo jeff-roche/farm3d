@@ -4,15 +4,61 @@
   min-height: 0;
 }
 
-.grid {
+/* Column wrapper for the toolbar (Task 15) stacked above the scrollable
+   printer grid. `.dashboard` stays row-direction so the resizable detail
+   aside remains a sibling, not a child, of this column. */
+.main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.groups {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.groupHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  background-color: var(--f3d-color-surface);
+}
+
+.groupTitle {
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  color: var(--f3d-color-text);
+}
+
+.groupCount {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: 0.75rem;
-  align-content: start;
 }
 
 .card {
@@ -24,9 +70,6 @@
   text-align: left;
 }
 
-/* Specificity above .resetButton's single-class selector, so these survive
-   resetButton's `border: none; background: none; padding: 0;` regardless of
-   which module's stylesheet the bundler happens to inject last. */
 button.card {
   padding: 0.75rem;
   background-color: var(--f3d-color-surface-raised);
@@ -60,8 +103,13 @@ button.cardSelected:hover {
   white-space: nowrap;
 }
 
-.statusBadge {
-  flex-shrink: 0;
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.badge {
   padding: 0.125rem 0.5rem;
   border-radius: var(--f3d-radius-full);
   font-family: var(--f3d-type-label-font);
@@ -70,59 +118,24 @@ button.cardSelected:hover {
   letter-spacing: var(--f3d-type-label-tracking);
 }
 
-.statusBadge_idle {
-  background-color: var(--f3d-color-surface-hover);
-  color: var(--f3d-color-text-muted);
-}
-.statusBadge_printing {
-  background-color: var(--f3d-color-accent);
-  color: var(--f3d-color-on-accent);
-}
-.statusBadge_paused {
+.badgeWarning {
   background-color: var(--f3d-color-warning);
   color: var(--f3d-color-on-warning);
 }
-.statusBadge_error {
-  background-color: var(--f3d-color-danger);
-  color: var(--f3d-color-on-danger);
-}
-.statusBadge_offline {
-  background-color: var(--f3d-color-surface);
-  color: var(--f3d-color-text-disabled);
+
+.badgeAccent {
+  background-color: var(--f3d-color-accent);
+  color: var(--f3d-color-on-accent);
 }
 
-.jobRow {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.jobName {
-  font-size: var(--f3d-type-body-small-size);
+.badgeMuted {
+  background-color: var(--f3d-color-surface-hover);
   color: var(--f3d-color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cardFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
   font-family: var(--f3d-type-mono-font);
   font-size: var(--f3d-type-body-small-size);
-  color: var(--f3d-color-text-muted);
-}
-
-.connection {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.temps {
-  font-family: var(--f3d-type-mono-font);
   color: var(--f3d-color-text-muted);
 }
 
@@ -166,6 +179,10 @@ button.cardSelected:hover {
 }
 
 .detailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--f3d-color-border);
   font-family: var(--f3d-type-heading-font);
@@ -182,30 +199,6 @@ button.cardSelected:hover {
   padding: 0.75rem;
 }
 
-.detailField {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.detailLabel {
-  font-family: var(--f3d-type-label-font);
-  font-size: var(--f3d-type-label-size);
-  font-weight: var(--f3d-type-label-weight);
-  letter-spacing: var(--f3d-type-label-tracking);
-  color: var(--f3d-color-text-muted);
-  text-transform: uppercase;
-}
-
 .detailMuted {
   color: var(--f3d-color-text-disabled);
-}
-
-.webcamPlaceholder {
-  padding: 1.5rem 0.5rem;
-  text-align: center;
-  background-color: var(--f3d-color-surface-hover);
-  border-radius: var(--f3d-radius-sm);
-  color: var(--f3d-color-text-disabled);
-  font-size: var(--f3d-type-body-small-size);
 }

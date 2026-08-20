@@ -1,45 +1,74 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { IconUsb, IconWifi } from "@tabler/icons-solidjs";
-import { Button, Progress } from "../design-system";
+import { Button } from "../design-system";
+import type { ResolvedPrinter } from "../printers/types";
 import styles from "./PrinterDashboard.module.css";
 
-export interface Printer {
-  id: string;
-  name: string;
-  status: "idle" | "printing" | "paused" | "error" | "offline";
-  connectionType: "network" | "serial";
-  currentJob?: { modelName: string; progress: number };
-  nozzleTempC?: number;
-  bedTempC?: number;
+export interface PrinterGroup {
+  modelKey: string;
+  modelLabel: string;
+  printers: ResolvedPrinter[];
+}
+
+const UNLINKED_KEY = "__unlinked__";
+
+/** Groups by catalog model; a Printer whose catalog reference doesn't
+ *  resolve (renamed/removed upstream preset) lands in a trailing "Unlinked"
+ *  group instead of a normal model group. */
+export function groupPrintersByModel(printers: ResolvedPrinter[]): PrinterGroup[] {
+  const byModel = new Map<string, ResolvedPrinter[]>();
+  for (const printer of printers) {
+    const key =
+      printer.catalogStatus === "ok" || printer.catalogStatus === "rematched"
+        ? printer.catalogRef.modelId
+        : UNLINKED_KEY;
+    const list = byModel.get(key) ?? [];
+    list.push(printer);
+    byModel.set(key, list);
+  }
+
+  const groups: PrinterGroup[] = [];
+  for (const [key, list] of byModel) {
+    if (key === UNLINKED_KEY) continue;
+    groups.push({
+      modelKey: key,
+      modelLabel: list[0].modelLabel,
+      printers: [...list].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  }
+  groups.sort((a, b) => a.modelLabel.localeCompare(b.modelLabel));
+
+  const unlinked = byModel.get(UNLINKED_KEY);
+  if (unlinked && unlinked.length > 0) {
+    groups.push({
+      modelKey: UNLINKED_KEY,
+      modelLabel: "Unlinked",
+      printers: [...unlinked].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  }
+  return groups;
+}
+
+/** "3 printers" — for AppShell's status bar. Per-status counts return once
+ *  phase 3 wires `runtimeStatus`; every Printer is status-less in phase 1. */
+export function summarizePrinters(printers: ResolvedPrinter[]): string {
+  if (printers.length === 0) return "No printers";
+  return `${printers.length} printer${printers.length === 1 ? "" : "s"}`;
 }
 
 export interface PrinterDashboardProps {
-  printers: Printer[];
+  printers: ResolvedPrinter[];
+  onAddPrinter?: () => void;
+  onRemovePrinter?: (id: string) => void;
 }
 
-const STATUS_LABEL: Record<Printer["status"], string> = {
-  idle: "Idle",
-  printing: "Printing",
-  paused: "Paused",
-  error: "Error",
-  offline: "Offline",
-};
-
-/** "3 printers · 1 printing · 2 idle" — for AppShell's status bar. */
-export function summarizePrinters(printers: Printer[]): string {
-  if (printers.length === 0) return "No printers";
-  const printing = printers.filter((p) => p.status === "printing").length;
-  const idle = printers.filter((p) => p.status === "idle").length;
-  return `${printers.length} printer${printers.length === 1 ? "" : "s"} · ${printing} printing · ${idle} idle`;
-}
-
-const DEFAULT_DETAIL_WIDTH = 256;
+const DEFAULT_DETAIL_WIDTH = 320;
 const MIN_DETAIL_WIDTH = 220;
-const MAX_DETAIL_WIDTH = 480;
+const MAX_DETAIL_WIDTH = 560;
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const selected = createMemo(() => props.printers.find((p) => p.id === selectedId()));
+  const groups = createMemo(() => groupPrintersByModel(props.printers));
   const [detailWidth, setDetailWidth] = createSignal(DEFAULT_DETAIL_WIDTH);
 
   let dragStartX = 0;
@@ -72,60 +101,79 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
 
   return (
     <div class={styles.dashboard}>
-      <div class={styles.grid}>
-        <Show
-          when={props.printers.length > 0}
-          fallback={
-            <div class={styles.empty}>
-              <p class={styles.emptyMessage}>No printers yet</p>
-              <Button variant="secondary" disabled title="Adding printers isn't wired up yet">
-                + Add printer
-              </Button>
-            </div>
-          }
+      {/* `.main` is a column wrapper: Task 15 mounts a toolbar as its first
+          child, stacked above `.groups`. `.dashboard` itself stays row-direction
+          so the resizable detail aside remains a sibling, not nested here. */}
+      <div class={styles.main}>
+        <div class={styles.groups}>
+          <Show
+            when={props.printers.length > 0}
+            fallback={
+              <div class={styles.empty}>
+                <p class={styles.emptyMessage}>No printers yet</p>
+                <Button variant="secondary" onClick={() => props.onAddPrinter?.()}>
+                  + Add printer
+                </Button>
+              </div>
+            }
         >
-          <For each={props.printers}>
-            {(printer) => (
-              <button
-                class={styles.card}
-                classList={{ [styles.cardSelected]: printer.id === selectedId() }}
-                onClick={() => setSelectedId(printer.id)}
-              >
-                <div class={styles.cardHeader}>
-                  <span class={styles.cardName}>{printer.name}</span>
-                  <span
-                    class={styles.statusBadge}
-                    classList={{ [styles[`statusBadge_${printer.status}`]]: true }}
-                  >
-                    {STATUS_LABEL[printer.status]}
-                  </span>
-                </div>
-
-                {printer.currentJob && (
-                  <div class={styles.jobRow}>
-                    <span class={styles.jobName}>{printer.currentJob.modelName}</span>
-                    <Progress value={printer.currentJob.progress * 100} showValue />
-                  </div>
-                )}
-
-                <div class={styles.cardFooter}>
-                  <span class={styles.temps}>
-                    {printer.nozzleTempC != null && `${printer.nozzleTempC}°C nozzle`}
-                    {printer.bedTempC != null && ` · ${printer.bedTempC}°C bed`}
-                  </span>
-                  <span class={styles.connection}>
-                    {printer.connectionType === "network" ? (
-                      <IconWifi size={12} />
-                    ) : (
-                      <IconUsb size={12} />
+          <For each={groups()}>
+            {(group) => (
+              <section class={styles.group}>
+                <header class={styles.groupHeader}>
+                  <span class={styles.groupTitle}>{group.modelLabel}</span>
+                  <span class={styles.groupCount}>{group.printers.length}</span>
+                </header>
+                <div class={styles.grid}>
+                  <For each={group.printers}>
+                    {(printer) => (
+                      <button
+                        class={styles.card}
+                        classList={{ [styles.cardSelected]: printer.id === selectedId() }}
+                        onClick={() => setSelectedId(printer.id)}
+                      >
+                        <div class={styles.cardHeader}>
+                          <span class={styles.cardName}>{printer.name}</span>
+                        </div>
+                        <div class={styles.badgeRow}>
+                          <Show when={printer.catalogStatus !== "ok"}>
+                            <span class={[styles.badge, styles.badgeWarning].join(" ")}>
+                              Unlinked
+                            </span>
+                          </Show>
+                          <Show when={printer.profileDrift.length > 0}>
+                            <span class={[styles.badge, styles.badgeAccent].join(" ")}>
+                              Profile updated
+                            </span>
+                          </Show>
+                          <Show when={printer.overriddenFields.length > 0}>
+                            <span class={[styles.badge, styles.badgeMuted].join(" ")}>
+                              {printer.overriddenFields.length} override
+                              {printer.overriddenFields.length === 1 ? "" : "s"}
+                            </span>
+                          </Show>
+                          <Show when={printer.unknownOverrideKeys.length > 0}>
+                            <span
+                              class={[styles.badge, styles.badgeWarning].join(" ")}
+                              title={`Unrecognized override keys: ${printer.unknownOverrideKeys.join(", ")}`}
+                            >
+                              {printer.unknownOverrideKeys.length} unknown key
+                              {printer.unknownOverrideKeys.length === 1 ? "" : "s"}
+                            </span>
+                          </Show>
+                        </div>
+                        <div class={styles.cardFooter}>
+                          <span class={styles.variant}>{printer.variantLabel}</span>
+                        </div>
+                      </button>
                     )}
-                    {printer.connectionType}
-                  </span>
+                  </For>
                 </div>
-              </button>
+              </section>
             )}
           </For>
         </Show>
+      </div>
       </div>
 
       <Show when={selected()}>
@@ -143,26 +191,16 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
               style={{ width: `${detailWidth()}px` }}
               aria-label="Printer detail"
             >
-              <div class={styles.detailHeader}>{printer().name}</div>
+              <div class={styles.detailHeader}>
+                <span>{printer().name}</span>
+                <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
+                  Remove
+                </Button>
+              </div>
               <div class={styles.detailBody}>
-                <div class={styles.detailField}>
-                  <span class={styles.detailLabel}>Status</span>
-                  <span>{STATUS_LABEL[printer().status]}</span>
-                </div>
-                <div class={styles.detailField}>
-                  <span class={styles.detailLabel}>Webcam</span>
-                  <div class={styles.webcamPlaceholder}>No feed configured</div>
-                </div>
-                <div class={styles.detailField}>
-                  <span class={styles.detailLabel}>Loaded material</span>
-                  <span class={styles.detailMuted}>Not tracked yet</span>
-                </div>
-                <Button variant="secondary" disabled title="Job assignment isn't wired up yet">
-                  Assign job
-                </Button>
-                <Button variant="danger" disabled title="Cancelling isn't wired up yet">
-                  Cancel job
-                </Button>
+                {/* Task 16 replaces this placeholder with <PrinterProfilePanel>
+                    wrapped in the Status/Profile/Connection Tabs. */}
+                <p class={styles.detailMuted}>Profile — wired up in Task 16.</p>
               </div>
             </aside>
           </>
