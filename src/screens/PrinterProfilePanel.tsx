@@ -10,6 +10,10 @@ export interface PrinterProfilePanelProps {
 
 const DEBOUNCE_MS = 300;
 
+/** The values `defaultBedType` actually takes in the shipped catalog:
+ *  "" (942 variants), "4" (20) and "Textured PEI Plate" (9). */
+const BED_TYPE_OPTIONS = ["", "4", "Textured PEI Plate"];
+
 function isOverridden(printer: ResolvedPrinter, field: OverridableField): boolean {
   return printer.overriddenFields.includes(field);
 }
@@ -85,6 +89,14 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
   const rectShape = createMemo(() => {
     const shape = props.printer.profile.bedShape;
     return shape.kind === "rectangular" ? shape : null;
+  });
+
+  // Defensively carry the printer's own value when it isn't one of the known
+  // three, so a future catalog regeneration introducing a new bed type can
+  // never leave the control silently showing a blank, unmatched value.
+  const bedTypeOptions = createMemo(() => {
+    const current = props.printer.profile.defaultBedType;
+    return BED_TYPE_OPTIONS.includes(current) ? BED_TYPE_OPTIONS : [...BED_TYPE_OPTIONS, current];
   });
 
   return (
@@ -176,10 +188,13 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
         overridden={isOverridden(props.printer, "defaultBedType")}
         onRevert={() => void revertField(props.printer.id, "defaultBedType")}
       >
-        {/* Raw catalog bed-type codes, not human labels — the generator
-            doesn't emit a code->label map in phase 1. */}
+        {/* Raw catalog bed-type values, not human labels — the generator
+            doesn't emit a code->label map in phase 1. The empty string is the
+            catalog's own "unspecified", shown as "Default" so it isn't a blank
+            list item. */}
         <Select
-          options={["1", "2", "3", "4"]}
+          options={bedTypeOptions()}
+          optionLabel={(v: string) => (v === "" ? "Default" : v)}
           value={props.printer.profile.defaultBedType}
           onChange={(v) => void overrideField(props.printer.id, "defaultBedType", v)}
         />
