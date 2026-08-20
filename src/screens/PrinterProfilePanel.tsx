@@ -62,6 +62,15 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
     setTimer(setTimeout(() => void overrideField(printerId, field, value), DEBOUNCE_MS));
   }
 
+  // Kobalte's NumberField root fires onRawValueChange unconditionally at
+  // mount (node_modules/@kobalte/core/src/number-field/number-field-root.tsx:214),
+  // and again whenever the reactive source feeding its `rawValue` prop
+  // changes identity -- neither case is a real edit. Writing an override
+  // for a same-value "change" would silently pin the field to the catalog
+  // value it already has, permanently defeating drift detection for it
+  // (profile_drift is only computed for non-overridden fields). Each
+  // onChange below must compare against the field's current value and
+  // no-op on equality before scheduling a write.
   function debouncedBedShapeOverride(shape: RectangularBedShape, patch: Partial<Pick<RectangularBedShape, "widthMm" | "depthMm">>) {
     pendingBedShapePatch = { ...pendingBedShapePatch, ...patch };
     clearTimeout(bedShapeTimer);
@@ -113,12 +122,13 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
           value={props.printer.profile.printableHeightMm}
           suffix="mm"
           minValue={1}
-          onChange={(v) =>
+          onChange={(v) => {
+            if (v === props.printer.profile.printableHeightMm) return;
             debouncedOverride(
               "printableHeightMm", v,
               () => heightTimer, (t) => (heightTimer = t),
-            )
-          }
+            );
+          }}
         />
       </Field>
 
@@ -135,14 +145,20 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
                 value={shape().widthMm}
                 suffix="mm"
                 minValue={1}
-                onChange={(v) => debouncedBedShapeOverride(shape(), { widthMm: v })}
+                onChange={(v) => {
+                  if (v === shape().widthMm) return;
+                  debouncedBedShapeOverride(shape(), { widthMm: v });
+                }}
               />
               <NumberField
                 aria-label="Bed depth"
                 value={shape().depthMm}
                 suffix="mm"
                 minValue={1}
-                onChange={(v) => debouncedBedShapeOverride(shape(), { depthMm: v })}
+                onChange={(v) => {
+                  if (v === shape().depthMm) return;
+                  debouncedBedShapeOverride(shape(), { depthMm: v });
+                }}
               />
             </div>
           </Field>

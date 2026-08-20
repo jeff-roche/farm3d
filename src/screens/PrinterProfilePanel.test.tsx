@@ -81,6 +81,16 @@ describe("PrinterProfilePanel", () => {
     expect(overrideField).toHaveBeenCalledWith("prn-1", "printableHeightMm", 240);
   });
 
+  it("does not persist an override merely from mounting -- Kobalte's NumberField mount-time echo must not be treated as a real edit", () => {
+    vi.useFakeTimers();
+    render(() => <PrinterProfilePanel printer={PRINTER} />);
+
+    // No interaction with any control -- just let the debounce window pass.
+    vi.advanceTimersByTime(400);
+
+    expect(overrideField).not.toHaveBeenCalled();
+  });
+
   it("shows a drift banner and calls resolveDrift on Accept", async () => {
     const drifted: ResolvedPrinter = {
       ...PRINTER,
