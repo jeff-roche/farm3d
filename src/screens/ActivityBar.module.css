@@ -1,0 +1,15 @@
+.bar {
+  grid-area: activity;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  width: 3rem;
+  padding: 0.5rem 0;
+  background-color: var(--f3d-color-surface);
+  border-right: 1px solid var(--f3d-color-border);
+}
+
+.spacer {
+  flex: 1;
+}
