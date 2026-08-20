@@ -95,10 +95,19 @@ git clone --depth 1 --filter=blob:none --sparse --branch v2.4.2 \
 git -C <tmp> sparse-checkout set resources/profiles
 ```
 
-~1 second, 66 vendor bundles, discarded after generation. Running the ingestion
-over it produced **358 models / 927 variants / 278 KB raw / 14 KB gzipped**,
-essentially matching a full local install's 361/939 (the small delta is a
-newer-than-tag local install, which is exactly why pinning is worth doing).
+~1 second, 66 vendor bundles, discarded after generation.
+
+**Correction (found during implementation):** a planning-time Python
+prototype run over this clone reported 358 models / 927 variants / 278 KB
+raw, but that prototype indexed machine presets by *filename* rather than by
+their own internal JSON `"name"` field. 59 files in `v2.4.2`'s tree have a
+`"name"` differing from their filename, so filename-keyed `inherits`
+resolution silently drops those chains. The implemented generator indexes by
+the internal `"name"` field — the semantically correct approach, and what
+this spec's own field descriptions already assume — and produces the true
+count: **369 models / 971 variants**, ~609 KB compact / ~1.1 MB
+pretty-printed (this repo's convention, matching `settings.rs`'s
+`to_string_pretty` output, is pretty-printed for hand-editability).
 
 `just gen-catalog [tag]` defaults to a pinned tag constant in the justfile;
 bumping the catalog is a one-line, reviewable diff.
@@ -129,7 +138,7 @@ No scanning of local OrcaSlicer installs. The catalog is exactly what shipped
 with the running farm3d build, and changes only when farm3d releases a new one.
 
 - **The catalog is immutable at runtime** — `tauri::State<Arc<Catalog>>`, parsed
-  once in `setup()` (278 KB, single-digit ms). No `RwLock`, no background thread,
+  once in `setup()` (~1.1 MB, still single-digit ms). No `RwLock`, no background thread,
   no hot-swap, no event, no store re-fetch listener.
 - **No platform path discovery** — no flatpak/`/usr/share`/`.app`/`%APPDATA%`
   matrix, no AppImage gap, no `orcaslicerDataDir` setting.
@@ -516,7 +525,7 @@ pattern against pure path-taking fns:
 - `resolve_printer`: inherited-only; single override; override equal to the
   inherited value (still counts as overridden); each `CatalogStatus`.
 - Two non-ignored tests over the *committed* `printer-catalog.json`, both cheap
-  (278 KB) and both catching a bad regeneration at PR time:
+  (~1.1 MB) and both catching a bad regeneration at PR time:
   - `snapshot_is_complete()` — every variant resolves a `bedShape` and a
     `printableHeightMm`.
   - `snapshot_carries_no_disallowed_fields()` — the serialized snapshot
@@ -545,7 +554,8 @@ pattern against pure path-taking fns:
   `vitest.setup.ts` alongside the existing `ResizeObserver` stub.
 
 **End to end** — `just gen-catalog` regenerates the snapshot from the pinned
-OrcaSlicer tag; at `v2.4.2` it must produce 358 models / 927 variants. Then
+OrcaSlicer tag; at `v2.4.2` it must produce 369 models / 971 variants (see the
+correction above). Then
 `just dev` and confirm visually per `AGENTS.md`: add three Centauri Carbons at
 different names, see them grouped under one "Elegoo Centauri Carbon" header;
 override air filtration on one and confirm the accent border, the revert
