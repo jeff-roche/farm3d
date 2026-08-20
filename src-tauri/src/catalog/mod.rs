@@ -1,6 +1,8 @@
 pub mod ingest;
 
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -57,4 +59,57 @@ pub struct Catalog {
     pub source_tag: String,
     pub notice: String,
     pub models: Vec<CatalogModel>,
+}
+
+pub fn load_snapshot(path: &Path) -> Result<Catalog, String> {
+    let contents = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&contents).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_path() -> PathBuf {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "farm3d-catalog-test-{}-{}.json",
+            std::process::id(),
+            id
+        ))
+    }
+
+    #[test]
+    fn loads_a_valid_snapshot() {
+        let path = temp_path();
+        let catalog = Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![],
+        };
+        fs::write(&path, serde_json::to_string(&catalog).unwrap()).unwrap();
+
+        let loaded = load_snapshot(&path).unwrap();
+        assert_eq!(loaded, catalog);
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn missing_file_is_an_error() {
+        let path = temp_path();
+        assert!(load_snapshot(&path).is_err());
+    }
+
+    #[test]
+    fn corrupt_file_is_an_error() {
+        let path = temp_path();
+        fs::write(&path, "not valid json").unwrap();
+        assert!(load_snapshot(&path).is_err());
+        fs::remove_file(&path).ok();
+    }
 }
