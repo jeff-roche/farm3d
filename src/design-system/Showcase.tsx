@@ -16,6 +16,7 @@ import {
   Tooltip,
   DropdownMenu,
   Progress,
+  Logo,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -37,6 +38,14 @@ export function Showcase() {
           value={theme.mode()}
           onChange={theme.setThemeMode}
         />
+      </Panel>
+
+      <Panel title="Logo">
+        <div class={styles.row}>
+          <Logo size={16} />
+          <Logo size={24} />
+          <Logo size={48} title="farm3d" />
+        </div>
       </Panel>
 
       <Panel title="Button">

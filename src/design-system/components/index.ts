@@ -19,3 +19,4 @@ export {
   type MenuSeparator,
 } from "./DropdownMenu";
 export { Progress, type ProgressProps } from "./Progress";
+export { Logo, type LogoProps } from "./Logo";

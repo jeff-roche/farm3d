@@ -10,6 +10,7 @@ import { Tabs } from "./Tabs";
 import { Dialog } from "./Dialog";
 import { DropdownMenu } from "./DropdownMenu";
 import { Chip } from "./Chip";
+import { Logo } from "./Logo";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -144,6 +145,32 @@ describe("Dialog", () => {
     expect(screen.queryByText("Confirm")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByText("Open"));
     await waitFor(() => expect(screen.getByText("Confirm")).toBeInTheDocument());
+  });
+});
+
+describe("Logo", () => {
+  it("defaults to a 24px svg", () => {
+    const { container } = render(() => <Logo />);
+    const svg = container.querySelector("svg");
+    expect(svg?.getAttribute("width")).toBe("24");
+    expect(svg?.getAttribute("height")).toBe("24");
+  });
+
+  it("respects the size prop", () => {
+    const { container } = render(() => <Logo size={48} />);
+    const svg = container.querySelector("svg");
+    expect(svg?.getAttribute("width")).toBe("48");
+  });
+
+  it("gives each instance a unique clip-path id", () => {
+    const { container } = render(() => (
+      <>
+        <Logo />
+        <Logo />
+      </>
+    ));
+    const ids = [...container.querySelectorAll("clipPath")].map((el) => el.id);
+    expect(new Set(ids).size).toBe(2);
   });
 });
 
