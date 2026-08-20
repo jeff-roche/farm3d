@@ -4,7 +4,7 @@ import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard, summarizePrinters } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
-import { loadPrinters, printers, removePrinter } from "./printers/printer-store";
+import { addPrinter, loadPrinters, printers, removePrinter } from "./printers/printer-store";
 
 const MODELS: Model[] = [
   { id: "benchy", name: "Benchy_v3.gcode", addedAt: "2 days ago" },
@@ -38,6 +38,7 @@ function App() {
       >
         <PrinterDashboard
           printers={printers()}
+          onAddPrinter={(draft) => void addPrinter(draft)}
           onRemovePrinter={(id) => void removePrinter(id)}
         />
       </Show>

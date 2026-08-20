@@ -15,6 +15,13 @@
   min-height: 0;
 }
 
+.toolbar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 0.75rem 0;
+}
+
 .groups {
   flex: 1;
   min-height: 0;

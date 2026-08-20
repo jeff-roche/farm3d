@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button } from "../design-system";
-import type { ResolvedPrinter } from "../printers/types";
+import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
+import { PrinterAddDialog } from "./PrinterAddDialog";
 import styles from "./PrinterDashboard.module.css";
 
 export interface PrinterGroup {
@@ -57,7 +58,7 @@ export function summarizePrinters(printers: ResolvedPrinter[]): string {
 
 export interface PrinterDashboardProps {
   printers: ResolvedPrinter[];
-  onAddPrinter?: () => void;
+  onAddPrinter?: (draft: PrinterDraft) => void;
   onRemovePrinter?: (id: string) => void;
 }
 
@@ -70,6 +71,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   const selected = createMemo(() => props.printers.find((p) => p.id === selectedId()));
   const groups = createMemo(() => groupPrintersByModel(props.printers));
   const [detailWidth, setDetailWidth] = createSignal(DEFAULT_DETAIL_WIDTH);
+  const [addDialogOpen, setAddDialogOpen] = createSignal(false);
 
   let dragStartX = 0;
   let dragStartWidth = 0;
@@ -105,15 +107,19 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           child, stacked above `.groups`. `.dashboard` itself stays row-direction
           so the resizable detail aside remains a sibling, not nested here. */}
       <div class={styles.main}>
+        <div class={styles.toolbar}>
+          <PrinterAddDialog
+            open={addDialogOpen()}
+            onOpenChange={setAddDialogOpen}
+            onAdd={(draft) => props.onAddPrinter?.(draft)}
+          />
+        </div>
         <div class={styles.groups}>
           <Show
             when={props.printers.length > 0}
             fallback={
               <div class={styles.empty}>
-                <p class={styles.emptyMessage}>No printers yet</p>
-                <Button variant="secondary" onClick={() => props.onAddPrinter?.()}>
-                  + Add printer
-                </Button>
+                <p class={styles.emptyMessage}>No printers yet — add one with the button above.</p>
               </div>
             }
         >
