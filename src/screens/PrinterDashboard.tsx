@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { IconUsb, IconWifi } from "@tabler/icons-solidjs";
 import { Button, Progress } from "../design-system";
 import styles from "./PrinterDashboard.module.css";
@@ -33,9 +33,42 @@ export function summarizePrinters(printers: Printer[]): string {
   return `${printers.length} printer${printers.length === 1 ? "" : "s"} · ${printing} printing · ${idle} idle`;
 }
 
+const DEFAULT_DETAIL_WIDTH = 256;
+const MIN_DETAIL_WIDTH = 220;
+const MAX_DETAIL_WIDTH = 480;
+
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const selected = createMemo(() => props.printers.find((p) => p.id === selectedId()));
+  const [detailWidth, setDetailWidth] = createSignal(DEFAULT_DETAIL_WIDTH);
+
+  let dragStartX = 0;
+  let dragStartWidth = 0;
+
+  function onResizeMove(event: PointerEvent) {
+    const delta = dragStartX - event.clientX;
+    const next = Math.min(MAX_DETAIL_WIDTH, Math.max(MIN_DETAIL_WIDTH, dragStartWidth + delta));
+    setDetailWidth(next);
+  }
+
+  function stopResizing() {
+    window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", stopResizing);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+
+  function onResizeStart(event: PointerEvent) {
+    event.preventDefault();
+    dragStartX = event.clientX;
+    dragStartWidth = detailWidth();
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onResizeMove);
+    window.addEventListener("pointerup", stopResizing);
+  }
+
+  onCleanup(stopResizing);
 
   return (
     <div class={styles.dashboard}>
@@ -97,29 +130,42 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
 
       <Show when={selected()}>
         {(printer) => (
-          <aside class={styles.detail} aria-label="Printer detail">
-            <div class={styles.detailHeader}>{printer().name}</div>
-            <div class={styles.detailBody}>
-              <div class={styles.detailField}>
-                <span class={styles.detailLabel}>Status</span>
-                <span>{STATUS_LABEL[printer().status]}</span>
+          <>
+            <div
+              class={styles.resizeHandle}
+              onPointerDown={onResizeStart}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize printer detail panel"
+            />
+            <aside
+              class={styles.detail}
+              style={{ width: `${detailWidth()}px` }}
+              aria-label="Printer detail"
+            >
+              <div class={styles.detailHeader}>{printer().name}</div>
+              <div class={styles.detailBody}>
+                <div class={styles.detailField}>
+                  <span class={styles.detailLabel}>Status</span>
+                  <span>{STATUS_LABEL[printer().status]}</span>
+                </div>
+                <div class={styles.detailField}>
+                  <span class={styles.detailLabel}>Webcam</span>
+                  <div class={styles.webcamPlaceholder}>No feed configured</div>
+                </div>
+                <div class={styles.detailField}>
+                  <span class={styles.detailLabel}>Loaded material</span>
+                  <span class={styles.detailMuted}>Not tracked yet</span>
+                </div>
+                <Button variant="secondary" disabled title="Job assignment isn't wired up yet">
+                  Assign job
+                </Button>
+                <Button variant="danger" disabled title="Cancelling isn't wired up yet">
+                  Cancel job
+                </Button>
               </div>
-              <div class={styles.detailField}>
-                <span class={styles.detailLabel}>Webcam</span>
-                <div class={styles.webcamPlaceholder}>No feed configured</div>
-              </div>
-              <div class={styles.detailField}>
-                <span class={styles.detailLabel}>Loaded material</span>
-                <span class={styles.detailMuted}>Not tracked yet</span>
-              </div>
-              <Button variant="secondary" disabled title="Job assignment isn't wired up yet">
-                Assign job
-              </Button>
-              <Button variant="danger" disabled title="Cancelling isn't wired up yet">
-                Cancel job
-              </Button>
-            </div>
-          </aside>
+            </aside>
+          </>
         )}
       </Show>
     </div>
