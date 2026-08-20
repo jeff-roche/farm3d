@@ -4,7 +4,16 @@ import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard, summarizePrinters } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
-import { addPrinter, loadPrinters, printers, removePrinter } from "./printers/printer-store";
+import {
+  addPrinter,
+  dismissPrinterStoreError,
+  loadPrinters,
+  printers,
+  printerStoreError,
+  removePrinter,
+} from "./printers/printer-store";
+import { Button } from "./design-system";
+import styles from "./App.module.css";
 
 const MODELS: Model[] = [
   { id: "benchy", name: "Benchy_v3.gcode", addedAt: "2 days ago" },
@@ -30,6 +39,16 @@ function App() {
       title={SCREEN_TITLE[active()]}
       statusSummary={summarizePrinters(printers())}
     >
+      <Show when={printerStoreError()}>
+        {(message) => (
+          <div class={styles.errorBanner} role="alert">
+            <p class={styles.errorMessage}>{message()}</p>
+            <Button variant="ghost" onClick={dismissPrinterStoreError}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
       <Show
         when={active() === "printers"}
         fallback={

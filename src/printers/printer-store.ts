@@ -26,6 +26,19 @@ export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 
+/**
+ * Mutations report failures into `state.error` (surfaced by App's banner)
+ * rather than rejecting: every call site does `void fn(...)`, so a rethrow
+ * would only relocate the unhandled rejection.
+ */
+function reportError(e: unknown): void {
+  setState("error", String(e));
+}
+
+export function dismissPrinterStoreError(): void {
+  setState("error", null);
+}
+
 const EMPTY_PROFILE: PrinterProfile = {
   bedShape: { kind: "rectangular", widthMm: 220, depthMm: 220, originXMm: 0, originYMm: 0 },
   printableHeightMm: 250,
@@ -105,7 +118,7 @@ function removeById(id: string): void {
   setState("printers", (list) => list.filter((p) => p.id !== id));
 }
 
-export async function addPrinter(draft: PrinterDraft): Promise<string> {
+export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
   if (!isTauri()) {
     const id = `prn-web-${state.printers.length + 1}`;
     setState("printers", (list) => [
@@ -129,9 +142,14 @@ export async function addPrinter(draft: PrinterDraft): Promise<string> {
     ]);
     return id;
   }
-  const resolved = await invoke<ResolvedPrinter>("create_printer", { draft });
-  setState("printers", (list) => [...list, resolved]);
-  return resolved.id;
+  try {
+    const resolved = await invoke<ResolvedPrinter>("create_printer", { draft });
+    setState("printers", (list) => [...list, resolved]);
+    return resolved.id;
+  } catch (e) {
+    reportError(e);
+    return undefined;
+  }
 }
 
 export async function updatePrinter(id: string, patch: PrinterPatch): Promise<void> {
@@ -139,8 +157,12 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
     setState("printers", (p) => p.id === id, (p) => ({ ...p, ...patch }));
     return;
   }
-  const resolved = await invoke<ResolvedPrinter>("update_printer", { id, patch });
-  spliceResolved(resolved);
+  try {
+    const resolved = await invoke<ResolvedPrinter>("update_printer", { id, patch });
+    spliceResolved(resolved);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 export async function removePrinter(id: string): Promise<void> {
@@ -148,8 +170,12 @@ export async function removePrinter(id: string): Promise<void> {
     removeById(id);
     return;
   }
-  await invoke("delete_printer", { id });
-  removeById(id);
+  try {
+    await invoke("delete_printer", { id });
+    removeById(id);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 /** `value: undefined` is not valid here — pass a concrete value to override,
@@ -160,33 +186,53 @@ export async function overrideField(
   value: unknown,
 ): Promise<void> {
   if (!isTauri()) return; // web fallback has no catalog to resolve overrides against
-  const resolved = await invoke<ResolvedPrinter>("set_printer_override", { id, field, value });
-  spliceResolved(resolved);
+  try {
+    const resolved = await invoke<ResolvedPrinter>("set_printer_override", { id, field, value });
+    spliceResolved(resolved);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 export async function revertField(id: string, field: OverridableField): Promise<void> {
   if (!isTauri()) return;
-  const resolved = await invoke<ResolvedPrinter>("set_printer_override", {
-    id,
-    field,
-    value: null,
-  });
-  spliceResolved(resolved);
+  try {
+    const resolved = await invoke<ResolvedPrinter>("set_printer_override", {
+      id,
+      field,
+      value: null,
+    });
+    spliceResolved(resolved);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise<void> {
   if (!isTauri()) return;
-  const resolved = await invoke<ResolvedPrinter>("rebind_printer", { id, catalogRef });
-  spliceResolved(resolved);
+  try {
+    const resolved = await invoke<ResolvedPrinter>("rebind_printer", { id, catalogRef });
+    spliceResolved(resolved);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 export async function resolveDrift(id: string, action: "accept" | "pin"): Promise<void> {
   if (!isTauri()) return;
-  const resolved = await invoke<ResolvedPrinter>("resolve_profile_drift", { id, action });
-  spliceResolved(resolved);
+  try {
+    const resolved = await invoke<ResolvedPrinter>("resolve_profile_drift", { id, action });
+    spliceResolved(resolved);
+  } catch (e) {
+    reportError(e);
+  }
 }
 
 export async function openPrintersFile(): Promise<void> {
   if (!isTauri()) return;
-  await invoke("open_printers_file");
+  try {
+    await invoke("open_printers_file");
+  } catch (e) {
+    reportError(e);
+  }
 }

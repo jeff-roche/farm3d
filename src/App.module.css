@@ -1,0 +1,19 @@
+.errorBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface-hover);
+  border: 1px solid var(--f3d-color-danger);
+}
+
+.errorMessage {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-danger);
+  overflow-wrap: anywhere;
+}

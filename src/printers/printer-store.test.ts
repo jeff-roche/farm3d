@@ -92,6 +92,23 @@ describe("printer-store", () => {
       expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { id: "prn-1" });
       expect(printers()).toEqual([]);
     });
+
+    it("a rejected mutation surfaces the message instead of rejecting, and can be dismissed", async () => {
+      tauriMock.invoke.mockResolvedValue([A_RESOLVED_PRINTER]);
+      const { loadPrinters, overrideField, printerStoreError, dismissPrinterStoreError } =
+        await import("./printer-store");
+      await loadPrinters();
+      expect(printerStoreError()).toBeNull();
+
+      tauriMock.invoke.mockRejectedValue(new Error("printers.json is read-only"));
+      // Must not reject: every call site discards the promise with `void`.
+      await expect(overrideField("prn-1", "printableHeightMm", 240)).resolves.toBeUndefined();
+
+      expect(printerStoreError()).toContain("printers.json is read-only");
+
+      dismissPrinterStoreError();
+      expect(printerStoreError()).toBeNull();
+    });
   });
 
   describe("under just web (no Tauri backend)", () => {
