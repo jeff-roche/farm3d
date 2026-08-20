@@ -1,0 +1,7 @@
+{
+  "type": "machine_model",
+  "name": "Test Delta",
+  "model_id": "TestVendor-TD",
+  "nozzle_diameter": "0.4",
+  "machine_tech": "FFF"
+}

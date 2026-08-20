@@ -1,0 +1,11 @@
+{
+  "type": "machine",
+  "name": "Test Delta 0.4 nozzle",
+  "inherits": "fdm_machine_common",
+  "printer_model": "Test Delta",
+  "printer_variant": "0.4",
+  "nozzle_diameter": ["0.4"],
+  "printable_area": ["150x0", "106x44", "44x106", "0x150", "0x0"],
+  "gcode_flavor": "klipper",
+  "host_type": "octoprint"
+}

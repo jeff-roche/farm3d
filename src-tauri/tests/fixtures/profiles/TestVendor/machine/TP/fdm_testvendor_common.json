@@ -1,0 +1,7 @@
+{
+  "type": "machine",
+  "name": "fdm_testvendor_common",
+  "inherits": "fdm_machine_common",
+  "auxiliary_fan": "1",
+  "support_air_filtration": "1"
+}

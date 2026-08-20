@@ -1,0 +1,7 @@
+{
+  "type": "machine_model",
+  "name": "Test Printer",
+  "model_id": "TestVendor-TP",
+  "nozzle_diameter": "0.4",
+  "machine_tech": "FFF"
+}

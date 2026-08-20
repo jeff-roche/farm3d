@@ -1,0 +1,15 @@
+{
+  "name": "TestVendor",
+  "version": "1.0.0.0",
+  "machine_model_list": [
+    { "name": "Test Printer", "sub_path": "machine/TP/Test Printer.json" },
+    { "name": "Test Delta", "sub_path": "machine/TD/Test Delta.json" },
+    { "name": "Test Printer 5T", "sub_path": "machine/T5/Test Printer 5T.json" }
+  ],
+  "machine_list": [
+    { "name": "Test Printer 0.4 nozzle", "sub_path": "machine/TP/Test Printer 0.4 nozzle.json" },
+    { "name": "Test Delta 0.4 nozzle", "sub_path": "machine/TD/Test Delta 0.4 nozzle.json" },
+    { "name": "Test Printer 5T 0.4 nozzle", "sub_path": "machine/T5/Test Printer 5T 0.4 nozzle.json" },
+    { "name": "Ghost Printer 0.4 nozzle", "sub_path": "machine/nonexistent.json" }
+  ]
+}

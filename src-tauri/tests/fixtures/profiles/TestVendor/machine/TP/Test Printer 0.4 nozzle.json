@@ -1,0 +1,9 @@
+{
+  "type": "machine",
+  "name": "Test Printer 0.4 nozzle",
+  "inherits": "fdm_testvendor_common",
+  "printer_model": "Test Printer",
+  "printer_variant": "0.4",
+  "nozzle_diameter": ["0.4"],
+  "host_type": "moonraker"
+}

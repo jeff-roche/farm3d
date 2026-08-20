@@ -1,0 +1,12 @@
+{
+  "type": "machine",
+  "name": "fdm_machine_common",
+  "printable_area": ["0x0", "220x0", "220x220", "0x220"],
+  "printable_height": "250",
+  "gcode_flavor": "marlin",
+  "nozzle_type": "brass",
+  "default_bed_type": "1",
+  "auxiliary_fan": "0",
+  "support_air_filtration": "0",
+  "support_multi_filament": "0"
+}
