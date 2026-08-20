@@ -130,4 +130,25 @@ mod tests {
     fn empty_list_is_an_error() {
         assert!(parse_printable_area(&[]).is_err());
     }
+
+    #[test]
+    fn rectangular_serializes_fields_as_camel_case() {
+        let shape = BedShape::Rectangular {
+            width_mm: 256.0,
+            depth_mm: 256.0,
+            origin_x_mm: 10.0,
+            origin_y_mm: 20.0,
+        };
+        let json = serde_json::to_string(&shape).unwrap();
+        // Fields should be in camelCase (widthMm, depthMm, originXMm, originYMm)
+        // not snake_case (width_mm, depth_mm, origin_x_mm, origin_y_mm)
+        assert!(json.contains("\"widthMm\""), "missing camelCase widthMm in: {json}");
+        assert!(json.contains("\"depthMm\""), "missing camelCase depthMm in: {json}");
+        assert!(json.contains("\"originXMm\""), "missing camelCase originXMm in: {json}");
+        assert!(json.contains("\"originYMm\""), "missing camelCase originYMm in: {json}");
+        assert!(!json.contains("\"width_mm\""), "found snake_case width_mm in: {json}");
+        assert!(!json.contains("\"depth_mm\""), "found snake_case depth_mm in: {json}");
+        assert!(!json.contains("\"origin_x_mm\""), "found snake_case origin_x_mm in: {json}");
+        assert!(!json.contains("\"origin_y_mm\""), "found snake_case origin_y_mm in: {json}");
+    }
 }
