@@ -157,7 +157,7 @@ pub fn apply_override(
 }
 
 use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, ResolvedPrinter};
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogVariant};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -198,6 +198,19 @@ fn generate_id() -> String {
     format!("prn-{:x}", nanos & 0xFFFF_FFFF)
 }
 
+/// Builds a fresh drift baseline from the RAW catalog variant — never from a
+/// `ResolvedPrinter`'s merged/effective profile, which may have overrides
+/// baked in. Overrides must never leak into `last_known_good`, or a later
+/// override revert can produce spurious drift (and "pin" can silently
+/// re-instate an override the user just removed).
+fn baseline_from(variant: &CatalogVariant, catalog: &Catalog) -> LastKnownGood {
+    LastKnownGood {
+        profile: PrinterProfile::from(variant),
+        catalog_version: catalog.source_tag.clone(),
+        resolved_at: now_rfc3339(),
+    }
+}
+
 #[tauri::command]
 pub fn list_printers(
     app: AppHandle,
@@ -228,11 +241,7 @@ pub fn create_printer(
         group: draft.group.unwrap_or_default(),
         notes: String::new(),
         overrides: PrinterProfileOverrides::default(),
-        last_known_good: Some(LastKnownGood {
-            profile: PrinterProfile::from(variant),
-            catalog_version: catalog.source_tag.clone(),
-            resolved_at: now_rfc3339(),
-        }),
+        last_known_good: Some(baseline_from(variant, &catalog)),
         connection: None,
     };
 
@@ -310,11 +319,7 @@ pub fn rebind_printer(
             format!("cannot rebind to an unresolvable catalog reference (status: {status:?})")
         })?;
         // Rebinding invalidates any stale drift baseline — re-baseline immediately.
-        stored.last_known_good = Some(LastKnownGood {
-            profile: PrinterProfile::from(variant),
-            catalog_version: catalog.source_tag.clone(),
-            resolved_at: now_rfc3339(),
-        });
+        stored.last_known_good = Some(baseline_from(variant, &catalog));
     }
     write_printers_to(&config_dir, &file)?;
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
@@ -334,11 +339,13 @@ pub fn resolve_profile_drift(
         let resolved = resolve_printer(&catalog, stored_ref);
         match action.as_str() {
             "accept" => {
-                stored_ref.last_known_good = Some(LastKnownGood {
-                    profile: resolved.profile.clone(),
-                    catalog_version: catalog.source_tag.clone(),
-                    resolved_at: now_rfc3339(),
-                });
+                let (variant, status) = resolve_catalog_ref(&catalog, &stored_ref.catalog_ref);
+                let variant = variant.ok_or_else(|| {
+                    format!(
+                        "cannot accept drift for an unresolvable catalog reference (status: {status:?})"
+                    )
+                })?;
+                stored_ref.last_known_good = Some(baseline_from(variant, &catalog));
             }
             "pin" => {
                 for drift in &resolved.profile_drift {
@@ -544,5 +551,53 @@ mod tests {
         let overrides = PrinterProfileOverrides::default();
         let result = apply_override(&overrides, "printableHeightMm", Some(serde_json::json!("not a number")));
         assert!(result.is_err());
+    }
+
+    fn a_variant() -> CatalogVariant {
+        CatalogVariant {
+            variant: "Test Printer 0.4 nozzle".to_string(),
+            printer_variant: "0.4".to_string(),
+            bed_shape: BedShape::Rectangular {
+                width_mm: 256.0,
+                depth_mm: 256.0,
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
+            },
+            printable_height_mm: 256.0,
+            bed_exclude_areas: vec![],
+            default_bed_type: "4".to_string(),
+            nozzle_diameter_mm: vec![0.4],
+            nozzle_type: "hardened_steel".to_string(),
+            gcode_flavor: "klipper".to_string(),
+            has_auxiliary_fan: true,
+            supports_air_filtration: true,
+            supports_multi_filament: false,
+            suggested_host_type: None,
+        }
+    }
+
+    fn a_catalog_for_baseline() -> Catalog {
+        Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![],
+        }
+    }
+
+    #[test]
+    fn baseline_from_uses_the_raw_catalog_profile_not_a_merged_one() {
+        // This is the regression test for the drift-acceptance bug: baseline_from
+        // must always produce PrinterProfile::from(variant) — the raw catalog
+        // value — never a profile with override values mixed in. If a caller
+        // passed a merged/effective profile here instead, an active override
+        // would get baked into the new last_known_good baseline, causing bogus
+        // drift alerts (and silent override re-instatement via "pin") once the
+        // user reverts that override later.
+        let variant = a_variant();
+        let catalog = a_catalog_for_baseline();
+        let baseline = baseline_from(&variant, &catalog);
+        assert_eq!(baseline.profile, PrinterProfile::from(&variant));
+        assert_eq!(baseline.catalog_version, "v2.4.2");
     }
 }
