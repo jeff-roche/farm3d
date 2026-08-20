@@ -1,6 +1,7 @@
 import { render } from "solid-js/web";
 import App from "./App";
 import { initTheme } from "./design-system";
+import "./design-system/fonts.css";
 import "./styles.css";
 
 initTheme();
