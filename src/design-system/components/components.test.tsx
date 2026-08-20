@@ -319,4 +319,13 @@ describe("Field", () => {
     ));
     expect(screen.getByText("inherited: 256")).toBeInTheDocument();
   });
+
+  it("shows the hint text even when overridden (regression: hint should not gate on !overridden)", () => {
+    render(() => (
+      <Field label="Printable height" overridden hint="inherited: 256" onRevert={() => {}}>
+        240
+      </Field>
+    ));
+    expect(screen.getByText("inherited: 256")).toBeInTheDocument();
+  });
 });
