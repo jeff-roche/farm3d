@@ -1,4 +1,5 @@
 pub mod ingest;
+pub mod resolve;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
