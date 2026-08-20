@@ -17,4 +17,6 @@ async function main() {
   }
 }
 
-main();
+main().catch((error) => {
+  console.error("Failed to start the application:", error);
+});

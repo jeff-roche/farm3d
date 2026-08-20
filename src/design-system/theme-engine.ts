@@ -113,7 +113,10 @@ export async function initTheme(): Promise<void> {
   registerTheme(lightTheme);
   registerTheme(darkTheme);
 
-  const settings = await loadSettings();
+  const settings = await loadSettings().catch((error) => {
+    console.error("Failed to load settings; using defaults:", error);
+    return { themeMode: "system" as ThemeMode };
+  });
   currentMode = settings.themeMode || "system";
   applyCurrentMode();
 

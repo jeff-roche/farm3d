@@ -6,10 +6,18 @@ use tauri_plugin_opener::OpenerExt;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
-#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub theme_mode: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme_mode: "system".to_string(),
+        }
+    }
 }
 
 fn settings_file_path(config_dir: &Path) -> PathBuf {
@@ -30,8 +38,14 @@ fn load_settings_from(config_dir: &Path) -> Result<Settings, String> {
         return Ok(defaults);
     }
     match fs::read_to_string(&path) {
-        Ok(contents) => Ok(serde_json::from_str(&contents).unwrap_or_default()),
-        Err(_) => Ok(Settings::default()),
+        Ok(contents) => Ok(serde_json::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("settings.json is not valid JSON ({e}); using defaults");
+            Settings::default()
+        })),
+        Err(e) => {
+            eprintln!("Could not read settings.json ({e}); using defaults");
+            Ok(Settings::default())
+        }
     }
 }
 
