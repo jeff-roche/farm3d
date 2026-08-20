@@ -10,6 +10,10 @@ install:
 install-rust:
     cargo fetch --manifest-path src-tauri/Cargo.toml
 
+# Run the Tauri backend's Rust test suite
+test-rust:
+    cargo test --manifest-path src-tauri/Cargo.toml
+
 # Run the full desktop app (Rust + frontend) with hot reload
 dev:
     npm run tauri dev
