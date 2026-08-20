@@ -1,7 +1,7 @@
 pub mod inherits;
 pub mod shape;
 
-use crate::catalog::{BedShape, CatalogModel, CatalogVariant, PointMm};
+use crate::catalog::{CatalogModel, CatalogVariant, PointMm};
 use inherits::{resolve_machine_preset, InheritsError};
 use serde_json::Value;
 use shape::{parse_printable_area, ShapeError};
@@ -213,6 +213,7 @@ fn extract_variant(name: &str, resolved: &Value) -> Result<CatalogVariant, Inges
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::BedShape;
 
     fn fixtures_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles")
