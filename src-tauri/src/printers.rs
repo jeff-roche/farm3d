@@ -325,6 +325,29 @@ pub fn rebind_printer(
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }
 
+/// "Keep my value": pins each drifted field back to its OLD (last-known-good)
+/// value as an explicit override.
+///
+/// Drift is reported for every profile field, but only `OVERRIDABLE_FIELDS` can
+/// be pinned — variant-identity fields (`nozzleType`, `gcodeFlavor`,
+/// `nozzleDiameterMm`, `supportsMultiFilament`, `suggestedHostType`) are a
+/// rebind, not something a user overrides. Those are skipped rather than passed
+/// to `apply_override`, which would reject them and abort the entire pin action,
+/// making "Keep my value" silently do nothing for any drift set containing one.
+fn pin_drift(
+    overrides: &PrinterProfileOverrides,
+    drift: &[crate::catalog::resolve::ProfileDrift],
+) -> Result<PrinterProfileOverrides, String> {
+    let mut updated = overrides.clone();
+    for d in drift {
+        if !OVERRIDABLE_FIELDS.contains(&d.field.as_str()) {
+            continue;
+        }
+        updated = apply_override(&updated, &d.field, Some(d.from.clone()))?;
+    }
+    Ok(updated)
+}
+
 #[tauri::command]
 pub fn resolve_profile_drift(
     app: AppHandle,
@@ -348,11 +371,7 @@ pub fn resolve_profile_drift(
                 stored_ref.last_known_good = Some(baseline_from(variant, &catalog));
             }
             "pin" => {
-                for drift in &resolved.profile_drift {
-                    // Pin to the OLD (last-known-good) value — "keep my value".
-                    stored_ref.overrides =
-                        apply_override(&stored_ref.overrides, &drift.field, Some(drift.from.clone()))?;
-                }
+                stored_ref.overrides = pin_drift(&stored_ref.overrides, &resolved.profile_drift)?;
             }
             other => return Err(format!("unknown drift action: {other:?}")),
         }
@@ -599,5 +618,55 @@ mod tests {
         let baseline = baseline_from(&variant, &catalog);
         assert_eq!(baseline.profile, PrinterProfile::from(&variant));
         assert_eq!(baseline.catalog_version, "v2.4.2");
+    }
+
+    /// Regression test for the "pin" action hard-erroring: drift routinely
+    /// includes variant-identity fields that `apply_override` rejects, which
+    /// used to abort the whole action, so "Keep my value" did nothing at all.
+    #[test]
+    fn pinning_drift_skips_non_overridable_fields_instead_of_erroring() {
+        use crate::catalog::CatalogModel;
+
+        // Catalog holds the current variant; last_known_good holds an older
+        // snapshot that differs in BOTH an overridable field (printableHeightMm)
+        // and a non-overridable one (nozzleType).
+        let current = a_variant();
+        let catalog = Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![CatalogModel {
+                model_id: "TestVendor-TP".to_string(),
+                vendor: "TestVendor".to_string(),
+                model: "Test Printer".to_string(),
+                variants: vec![current.clone()],
+            }],
+        };
+
+        let mut stale = a_variant();
+        stale.printable_height_mm = 200.0;
+        stale.nozzle_type = "brass".to_string();
+
+        let mut printer = a_printer();
+        printer.last_known_good = Some(LastKnownGood {
+            profile: PrinterProfile::from(&stale),
+            catalog_version: "v2.4.1".to_string(),
+            resolved_at: "2026-08-01T00:00:00Z".to_string(),
+        });
+
+        let resolved = resolve_printer(&catalog, &printer);
+        let drifted: Vec<_> = resolved.profile_drift.iter().map(|d| d.field.as_str()).collect();
+        assert!(drifted.contains(&"printableHeightMm"), "expected height drift, got {drifted:?}");
+        assert!(drifted.contains(&"nozzleType"), "expected nozzleType drift, got {drifted:?}");
+
+        let pinned = pin_drift(&printer.overrides, &resolved.profile_drift)
+            .expect("pinning must not fail just because drift includes a non-overridable field");
+
+        // The overridable field is pinned to its OLD value...
+        assert_eq!(pinned.printable_height_mm, Some(200.0));
+        // ...and the non-overridable one is simply not recorded anywhere.
+        let json = serde_json::to_value(&pinned).unwrap();
+        assert!(json.get("nozzleType").is_none(), "nozzleType must not be pinned");
+        assert!(pinned.extra.is_empty(), "no stray override keys: {:?}", pinned.extra);
     }
 }
