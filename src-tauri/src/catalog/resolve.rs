@@ -247,7 +247,7 @@ fn diff_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{CatalogModel, PointMm};
+    use crate::catalog::CatalogModel;
     use crate::printers::LastKnownGood;
 
     fn variant(name: &str, printer_variant: &str, height: f64) -> CatalogVariant {
@@ -349,17 +349,35 @@ mod tests {
 
     #[test]
     fn never_rematches_across_vendors() {
-        let mut catalog = a_catalog();
-        catalog.models.push(CatalogModel {
-            model_id: "Other-CC".to_string(),
-            vendor: "OtherVendor".to_string(),
-            model: "Other Centauri Carbon".to_string(),
-            variants: vec![variant("Other Centauri Carbon 0.4 nozzle", "0.4", 256.0)],
-        });
-        let mut r = a_ref();
-        r.model_id = "does-not-exist-anywhere".to_string();
-        r.model = "Does Not Exist Anywhere".to_string();
-        // Even though OtherVendor has a same-printerVariant match, vendor differs.
+        let catalog = Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![
+                // Vendor "Elegoo" exists, but has no model matching the ref's
+                // model_id or (normalized) model name — a genuine miss, not a
+                // sabotaged name.
+                CatalogModel {
+                    model_id: "Elegoo-Other".to_string(),
+                    vendor: "Elegoo".to_string(),
+                    model: "Elegoo Something Else".to_string(),
+                    variants: vec![variant("Elegoo Something Else 0.4 nozzle", "0.4", 256.0)],
+                },
+                // Decoy: same model name (normalizes identically to the ref's
+                // model) AND same printer_variant as what the ref is looking
+                // for, but under a different vendor. If any cascade step's
+                // `m.vendor == r.vendor` guard were dropped, this decoy would
+                // be found via the normalized-name/printerVariant rematch and
+                // wrongly reported as `Rematched`.
+                CatalogModel {
+                    model_id: "Other-CC".to_string(),
+                    vendor: "OtherVendor".to_string(),
+                    model: "Elegoo Centauri Carbon".to_string(),
+                    variants: vec![variant("Elegoo Centauri Carbon 0.4 nozzle", "0.4", 256.0)],
+                },
+            ],
+        };
+        let r = a_ref(); // vendor "Elegoo", model "Elegoo Centauri Carbon", printer_variant "0.4"
         let (v, status) = resolve_catalog_ref(&catalog, &r);
         assert_eq!(status, CatalogStatus::ModelMissing);
         assert!(v.is_none());
