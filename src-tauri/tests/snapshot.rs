@@ -42,6 +42,27 @@ fn snapshot_is_complete() {
     }
 }
 
+/// `(vendor, model)` is the key `resolve_catalog_ref` and `list_catalog_variants`
+/// match on, so it has to stay unique across every regenerated catalog.
+/// `modelId` is deliberately NOT asserted unique — the real catalog legitimately
+/// has duplicate and empty modelIds, which is precisely why resolution keys on
+/// the name pair instead.
+#[test]
+fn snapshot_vendor_model_pairs_are_unique() {
+    let raw = load_snapshot_raw();
+    let catalog: Catalog = serde_json::from_str(&raw).expect("snapshot should be valid JSON");
+    let mut seen = std::collections::HashSet::new();
+    for model in &catalog.models {
+        let key = (model.vendor.clone(), model.model.clone());
+        assert!(
+            seen.insert(key),
+            "duplicate (vendor, model) pair: ({}, {})",
+            model.vendor,
+            model.model
+        );
+    }
+}
+
 /// The executable form of ADR 0007's allowlist rule: never let a future field
 /// addition smuggle g-code or filenames into the shipped catalog.
 #[test]

@@ -30,6 +30,19 @@ describe("printer-catalog", () => {
     expect(tauriMock.invoke).not.toHaveBeenCalled();
   });
 
+  it("listCatalogVariants keys on (vendor, model), not modelId", async () => {
+    tauriMock.isTauri.mockReturnValue(true);
+    tauriMock.invoke.mockResolvedValue([]);
+    const { listCatalogVariants } = await import("./printer-catalog");
+
+    await listCatalogVariants("Elegoo", "Elegoo Centauri Carbon");
+
+    expect(tauriMock.invoke).toHaveBeenCalledWith("list_catalog_variants", {
+      vendor: "Elegoo",
+      model: "Elegoo Centauri Carbon",
+    });
+  });
+
   it("previewProfile forwards the catalogRef", async () => {
     tauriMock.isTauri.mockReturnValue(true);
     const ref = { vendor: "Elegoo", model: "Elegoo Centauri Carbon", variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4" };

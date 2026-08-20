@@ -43,10 +43,18 @@ pub fn resolve_catalog_ref<'a>(
     catalog: &'a Catalog,
     r: &CatalogRef,
 ) -> (Option<&'a CatalogVariant>, CatalogStatus) {
+    // Step 1: exact (vendor, model) match. Variant names are unique WITHIN
+    // a model by construction, and (vendor, model) name pairs are unique
+    // across the whole catalog (verified: zero duplicates) even though
+    // `modelId` alone is NOT (11 models across 5 groups share a modelId
+    // with a same-vendor sibling in the shipped v2.4.2 catalog, including
+    // 3 Cubicon models sharing modelId ""). Matching by name here, before
+    // ever consulting modelId, is what keeps a modelId collision from
+    // ever silently resolving to the wrong model.
     if let Some(model) = catalog
         .models
         .iter()
-        .find(|m| m.vendor == r.vendor && m.model_id == r.model_id)
+        .find(|m| m.vendor == r.vendor && m.model == r.model)
     {
         if let Some(variant) = model.variants.iter().find(|v| v.variant == r.variant) {
             return (Some(variant), CatalogStatus::Ok);
@@ -61,6 +69,29 @@ pub fn resolve_catalog_ref<'a>(
         return (None, CatalogStatus::VariantMissing);
     }
 
+    // Step 2: the model's own name changed upstream but modelId is stable.
+    // Still requires (vendor, modelId) together, and additionally rejects
+    // an empty modelId outright -- an empty key can't disambiguate among
+    // the models that share it, so treating it as a match key here would
+    // reintroduce exactly the collision this fix closes.
+    if !r.model_id.is_empty() {
+        if let Some(model) = catalog
+            .models
+            .iter()
+            .find(|m| m.vendor == r.vendor && m.model_id == r.model_id)
+        {
+            if let Some(variant) = model
+                .variants
+                .iter()
+                .find(|v| v.printer_variant == r.printer_variant)
+            {
+                return (Some(variant), CatalogStatus::Rematched);
+            }
+            return (None, CatalogStatus::VariantMissing);
+        }
+    }
+
+    // Step 3: cosmetic-only model name drift (punctuation/case).
     if let Some(model) = catalog
         .models
         .iter()
@@ -381,6 +412,45 @@ mod tests {
         let (v, status) = resolve_catalog_ref(&catalog, &r);
         assert_eq!(status, CatalogStatus::ModelMissing);
         assert!(v.is_none());
+    }
+
+    /// Mirrors the real Cubicon/Snapmaker shape: two models under one vendor
+    /// sharing a `modelId`. Resolving by `(vendor, modelId)` would pick
+    /// whichever came first; resolving by `(vendor, model)` name picks the one
+    /// the user actually asked for.
+    #[test]
+    fn a_shared_model_id_never_resolves_to_the_wrong_sibling_model() {
+        let catalog = Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![
+                CatalogModel {
+                    model_id: "shared-id".to_string(),
+                    vendor: "Cubicon".to_string(),
+                    model: "Model A".to_string(),
+                    variants: vec![variant("Model A 0.4 nozzle", "0.4", 300.0)],
+                },
+                CatalogModel {
+                    model_id: "shared-id".to_string(),
+                    vendor: "Cubicon".to_string(),
+                    model: "Model B".to_string(),
+                    variants: vec![variant("Model B 0.4 nozzle", "0.4", 200.0)],
+                },
+            ],
+        };
+        let r = CatalogRef {
+            vendor: "Cubicon".to_string(),
+            model: "Model B".to_string(),
+            variant: "Model B 0.4 nozzle".to_string(),
+            model_id: "shared-id".to_string(),
+            printer_variant: "0.4".to_string(),
+        };
+        let (v, status) = resolve_catalog_ref(&catalog, &r);
+        assert_eq!(status, CatalogStatus::Ok);
+        let v = v.unwrap();
+        assert_eq!(v.variant, "Model B 0.4 nozzle");
+        assert_eq!(v.printable_height_mm, 200.0, "resolved to Model A's variant");
     }
 
     #[test]

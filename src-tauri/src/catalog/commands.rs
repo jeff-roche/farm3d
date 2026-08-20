@@ -42,15 +42,20 @@ pub fn list_catalog_models(catalog: State<Arc<Catalog>>) -> Vec<CatalogModelSumm
         .collect()
 }
 
+/// Looks a model up by its `(vendor, model)` name pair, NOT by `modelId` —
+/// `modelId` is not unique in the real catalog (11 models across 5 groups share
+/// one with a same-vendor sibling, and 3 Cubicon models share `modelId: ""`),
+/// so keying on it would silently return another model's variants.
 #[tauri::command]
 pub fn list_catalog_variants(
     catalog: State<Arc<Catalog>>,
-    model_id: String,
+    vendor: String,
+    model: String,
 ) -> Vec<CatalogVariantSummary> {
     catalog
         .models
         .iter()
-        .find(|m| m.model_id == model_id)
+        .find(|m| m.vendor == vendor && m.model == model)
         .map(|m| {
             m.variants
                 .iter()

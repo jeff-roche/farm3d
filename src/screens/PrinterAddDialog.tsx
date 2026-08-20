@@ -37,7 +37,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
   });
 
   const [variants] = createResource(selectedModel, (model) =>
-    model ? listCatalogVariants(model.modelId) : Promise.resolve([]),
+    model ? listCatalogVariants(model.vendor, model.model) : Promise.resolve([]),
   );
 
   // Auto-select the sole variant, or default to 0.4mm, without clobbering a
@@ -91,7 +91,9 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
         <Combobox
           label="Printer model"
           options={filteredModels()}
-          optionValue={(m: CatalogModelSummary) => m.modelId}
+          // Composite key: modelId alone isn't unique in the real catalog, and
+          // two options sharing a key makes Kobalte treat them as one option.
+          optionValue={(m: CatalogModelSummary) => `${m.vendor}::${m.model}`}
           optionLabel={(m: CatalogModelSummary) => `${m.vendor} · ${m.model}`}
           value={selectedModel() ?? undefined}
           onChange={onSelectModel}

@@ -11,9 +11,16 @@ export async function listCatalogModels(): Promise<CatalogModelSummary[]> {
   return modelsCache;
 }
 
-export async function listCatalogVariants(modelId: string): Promise<CatalogVariantSummary[]> {
+/**
+ * Keyed by the (vendor, model) name pair, not modelId — modelId is not unique
+ * in the real catalog, so it can't identify a model on its own.
+ */
+export async function listCatalogVariants(
+  vendor: string,
+  model: string,
+): Promise<CatalogVariantSummary[]> {
   if (!isTauri()) return [];
-  return invoke<CatalogVariantSummary[]>("list_catalog_variants", { modelId });
+  return invoke<CatalogVariantSummary[]>("list_catalog_variants", { vendor, model });
 }
 
 export async function previewProfile(catalogRef: CatalogRef): Promise<PrinterProfile> {
