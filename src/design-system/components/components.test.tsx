@@ -12,6 +12,7 @@ import { Popover } from "./Popover";
 import { DropdownMenu } from "./DropdownMenu";
 import { Chip } from "./Chip";
 import { Logo } from "./Logo";
+import { NumberField } from "./NumberField";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -201,6 +202,31 @@ describe("Logo", () => {
     ));
     const ids = [...container.querySelectorAll("clipPath")].map((el) => el.id);
     expect(new Set(ids).size).toBe(2);
+  });
+});
+
+describe("NumberField", () => {
+  it("calls onChange with the incremented raw value when the increment trigger is clicked", async () => {
+    const onChange = vi.fn();
+    render(() => <NumberField label="Height" value={10} step={1} onChange={onChange} />);
+    const increment = screen.getByLabelText("Increment");
+    await fireEvent.click(increment);
+    expect(onChange).toHaveBeenCalledWith(11);
+  });
+
+  it("does not exceed maxValue", async () => {
+    const onChange = vi.fn();
+    render(() => (
+      <NumberField label="Height" value={10} maxValue={10} step={1} onChange={onChange} />
+    ));
+    const increment = screen.getByLabelText("Increment");
+    await fireEvent.click(increment);
+    expect(onChange).not.toHaveBeenCalledWith(11);
+  });
+
+  it("renders the suffix text", () => {
+    render(() => <NumberField label="Height" value={10} suffix="mm" />);
+    expect(screen.getByText("mm")).toBeInTheDocument();
   });
 });
 

@@ -18,6 +18,7 @@ import {
   DropdownMenu,
   Progress,
   Logo,
+  NumberField,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -29,6 +30,7 @@ export function Showcase() {
   const [sliderValue, setSliderValue] = createSignal(40);
   const [radioValue, setRadioValue] = createSignal("b");
   const [chipSelected, setChipSelected] = createSignal(true);
+  const [numberValue, setNumberValue] = createSignal(120);
 
   return (
     <div class={styles.page}>
@@ -139,6 +141,18 @@ export function Showcase() {
             onChange={setSliderValue}
           />
         </div>
+      </Panel>
+
+      <Panel title="NumberField">
+        <NumberField
+          label="Bed height"
+          suffix="mm"
+          minValue={0}
+          maxValue={500}
+          step={1}
+          value={numberValue()}
+          onChange={setNumberValue}
+        />
       </Panel>
 
       <Panel title="Tabs">

@@ -20,4 +20,5 @@ export {
   type MenuSeparator,
 } from "./DropdownMenu";
 export { Progress, type ProgressProps } from "./Progress";
+export { NumberField, type NumberFieldProps } from "./NumberField";
 export { Logo, type LogoProps } from "./Logo";
