@@ -14,6 +14,10 @@ install-rust:
 test-rust:
     cargo test --manifest-path src-tauri/Cargo.toml
 
+# Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
+gen-catalog tag="v2.4.2":
+    cargo run --manifest-path src-tauri/Cargo.toml --bin gen-catalog -- {{tag}}
+
 # Run the full desktop app (Rust + frontend) with hot reload
 dev:
     npm run tauri dev
