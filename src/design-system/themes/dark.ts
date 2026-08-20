@@ -1,13 +1,13 @@
 import type { Theme } from "../tokens/types";
-import { editorTypography } from "../tokens/typography";
-import { editorShape } from "../tokens/shape";
+import { farm3dTypography } from "../tokens/typography";
+import { farm3dShape } from "../tokens/shape";
 
 /**
  * The default dark theme — an editor/tool aesthetic (Blender/Godot/Unity-inspired)
  * rather than a consumer-app one: flat, dense, neutral grays with a farm-green accent.
  */
 export const darkTheme: Theme = {
-  name: "editor-dark",
+  name: "farm3d-dark",
   scheme: "dark",
   color: {
     bg: "#17181a",
@@ -36,6 +36,6 @@ export const darkTheme: Theme = {
 
     focusRing: "#8fc46b",
   },
-  typography: editorTypography,
-  shape: editorShape,
+  typography: farm3dTypography,
+  shape: farm3dShape,
 };

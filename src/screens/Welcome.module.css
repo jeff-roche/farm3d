@@ -1,0 +1,110 @@
+.screen {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topBar {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem;
+}
+
+.wordmark {
+  font-family: var(--f3d-type-mono-font);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--f3d-color-text);
+}
+
+.startPanel {
+  position: absolute;
+  z-index: 2;
+  left: 3rem;
+  bottom: 4rem;
+  width: 21rem;
+  max-width: calc(100vw - 4.5rem);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.4);
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions > * {
+  flex: 1;
+}
+
+.recentLabel {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--f3d-color-border);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+  text-transform: uppercase;
+}
+
+.empty {
+  margin: 0.5rem 0 0;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.recentList {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recentItem {
+  composes: focusRing from "../design-system/components/shared.module.css";
+  composes: resetButton from "../design-system/components/shared.module.css";
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.25rem;
+  border-radius: var(--f3d-radius-sm);
+  text-align: left;
+}
+
+.recentItem:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.recentName {
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text);
+}
+
+.recentMeta {
+  flex-shrink: 0;
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.footer {
+  position: absolute;
+  z-index: 2;
+  right: 1rem;
+  bottom: 0.75rem;
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-disabled);
+}

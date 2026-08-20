@@ -14,7 +14,7 @@ function style(
 }
 
 /** Dense, editor-style type scale — smaller sizes and tighter line-height than a consumer-app scale. */
-export const editorTypography: TypographyScale = {
+export const farm3dTypography: TypographyScale = {
   heading: style(ui, 600, "0.8125rem", "1.25rem", "0.02em"),
   body: style(ui, 400, "0.8125rem", "1.25rem", "0em"),
   bodySmall: style(ui, 400, "0.75rem", "1.125rem", "0em"),

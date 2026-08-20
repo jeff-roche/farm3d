@@ -1,10 +1,10 @@
 import type { Theme } from "../tokens/types";
-import { editorTypography } from "../tokens/typography";
-import { editorShape } from "../tokens/shape";
+import { farm3dTypography } from "../tokens/typography";
+import { farm3dShape } from "../tokens/shape";
 
 /** The light counterpart to darkTheme — same editor aesthetic and farm-green accent. */
 export const lightTheme: Theme = {
-  name: "editor-light",
+  name: "farm3d-light",
   scheme: "light",
   color: {
     bg: "#eef0ea",
@@ -33,6 +33,6 @@ export const lightTheme: Theme = {
 
     focusRing: "#47672f",
   },
-  typography: editorTypography,
-  shape: editorShape,
+  typography: farm3dTypography,
+  shape: farm3dShape,
 };

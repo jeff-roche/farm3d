@@ -67,7 +67,7 @@ export interface ShapeScale {
 }
 
 export interface Theme {
-  /** Unique registry key, e.g. "editor-light". */
+  /** Unique registry key, e.g. "farm3d-light". */
   name: string;
   /** Whether this theme is meant for light or dark surfaces; used to pick a theme for 'system' mode. */
   scheme: "light" | "dark";

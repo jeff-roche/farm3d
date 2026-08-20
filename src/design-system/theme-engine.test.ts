@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "./tokens/types";
-import { editorTypography } from "./tokens/typography";
-import { editorShape } from "./tokens/shape";
+import { farm3dTypography } from "./tokens/typography";
+import { farm3dShape } from "./tokens/shape";
 
 /** Minimal mock of matchMedia('(prefers-color-scheme: dark)') that supports firing 'change'. */
 function mockMatchMedia(initialDark: boolean) {
@@ -53,8 +53,8 @@ function makeTheme(name: string, scheme: "light" | "dark", accent: string): Them
       onSuccess: "#000000",
       focusRing: "#000000",
     },
-    typography: editorTypography,
-    shape: editorShape,
+    typography: farm3dTypography,
+    shape: farm3dShape,
   };
 }
 
@@ -75,7 +75,7 @@ describe("theme-engine", () => {
     mockMatchMedia(true);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("editor-dark");
+    expect(getResolvedThemeName()).toBe("farm3d-dark");
     expect(document.documentElement.dataset.themeScheme).toBe("dark");
   });
 
@@ -83,7 +83,7 @@ describe("theme-engine", () => {
     mockMatchMedia(false);
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("editor-light");
+    expect(getResolvedThemeName()).toBe("farm3d-light");
     expect(document.documentElement.dataset.themeScheme).toBe("light");
   });
 
@@ -91,18 +91,18 @@ describe("theme-engine", () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    setThemeMode("editor-dark");
-    expect(getResolvedThemeName()).toBe("editor-dark");
-    expect(localStorage.getItem("farm3d.theme-mode")).toBe("editor-dark");
+    setThemeMode("farm3d-dark");
+    expect(getResolvedThemeName()).toBe("farm3d-dark");
+    expect(localStorage.getItem("farm3d.theme-mode")).toBe("farm3d-dark");
     expect(document.documentElement.style.getPropertyValue("--f3d-color-accent")).not.toBe("");
   });
 
   it("reads a persisted mode on init, overriding the current OS preference", async () => {
-    localStorage.setItem("farm3d.theme-mode", "editor-dark");
+    localStorage.setItem("farm3d.theme-mode", "farm3d-dark");
     mockMatchMedia(false); // OS says light, but a dark mode was explicitly persisted
     const { initTheme, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    expect(getResolvedThemeName()).toBe("editor-dark");
+    expect(getResolvedThemeName()).toBe("farm3d-dark");
   });
 
   it("lets a plugin register and activate a custom theme", async () => {
@@ -119,12 +119,12 @@ describe("theme-engine", () => {
     );
   });
 
-  it("falls back to editor-light for an unregistered theme name", async () => {
+  it("falls back to farm3d-light for an unregistered theme name", async () => {
     mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
     setThemeMode("does-not-exist");
-    expect(getResolvedThemeName()).toBe("editor-light");
+    expect(getResolvedThemeName()).toBe("farm3d-light");
   });
 
   it("notifies subscribers when the OS preference changes in 'system' mode", async () => {
@@ -136,18 +136,18 @@ describe("theme-engine", () => {
 
     media.setDark(true);
 
-    expect(getResolvedThemeName()).toBe("editor-dark");
-    expect(seen).toEqual(["editor-dark"]);
+    expect(getResolvedThemeName()).toBe("farm3d-dark");
+    expect(seen).toEqual(["farm3d-dark"]);
   });
 
   it("ignores OS preference changes once an explicit mode is set", async () => {
     const media = mockMatchMedia(false);
     const { initTheme, setThemeMode, getResolvedThemeName } = await import("./theme-engine");
     initTheme();
-    setThemeMode("editor-light");
+    setThemeMode("farm3d-light");
 
     media.setDark(true);
 
-    expect(getResolvedThemeName()).toBe("editor-light");
+    expect(getResolvedThemeName()).toBe("farm3d-light");
   });
 });

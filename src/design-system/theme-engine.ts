@@ -39,7 +39,7 @@ function prefersDark(): boolean {
 
 function resolveTheme(mode: ThemeMode): Theme {
   if (mode === "system") {
-    const fallback = prefersDark() ? "editor-dark" : "editor-light";
+    const fallback = prefersDark() ? "farm3d-dark" : "farm3d-light";
     return registry.get(fallback) ?? lightTheme;
   }
   return registry.get(mode) ?? lightTheme;

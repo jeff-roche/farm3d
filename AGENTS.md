@@ -60,3 +60,21 @@ shell/tool.
 Run `just build` and `just test`; both must pass. If a display is
 available, also launch `just dev` and visually confirm — a passing
 build/test suite does not guarantee the UI actually renders correctly.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`jeff-roche/farm3d`), via the `gh`
+CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-label vocabulary (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`). See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (neither exists
+yet). See `docs/agents/domain.md`.

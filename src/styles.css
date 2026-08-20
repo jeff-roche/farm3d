@@ -1,22 +1,9 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.typescript:hover {
-  filter: drop-shadow(0 0 2em #2d79c7);
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
 * {
   box-sizing: border-box;
 }
 
 :root {
   font-family: var(--f3d-type-body-font);
-  font-size: var(--f3d-type-body-size);
   line-height: var(--f3d-type-body-line-height);
   font-weight: var(--f3d-type-body-weight);
 
@@ -34,6 +21,7 @@
 
 body {
   margin: 0;
+  font-size: var(--f3d-type-body-size);
 }
 
 a {

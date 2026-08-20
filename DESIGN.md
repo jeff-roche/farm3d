@@ -30,7 +30,7 @@ A `Theme` (`src/design-system/tokens/types.ts`) has three parts:
 
 ```ts
 interface Theme {
-  name: string;              // unique registry key, e.g. "editor-dark"
+  name: string;              // unique registry key, e.g. "farm3d-dark"
   scheme: "light" | "dark";  // which built-in this theme substitutes for in 'system' mode
   color: ColorRoles;         // ~19 roles: bg, surface, surfaceRaised, surfaceHover,
                               // surfaceSelected, border, borderStrong, text, textMuted,
@@ -41,7 +41,7 @@ interface Theme {
 }
 ```
 
-The two built-in themes (`editor-light`, `editor-dark`) are hand-authored in
+The two built-in themes (`farm3d-light`, `farm3d-dark`) are hand-authored in
 `src/design-system/themes/{light,dark}.ts` — with only ~19 color roles,
 there's no need for algorithmic palette generation; values are picked
 directly, calibrated against known editor dark themes.
@@ -81,8 +81,8 @@ const harvestTheme: Theme = {
   name: "harvest",
   scheme: "dark",
   color: { /* all 19 roles */ },
-  typography: editorTypography, // reuse the built-in scale, or provide your own
-  shape: editorShape,
+  typography: farm3dTypography, // reuse the built-in scale, or provide your own
+  shape: farm3dShape,
 };
 
 registerTheme(harvestTheme);
