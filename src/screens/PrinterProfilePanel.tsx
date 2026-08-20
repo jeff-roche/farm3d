@@ -196,6 +196,7 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
           options={bedTypeOptions()}
           optionLabel={(v: string) => (v === "" ? "Default" : v)}
           value={props.printer.profile.defaultBedType}
+          placeholder="Default"
           onChange={(v) => void overrideField(props.printer.id, "defaultBedType", v)}
         />
       </Field>

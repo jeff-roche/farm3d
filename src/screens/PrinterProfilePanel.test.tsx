@@ -138,6 +138,17 @@ describe("PrinterProfilePanel", () => {
     expect(overrideField).not.toHaveBeenCalledWith("prn-1", "printableHeightMm", 240);
   });
 
+  it("shows 'Default' in the closed bed-type trigger when defaultBedType is empty -- Kobalte treats a selected key of '' as no selection and falls back to the placeholder", () => {
+    // 942 of 971 catalog variants carry defaultBedType: "" -- this is the
+    // overwhelming common case, not an edge case.
+    const noBedType: ResolvedPrinter = {
+      ...PRINTER,
+      profile: { ...PRINTER.profile, defaultBedType: "" },
+    };
+    render(() => <PrinterProfilePanel printer={noBedType} />);
+    expect(screen.getByText("Default")).toBeInTheDocument();
+  });
+
   it("merges width and depth edits made within the same debounce window", async () => {
     vi.useFakeTimers();
     render(() => <PrinterProfilePanel printer={PRINTER} />);
