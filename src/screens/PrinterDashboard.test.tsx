@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 import { groupPrintersByModel, PrinterDashboard, summarizePrinters } from "./PrinterDashboard";
 import type { ResolvedPrinter } from "../printers/types";
@@ -90,5 +90,22 @@ describe("PrinterDashboard", () => {
     render(() => <PrinterDashboard printers={[printer({ id: "a", name: "Bay 1" })]} />);
     await fireEvent.click(screen.getByText("Bay 1"));
     expect(screen.getByLabelText("Printer detail")).toBeInTheDocument();
+  });
+
+  it("does not badge an auto-rematched printer as Unlinked, but still badges a genuinely unresolved one", () => {
+    render(() => (
+      <PrinterDashboard
+        printers={[
+          printer({ id: "a", name: "Bay 1", catalogStatus: "rematched" }),
+          printer({ id: "b", name: "Bay 2", catalogStatus: "variantMissing" }),
+        ]}
+      />
+    ));
+
+    const rematchedCard = screen.getByText("Bay 1").closest("button") as HTMLElement;
+    expect(within(rematchedCard).queryByText("Unlinked")).not.toBeInTheDocument();
+
+    const unresolvedCard = screen.getByText("Bay 2").closest("button") as HTMLElement;
+    expect(within(unresolvedCard).getByText("Unlinked")).toBeInTheDocument();
   });
 });

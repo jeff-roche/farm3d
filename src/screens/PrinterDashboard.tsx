@@ -136,7 +136,12 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                           <span class={styles.cardName}>{printer.name}</span>
                         </div>
                         <div class={styles.badgeRow}>
-                          <Show when={printer.catalogStatus !== "ok"}>
+                          <Show
+                            when={
+                              printer.catalogStatus !== "ok" &&
+                              printer.catalogStatus !== "rematched"
+                            }
+                          >
                             <span class={[styles.badge, styles.badgeWarning].join(" ")}>
                               Unlinked
                             </span>
