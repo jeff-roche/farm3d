@@ -1,0 +1,164 @@
+.library {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.panelHeader {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-border);
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  letter-spacing: var(--f3d-type-heading-tracking);
+  color: var(--f3d-color-text);
+}
+
+.list {
+  flex-shrink: 0;
+  width: 14rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+  background-color: var(--f3d-color-surface);
+  border-right: 1px solid var(--f3d-color-border);
+}
+
+.empty {
+  margin: 0.75rem;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.modelList {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.modelRow {
+  composes: focusRing from "../design-system/components/shared.module.css";
+  composes: resetButton from "../design-system/components/shared.module.css";
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  text-align: left;
+}
+
+.modelRow:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.modelRowSelected,
+.modelRowSelected:hover {
+  background-color: var(--f3d-color-accent-muted);
+  color: var(--f3d-color-accent);
+}
+
+.modelThumb {
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface-hover);
+  border: 1px solid var(--f3d-color-border);
+}
+
+.modelName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text);
+}
+
+.modelAdded {
+  flex-shrink: 0;
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-disabled);
+}
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.viewportActions {
+  position: absolute;
+  z-index: 1;
+  top: 0.75rem;
+  left: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem;
+  background-color: var(--f3d-color-surface-raised);
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-md);
+}
+
+.viewportHint {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--f3d-radius-md);
+  background-color: var(--f3d-color-surface-raised);
+  border: 1px solid var(--f3d-color-border);
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+  white-space: nowrap;
+}
+
+.detail {
+  flex-shrink: 0;
+  width: 16rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+  background-color: var(--f3d-color-surface);
+  border-left: 1px solid var(--f3d-color-border);
+}
+
+.detailEmpty {
+  margin: 0.75rem;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.detailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.detailField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detailLabel {
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+  text-transform: uppercase;
+}
