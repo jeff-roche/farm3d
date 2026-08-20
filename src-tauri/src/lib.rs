@@ -2,6 +2,11 @@ pub mod catalog;
 mod printers;
 mod settings;
 
+use catalog::commands::{catalog_info, list_catalog_models, list_catalog_variants, preview_profile};
+use printers::{
+    create_printer, delete_printer, list_printers, open_printers_file, rebind_printer,
+    resolve_profile_drift, set_printer_override, update_printer,
+};
 use settings::{load_settings, open_settings_file, save_settings};
 use std::sync::Arc;
 use tauri::path::BaseDirectory;
@@ -24,7 +29,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
-            open_settings_file
+            open_settings_file,
+            list_printers,
+            create_printer,
+            update_printer,
+            delete_printer,
+            set_printer_override,
+            rebind_printer,
+            resolve_profile_drift,
+            open_printers_file,
+            list_catalog_models,
+            list_catalog_variants,
+            preview_profile,
+            catalog_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

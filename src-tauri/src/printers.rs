@@ -1,9 +1,5 @@
 //! Persistence for `printers.json` — the user-owned counterpart to the
-//! read-only catalog. This task lands the types and path-taking functions
-//! only; nothing in the crate calls into this module outside its own tests
-//! yet (Tauri commands and printer resolution wire it in as later tasks in
-//! this plan), so the compiler can't see these `pub` items as reachable.
-#![allow(dead_code)]
+//! read-only catalog.
 
 use crate::catalog::{BedShape, PointMm, PrinterProfile};
 use serde::{Deserialize, Serialize};
@@ -158,6 +154,269 @@ pub fn apply_override(
     }
     serde_json::from_value(serde_json::Value::Object(map))
         .map_err(|e| format!("invalid value for `{field}`: {e}"))
+}
+
+use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, ResolvedPrinter};
+use crate::catalog::Catalog;
+use std::sync::Arc;
+use tauri::{AppHandle, Manager};
+use tauri_plugin_opener::OpenerExt;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrinterDraft {
+    pub name: String,
+    pub catalog_ref: CatalogRef,
+    pub group: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrinterPatch {
+    pub name: Option<String>,
+    pub group: Option<String>,
+    pub notes: Option<String>,
+}
+
+fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_config_dir().map_err(|e| e.to_string())
+}
+
+fn find_printer_mut<'a>(
+    file: &'a mut PrintersFile,
+    id: &str,
+) -> Result<&'a mut StoredPrinter, String> {
+    file.printers
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| format!("no printer with id {id:?}"))
+}
+
+fn generate_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    format!("prn-{:x}", nanos & 0xFFFF_FFFF)
+}
+
+#[tauri::command]
+pub fn list_printers(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+) -> Result<Vec<ResolvedPrinter>, String> {
+    let file = load_printers_from(&app_config_dir(&app)?)?;
+    Ok(file.printers.iter().map(|p| resolve_printer(&catalog, p)).collect())
+}
+
+#[tauri::command]
+pub fn create_printer(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+    draft: PrinterDraft,
+) -> Result<ResolvedPrinter, String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+
+    let (variant, status) = resolve_catalog_ref(&catalog, &draft.catalog_ref);
+    let variant = variant.ok_or_else(|| {
+        format!("cannot add a printer for an unresolvable catalog reference (status: {status:?})")
+    })?;
+
+    let stored = StoredPrinter {
+        id: generate_id(),
+        name: draft.name,
+        catalog_ref: draft.catalog_ref,
+        group: draft.group.unwrap_or_default(),
+        notes: String::new(),
+        overrides: PrinterProfileOverrides::default(),
+        last_known_good: Some(LastKnownGood {
+            profile: PrinterProfile::from(variant),
+            catalog_version: catalog.source_tag.clone(),
+            resolved_at: now_rfc3339(),
+        }),
+        connection: None,
+    };
+
+    let resolved = resolve_printer(&catalog, &stored);
+    file.printers.push(stored);
+    write_printers_to(&config_dir, &file)?;
+    Ok(resolved)
+}
+
+#[tauri::command]
+pub fn update_printer(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+    id: String,
+    patch: PrinterPatch,
+) -> Result<ResolvedPrinter, String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+    {
+        let stored = find_printer_mut(&mut file, &id)?;
+        if let Some(name) = patch.name {
+            stored.name = name;
+        }
+        if let Some(group) = patch.group {
+            stored.group = group;
+        }
+        if let Some(notes) = patch.notes {
+            stored.notes = notes;
+        }
+    }
+    write_printers_to(&config_dir, &file)?;
+    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+}
+
+#[tauri::command]
+pub fn delete_printer(app: AppHandle, id: String) -> Result<(), String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+    file.printers.retain(|p| p.id != id);
+    write_printers_to(&config_dir, &file)
+}
+
+#[tauri::command]
+pub fn set_printer_override(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+    id: String,
+    field: String,
+    value: Option<serde_json::Value>,
+) -> Result<ResolvedPrinter, String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+    {
+        let stored = find_printer_mut(&mut file, &id)?;
+        stored.overrides = apply_override(&stored.overrides, &field, value)?;
+    }
+    write_printers_to(&config_dir, &file)?;
+    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+}
+
+#[tauri::command]
+pub fn rebind_printer(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+    id: String,
+    catalog_ref: CatalogRef,
+) -> Result<ResolvedPrinter, String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+    {
+        let stored = find_printer_mut(&mut file, &id)?;
+        stored.catalog_ref = catalog_ref;
+        let (variant, status) = resolve_catalog_ref(&catalog, &stored.catalog_ref);
+        let variant = variant.ok_or_else(|| {
+            format!("cannot rebind to an unresolvable catalog reference (status: {status:?})")
+        })?;
+        // Rebinding invalidates any stale drift baseline — re-baseline immediately.
+        stored.last_known_good = Some(LastKnownGood {
+            profile: PrinterProfile::from(variant),
+            catalog_version: catalog.source_tag.clone(),
+            resolved_at: now_rfc3339(),
+        });
+    }
+    write_printers_to(&config_dir, &file)?;
+    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+}
+
+#[tauri::command]
+pub fn resolve_profile_drift(
+    app: AppHandle,
+    catalog: tauri::State<Arc<Catalog>>,
+    id: String,
+    action: String,
+) -> Result<ResolvedPrinter, String> {
+    let config_dir = app_config_dir(&app)?;
+    let mut file = load_printers_from(&config_dir)?;
+    {
+        let stored_ref = find_printer_mut(&mut file, &id)?;
+        let resolved = resolve_printer(&catalog, stored_ref);
+        match action.as_str() {
+            "accept" => {
+                stored_ref.last_known_good = Some(LastKnownGood {
+                    profile: resolved.profile.clone(),
+                    catalog_version: catalog.source_tag.clone(),
+                    resolved_at: now_rfc3339(),
+                });
+            }
+            "pin" => {
+                for drift in &resolved.profile_drift {
+                    // Pin to the OLD (last-known-good) value — "keep my value".
+                    stored_ref.overrides =
+                        apply_override(&stored_ref.overrides, &drift.field, Some(drift.from.clone()))?;
+                }
+            }
+            other => return Err(format!("unknown drift action: {other:?}")),
+        }
+    }
+    write_printers_to(&config_dir, &file)?;
+    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+}
+
+#[tauri::command]
+pub fn open_printers_file(app: AppHandle) -> Result<(), String> {
+    let config_dir = app_config_dir(&app)?;
+    let path = printers_file_path(&config_dir);
+    if !path.exists() {
+        write_printers_to(
+            &config_dir,
+            &PrintersFile { schema_version: PRINTERS_SCHEMA_VERSION, printers: vec![] },
+        )?;
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// A dependency-free RFC3339 UTC timestamp for `LastKnownGood.resolved_at` —
+/// avoids adding a date/time crate for one field. Runs at runtime (unlike
+/// gen-catalog's shell-out to `date`, which is fine for a dev-only tool but
+/// wouldn't be portable inside the shipped app).
+pub fn now_rfc3339() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    rfc3339_from_unix_seconds(secs)
+}
+
+fn rfc3339_from_unix_seconds(secs: u64) -> String {
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// Howard Hinnant's days-from-civil algorithm, inverted (public domain) —
+/// converts a day count since the Unix epoch into a (year, month, day) civil
+/// date without a date/time crate dependency.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod rfc3339_tests {
+    use super::*;
+
+    #[test]
+    fn epoch_zero_is_the_unix_epoch_date() {
+        assert_eq!(rfc3339_from_unix_seconds(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn a_known_timestamp_round_trips_correctly() {
+        // 946684800 is the well-known Unix timestamp for 2000-01-01T00:00:00Z.
+        assert_eq!(rfc3339_from_unix_seconds(946_684_800), "2000-01-01T00:00:00Z");
+    }
 }
 
 #[cfg(test)]
