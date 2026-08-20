@@ -80,6 +80,9 @@ pub fn resolve_catalog_ref<'a>(
             .iter()
             .find(|m| m.vendor == r.vendor && m.model_id == r.model_id)
         {
+            if let Some(variant) = model.variants.iter().find(|v| v.variant == r.variant) {
+                return (Some(variant), CatalogStatus::Rematched);
+            }
             if let Some(variant) = model
                 .variants
                 .iter()
@@ -451,6 +454,48 @@ mod tests {
         let v = v.unwrap();
         assert_eq!(v.variant, "Model B 0.4 nozzle");
         assert_eq!(v.printable_height_mm, 200.0, "resolved to Model A's variant");
+    }
+
+    /// Step 2 ((vendor, modelId) match, reached only when step 1's exact
+    /// (vendor, model) name match misses -- e.g. the model was renamed
+    /// upstream) must try an exact variant-name match before falling back to
+    /// printerVariant, mirroring step 1. Without that check, a model with two
+    /// variants sharing one printerVariant value could resolve to the wrong
+    /// sibling even though the ref's exact variant name unambiguously
+    /// identifies one of them.
+    #[test]
+    fn model_id_step_prefers_an_exact_variant_name_match_over_a_shared_printer_variant() {
+        let catalog = Catalog {
+            generated_at: "2026-08-20T00:00:00Z".to_string(),
+            source_tag: "v2.4.2".to_string(),
+            notice: "test".to_string(),
+            models: vec![CatalogModel {
+                model_id: "Elegoo-CC".to_string(),
+                vendor: "Elegoo".to_string(),
+                // Renamed upstream since the ref was stored -- step 1's exact
+                // (vendor, model) name match will miss on this.
+                model: "Elegoo Centauri Carbon Pro".to_string(),
+                variants: vec![
+                    // Both variants share printer_variant "0.4"; only the
+                    // exact variant name can disambiguate them.
+                    variant("Elegoo Centauri Carbon 0.4 nozzle", "0.4", 256.0),
+                    variant("Elegoo Centauri Carbon 0.4 nozzle (older)", "0.4", 999.0),
+                ],
+            }],
+        };
+        let mut r = a_ref();
+        // Stored ref still carries the old model name (misses step 1) but the
+        // same model_id (hits step 2), and an exact variant name that matches
+        // only the first of the two same-printerVariant siblings.
+        r.model = "Elegoo Centauri Carbon".to_string();
+        let (v, status) = resolve_catalog_ref(&catalog, &r);
+        assert_eq!(status, CatalogStatus::Rematched);
+        let v = v.unwrap();
+        assert_eq!(v.variant, "Elegoo Centauri Carbon 0.4 nozzle");
+        assert_eq!(
+            v.printable_height_mm, 256.0,
+            "resolved to the wrong same-printerVariant sibling instead of the exact variant-name match"
+        );
     }
 
     #[test]
