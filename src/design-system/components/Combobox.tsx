@@ -45,7 +45,20 @@ export function Combobox<T>(props: ComboboxProps<T>) {
       placeholder={props.placeholder}
       disabled={props.disabled}
       itemComponent={(itemProps) => (
-        <KCombobox.Item item={itemProps.item} class={styles.item}>
+        <KCombobox.Item
+          item={itemProps.item}
+          class={styles.item}
+          // Kobalte selects on pointerup (not pointerdown), but the item's
+          // own mousedown default action moves focus there first — which
+          // blurs the input, and the blur handler resets the typed filter
+          // text before the pointerup lands. That re-expands the (now
+          // unfiltered) option list under the cursor, so the click resolves
+          // against whatever ends up there instead of the option the user
+          // meant to pick. Suppressing mousedown's default keeps focus on
+          // the input for the whole press, so the list never reflows out
+          // from under the pointerup.
+          onMouseDown={(e: MouseEvent) => e.preventDefault()}
+        >
           <KCombobox.ItemLabel>{toLabel(itemProps.item.rawValue as T)}</KCombobox.ItemLabel>
         </KCombobox.Item>
       )}

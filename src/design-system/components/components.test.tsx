@@ -157,6 +157,29 @@ describe("Combobox", () => {
     expect(await screen.findByText("Elegoo")).toBeInTheDocument();
     expect(await screen.findByText("Prusa")).toBeInTheDocument();
   });
+
+  it("suppresses an option's mousedown default so it never steals focus from the input", async () => {
+    // Kobalte selects on pointerup, not mousedown — but an unprevented
+    // mousedown still moves native focus to the item, which blurs the
+    // input and resets the typed filter before the pointerup lands. That
+    // re-expands the option list out from under the click, so it resolves
+    // against whatever's now at that position instead of the clicked
+    // option (reported: searching "Snapmaker" and clicking it selected
+    // "Afinia", the first item in the unfiltered list). This can't be
+    // reproduced in jsdom, which doesn't simulate mousedown's native
+    // focus-shift — so this test pins the guard itself.
+    render(() => (
+      <Combobox label="Model" options={["Elegoo Centauri Carbon", "Prusa MK4", "Voron 2.4"]} />
+    ));
+    const input = screen.getByRole("combobox", { name: "Model" }) as HTMLInputElement;
+    await fireEvent.pointerDown(input, { pointerType: "mouse", button: 0 });
+    await fireEvent.input(input, { target: { value: "Prusa" } });
+
+    const item = await screen.findByText("Prusa MK4");
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 });
+    item.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 describe("Tabs", () => {
