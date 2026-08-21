@@ -6,6 +6,7 @@
 //! is why the trait is deliberately two methods wide and why `ConnectionState`
 //! is farm3d's own small vocabulary rather than any one protocol's.
 
+pub mod commands;
 pub mod credentials;
 pub mod discovery;
 pub mod moonraker;
