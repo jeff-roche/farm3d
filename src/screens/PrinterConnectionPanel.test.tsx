@@ -100,4 +100,10 @@ describe("PrinterConnectionPanel", () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     expect(await screen.findByText(/OS keychain/)).toBeInTheDocument();
   });
+
+  it("renders the Kind label exactly once, not doubled by an extra Field wrapper", async () => {
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    await screen.findByRole("button", { name: /Moonraker/ });
+    expect(screen.getAllByText("Kind")).toHaveLength(1);
+  });
 });

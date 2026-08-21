@@ -1,5 +1,5 @@
 import { createMemo, createResource, createSignal, For, Show } from "solid-js";
-import { Button, Chip, Field, Select, TextField } from "../design-system";
+import { Button, Chip, Select, TextField } from "../design-system";
 import {
   clearConnection,
   credentialStoreInfo,
@@ -108,19 +108,17 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
 
   return (
     <div class={styles.panel}>
-      <Field label="Kind">
-        <Select
-          label="Kind"
-          options={KINDS}
-          optionValue={(k: (typeof KINDS)[number]) => k.value}
-          optionLabel={(k: (typeof KINDS)[number]) => k.label}
-          value={KINDS.find((k) => k.value === kind())}
-          onChange={(k: (typeof KINDS)[number]) => {
-            setKind(k.value);
-            setPort(String(DEFAULT_PORTS[k.value] ?? 7125));
-          }}
-        />
-      </Field>
+      <Select
+        label="Kind"
+        options={KINDS}
+        optionValue={(k: (typeof KINDS)[number]) => k.value}
+        optionLabel={(k: (typeof KINDS)[number]) => k.label}
+        value={KINDS.find((k) => k.value === kind())}
+        onChange={(k: (typeof KINDS)[number]) => {
+          setKind(k.value);
+          setPort(String(DEFAULT_PORTS[k.value] ?? 7125));
+        }}
+      />
 
       <TextField label="Host" value={host()} onChange={setHost} placeholder="voron.local" />
       <TextField label="Port" value={port()} onChange={setPort} />
