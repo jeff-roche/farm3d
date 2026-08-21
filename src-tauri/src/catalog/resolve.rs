@@ -36,7 +36,7 @@ pub struct ResolvedPrinter {
     pub inherited: serde_json::Map<String, serde_json::Value>,
     pub profile_drift: Vec<ProfileDrift>,
     pub unknown_override_keys: Vec<String>,
-    pub connection: Option<serde_json::Value>,
+    pub connection: Option<crate::connections::ConnectionConfig>,
 }
 
 pub fn resolve_catalog_ref<'a>(

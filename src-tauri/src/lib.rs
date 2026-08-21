@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod connections;
 mod printers;
 mod settings;
 

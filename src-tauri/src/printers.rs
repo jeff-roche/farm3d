@@ -28,10 +28,11 @@ pub struct StoredPrinter {
     pub overrides: PrinterProfileOverrides,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_known_good: Option<LastKnownGood>,
-    /// Phase 2's Connection config. Opaque here — printers.rs never
-    /// interprets it, only round-trips it.
+    /// Phase 2's Connection config. Holds a `credentialRef` only — the
+    /// secret it names lives in the OS keychain (or the 0600 fallback file),
+    /// never here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connection: Option<serde_json::Value>,
+    pub connection: Option<crate::connections::ConnectionConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
@@ -668,5 +669,52 @@ mod tests {
         let json = serde_json::to_value(&pinned).unwrap();
         assert!(json.get("nozzleType").is_none(), "nozzleType must not be pinned");
         assert!(pinned.extra.is_empty(), "no stray override keys: {:?}", pinned.extra);
+    }
+
+    #[test]
+    fn printers_file_without_a_connection_key_still_loads() {
+        // Every printer written by phase 1 looks like this. Typing the slot must
+        // not orphan them.
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            printers_file_path(&dir),
+            r#"{"schemaVersion":1,"printers":[{"id":"prn-1","name":"Bay 1"}]}"#,
+        )
+        .unwrap();
+        let loaded = load_printers_from(&dir).unwrap();
+        assert_eq!(loaded.printers.len(), 1);
+        assert_eq!(loaded.printers[0].connection, None);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stored_connection_round_trips_and_never_carries_a_secret() {
+        use crate::connections::{ConnectionConfig, DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
+
+        let dir = temp_dir();
+        let mut file = PrintersFile {
+            schema_version: 1,
+            printers: vec![StoredPrinter {
+                id: "prn-1".to_string(),
+                name: "Bay 1".to_string(),
+                ..Default::default()
+            }],
+        };
+        file.printers[0].connection = Some(ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: DEFAULT_MOONRAKER_PORT,
+            use_tls: false,
+            credential_ref: Some("farm3d/printer/prn-1/apikey".to_string()),
+        });
+        write_printers_to(&dir, &file).unwrap();
+
+        let raw = fs::read_to_string(printers_file_path(&dir)).unwrap();
+        // The reference is stored; the secret it points at never is.
+        assert!(raw.contains("credentialRef"));
+        assert!(!raw.contains("apiKey\""));
+        assert_eq!(load_printers_from(&dir).unwrap(), file);
+        fs::remove_dir_all(&dir).ok();
     }
 }
