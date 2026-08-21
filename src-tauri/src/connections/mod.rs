@@ -7,6 +7,7 @@
 //! is farm3d's own small vocabulary rather than any one protocol's.
 
 pub mod credentials;
+pub mod discovery;
 pub mod moonraker;
 pub mod supervisor;
 
