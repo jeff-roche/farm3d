@@ -8,6 +8,7 @@
 
 pub mod credentials;
 pub mod moonraker;
+pub mod supervisor;
 
 use serde::{Deserialize, Serialize};
 
