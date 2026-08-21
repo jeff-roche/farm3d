@@ -40,11 +40,21 @@
 }
 
 .trigger {
+  /* Kobalte's Combobox.Trigger renders a native <button>. Unlike Select's
+     trigger (which IS the visible box), this one sits inside `.control`
+     — it must stay chromeless, or the browser's default button background/
+     border/padding shows through as a white box around the chevron. */
+  composes: resetButton from "./shared.module.css";
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+button.trigger {
   /* Matches Select's trigger color so the chevron reads the same across
-     every dropdown-style component, not dimmer here than elsewhere. */
+     every dropdown-style component, not dimmer here than elsewhere.
+     Higher-specificity selector so this wins over resetButton's
+     `color: inherit`. */
   color: var(--f3d-color-text);
   cursor: pointer;
 }
