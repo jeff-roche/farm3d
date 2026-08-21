@@ -277,10 +277,39 @@ pub fn update_printer(
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }
 
+/// The credential (if any) a deleted printer's connection pointed at, so the
+/// caller can remove it from the store. Extracted as pure logic over
+/// `PrintersFile` so it's testable without a Tauri `AppHandle` — the command
+/// itself stays thin.
+fn credential_to_forget(file: &PrintersFile, id: &str) -> Option<String> {
+    file.printers
+        .iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.connection.as_ref())
+        .and_then(|c| c.credential_ref.clone())
+}
+
 #[tauri::command]
-pub fn delete_printer(app: AppHandle, id: String) -> Result<(), String> {
+pub fn delete_printer(
+    app: AppHandle,
+    manager: tauri::State<Arc<crate::connections::supervisor::ConnectionManager>>,
+    id: String,
+) -> Result<(), String> {
     let config_dir = app_config_dir(&app)?;
     let mut file = load_printers_from(&config_dir)?;
+
+    // Stop the supervisor FIRST, before the config it's reconnecting
+    // against is removed — otherwise it keeps retrying forever under an id
+    // that no longer exists in printers.json.
+    manager.stop(&id);
+
+    // Then clean up any stored credential — a printer record is the only
+    // place the UI can ever re-enter one, so once it's gone the credential
+    // would otherwise be orphaned in the keychain/file store forever.
+    if let Some(key) = credential_to_forget(&file, &id) {
+        crate::connections::credentials::CredentialStore::detect(config_dir.clone()).delete(&key)?;
+    }
+
     file.printers.retain(|p| p.id != id);
     write_printers_to(&config_dir, &file)
 }
@@ -715,6 +744,75 @@ mod tests {
         assert!(raw.contains("credentialRef"));
         assert!(!raw.contains("apiKey\""));
         assert_eq!(load_printers_from(&dir).unwrap(), file);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn credential_to_forget_finds_the_deleted_printers_credential_ref() {
+        use crate::connections::{ConnectionConfig, DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
+
+        let mut printer = a_printer();
+        printer.connection = Some(ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: DEFAULT_MOONRAKER_PORT,
+            use_tls: false,
+            credential_ref: Some("farm3d/printer/prn-1/apikey".to_string()),
+        });
+        let file = PrintersFile { schema_version: 1, printers: vec![printer] };
+
+        assert_eq!(
+            credential_to_forget(&file, "prn-1"),
+            Some("farm3d/printer/prn-1/apikey".to_string())
+        );
+    }
+
+    #[test]
+    fn credential_to_forget_is_none_when_the_printer_has_no_connection() {
+        let file = PrintersFile { schema_version: 1, printers: vec![a_printer()] };
+        assert_eq!(credential_to_forget(&file, "prn-1"), None);
+        // Also None for an id that isn't even in the file, rather than panicking.
+        assert_eq!(credential_to_forget(&file, "prn-ghost"), None);
+    }
+
+    #[test]
+    fn deleting_a_printer_with_a_credential_removes_it_from_a_file_backed_store() {
+        // Regression test: before this fix, `delete_printer` left the
+        // supervisor running and the credential orphaned in the store. This
+        // exercises the same sequence `delete_printer` performs (identify
+        // the credential, delete it from the store, then drop the printer
+        // from the file) without needing a Tauri AppHandle.
+        use crate::connections::credentials::CredentialStore;
+        use crate::connections::{ConnectionConfig, DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
+
+        let dir = temp_dir();
+        let key = "farm3d/printer/prn-1/apikey".to_string();
+
+        let mut printer = a_printer();
+        printer.connection = Some(ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: DEFAULT_MOONRAKER_PORT,
+            use_tls: false,
+            credential_ref: Some(key.clone()),
+        });
+        let mut file = PrintersFile { schema_version: 1, printers: vec![printer] };
+        write_printers_to(&dir, &file).unwrap();
+
+        let store = CredentialStore::file_backed(dir.clone());
+        store.set(&key, "s3cret").unwrap();
+        assert_eq!(store.get(&key).unwrap(), Some("s3cret".to_string()));
+
+        // What `delete_printer` does, minus the supervisor stop (which needs
+        // a live ConnectionManager/AppHandle).
+        if let Some(key) = credential_to_forget(&file, "prn-1") {
+            store.delete(&key).unwrap();
+        }
+        file.printers.retain(|p| p.id != "prn-1");
+        write_printers_to(&dir, &file).unwrap();
+
+        assert_eq!(store.get(&key).unwrap(), None, "credential must not survive printer deletion");
+        assert!(load_printers_from(&dir).unwrap().printers.is_empty());
         fs::remove_dir_all(&dir).ok();
     }
 }

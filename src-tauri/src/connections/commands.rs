@@ -51,7 +51,7 @@ pub fn split_submission(
     let (credential_ref, secret) = match submission.api_key.as_deref() {
         None => (Some(key_ref), None),
         Some(key) if key.trim().is_empty() => (None, None),
-        Some(key) => (Some(key_ref), Some(key.to_string())),
+        Some(key) => (Some(key_ref), Some(key.trim().to_string())),
     };
     (
         ConnectionConfig {
@@ -90,6 +90,21 @@ fn adapter(
     }
 }
 
+/// The OLD credential (if any) that must be deleted from the store because
+/// the newly split config no longer references one — e.g. the user
+/// explicitly cleared their API key (`split_submission` turns `Some("")`
+/// into `credential_ref: None`). If the new config still carries a
+/// `credential_ref`, nothing needs clearing, even if it happens to name the
+/// same key: the "omitted" case round-trips the same ref on purpose.
+///
+/// Pure over the two refs so this is testable without a Tauri `AppHandle`.
+fn credential_to_clear(previous_ref: Option<&str>, new_config: &ConnectionConfig) -> Option<String> {
+    if new_config.credential_ref.is_some() {
+        return None;
+    }
+    previous_ref.map(str::to_string)
+}
+
 #[tauri::command]
 pub fn set_printer_connection(
     app: AppHandle,
@@ -102,11 +117,28 @@ pub fn set_printer_connection(
     let mut file = load_printers_from(&dir)?;
     let (config, secret) = split_submission(submission, &id);
 
+    let previous_credential_ref = file
+        .printers
+        .iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.connection.as_ref())
+        .and_then(|c| c.credential_ref.clone());
+
     // Write the secret BEFORE persisting the reference: a config pointing at
     // a credential that was never stored is worse than a stored credential
     // nothing points at yet.
-    if let (Some(secret), Some(key)) = (secret, config.credential_ref.as_deref()) {
-        store(&app)?.set(key, &secret)?;
+    if let (Some(secret), Some(key)) = (&secret, config.credential_ref.as_deref()) {
+        store(&app)?.set(key, secret)?;
+    }
+
+    // An explicit clear (submission.api_key was `Some("")`) means the new
+    // config carries no credential_ref at all. That must also delete the
+    // OLD stored secret — otherwise "clear credential" only forgets the
+    // pointer while the secret itself sits orphaned in the store forever,
+    // which is exactly the failure mode the None/empty asymmetry exists to
+    // prevent.
+    if let Some(old_key) = credential_to_clear(previous_credential_ref.as_deref(), &config) {
+        store(&app)?.delete(&old_key)?;
     }
 
     {
@@ -242,5 +274,59 @@ mod tests {
         }, "prn-1");
         assert_eq!(secret, None);
         assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+    }
+
+    #[test]
+    fn a_submitted_api_key_is_trimmed_before_it_is_stored() {
+        // A pasted key with accidental leading/trailing whitespace must not
+        // be stored verbatim — it would fail as an `X-Api-Key` header value
+        // against the real printer with no indication why.
+        let (config, secret) = split_submission(ConnectionSubmission {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: 7125,
+            use_tls: false,
+            api_key: Some("  s3cret  \n".to_string()),
+        }, "prn-1");
+        assert_eq!(secret.as_deref(), Some("s3cret"));
+        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+    }
+
+    fn moonraker_config(credential_ref: Option<&str>) -> ConnectionConfig {
+        ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: 7125,
+            use_tls: false,
+            credential_ref: credential_ref.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn clearing_the_credential_ref_forgets_the_old_one() {
+        // The scenario from the orphaned-secret bug: the new config has no
+        // credential_ref (an explicit clear), so the OLD ref must be
+        // returned for deletion — otherwise the secret it named survives in
+        // the store forever with nothing left pointing at it.
+        let new_config = moonraker_config(None);
+        assert_eq!(
+            credential_to_clear(Some("farm3d/printer/prn-1/apikey"), &new_config),
+            Some("farm3d/printer/prn-1/apikey".to_string())
+        );
+    }
+
+    #[test]
+    fn keeping_a_credential_ref_forgets_nothing() {
+        // Whether the ref is unchanged (the "omitted api_key" case) or is a
+        // fresh key for the same printer, the new config still names a
+        // credential — there is nothing to delete.
+        let new_config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(credential_to_clear(Some("farm3d/printer/prn-1/apikey"), &new_config), None);
+    }
+
+    #[test]
+    fn there_was_never_a_credential_to_forget() {
+        let new_config = moonraker_config(None);
+        assert_eq!(credential_to_clear(None, &new_config), None);
     }
 }
