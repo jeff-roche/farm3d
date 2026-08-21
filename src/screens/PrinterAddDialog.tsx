@@ -1,8 +1,37 @@
 import { createEffect, createMemo, createResource, createSignal, Show } from "solid-js";
 import { Button, Combobox, Dialog, Select, TextField } from "../design-system";
 import { listCatalogModels, listCatalogVariants, previewProfile } from "../printers/printer-catalog";
-import type { CatalogModelSummary, CatalogVariantSummary, PrinterDraft } from "../printers/types";
+import type {
+  CatalogModelSummary,
+  CatalogVariantSummary,
+  PrinterDraft,
+  PrinterProfile,
+} from "../printers/types";
 import styles from "./PrinterAddDialog.module.css";
+
+/** If the model's own name already starts with its vendor's, drop that
+ *  prefix in the Model dropdown — the Brand dropdown already said it. Falls
+ *  back to the full name when the model doesn't literally start with the
+ *  vendor string (true for ~80% of the catalog, e.g. not for Bambu Lab,
+ *  whose vendor code is "BBL") or when stripping would leave nothing. */
+function stripBrandPrefix(model: string, vendor: string): string {
+  if (!model.toLowerCase().startsWith(vendor.toLowerCase())) return model;
+  const rest = model.slice(vendor.length).trimStart();
+  return rest || model;
+}
+
+/** `bedShape`'s discriminated-union narrowing only holds within a single
+ *  function body — it doesn't carry across separate calls to the same
+ *  accessor. Narrowing here, on a plain argument, keeps that local so the
+ *  call site can still call the live `p()` accessor directly inside JSX
+ *  (see the render-prop below) rather than freezing its value in a `const`,
+ *  which would stop the preview from updating on a later nozzle change. */
+function formatBedSummary(profile: PrinterProfile): string {
+  const { bedShape } = profile;
+  return bedShape.kind === "rectangular"
+    ? `${bedShape.widthMm} × ${bedShape.depthMm} × ${profile.printableHeightMm} mm`
+    : `${profile.printableHeightMm} mm tall, non-rectangular bed`;
+}
 
 export interface PrinterAddDialogProps {
   open: boolean;
@@ -107,7 +136,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
             label="Model"
             options={modelsForVendor()}
             optionValue={(m: CatalogModelSummary) => m.model}
-            optionLabel={(m: CatalogModelSummary) => m.model}
+            optionLabel={(m: CatalogModelSummary) => stripBrandPrefix(m.model, m.vendor)}
             value={selectedModel() ?? undefined}
             onChange={onSelectModel}
           />
@@ -132,24 +161,19 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
           error={nameTouched() ? nameError() : undefined}
         />
         <Show when={preview()}>
-          {(p) => {
-            // Bind once per render: TS's discriminated-union narrowing on
-            // `bedShape.kind` doesn't carry across separate `p()` calls, since
-            // each call is an independent (if referentially stable) accessor
-            // invocation as far as the type-checker's control-flow analysis
-            // is concerned.
-            const profile = p();
-            const bedShape = profile.bedShape;
-            return (
-              <p class={styles.summary}>
-                {bedShape.kind === "rectangular"
-                  ? `${bedShape.widthMm} × ${bedShape.depthMm} × ${profile.printableHeightMm} mm`
-                  : `${profile.printableHeightMm} mm tall, non-rectangular bed`}
-                {" · "}
-                {profile.nozzleDiameterMm.join(", ")} mm nozzle
-              </p>
-            );
-          }}
+          {(p) => (
+            // Calling p() inside each JSX expression (not hoisted into a
+            // `const` above) is required, not stylistic: PrinterDashboard's
+            // pattern of a non-keyed <Show> applies here too — this
+            // render-prop runs once for the whole time preview() stays
+            // truthy, so only expressions that call the live accessor
+            // directly stay reactive to a later nozzle/model change.
+            <p class={styles.summary}>
+              {formatBedSummary(p())}
+              {" · "}
+              {p().nozzleDiameterMm.join(", ")} mm nozzle
+            </p>
+          )}
         </Show>
       </div>
       <div class={styles.footer}>
