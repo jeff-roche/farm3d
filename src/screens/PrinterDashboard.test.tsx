@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { groupPrintersByModel, PrinterDashboard, summarizePrinters } from "./PrinterDashboard";
 import type { ResolvedPrinter } from "../printers/types";
 
@@ -90,6 +90,22 @@ describe("PrinterDashboard", () => {
     render(() => <PrinterDashboard printers={[printer({ id: "a", name: "Bay 1" })]} />);
     await fireEvent.click(screen.getByText("Bay 1"));
     expect(screen.getByLabelText("Printer detail")).toBeInTheDocument();
+  });
+
+  it("closes the detail aside via its close button, without removing the printer", async () => {
+    const onRemovePrinter = vi.fn();
+    render(() => (
+      <PrinterDashboard printers={[printer({ id: "a", name: "Bay 1" })]} onRemovePrinter={onRemovePrinter} />
+    ));
+    await fireEvent.click(screen.getByText("Bay 1"));
+    expect(screen.getByLabelText("Printer detail")).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close printer detail" }));
+
+    expect(screen.queryByLabelText("Printer detail")).not.toBeInTheDocument();
+    expect(onRemovePrinter).not.toHaveBeenCalled();
+    // The card itself is still there — only the aside closed.
+    expect(screen.getByText("Bay 1")).toBeInTheDocument();
   });
 
   it("does not badge an auto-rematched printer as Unlinked, but still badges a genuinely unresolved one", () => {

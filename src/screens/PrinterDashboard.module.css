@@ -223,6 +223,12 @@ button.cardSelected:hover {
   color: var(--f3d-color-text);
 }
 
+.detailHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .detailBody {
   display: flex;
   flex-direction: column;

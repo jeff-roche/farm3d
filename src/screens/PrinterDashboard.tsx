@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button, Tabs } from "../design-system";
+import { IconX } from "@tabler/icons-solidjs";
+import { Button, IconButton, Tabs } from "../design-system";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
 import { openPrintersFile } from "../printers/printer-store";
 import { PrinterAddDialog } from "./PrinterAddDialog";
@@ -245,9 +246,14 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             >
               <div class={styles.detailHeader}>
                 <span>{printer().name}</span>
-                <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
-                  Remove
-                </Button>
+                <div class={styles.detailHeaderActions}>
+                  <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
+                    Remove
+                  </Button>
+                  <IconButton aria-label="Close printer detail" onClick={() => setSelectedId(null)}>
+                    <IconX size={16} />
+                  </IconButton>
+                </div>
               </div>
               <div class={styles.detailBody}>
                 <Tabs
