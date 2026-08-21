@@ -73,10 +73,17 @@ fn store(app: &AppHandle) -> Result<CredentialStore, String> {
     Ok(CredentialStore::detect(config_dir(app)?))
 }
 
+fn api_key_from(store: &CredentialStore, config: &ConnectionConfig) -> Result<Option<String>, String> {
+    match &config.credential_ref {
+        None => Ok(None),
+        Some(key) => store.get(key),
+    }
+}
+
 fn api_key_for(app: &AppHandle, config: &ConnectionConfig) -> Result<Option<String>, String> {
     match &config.credential_ref {
         None => Ok(None),
-        Some(key) => store(app)?.get(key),
+        Some(_) => api_key_from(&store(app)?, config),
     }
 }
 
@@ -105,17 +112,37 @@ fn credential_to_clear(previous_ref: Option<&str>, new_config: &ConnectionConfig
     previous_ref.map(str::to_string)
 }
 
+/// `split_submission` returns the DERIVED credential ref for the "api_key was
+/// omitted" case, which means "leave the stored secret alone". That is right
+/// when editing an existing connection, but on a first-ever save nothing was
+/// ever written: persisting the derived ref would make `printers.json` claim a
+/// credential the store has never seen, and the Connection tab would then
+/// offer to "keep" a secret that does not exist. Carrying the PREVIOUS ref
+/// forward instead is a no-op for the edit case and the truth for a first save.
+///
+/// Pure so it is testable without a Tauri `AppHandle`.
+fn settle_credential_ref(
+    config: &mut ConnectionConfig,
+    api_key_omitted: bool,
+    previous_ref: Option<&str>,
+) {
+    if api_key_omitted {
+        config.credential_ref = previous_ref.map(str::to_string);
+    }
+}
+
 #[tauri::command]
-pub fn set_printer_connection(
+pub async fn set_printer_connection(
     app: AppHandle,
-    catalog: tauri::State<Arc<Catalog>>,
-    manager: tauri::State<Arc<ConnectionManager>>,
+    catalog: tauri::State<'_, Arc<Catalog>>,
+    manager: tauri::State<'_, Arc<ConnectionManager>>,
     id: String,
     submission: ConnectionSubmission,
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
     let mut file = load_printers_from(&dir)?;
-    let (config, secret) = split_submission(submission, &id);
+    let api_key_omitted = submission.api_key.is_none();
+    let (mut config, secret) = split_submission(submission, &id);
 
     let previous_credential_ref = file
         .printers
@@ -124,11 +151,18 @@ pub fn set_printer_connection(
         .and_then(|p| p.connection.as_ref())
         .and_then(|c| c.credential_ref.clone());
 
+    settle_credential_ref(&mut config, api_key_omitted, previous_credential_ref.as_deref());
+
+    // Detected ONCE per invocation: `CredentialStore::detect` is a Secret
+    // Service round trip on Linux, and re-detecting per use meant up to three
+    // of them (each able to raise an unlock prompt) for a single save.
+    let store = store(&app)?;
+
     // Write the secret BEFORE persisting the reference: a config pointing at
     // a credential that was never stored is worse than a stored credential
     // nothing points at yet.
     if let (Some(secret), Some(key)) = (&secret, config.credential_ref.as_deref()) {
-        store(&app)?.set(key, secret)?;
+        store.set(key, secret)?;
     }
 
     // An explicit clear (submission.api_key was `Some("")`) means the new
@@ -138,7 +172,7 @@ pub fn set_printer_connection(
     // which is exactly the failure mode the None/empty asymmetry exists to
     // prevent.
     if let Some(old_key) = credential_to_clear(previous_credential_ref.as_deref(), &config) {
-        store(&app)?.delete(&old_key)?;
+        store.delete(&old_key)?;
     }
 
     {
@@ -151,17 +185,17 @@ pub fn set_printer_connection(
     }
     write_printers_to(&dir, &file)?;
 
-    let api_key = api_key_for(&app, &config)?;
+    let api_key = api_key_from(&store, &config)?;
     manager.start(id.clone(), config, api_key);
 
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }
 
 #[tauri::command]
-pub fn clear_printer_connection(
+pub async fn clear_printer_connection(
     app: AppHandle,
-    catalog: tauri::State<Arc<Catalog>>,
-    manager: tauri::State<Arc<ConnectionManager>>,
+    catalog: tauri::State<'_, Arc<Catalog>>,
+    manager: tauri::State<'_, Arc<ConnectionManager>>,
     id: String,
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
@@ -201,7 +235,7 @@ pub async fn test_printer_connection(
 }
 
 #[tauri::command]
-pub fn credential_store_info(app: AppHandle) -> Result<CredentialStoreInfo, String> {
+pub async fn credential_store_info(app: AppHandle) -> Result<CredentialStoreInfo, String> {
     let store = store(&app)?;
     Ok(CredentialStoreInfo {
         kind: store.kind(),
@@ -218,6 +252,9 @@ pub async fn discover_printers() -> Vec<DiscoveredPrinter> {
         .unwrap_or_default()
 }
 
+/// Stays synchronous deliberately: this reads only the in-memory `StatusMap`
+/// (a mutex lock and a clone), so there is nothing here that can block the
+/// main thread the way the credential-store commands can.
 #[tauri::command]
 pub fn printer_statuses(
     manager: tauri::State<Arc<ConnectionManager>>,
@@ -328,5 +365,35 @@ mod tests {
     fn there_was_never_a_credential_to_forget() {
         let new_config = moonraker_config(None);
         assert_eq!(credential_to_clear(None, &new_config), None);
+    }
+
+    #[test]
+    fn a_first_save_with_no_api_key_persists_no_credential_ref() {
+        // The UI reads `credentialRef` as "a credential is stored". On a
+        // first-ever save with the key field left blank nothing was written,
+        // so the ref split_submission derived must NOT be persisted —
+        // otherwise the Connection tab offers to "keep" a secret that the
+        // credential store has never seen.
+        let mut config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
+        settle_credential_ref(&mut config, true, None);
+        assert_eq!(config.credential_ref, None);
+    }
+
+    #[test]
+    fn editing_with_no_api_key_keeps_the_stored_credential_ref() {
+        // The other half of the same rule: an existing connection whose
+        // secret is untouched must keep pointing at it.
+        let mut config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
+        settle_credential_ref(&mut config, true, Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+    }
+
+    #[test]
+    fn a_submitted_api_key_settles_on_its_own_ref_regardless_of_history() {
+        // A key WAS submitted, so a credential is genuinely being written:
+        // the derived ref stands whether or not one was stored before.
+        let mut config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
+        settle_credential_ref(&mut config, false, None);
+        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
     }
 }

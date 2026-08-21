@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => tauriMock);
 
+const eventMock = vi.hoisted(() => ({ listen: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => eventMock);
+
 beforeEach(() => {
   vi.resetModules();
   tauriMock.isTauri.mockReset();
   tauriMock.invoke.mockReset();
+  eventMock.listen.mockReset();
 });
 
 afterEach(() => {
@@ -91,6 +95,87 @@ describe("printer-store", () => {
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { id: "prn-1" });
       expect(printers()).toEqual([]);
+    });
+
+    it("keeps live runtimeStatus when a mutation splices in a fresh ResolvedPrinter", async () => {
+      // Rust never returns `runtimeStatus` — it is frontend-only live state.
+      // A rename must not blank the connection badge and temperatures until
+      // the supervisor's next push, which for an offline printer is up to a
+      // minute of backoff away.
+      // Clones, not the shared fixture: the store mutates what it is handed,
+      // so reusing the literal would smuggle `runtimeStatus` into the
+      // "fresh from Rust" value and make this pass without the fix.
+      tauriMock.invoke.mockResolvedValue([structuredClone(A_RESOLVED_PRINTER)]);
+      const { loadPrinters, applyStatus, updatePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      applyStatus("prn-1", {
+        connectionState: "error",
+        error: "Could not reach the printer",
+        updatedAt: "2026-08-20T14:02:11Z",
+      });
+
+      tauriMock.invoke.mockResolvedValue({
+        ...structuredClone(A_RESOLVED_PRINTER),
+        name: "Bay 1 — renamed",
+      });
+      await updatePrinter("prn-1", { name: "Bay 1 — renamed" });
+
+      expect(printers()[0].name).toBe("Bay 1 — renamed");
+      expect(printers()[0].runtimeStatus?.connectionState).toBe("error");
+      expect(printers()[0].runtimeStatus?.error).toBe("Could not reach the printer");
+    });
+
+    it("applies a printer-status event straight off the Rust event channel", async () => {
+      // Pins the seam between supervisor.rs's STATUS_EVENT/StatusEvent and
+      // this module's own `listen(...)` string and payload shape. Both sides
+      // otherwise mock each other away, so a rename on either would break
+      // live status with a green test suite.
+      let handler: ((event: { payload: { id: string; status: unknown } }) => void) | undefined;
+      const unlisten = vi.fn();
+      eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
+        handler = cb;
+        return Promise.resolve(unlisten);
+      });
+      tauriMock.invoke.mockImplementation((command: string) =>
+        Promise.resolve(command === "list_printers" ? [structuredClone(A_RESOLVED_PRINTER)] : {}),
+      );
+
+      const { loadPrinters, startStatusListener, printers } = await import("./printer-store");
+      await loadPrinters();
+      const stop = await startStatusListener();
+
+      expect(eventMock.listen).toHaveBeenCalledWith("printer-status", expect.any(Function));
+      handler!({
+        payload: {
+          id: "prn-1",
+          status: {
+            connectionState: "online",
+            jobState: "printing",
+            jobName: "benchy.gcode",
+            progress: 0.42,
+            nozzleTempC: 210.5,
+            nozzleTargetC: 210,
+            bedTempC: 60.1,
+            bedTargetC: 60,
+            printDurationS: 812.5,
+            updatedAt: "2026-08-20T14:02:11Z",
+          },
+        },
+      });
+
+      expect(printers()[0].runtimeStatus).toEqual({
+        connectionState: "online",
+        jobState: "printing",
+        jobName: "benchy.gcode",
+        progress: 0.42,
+        nozzleTempC: 210.5,
+        nozzleTargetC: 210,
+        bedTempC: 60.1,
+        bedTargetC: 60,
+        printDurationS: 812.5,
+        updatedAt: "2026-08-20T14:02:11Z",
+      });
+      expect(stop).toBe(unlisten);
     });
 
     it("a rejected mutation surfaces the message instead of rejecting, and can be dismissed", async () => {

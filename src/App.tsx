@@ -30,9 +30,14 @@ function App() {
   const [active, setActive] = createSignal<ScreenId>("printers");
 
   onMount(() => {
-    void loadPrinters();
     let unlisten: (() => void) | undefined;
-    void startStatusListener().then((fn) => (unlisten = fn));
+    // Sequenced, not concurrent: `applyStatus` drops events for ids it does
+    // not know yet, so any status arriving before the printer list has loaded
+    // — including the backfill inside `startStatusListener` — is discarded
+    // with no retry.
+    void loadPrinters()
+      .then(startStatusListener)
+      .then((fn) => (unlisten = fn));
     onCleanup(() => unlisten?.());
   });
 

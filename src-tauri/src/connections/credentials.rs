@@ -134,9 +134,32 @@ impl CredentialStore {
         fs::create_dir_all(&self.config_dir).map_err(|e| e.to_string())?;
         let path = credentials_file_path(&self.config_dir);
         let json = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
-        fs::write(&path, json).map_err(|e| e.to_string())?;
+        write_owner_only(&path, &json)?;
         restrict_permissions(&path)
     }
+}
+
+/// Creates the file at 0600 rather than at the default 0644-then-chmod: this
+/// is the one file whose whole purpose is holding a plaintext secret, and
+/// `fs::write` would leave it world-readable for the window between the first
+/// byte landing and `restrict_permissions` correcting it.
+#[cfg(unix)]
+fn write_owner_only(path: &Path, contents: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(contents.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &Path, contents: &str) -> Result<(), String> {
+    fs::write(path, contents).map_err(|e| e.to_string())
 }
 
 fn keychain_entry(key: &str) -> Result<keyring::Entry, String> {
@@ -234,6 +257,21 @@ mod tests {
         // corrected on the next write, not merely on creation.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         store.set(&key, "second").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_brand_new_credentials_file_is_owner_only_from_its_first_byte() {
+        // Deliberately exercises the creation path ALONE, with no
+        // `restrict_permissions` after it: a default-0644 create followed by
+        // a chmod would leave the secret world-readable in between.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = credentials_file_path(&dir);
+        write_owner_only(&path, "{}").unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         fs::remove_dir_all(&dir).ok();
     }

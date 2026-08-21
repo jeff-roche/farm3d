@@ -133,6 +133,16 @@ impl ConnectionManager {
         self.tasks.lock().unwrap().insert(printer_id, handle);
     }
 
+    /// Publishes a terminal error for a printer WITHOUT starting a connection
+    /// task. For failures that no amount of reconnecting can fix — today, a
+    /// credential store we cannot read at launch. Starting the normal loop
+    /// there would report an *auth* failure forever and point the user at
+    /// their API key rather than at the real cause.
+    pub fn report_error(&self, printer_id: &str, message: impl Into<String>) {
+        self.stop(printer_id);
+        publish(&self.app, &self.statuses, printer_id, PrinterStatus::errored(message));
+    }
+
     pub fn stop(&self, printer_id: &str) {
         if let Some(handle) = self.tasks.lock().unwrap().remove(printer_id) {
             handle.abort();

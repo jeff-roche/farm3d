@@ -39,10 +39,29 @@ pub fn run() {
                     let store = connections::credentials::CredentialStore::detect(dir);
                     for stored in &file.printers {
                         let Some(config) = stored.connection.clone() else { continue };
-                        let api_key = config
-                            .credential_ref
-                            .as_deref()
-                            .and_then(|key| store.get(key).ok().flatten());
+                        let api_key = match config.credential_ref.as_deref() {
+                            None => None,
+                            Some(key) => match store.get(key) {
+                                Ok(found) => found,
+                                // NOT the same as "no key configured": the
+                                // store itself is unreadable (a corrupt
+                                // credentials.json, a refused keychain).
+                                // Connecting with `None` would loop forever
+                                // reporting an AUTH failure, sending the user
+                                // after their API key instead of the store.
+                                Err(e) => {
+                                    eprintln!(
+                                        "farm3d: cannot read the stored credential for {}: {e}",
+                                        stored.id
+                                    );
+                                    manager.report_error(
+                                        &stored.id,
+                                        format!("Could not read this printer's stored credential: {e}"),
+                                    );
+                                    continue;
+                                }
+                            },
+                        };
                         manager.start(stored.id.clone(), config, api_key);
                     }
                 }

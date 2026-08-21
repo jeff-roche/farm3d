@@ -115,8 +115,19 @@ export async function loadPrinters(): Promise<void> {
   }
 }
 
+/** `runtimeStatus` is frontend-only live state that Rust never sends back, so
+ *  it must survive every mutation that splices in a fresh `ResolvedPrinter` —
+ *  otherwise a rename would blank the connection badge and temperatures until
+ *  the supervisor's next push, up to a minute of backoff away for an offline
+ *  printer. Solid's store merges an object at a path (absent keys are left
+ *  alone) so this already held, but it held by accident of that merge; carried
+ *  forward explicitly here, and pinned by a test, so it stays true. */
 function spliceResolved(resolved: ResolvedPrinter): void {
-  setState("printers", (p) => p.id === resolved.id, resolved);
+  setState(
+    "printers",
+    (p) => p.id === resolved.id,
+    (previous) => ({ ...resolved, runtimeStatus: previous.runtimeStatus }),
+  );
 }
 
 function removeById(id: string): void {
