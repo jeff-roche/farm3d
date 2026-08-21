@@ -7,6 +7,7 @@
 //! is farm3d's own small vocabulary rather than any one protocol's.
 
 pub mod credentials;
+pub mod moonraker;
 
 use serde::{Deserialize, Serialize};
 
