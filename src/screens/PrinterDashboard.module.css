@@ -141,10 +141,34 @@ button.cardSelected:hover {
   color: var(--f3d-color-text-muted);
 }
 
+.state_online {
+  composes: badgeAccent;
+}
+
+.state_connecting {
+  composes: badgeMuted;
+}
+
+.state_offline {
+  composes: badgeMuted;
+}
+
+.state_error {
+  composes: badgeWarning;
+}
+
 .cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   font-family: var(--f3d-type-mono-font);
   font-size: var(--f3d-type-body-small-size);
   color: var(--f3d-color-text-muted);
+}
+
+.readings {
+  white-space: nowrap;
 }
 
 .empty {

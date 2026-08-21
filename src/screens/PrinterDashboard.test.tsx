@@ -108,4 +108,34 @@ describe("PrinterDashboard", () => {
     const unresolvedCard = screen.getByText("Bay 2").closest("button") as HTMLElement;
     expect(within(unresolvedCard).getByText("Unlinked")).toBeInTheDocument();
   });
+
+  it("counts connection states once printers report them", () => {
+    // Phase 1 could only say "3 printers" — there was nothing to count.
+    const printers = [
+      printer({ id: "a", runtimeStatus: { connectionState: "online", updatedAt: "" } }),
+      printer({ id: "b", runtimeStatus: { connectionState: "offline", updatedAt: "" } }),
+      printer({ id: "c" }),
+    ];
+    expect(summarizePrinters(printers)).toBe("3 printers — 1 online, 1 offline");
+  });
+
+  it("still says only the count when nothing has reported", () => {
+    expect(summarizePrinters([printer({ id: "a" })])).toBe("1 printer");
+  });
+
+  it("badges a printer with its connection state", () => {
+    const printers = [
+      printer({ id: "a", runtimeStatus: { connectionState: "online", updatedAt: "" } }),
+    ];
+    render(() => <PrinterDashboard printers={printers} />);
+    expect(screen.getByText("online")).toBeInTheDocument();
+  });
+
+  it("renders an unreported temperature as a dash, never as zero", () => {
+    const printers = [
+      printer({ id: "a", runtimeStatus: { connectionState: "online", updatedAt: "" } }),
+    ];
+    render(() => <PrinterDashboard printers={printers} />);
+    expect(screen.queryByText(/0 °C/)).not.toBeInTheDocument();
+  });
 });

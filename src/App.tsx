@@ -1,5 +1,5 @@
 // src/App.tsx
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard, summarizePrinters } from "./screens/PrinterDashboard";
@@ -11,6 +11,7 @@ import {
   printers,
   printerStoreError,
   removePrinter,
+  startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
 import styles from "./App.module.css";
@@ -30,6 +31,9 @@ function App() {
 
   onMount(() => {
     void loadPrinters();
+    let unlisten: (() => void) | undefined;
+    void startStatusListener().then((fn) => (unlisten = fn));
+    onCleanup(() => unlisten?.());
   });
 
   return (

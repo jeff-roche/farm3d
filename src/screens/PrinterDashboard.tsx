@@ -3,6 +3,7 @@ import { Button, Tabs } from "../design-system";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
 import { openPrintersFile } from "../printers/printer-store";
 import { PrinterAddDialog } from "./PrinterAddDialog";
+import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import styles from "./PrinterDashboard.module.css";
 
@@ -51,11 +52,25 @@ export function groupPrintersByModel(printers: ResolvedPrinter[]): PrinterGroup[
   return groups;
 }
 
-/** "3 printers" — for AppShell's status bar. Per-status counts return once
- *  phase 3 wires `runtimeStatus`; every Printer is status-less in phase 1. */
+/** "3 printers — 1 online, 1 offline" for AppShell's status bar. Printers
+ *  that have never reported are counted in the total only: a printer with no
+ *  Connection configured is not "offline", it is simply not connected. */
 export function summarizePrinters(printers: ResolvedPrinter[]): string {
   if (printers.length === 0) return "No printers";
-  return `${printers.length} printer${printers.length === 1 ? "" : "s"}`;
+  const total = `${printers.length} printer${printers.length === 1 ? "" : "s"}`;
+  const counts = { online: 0, offline: 0, error: 0, connecting: 0 };
+  for (const printer of printers) {
+    const state = printer.runtimeStatus?.connectionState;
+    if (state) counts[state] += 1;
+  }
+  const parts = (["online", "connecting", "offline", "error"] as const)
+    .filter((state) => counts[state] > 0)
+    .map((state) => `${counts[state]} ${state}`);
+  return parts.length > 0 ? `${total} — ${parts.join(", ")}` : total;
+}
+
+function formatTemp(value: number | undefined): string {
+  return value === undefined ? "—" : `${Math.round(value)} °C`;
 }
 
 export interface PrinterDashboardProps {
@@ -149,6 +164,16 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                           <span class={styles.cardName}>{printer.name}</span>
                         </div>
                         <div class={styles.badgeRow}>
+                          <Show when={printer.runtimeStatus}>
+                            {(status) => (
+                              <span
+                                class={[styles.badge, styles[`state_${status().connectionState}`]].join(" ")}
+                                title={status().error ?? `Updated ${status().updatedAt}`}
+                              >
+                                {status().connectionState}
+                              </span>
+                            )}
+                          </Show>
                           <Show
                             when={
                               printer.catalogStatus !== "ok" &&
@@ -182,6 +207,15 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                         </div>
                         <div class={styles.cardFooter}>
                           <span>{printer.variantLabel}</span>
+                          <Show when={printer.runtimeStatus}>
+                            {(status) => (
+                              // An unreported reading is an em dash, never a
+                              // zero — "0 °C" reads as a real measurement.
+                              <span class={styles.readings}>
+                                {formatTemp(status().nozzleTempC)} / {formatTemp(status().bedTempC)}
+                              </span>
+                            )}
+                          </Show>
                         </div>
                       </button>
                     )}
@@ -238,7 +272,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                     {
                       value: "connection",
                       label: "Connection",
-                      content: <p class={styles.detailMuted}>Configured in a later phase.</p>,
+                      content: <PrinterConnectionPanel printer={printer()} />,
                     },
                   ]}
                 />
