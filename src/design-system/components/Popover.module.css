@@ -1,3 +1,7 @@
+.trigger {
+  cursor: pointer;
+}
+
 .content {
   composes: focusRing from "./shared.module.css";
   display: flex;

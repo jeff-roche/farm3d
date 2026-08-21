@@ -14,7 +14,7 @@ export interface DialogProps extends ParentProps {
 export function Dialog(props: DialogProps) {
   return (
     <KDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <KDialog.Trigger>{props.trigger}</KDialog.Trigger>
+      <KDialog.Trigger class={styles.trigger}>{props.trigger}</KDialog.Trigger>
       <KDialog.Portal>
         <KDialog.Overlay class={styles.overlay} />
         <KDialog.Content class={styles.content}>

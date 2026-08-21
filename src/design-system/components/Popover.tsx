@@ -28,7 +28,7 @@ export function Popover(props: PopoverProps) {
       modal={props.modal}
     >
       <Show when={props.trigger}>
-        <KPopover.Trigger>{props.trigger}</KPopover.Trigger>
+        <KPopover.Trigger class={styles.trigger}>{props.trigger}</KPopover.Trigger>
       </Show>
       <KPopover.Portal>
         <KPopover.Content class={styles.content}>{props.children}</KPopover.Content>

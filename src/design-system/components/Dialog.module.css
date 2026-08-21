@@ -1,3 +1,7 @@
+.trigger {
+  cursor: pointer;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
