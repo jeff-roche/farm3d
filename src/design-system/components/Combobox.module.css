@@ -43,7 +43,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--f3d-color-text-muted);
+  /* Matches Select's trigger color so the chevron reads the same across
+     every dropdown-style component, not dimmer here than elsewhere. */
+  color: var(--f3d-color-text);
   cursor: pointer;
 }
 
