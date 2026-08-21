@@ -290,9 +290,9 @@ fn credential_to_forget(file: &PrintersFile, id: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn delete_printer(
+pub async fn delete_printer(
     app: AppHandle,
-    manager: tauri::State<Arc<crate::connections::supervisor::ConnectionManager>>,
+    manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager>>,
     id: String,
 ) -> Result<(), String> {
     let config_dir = app_config_dir(&app)?;
