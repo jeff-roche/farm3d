@@ -30,26 +30,29 @@ afterEach(() => {
 });
 
 describe("PrinterAddDialog", () => {
-  it("searches, selects a model + auto-selected variant, and submits the draft", async () => {
+  it("picks a brand, then a model + auto-selected variant, and submits the draft", async () => {
     const onAdd = vi.fn();
     render(() => <PrinterAddDialog open onOpenChange={() => {}} onAdd={onAdd} />);
 
-    // findByLabelText is ambiguous here — Kobalte's Combobox trigger button
-    // also carries "Printer model" in its computed accessible name via
-    // aria-labelledby, so it collides with the input under
-    // @testing-library/dom's (non-recursive) label-matching heuristic.
-    // getByRole("combobox", ...) is unambiguous: that role belongs only to
-    // the <input> (verified against Kobalte's combobox source during Task 11).
-    const input = await screen.findByRole("combobox", { name: "Printer model" });
-    await fireEvent.pointerDown(input, { pointerType: "mouse", button: 0 });
-    await fireEvent.input(input, { target: { value: "Centauri" } });
+    // Brand: a Combobox over the distinct vendor list. getByRole("combobox",
+    // ...) targets the <input> unambiguously (same technique as the old
+    // single-field flow — see Task 11's findings on Kobalte's
+    // aria-labelledby-driven accessible-name collisions).
+    const brandInput = await screen.findByRole("combobox", { name: "Brand" });
+    await fireEvent.pointerDown(brandInput, { pointerType: "mouse", button: 0 });
+    await fireEvent.input(brandInput, { target: { value: "Elegoo" } });
 
-    const item = await screen.findByText("Elegoo · Elegoo Centauri Carbon");
+    const brandItem = await screen.findByText("Elegoo");
     // pointerType: "mouse" is required — Kobalte's selectable-item handler
-    // only selects on pointerup when pointerType is "mouse" and button is 0
-    // (verified against createSelectableItem during Task 11; omitting this
-    // makes the event a no-op and onChange never fires).
-    await fireEvent.pointerUp(item, { pointerType: "mouse", button: 0 });
+    // only selects on pointerup when pointerType is "mouse" and button is 0.
+    await fireEvent.pointerUp(brandItem, { pointerType: "mouse", button: 0 });
+
+    // Model: a plain Select, filtered to the chosen brand. Follows this
+    // repo's established Select test pattern (pointerdown to open, click to
+    // select — Select's listbox item responds to click, unlike Combobox's).
+    const modelTrigger = await screen.findByRole("button", { name: "Model" });
+    await fireEvent.pointerDown(modelTrigger, { pointerType: "mouse", button: 0 });
+    await fireEvent.click(await screen.findByText("Elegoo Centauri Carbon"));
 
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
       "Elegoo Centauri Carbon",
@@ -58,7 +61,7 @@ describe("PrinterAddDialog", () => {
     // getByText("Add printer") is ambiguous here too — the Dialog's own
     // title renders as an <h2>Add printer</h2>, colliding with the submit
     // button's identical label. getByRole("button", ...) disambiguates the
-    // same way the combobox query above does.
+    // same way the queries above do.
     await fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
 
     expect(onAdd).toHaveBeenCalledWith({
@@ -73,8 +76,9 @@ describe("PrinterAddDialog", () => {
     });
   });
 
-  it("disables Add printer until a model is selected", () => {
+  it("hides the Model dropdown until a brand is chosen, and disables Add printer until a model is selected", () => {
     render(() => <PrinterAddDialog open onOpenChange={() => {}} onAdd={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
     // See the analogous getByRole note in the test above — the Dialog's own
     // title also reads "Add printer", so getByText would be ambiguous.
     const addButton = screen.getByRole("button", { name: "Add printer" }) as HTMLButtonElement;

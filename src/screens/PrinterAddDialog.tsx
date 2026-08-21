@@ -12,28 +12,28 @@ export interface PrinterAddDialogProps {
 
 export function PrinterAddDialog(props: PrinterAddDialogProps) {
   const [models] = createResource(listCatalogModels);
-  const [query, setQuery] = createSignal("");
+  const [vendorQuery, setVendorQuery] = createSignal("");
+  const [selectedVendor, setSelectedVendor] = createSignal<string | null>(null);
   const [selectedModel, setSelectedModel] = createSignal<CatalogModelSummary | null>(null);
   const [selectedVariant, setSelectedVariant] = createSignal<CatalogVariantSummary | null>(null);
   const [name, setName] = createSignal("");
   const [nameTouched, setNameTouched] = createSignal(false);
 
-  // Punctuation-insensitive: Kobalte resets the input's displayed text to the
-  // selected option's full label ("Vendor · Model") immediately after a
-  // selection, which round-trips through onInputChange into `query`. Without
-  // normalizing away the "·" separator, that reset text no longer matches the
-  // plain "vendor model" search corpus below, `filteredModels` collapses to
-  // empty, and the just-selected option vanishes from Kobalte's own option
-  // list before it can resolve the selection — silently discarding it.
-  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const vendors = createMemo(() => {
+    const seen = new Set<string>();
+    for (const m of models() ?? []) seen.add(m.vendor);
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  });
 
-  const filteredModels = createMemo(() => {
-    const q = normalize(query());
-    const all = models() ?? [];
-    const matching = q
-      ? all.filter((m) => normalize(`${m.vendor} ${m.model}`).includes(q))
-      : all;
-    return matching.slice(0, 50);
+  const filteredVendors = createMemo(() => {
+    const q = vendorQuery().trim().toLowerCase();
+    const all = vendors();
+    return q ? all.filter((v) => v.toLowerCase().includes(q)) : all;
+  });
+
+  const modelsForVendor = createMemo(() => {
+    const vendor = selectedVendor();
+    return vendor ? (models() ?? []).filter((m) => m.vendor === vendor) : [];
   });
 
   const [variants] = createResource(selectedModel, (model) =>
@@ -64,6 +64,12 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
 
   const [preview] = createResource(catalogRef, (ref) => (ref ? previewProfile(ref) : Promise.resolve(null)));
 
+  function onSelectVendor(vendor: string) {
+    setSelectedVendor(vendor);
+    setSelectedModel(null);
+    setSelectedVariant(null);
+  }
+
   function onSelectModel(model: CatalogModelSummary) {
     setSelectedModel(model);
     setSelectedVariant(null);
@@ -89,17 +95,23 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
     >
       <div class={styles.form}>
         <Combobox
-          label="Printer model"
-          options={filteredModels()}
-          // Composite key: modelId alone isn't unique in the real catalog, and
-          // two options sharing a key makes Kobalte treat them as one option.
-          optionValue={(m: CatalogModelSummary) => `${m.vendor}::${m.model}`}
-          optionLabel={(m: CatalogModelSummary) => `${m.vendor} · ${m.model}`}
-          value={selectedModel() ?? undefined}
-          onChange={onSelectModel}
-          onInputChange={setQuery}
-          placeholder={`Search ${(models() ?? []).length} models...`}
+          label="Brand"
+          options={filteredVendors()}
+          value={selectedVendor() ?? undefined}
+          onChange={onSelectVendor}
+          onInputChange={setVendorQuery}
+          placeholder={`Search ${vendors().length} brands...`}
         />
+        <Show when={selectedVendor()}>
+          <Select
+            label="Model"
+            options={modelsForVendor()}
+            optionValue={(m: CatalogModelSummary) => m.model}
+            optionLabel={(m: CatalogModelSummary) => m.model}
+            value={selectedModel() ?? undefined}
+            onChange={onSelectModel}
+          />
+        </Show>
         <Show when={selectedModel()}>
           <Select
             label="Nozzle"
