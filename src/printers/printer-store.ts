@@ -2,10 +2,15 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { createStore } from "solid-js/store";
 import type {
   CatalogRef,
+  ConnectionSubmission,
+  CredentialStoreInfo,
+  DiscoveredPrinter,
   OverridableField,
   PrinterDraft,
   PrinterPatch,
   PrinterProfile,
+  PrinterStatus,
+  ProbeResult,
   ResolvedPrinter,
 } from "./types";
 
@@ -234,5 +239,79 @@ export async function openPrintersFile(): Promise<void> {
     await invoke("open_printers_file");
   } catch (e) {
     reportError(e);
+  }
+}
+
+/** Merges live status onto one printer row. Unknown ids are ignored — a
+ *  status event can arrive after a delete, and must not resurrect the row. */
+export function applyStatus(id: string, status: PrinterStatus): void {
+  if (!state.printers.some((p) => p.id === id)) return;
+  setState("printers", (p) => p.id === id, "runtimeStatus", status);
+}
+
+/** Subscribes to the supervisor's status events, then backfills whatever it
+ *  already knows — a printer that came online before this listener attached
+ *  would otherwise show nothing until its next change. Returns an unlisten fn. */
+export async function startStatusListener(): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<{ id: string; status: PrinterStatus }>(
+    "printer-status",
+    (event) => applyStatus(event.payload.id, event.payload.status),
+  );
+  try {
+    const known = await invoke<Record<string, PrinterStatus>>("printer_statuses");
+    for (const [id, status] of Object.entries(known)) applyStatus(id, status);
+  } catch (e) {
+    reportError(e);
+  }
+  return unlisten;
+}
+
+export async function setConnection(id: string, submission: ConnectionSubmission): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    spliceResolved(await invoke<ResolvedPrinter>("set_printer_connection", { id, submission }));
+  } catch (e) {
+    reportError(e);
+  }
+}
+
+export async function clearConnection(id: string): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    spliceResolved(await invoke<ResolvedPrinter>("clear_printer_connection", { id }));
+  } catch (e) {
+    reportError(e);
+  }
+}
+
+/** Rejects rather than reporting into the banner: the Connection tab renders
+ *  a probe failure inline, next to the fields the user needs to correct. */
+export async function testConnection(
+  id: string,
+  submission: ConnectionSubmission,
+): Promise<ProbeResult> {
+  if (!isTauri()) throw new Error("Testing a connection needs the desktop app");
+  return invoke<ProbeResult>("test_printer_connection", { id, submission });
+}
+
+export async function discoverPrinters(): Promise<DiscoveredPrinter[]> {
+  if (!isTauri()) return [];
+  try {
+    return await invoke<DiscoveredPrinter[]>("discover_printers");
+  } catch (e) {
+    reportError(e);
+    return [];
+  }
+}
+
+export async function credentialStoreInfo(): Promise<CredentialStoreInfo | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<CredentialStoreInfo>("credential_store_info");
+  } catch (e) {
+    reportError(e);
+    return null;
   }
 }

@@ -131,5 +131,44 @@ describe("printer-store", () => {
 
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
+
+    it("merges a status event onto the matching printer and leaves siblings alone", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const [first, second] = store.printers();
+
+      store.applyStatus(first.id, {
+        connectionState: "online",
+        nozzleTempC: 201.4,
+        updatedAt: "2026-08-20T14:02:11Z",
+      });
+
+      expect(store.printers()[0].runtimeStatus?.nozzleTempC).toBe(201.4);
+      expect(store.printers().find((p) => p.id === second.id)?.runtimeStatus).toBeUndefined();
+    });
+
+    it("ignores a status event for a printer it does not know", async () => {
+      // A stale event can arrive after a delete; it must not resurrect a row.
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const before = store.printers().length;
+      store.applyStatus("prn-ghost", {
+        connectionState: "online",
+        updatedAt: "2026-08-20T14:02:11Z",
+      });
+      expect(store.printers()).toHaveLength(before);
+    });
+
+    it("does not invoke connection mutations in the web fallback", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      await store.setConnection("prn-voron-1", {
+        kind: "moonraker",
+        host: "voron.local",
+        port: 7125,
+        useTls: false,
+      });
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
   });
 });
