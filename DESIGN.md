@@ -32,7 +32,7 @@ A `Theme` (`src/design-system/tokens/types.ts`) has three parts:
 interface Theme {
   name: string;              // unique registry key, e.g. "farm3d-dark"
   scheme: "light" | "dark";  // which built-in this theme substitutes for in 'system' mode
-  color: ColorRoles;         // ~19 roles: bg, surface, surfaceRaised, surfaceHover,
+  color: ColorRoles;         // 20 roles: bg, surface, surfaceRaised, surfaceHover,
                               // surfaceSelected, border, borderStrong, text, textMuted,
                               // textDisabled, accent, onAccent, accentMuted, danger,
                               // onDanger, warning, onWarning, success, onSuccess, focusRing
@@ -42,7 +42,7 @@ interface Theme {
 ```
 
 The two built-in themes (`farm3d-light`, `farm3d-dark`) are hand-authored in
-`src/design-system/themes/{light,dark}.ts` — with only ~19 color roles,
+`src/design-system/themes/{light,dark}.ts` — with only 20 color roles,
 there's no need for algorithmic palette generation; values are picked
 directly, calibrated against known editor dark themes.
 
@@ -90,7 +90,7 @@ import { registerTheme, setThemeMode, type Theme } from "./design-system";
 const harvestTheme: Theme = {
   name: "harvest",
   scheme: "dark",
-  color: { /* all 19 roles */ },
+  color: { /* all 20 roles */ },
   typography: farm3dTypography, // reuse the built-in scale, or provide your own
   shape: farm3dShape,
 };
@@ -111,7 +111,9 @@ Kobalte-backed is Kobalte's responsibility, not ours to get right by hand.
 | --- | --- |
 | `Button`, `IconButton` | `@kobalte/core/button` |
 | `TextField` | `@kobalte/core/text-field` |
+| `NumberField` | `@kobalte/core/number-field` |
 | `Select` | `@kobalte/core/select` |
+| `Combobox` | `@kobalte/core/combobox` |
 | `Checkbox` | `@kobalte/core/checkbox` |
 | `RadioGroup` | `@kobalte/core/radio-group` |
 | `Switch` | `@kobalte/core/switch` |
@@ -123,7 +125,7 @@ Kobalte-backed is Kobalte's responsibility, not ours to get right by hand.
 | `DropdownMenu` | `@kobalte/core/dropdown-menu` |
 | `Progress` | `@kobalte/core/progress` |
 | `Chip` | `@kobalte/core/toggle-button` |
-| `Panel` | plain element (no primitive needed) |
+| `Panel`, `Field`, `Logo` | plain element (no primitive needed) |
 
 Shared low-level CSS (focus ring, button reset) lives in
 `components/shared.module.css` and is pulled in via CSS Modules'

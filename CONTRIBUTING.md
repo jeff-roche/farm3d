@@ -12,11 +12,13 @@ just dev
 ## Before opening a PR
 
 ```sh
-just build   # type-checks and builds the frontend
-just test    # runs the Vitest suite
+just build       # type-checks and builds the frontend
+just test        # runs the Vitest suite
+just test-rust   # runs the Rust backend's test suite (if you touched src-tauri/)
 ```
 
-Both must pass. If you're on Linux and have a display available, also run
+Both `just build` and `just test` must pass; run `just test-rust` too when your
+change touches `src-tauri/`. If you're on Linux and have a display available, also run
 `just dev` and manually confirm the app still launches and behaves as
 expected — `just build`/`just test` verify correctness, not that the app
 actually renders right.
