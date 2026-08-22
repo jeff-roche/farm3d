@@ -4,6 +4,13 @@ import styles from "./TextField.module.css";
 
 export interface TextFieldProps {
   label?: string;
+  /** An accessible name for the input when no visible `label` is rendered —
+   *  e.g. an inline-editable field styled to read as plain text, not a
+   *  labeled form control. Forwarded to the *Input* subcomponent
+   *  specifically, not the Root, matching `NumberField`'s identical
+   *  `aria-label` handling and for the same reason: Kobalte's form-control
+   *  primitives read `aria-label` from the Input, not the Root. */
+  "aria-label"?: string;
   description?: string;
   error?: string;
   placeholder?: string;
@@ -19,6 +26,7 @@ export interface TextFieldProps {
 export function TextField(props: TextFieldProps) {
   const [local, rest] = splitProps(props, [
     "label",
+    "aria-label",
     "description",
     "error",
     "placeholder",
@@ -37,6 +45,7 @@ export function TextField(props: TextFieldProps) {
         class={styles.input}
         placeholder={local.placeholder}
         type={local.type ?? "text"}
+        aria-label={local["aria-label"]}
       />
       {local.description && (
         <KTextField.Description class={styles.description}>

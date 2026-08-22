@@ -85,6 +85,18 @@ describe("TextField", () => {
     render(() => <TextField label="Name" error="Required" />);
     expect(screen.getByText("Required")).toBeInTheDocument();
   });
+
+  it("forwards aria-label to the input itself, for an unlabeled field with no visible label", () => {
+    // Mirrors NumberField's identical aria-label handling: Kobalte's
+    // form-control primitives read aria-label from the Input subcomponent
+    // specifically, not the Root, so it must be forwarded there rather
+    // than spread onto the root element.
+    render(() => <TextField aria-label="Printer name" onChange={vi.fn()} />);
+    expect(screen.getByLabelText("Printer name") as HTMLInputElement).toHaveProperty(
+      "tagName",
+      "INPUT",
+    );
+  });
 });
 
 describe("Chip", () => {

@@ -3,8 +3,38 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { groupPrintersByModel, PrinterDashboard, summarizePrinters } from "./PrinterDashboard";
 import type { ResolvedPrinter } from "../printers/types";
 
+const updatePrinter = vi.fn();
+// A partial mock -- every other export (openPrintersFile, overrideField,
+// rebindPrinter, setConnection, ...) stays real. Those are only ever
+// *called* from the Profile/Connection/Status tab content, which none of
+// these tests select into, but they're still transitively imported by
+// PrinterDashboard's child components, so replacing the whole module would
+// silently break anything that reads one at render time.
+vi.mock("../printers/printer-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../printers/printer-store")>();
+  return { ...actual, updatePrinter: (...args: unknown[]) => updatePrinter(...args) };
+});
+
+// PrinterAddDialog's Model Select renders whatever `groupPrintersByModel`
+// prefilled it with as its selected value, which crashes if that model
+// isn't present in the (otherwise real, network-backed) catalog list --
+// this stands in with data covering every group these tests construct.
+vi.mock("../printers/printer-catalog", () => ({
+  listCatalogModels: vi.fn().mockResolvedValue([
+    { modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon" },
+    { modelId: "", vendor: "Cubicon", model: "Cubicon Single Plus 320c" },
+    { modelId: "", vendor: "Cubicon", model: "Cubicon Style" },
+  ]),
+  listCatalogVariants: vi.fn().mockResolvedValue([
+    { variant: "Elegoo Centauri Carbon 0.4 nozzle", printerVariant: "0.4" },
+  ]),
+  previewProfile: vi.fn().mockResolvedValue(null),
+}));
+
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 const PROFILE = {
@@ -61,6 +91,29 @@ describe("groupPrintersByModel", () => {
     const groups = groupPrintersByModel(printers);
     expect(groups[groups.length - 1].modelLabel).toBe("Unlinked");
     expect(groups[groups.length - 1].printers.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("does not merge two distinct models that happen to share a catalog modelId", () => {
+    // Regression test: the catalog resolver documents `modelId` as NOT
+    // unique across the shipped catalog. Keying the group solely on
+    // `modelId` would silently collapse these two different models into
+    // one group labelled with whichever printer sorted first.
+    const printers = [
+      printer({
+        id: "a",
+        name: "Bay 1",
+        catalogRef: { vendor: "Cubicon", model: "Cubicon Single Plus 320c", variant: "v1", modelId: "", printerVariant: "0.4" },
+        modelLabel: "Cubicon Single Plus 320c",
+      }),
+      printer({
+        id: "b",
+        name: "Bay 2",
+        catalogRef: { vendor: "Cubicon", model: "Cubicon Style", variant: "v2", modelId: "", printerVariant: "0.4" },
+        modelLabel: "Cubicon Style",
+      }),
+    ];
+    const groups = groupPrintersByModel(printers);
+    expect(groups.map((g) => g.modelLabel).sort()).toEqual(["Cubicon Single Plus 320c", "Cubicon Style"]);
   });
 });
 
@@ -153,5 +206,81 @@ describe("PrinterDashboard", () => {
     ];
     render(() => <PrinterDashboard printers={printers} />);
     expect(screen.queryByText(/0 °C/)).not.toBeInTheDocument();
+  });
+
+  it("debounces a rename before calling updatePrinter", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterDashboard printers={[printer({ id: "a", name: "Bay 1" })]} />);
+    await fireEvent.click(screen.getByText("Bay 1"));
+
+    const nameField = screen.getByLabelText("Printer name") as HTMLInputElement;
+    await fireEvent.input(nameField, { target: { value: "Bay 1 (renamed)" } });
+    expect(updatePrinter).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+    expect(updatePrinter).toHaveBeenCalledWith("a", { name: "Bay 1 (renamed)" });
+  });
+
+  it("cancels a pending rename when the selected printer switches", async () => {
+    // Same bug class as PrinterProfilePanel's/PrinterStatusPanel's guard:
+    // the detail aside's <Show when={selected()}> is non-keyed, so
+    // switching which card is selected does not remount the header.
+    vi.useFakeTimers();
+    render(() => (
+      <PrinterDashboard
+        printers={[printer({ id: "a", name: "Bay 1" }), printer({ id: "b", name: "Bay 2" })]}
+      />
+    ));
+    await fireEvent.click(screen.getByText("Bay 1"));
+
+    const nameField = screen.getByLabelText("Printer name") as HTMLInputElement;
+    await fireEvent.input(nameField, { target: { value: "a rename meant for Bay 1" } });
+
+    await fireEvent.click(screen.getByText("Bay 2"));
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).not.toHaveBeenCalledWith("a", { name: "a rename meant for Bay 1" });
+    expect(updatePrinter).not.toHaveBeenCalledWith("b", { name: "a rename meant for Bay 1" });
+  });
+
+  it("opens the add dialog pre-filled with a group's model via its header button", async () => {
+    render(() => <PrinterDashboard printers={[printer({ id: "a", name: "Bay 1" })]} />);
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Add another Elegoo Centauri Carbon" }),
+    );
+
+    expect(await screen.findByRole("button", { name: /Centauri Carbon/ })).toBeInTheDocument();
+    // Suggests a name distinct from the group's existing printer instead of
+    // colliding with "Elegoo Centauri Carbon" (Bay 1's own model name).
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Elegoo Centauri Carbon",
+    );
+  });
+
+  it("does not merge two distinct models that happen to share a catalog modelId into one 'add another' target", async () => {
+    // Regression guard for the same modelId-collision bug groupPrintersByModel
+    // is tested against above -- the header button must derive its prefill
+    // from the group's own printers, not a shared modelId.
+    const cubiconA = printer({
+      id: "a", name: "Bay 1",
+      catalogRef: { vendor: "Cubicon", model: "Cubicon Single Plus 320c", variant: "v1", modelId: "", printerVariant: "0.4" },
+      modelLabel: "Cubicon Single Plus 320c",
+    });
+    const cubiconB = printer({
+      id: "b", name: "Bay 2",
+      catalogRef: { vendor: "Cubicon", model: "Cubicon Style", variant: "v2", modelId: "", printerVariant: "0.4" },
+      modelLabel: "Cubicon Style",
+    });
+    render(() => <PrinterDashboard printers={[cubiconA, cubiconB]} />);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Add another Cubicon Style" }));
+    // The Model trigger strips the shared "Cubicon" vendor prefix (see
+    // PrinterAddDialog's stripBrandPrefix), so its label is "Style", not
+    // "Cubicon Style" -- still distinct from the OTHER Cubicon model's
+    // stripped label ("Single Plus 320c"), which is what this regression
+    // test actually needs to distinguish.
+    expect(await screen.findByRole("button", { name: /Style/ })).toBeInTheDocument();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Cubicon Style");
   });
 });

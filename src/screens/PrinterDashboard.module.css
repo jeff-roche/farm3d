@@ -63,6 +63,10 @@
   color: var(--f3d-color-text-muted);
 }
 
+.groupAddButton {
+  margin-left: auto;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
@@ -229,28 +233,17 @@ button.cardSelected:hover {
   gap: 0.5rem;
 }
 
+/* The inline rename field replaces what was a plain <span> here -- fills
+   the available header width the same way, alongside the Remove/Close
+   actions. */
+.detailNameField {
+  flex: 1;
+  min-width: 0;
+}
+
 .detailBody {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   padding: 0.75rem;
-}
-
-.detailMuted {
-  color: var(--f3d-color-text-disabled);
-}
-
-.detailField {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.detailLabel {
-  font-family: var(--f3d-type-label-font);
-  font-size: var(--f3d-type-label-size);
-  font-weight: var(--f3d-type-label-weight);
-  letter-spacing: var(--f3d-type-label-tracking);
-  color: var(--f3d-color-text-muted);
-  text-transform: uppercase;
 }

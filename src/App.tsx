@@ -66,7 +66,10 @@ function App() {
       >
         <PrinterDashboard
           printers={printers()}
-          onAddPrinter={(draft) => void addPrinter(draft)}
+          onAddPrinter={async (draft) => {
+            const id = await addPrinter(draft);
+            return id ? printers().find((p) => p.id === id) : undefined;
+          }}
           onRemovePrinter={(id) => void removePrinter(id)}
         />
       </Show>

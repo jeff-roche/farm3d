@@ -193,10 +193,18 @@ fn find_printer_mut<'a>(
         .ok_or_else(|| format!("no printer with id {id:?}"))
 }
 
+/// Guarantees uniqueness within this process's lifetime regardless of clock
+/// resolution — the nanosecond timestamp alone wrapped every ~4.3s once
+/// truncated to 32 bits, a real risk once rapid, repeated creation (e.g. an
+/// "add another like this" shortcut) is something a user actually does.
+static ID_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn generate_id() -> String {
+    use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    format!("prn-{:x}", nanos & 0xFFFF_FFFF)
+    let seq = ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("prn-{:x}-{:x}", nanos & 0xFFFF_FFFF, seq)
 }
 
 /// Builds a fresh drift baseline from the RAW catalog variant — never from a
@@ -814,5 +822,15 @@ mod tests {
         assert_eq!(store.get(&key).unwrap(), None, "credential must not survive printer deletion");
         assert!(load_printers_from(&dir).unwrap().printers.is_empty());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generate_id_never_repeats_under_rapid_creation() {
+        // Regression test for a real collision window: the old
+        // nanosecond-truncated-to-32-bits id wrapped roughly every ~4.3s, so
+        // creating several printers in a tight loop (exactly what an "add
+        // another like this" shortcut does) could produce duplicate ids.
+        let ids: std::collections::HashSet<String> = (0..1000).map(|_| generate_id()).collect();
+        assert_eq!(ids.len(), 1000, "generate_id produced a duplicate under rapid, repeated calls");
     }
 }

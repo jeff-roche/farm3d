@@ -1,12 +1,15 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { IconX } from "@tabler/icons-solidjs";
-import { Button, IconButton, Tabs } from "../design-system";
-import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
-import { openPrintersFile } from "../printers/printer-store";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { IconPlus, IconX } from "@tabler/icons-solidjs";
+import { Button, IconButton, Tabs, TextField } from "../design-system";
+import type { CatalogModelSummary, PrinterDraft, ResolvedPrinter } from "../printers/types";
+import { openPrintersFile, updatePrinter } from "../printers/printer-store";
 import { PrinterAddDialog } from "./PrinterAddDialog";
 import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
+import { PrinterStatusPanel } from "./PrinterStatusPanel";
 import styles from "./PrinterDashboard.module.css";
+
+const NAME_DEBOUNCE_MS = 300;
 
 export interface PrinterGroup {
   modelKey: string;
@@ -18,13 +21,20 @@ const UNLINKED_KEY = "__unlinked__";
 
 /** Groups by catalog model; a Printer whose catalog reference doesn't
  *  resolve (renamed/removed upstream preset) lands in a trailing "Unlinked"
- *  group instead of a normal model group. */
+ *  group instead of a normal model group.
+ *
+ *  Keyed on `vendor::model`, NOT `catalogRef.modelId` — the catalog
+ *  resolver documents `modelId` as not unique (several distinct models,
+ *  and even same-vendor siblings, can share one), so keying on it alone
+ *  could silently collapse two different models into one mislabeled
+ *  group. `(vendor, model)` is the same exact-match pair the resolver
+ *  itself treats as authoritative. */
 export function groupPrintersByModel(printers: ResolvedPrinter[]): PrinterGroup[] {
   const byModel = new Map<string, ResolvedPrinter[]>();
   for (const printer of printers) {
     const key =
       printer.catalogStatus === "ok" || printer.catalogStatus === "rematched"
-        ? printer.catalogRef.modelId
+        ? `${printer.catalogRef.vendor}::${printer.catalogRef.model}`
         : UNLINKED_KEY;
     const list = byModel.get(key) ?? [];
     list.push(printer);
@@ -76,7 +86,7 @@ function formatTemp(value: number | undefined): string {
 
 export interface PrinterDashboardProps {
   printers: ResolvedPrinter[];
-  onAddPrinter?: (draft: PrinterDraft) => void;
+  onAddPrinter?: (draft: PrinterDraft) => Promise<ResolvedPrinter | undefined>;
   onRemovePrinter?: (id: string) => void;
 }
 
@@ -90,6 +100,12 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   const groups = createMemo(() => groupPrintersByModel(props.printers));
   const [detailWidth, setDetailWidth] = createSignal(DEFAULT_DETAIL_WIDTH);
   const [addDialogOpen, setAddDialogOpen] = createSignal(false);
+  const [prefillModel, setPrefillModel] = createSignal<CatalogModelSummary | null>(null);
+
+  function openAddDialog(prefill: CatalogModelSummary | null) {
+    setPrefillModel(prefill);
+    setAddDialogOpen(true);
+  }
 
   let dragStartX = 0;
   let dragStartWidth = 0;
@@ -133,8 +149,13 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           </Button>
           <PrinterAddDialog
             open={addDialogOpen()}
-            onOpenChange={setAddDialogOpen}
-            onAdd={(draft) => props.onAddPrinter?.(draft)}
+            // The Dialog's own internal "+ Add printer" trigger (as opposed
+            // to a group header's "add another" button, which calls
+            // `openAddDialog` directly) always opens with no prefill.
+            onOpenChange={(open) => (open ? openAddDialog(null) : setAddDialogOpen(false))}
+            onAdd={(draft) => props.onAddPrinter?.(draft) ?? Promise.resolve(undefined)}
+            prefillModel={prefillModel()}
+            existingPrinters={props.printers}
           />
         </div>
         <div class={styles.groups}>
@@ -152,6 +173,20 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                 <header class={styles.groupHeader}>
                   <span class={styles.groupTitle}>{group.modelLabel}</span>
                   <span class={styles.groupCount}>{group.printers.length}</span>
+                  <IconButton
+                    class={styles.groupAddButton}
+                    aria-label={`Add another ${group.modelLabel}`}
+                    title={`Add another ${group.modelLabel}`}
+                    onClick={() =>
+                      openAddDialog({
+                        vendor: group.printers[0].catalogRef.vendor,
+                        model: group.printers[0].catalogRef.model,
+                        modelId: group.printers[0].catalogRef.modelId,
+                      })
+                    }
+                  >
+                    <IconPlus size={14} />
+                  </IconButton>
                 </header>
                 <div class={styles.grid}>
                   <For each={group.printers}>
@@ -230,62 +265,95 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
       </div>
 
       <Show when={selected()}>
-        {(printer) => (
-          <>
-            <div
-              class={styles.resizeHandle}
-              onPointerDown={onResizeStart}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize printer detail panel"
-            />
-            <aside
-              class={styles.detail}
-              style={{ width: `${detailWidth()}px` }}
-              aria-label="Printer detail"
-            >
-              <div class={styles.detailHeader}>
-                <span>{printer().name}</span>
-                <div class={styles.detailHeaderActions}>
-                  <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
-                    Remove
-                  </Button>
-                  <IconButton aria-label="Close printer detail" onClick={() => setSelectedId(null)}>
-                    <IconX size={16} />
-                  </IconButton>
+        {(printer) => {
+          // This render-prop runs ONCE for the whole time `selected()` stays
+          // truthy -- a non-keyed <Show> only re-invokes its child on a
+          // falsy<->truthy transition, so switching the selected printer
+          // does NOT remount this, only changes what `printer()` returns.
+          // An in-flight debounced rename must therefore be cancelled on
+          // that identity change, exactly like PrinterProfilePanel's guard,
+          // or a rename typed for printer A could land on printer B after a
+          // mid-debounce selection switch.
+          let nameTimer: ReturnType<typeof setTimeout> | undefined;
+
+          createEffect(
+            on(
+              () => printer().id,
+              (_id, prevId) => {
+                if (prevId === undefined) return;
+                clearTimeout(nameTimer);
+                nameTimer = undefined;
+              },
+            ),
+          );
+
+          onCleanup(() => clearTimeout(nameTimer));
+
+          function debouncedRename(value: string) {
+            clearTimeout(nameTimer);
+            const printerId = printer().id;
+            nameTimer = setTimeout(
+              () => void updatePrinter(printerId, { name: value }),
+              NAME_DEBOUNCE_MS,
+            );
+          }
+
+          return (
+            <>
+              <div
+                class={styles.resizeHandle}
+                onPointerDown={onResizeStart}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize printer detail panel"
+              />
+              <aside
+                class={styles.detail}
+                style={{ width: `${detailWidth()}px` }}
+                aria-label="Printer detail"
+              >
+                <div class={styles.detailHeader}>
+                  <TextField
+                    aria-label="Printer name"
+                    class={styles.detailNameField}
+                    value={printer().name}
+                    onChange={debouncedRename}
+                  />
+                  <div class={styles.detailHeaderActions}>
+                    <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
+                      Remove
+                    </Button>
+                    <IconButton aria-label="Close printer detail" onClick={() => setSelectedId(null)}>
+                      <IconX size={16} />
+                    </IconButton>
+                  </div>
                 </div>
-              </div>
-              <div class={styles.detailBody}>
-                <Tabs
-                  defaultValue="profile"
-                  items={[
-                    {
-                      value: "status",
-                      label: "Status",
-                      content: (
-                        <div class={styles.detailField}>
-                          <span class={styles.detailLabel}>Catalog</span>
-                          <span>{printer().modelLabel} — {printer().variantLabel}</span>
-                          <Show when={printer().catalogStatus !== "ok"}>
-                            <span class={styles.detailMuted}>
-                              Catalog status: {printer().catalogStatus}
-                            </span>
-                          </Show>
-                        </div>
-                      ),
-                    },
-                    { value: "profile", label: "Profile", content: <PrinterProfilePanel printer={printer()} /> },
-                    {
-                      value: "connection",
-                      label: "Connection",
-                      content: <PrinterConnectionPanel printer={printer()} />,
-                    },
-                  ]}
-                />
-              </div>
-            </aside>
-          </>
-        )}
+                <div class={styles.detailBody}>
+                  <Tabs
+                    defaultValue="profile"
+                    items={[
+                      {
+                        value: "status",
+                        label: "Status",
+                        content: <PrinterStatusPanel printer={printer()} />,
+                      },
+                      {
+                        value: "profile",
+                        label: "Profile",
+                        content: <PrinterProfilePanel printer={printer()} />,
+                      },
+                      {
+                        value: "connection",
+                        label: "Connection",
+                        content: <PrinterConnectionPanel printer={printer()} />,
+                      },
+                    ]}
+                  />
+                </div>
+              </aside>
+            </>
+          );
+        }}
       </Show>
     </div>
   );
