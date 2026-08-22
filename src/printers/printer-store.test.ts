@@ -15,6 +15,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const A_RESOLVED_PRINTER = {
@@ -197,7 +198,57 @@ describe("printer-store", () => {
   });
 
   describe("under just web (no Tauri backend)", () => {
-    beforeEach(() => tauriMock.isTauri.mockReturnValue(false));
+    beforeEach(() => {
+      tauriMock.isTauri.mockReturnValue(false);
+      // The web fallback resolves its seed printers against the real,
+      // bundled catalog via `fetch` (see printer-catalog.ts) -- this stands
+      // in for what Vite's dev server actually serves, with just the two
+      // models WEB_FALLBACK_SPECS names.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          json: () =>
+            Promise.resolve({
+              models: [
+                {
+                  modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon",
+                  variants: [
+                    {
+                      variant: "Elegoo Centauri Carbon 0.4 nozzle", printerVariant: "0.4",
+                      bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+                      printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
+                      nozzleDiameterMm: [0.4], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
+                      hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true,
+                      suggestedHostType: "elegoolink",
+                    },
+                    {
+                      variant: "Elegoo Centauri Carbon 0.6 nozzle", printerVariant: "0.6",
+                      bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+                      printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
+                      nozzleDiameterMm: [0.6], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
+                      hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true,
+                      suggestedHostType: "elegoolink",
+                    },
+                  ],
+                },
+                {
+                  modelId: "MK4", vendor: "Prusa", model: "Prusa MK4",
+                  variants: [
+                    {
+                      variant: "Prusa MK4 0.4 nozzle", printerVariant: "0.4",
+                      bedShape: { kind: "rectangular", widthMm: 250, depthMm: 210, originXMm: 0, originYMm: 0 },
+                      printableHeightMm: 220, bedExcludeAreas: [], defaultBedType: "",
+                      nozzleDiameterMm: [0.4], nozzleType: "hardened_steel", gcodeFlavor: "marlin2",
+                      hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false,
+                      suggestedHostType: "prusalink",
+                    },
+                  ],
+                },
+              ],
+            }),
+        }),
+      );
+    });
 
     it("seeds from the web fallback fixture without invoking any command", async () => {
       const { loadPrinters, printers } = await import("./printer-store");
@@ -206,7 +257,7 @@ describe("printer-store", () => {
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
 
-    it("overrideField and revertField are no-ops without a catalog to resolve against", async () => {
+    it("overrideField and revertField are no-ops -- no per-field override machinery to resolve against in web mode", async () => {
       const { loadPrinters, printers, overrideField, revertField } = await import("./printer-store");
       await loadPrinters();
       const id = printers()[0].id;
@@ -215,6 +266,39 @@ describe("printer-store", () => {
       await revertField(id, "printableHeightMm");
 
       expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("rebindPrinter re-resolves the printer against the real catalog rather than no-opping", async () => {
+      // Unlike overrideField/revertField above, a rebind has somewhere real
+      // to go now that the fallback catalog is real data: picking a
+      // sibling variant in the UI must actually take effect locally.
+      const { loadPrinters, printers, rebindPrinter } = await import("./printer-store");
+      await loadPrinters();
+      const centauriCarbon = printers().find((p) => p.catalogRef.printerVariant === "0.4")!;
+
+      await rebindPrinter(centauriCarbon.id, {
+        vendor: "Elegoo", model: "Elegoo Centauri Carbon",
+        variant: "Elegoo Centauri Carbon 0.6 nozzle", modelId: "Elegoo-CC", printerVariant: "0.6",
+      });
+
+      const rebound = printers().find((p) => p.id === centauriCarbon.id);
+      expect(rebound?.catalogRef.printerVariant).toBe("0.6");
+      expect(rebound?.variantLabel).toBe("Elegoo Centauri Carbon 0.6 nozzle");
+      expect(rebound?.profile.nozzleDiameterMm).toEqual([0.6]);
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("rebindPrinter leaves the printer unchanged when the target variant no longer exists", async () => {
+      const { loadPrinters, printers, rebindPrinter } = await import("./printer-store");
+      await loadPrinters();
+      const before = printers().find((p) => p.catalogRef.printerVariant === "0.4")!;
+
+      await rebindPrinter(before.id, {
+        vendor: "Elegoo", model: "Elegoo Centauri Carbon",
+        variant: "Elegoo Centauri Carbon 12.0 nozzle", modelId: "Elegoo-CC", printerVariant: "12.0",
+      });
+
+      expect(printers().find((p) => p.id === before.id)).toEqual(before);
     });
 
     it("merges a status event onto the matching printer and leaves siblings alone", async () => {

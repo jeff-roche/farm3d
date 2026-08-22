@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { createStore } from "solid-js/store";
+import { resolveWebCatalogVariant } from "./printer-catalog";
 import type {
   CatalogRef,
   ConnectionSubmission,
@@ -58,53 +59,71 @@ const EMPTY_PROFILE: PrinterProfile = {
   suggestedHostType: null,
 };
 
-/** `just web` seed data — no Rust backend, so this stands in for both the
- *  Farm and the catalog. Shaped after the pre-catalog mock in App.tsx. */
-const WEB_FALLBACK_PRINTERS: ResolvedPrinter[] = [
+interface WebFallbackSpec {
+  id: string;
+  name: string;
+  group: string;
+  notes: string;
+  vendor: string;
+  model: string;
+  printerVariant: string;
+}
+
+/** `just web` seed data — no Rust backend, so this stands in for the Farm.
+ *  Real catalog refs (not synthetic modelIds), resolved against the actual
+ *  bundled catalog by `buildWebFallbackPrinters` below, rather than
+ *  hand-typed profile numbers that could drift from it. Two Elegoo Centauri
+ *  Carbons at different nozzle variants, grouped together, demonstrate
+ *  grouping and rebinding; the Prusa MK4 is a second, unrelated model. */
+const WEB_FALLBACK_SPECS: WebFallbackSpec[] = [
   {
-    id: "prn-voron-1",
-    name: "Voron 2.4 — Bay 1",
-    group: "Bay 1",
-    notes: "",
-    catalogRef: {
-      vendor: "Voron", model: "Voron 2.4", variant: "Voron 2.4 0.4 nozzle",
-      modelId: "web-voron-24", printerVariant: "0.4",
-    },
-    catalogStatus: "ok",
-    modelLabel: "Voron 2.4",
-    variantLabel: "Voron 2.4 0.4 nozzle",
-    profile: EMPTY_PROFILE,
-    overriddenFields: [],
-    inherited: {},
-    profileDrift: [],
-    unknownOverrideKeys: [],
-    connection: null,
+    id: "prn-web-cc-1", name: "Elegoo Centauri Carbon — Bay 1", group: "Bay 1", notes: "",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
   },
   {
-    id: "prn-prusa-1",
-    name: "Prusa MK4 — Bay 2",
-    group: "Bay 2",
-    notes: "",
-    catalogRef: {
-      vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle",
-      modelId: "web-prusa-mk4", printerVariant: "0.4",
-    },
-    catalogStatus: "ok",
-    modelLabel: "Prusa MK4",
-    variantLabel: "Prusa MK4 0.4 nozzle",
-    profile: EMPTY_PROFILE,
-    overriddenFields: [],
-    inherited: {},
-    profileDrift: [],
-    unknownOverrideKeys: [],
-    connection: null,
+    id: "prn-web-cc-2", name: "Elegoo Centauri Carbon — Bay 2", group: "Bay 2",
+    notes: "Running a 0.6mm nozzle for coarse drafts.",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.6",
+  },
+  {
+    id: "prn-web-mk4-1", name: "Prusa MK4 — Bay 3", group: "Bay 3", notes: "",
+    vendor: "Prusa", model: "Prusa MK4", printerVariant: "0.4",
   },
 ];
+
+/** A spec whose vendor/model/variant no longer resolves (a stale seed
+ *  after the bundled catalog changes) is skipped rather than crashing the
+ *  whole dev environment over it. */
+async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
+  const resolved = await Promise.all(
+    WEB_FALLBACK_SPECS.map(async (spec): Promise<ResolvedPrinter | null> => {
+      const match = await resolveWebCatalogVariant(spec.vendor, spec.model, spec.printerVariant);
+      if (!match) return null;
+      return {
+        id: spec.id,
+        name: spec.name,
+        group: spec.group,
+        notes: spec.notes,
+        catalogRef: match.catalogRef,
+        catalogStatus: "ok",
+        modelLabel: match.modelLabel,
+        variantLabel: match.variantLabel,
+        profile: match.profile,
+        overriddenFields: [],
+        inherited: {},
+        profileDrift: [],
+        unknownOverrideKeys: [],
+        connection: null,
+      };
+    }),
+  );
+  return resolved.filter((p): p is ResolvedPrinter => p !== null);
+}
 
 export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
   if (!isTauri()) {
-    setState({ printers: WEB_FALLBACK_PRINTERS, status: "ready", error: null });
+    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null });
     return;
   }
   try {
@@ -137,6 +156,16 @@ function removeById(id: string): void {
 export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
   if (!isTauri()) {
     const id = `prn-web-${state.printers.length + 1}`;
+    // The Add dialog's Brand/Model/Nozzle selects are themselves backed by
+    // the real catalog in web mode now (see printer-catalog.ts), so this
+    // resolves real profile data for whatever the user picked rather than
+    // falling back to a generic placeholder. EMPTY_PROFILE only covers the
+    // case where that lookup itself fails (e.g. the catalog fetch errored).
+    const match = await resolveWebCatalogVariant(
+      draft.catalogRef.vendor,
+      draft.catalogRef.model,
+      draft.catalogRef.printerVariant,
+    );
     setState("printers", (list) => [
       ...list,
       {
@@ -146,9 +175,9 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
         notes: "",
         catalogRef: draft.catalogRef,
         catalogStatus: "ok",
-        modelLabel: draft.catalogRef.model,
-        variantLabel: draft.catalogRef.variant,
-        profile: EMPTY_PROFILE,
+        modelLabel: match?.modelLabel ?? draft.catalogRef.model,
+        variantLabel: match?.variantLabel ?? draft.catalogRef.variant,
+        profile: match?.profile ?? EMPTY_PROFILE,
         overriddenFields: [],
         inherited: {},
         profileDrift: [],
@@ -225,7 +254,33 @@ export async function revertField(id: string, field: OverridableField): Promise<
 }
 
 export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise<void> {
-  if (!isTauri()) return;
+  if (!isTauri()) {
+    // Unlike overrideField/revertField (still no-ops -- there's no per-field
+    // override machinery to resolve against in web mode), a rebind has
+    // somewhere real to go now: the same bundled catalog the Nozzle/variant
+    // Select's own options came from. Without this, picking a variant there
+    // would visibly do nothing, defeating the one thing `just web` reading
+    // the real catalog was for.
+    const match = await resolveWebCatalogVariant(
+      catalogRef.vendor,
+      catalogRef.model,
+      catalogRef.printerVariant,
+    );
+    if (!match) return; // nothing in the catalog to rebind to; leave it as-is
+    setState("printers", (p) => p.id === id, (p) => ({
+      ...p,
+      catalogRef: match.catalogRef,
+      catalogStatus: "ok",
+      modelLabel: match.modelLabel,
+      variantLabel: match.variantLabel,
+      profile: match.profile,
+      overriddenFields: [],
+      inherited: {},
+      profileDrift: [],
+      unknownOverrideKeys: [],
+    }));
+    return;
+  }
   try {
     const resolved = await invoke<ResolvedPrinter>("rebind_printer", { id, catalogRef });
     spliceResolved(resolved);
