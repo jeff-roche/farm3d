@@ -109,11 +109,7 @@ describe("PrinterAddDialog", () => {
       "Elegoo Centauri Carbon",
     );
 
-    // getByText("Add printer") is ambiguous here too — the Dialog's own
-    // title renders as an <h2>Add printer</h2>, colliding with the submit
-    // button's identical label. getByRole("button", ...) disambiguates the
-    // same way the queries above do.
-    await fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Connect →" }));
 
     expect(onAdd).toHaveBeenCalledWith({
       name: "Elegoo Centauri Carbon",
@@ -127,12 +123,10 @@ describe("PrinterAddDialog", () => {
     });
   });
 
-  it("hides the Model dropdown until a brand is chosen, and disables Add printer until a model is selected", () => {
+  it("hides the Model dropdown until a brand is chosen, and disables Connect until a model is selected", () => {
     render(() => <PrinterAddDialog open onOpenChange={() => {}} onAdd={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
-    // See the analogous getByRole note in the test above — the Dialog's own
-    // title also reads "Add printer", so getByText would be ambiguous.
-    const addButton = screen.getByRole("button", { name: "Add printer" }) as HTMLButtonElement;
+    const addButton = screen.getByRole("button", { name: "Connect →" }) as HTMLButtonElement;
     expect(addButton.disabled).toBe(true);
   });
 
@@ -164,7 +158,7 @@ describe("PrinterAddDialog", () => {
     await fireEvent.click(await screen.findByText("Centauri Carbon"));
 
     // Auto-selects the 0.4mm nozzle by default.
-    await screen.findByText(/0\.4 mm nozzle/);
+    await screen.findByText(/Nozzle: 0\.4 mm/);
 
     // Switching to 0.6mm must update the preview text, not leave it frozen
     // on the first-resolved (0.4mm) profile.
@@ -172,8 +166,8 @@ describe("PrinterAddDialog", () => {
     await fireEvent.pointerDown(nozzleTrigger, { pointerType: "mouse", button: 0 });
     await fireEvent.click(await screen.findByText("0.6 mm"));
 
-    await screen.findByText(/0\.6 mm nozzle/);
-    expect(screen.queryByText(/0\.4 mm nozzle/)).not.toBeInTheDocument();
+    await screen.findByText(/Nozzle: 0\.6 mm/);
+    expect(screen.queryByText(/Nozzle: 0\.4 mm/)).not.toBeInTheDocument();
   });
 
   it("prefills a group's model and suggests a unique name, avoiding an existing one", async () => {
@@ -237,7 +231,7 @@ describe("PrinterAddDialog", () => {
 
     // The auto-filled name already collides with the existing printer.
     expect(await screen.findByText("Another printer is already named this")).toBeInTheDocument();
-    const addButton = screen.getByRole("button", { name: "Add printer" }) as HTMLButtonElement;
+    const addButton = screen.getByRole("button", { name: "Connect →" }) as HTMLButtonElement;
     expect(addButton.disabled).toBe(false);
   });
 
@@ -251,7 +245,7 @@ describe("PrinterAddDialog", () => {
     await fireEvent.pointerDown(modelTrigger, { pointerType: "mouse", button: 0 });
     await fireEvent.click(await screen.findByText("Centauri Carbon"));
 
-    await fireEvent.click(screen.getByRole("button", { name: "Add printer" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Connect →" }));
     await vi.waitFor(() => expect(onAdd).toHaveBeenCalled());
   }
 
@@ -271,7 +265,7 @@ describe("PrinterAddDialog", () => {
     // that rendered.
     expect(await screen.findByRole("button", { name: /Kind/ })).toBeInTheDocument();
     expect(screen.getByLabelText("Host")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add printer" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect →" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 
@@ -282,7 +276,7 @@ describe("PrinterAddDialog", () => {
     await addACentauriCarbon(onAdd);
 
     expect(screen.getByRole("combobox", { name: "Brand" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add printer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect →" })).toBeInTheDocument();
     expect(screen.queryByText(/was added\. Set up its connection now/)).not.toBeInTheDocument();
   });
 

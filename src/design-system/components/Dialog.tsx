@@ -7,6 +7,8 @@ export interface DialogProps extends ParentProps {
   description?: string;
   /** Rendered as the content of Kobalte's own trigger <button> — pass text/icon content, not another button. */
   trigger: JSX.Element;
+  /** Extra class(es) for Kobalte's own trigger <button>, appended after the default trigger styling — e.g. to make it look like a primary Button. */
+  triggerClass?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
@@ -14,7 +16,9 @@ export interface DialogProps extends ParentProps {
 export function Dialog(props: DialogProps) {
   return (
     <KDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <KDialog.Trigger class={styles.trigger}>{props.trigger}</KDialog.Trigger>
+      <KDialog.Trigger class={[styles.trigger, props.triggerClass].filter(Boolean).join(" ")}>
+        {props.trigger}
+      </KDialog.Trigger>
       <KDialog.Portal>
         <KDialog.Overlay class={styles.overlay} />
         <KDialog.Content class={styles.content}>

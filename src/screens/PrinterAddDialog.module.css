@@ -1,3 +1,8 @@
+.trigger {
+  composes: button from "../design-system/components/Button.module.css";
+  composes: primary from "../design-system/components/Button.module.css";
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -6,10 +11,16 @@
 }
 
 .summary {
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
   color: var(--f3d-color-text-muted);
   font-family: var(--f3d-type-mono-font);
   font-size: var(--f3d-type-body-small-size);
+}
+
+.summary p {
+  margin: 0;
 }
 
 .footer {

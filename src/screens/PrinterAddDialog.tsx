@@ -214,6 +214,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
     <Dialog
       title={step() === "details" ? "Add printer" : "Set up connection"}
       trigger="+ Add printer"
+      triggerClass={styles.trigger}
       open={props.open}
       onOpenChange={props.onOpenChange}
     >
@@ -286,11 +287,10 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
               // render-prop runs once for the whole time preview() stays
               // truthy, so only expressions that call the live accessor
               // directly stay reactive to a later nozzle/model change.
-              <p class={styles.summary}>
-                {formatBedSummary(p())}
-                {" · "}
-                {p().nozzleDiameterMm.join(", ")} mm nozzle
-              </p>
+              <div class={styles.summary}>
+                <p>Build volume: {formatBedSummary(p())}</p>
+                <p>Nozzle: {p().nozzleDiameterMm.join(", ")} mm</p>
+              </div>
             )}
           </Show>
         </div>
@@ -308,7 +308,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
             Cancel
           </Button>
           <Button variant="primary" disabled={!canAdd()} onClick={() => void submit()}>
-            Add printer
+            Connect →
           </Button>
         </Show>
       </div>
