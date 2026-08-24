@@ -164,7 +164,6 @@ button.cardSelected:hover {
 .cardFooter {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
   font-family: var(--f3d-type-mono-font);
   font-size: var(--f3d-type-body-small-size);
@@ -172,6 +171,9 @@ button.cardSelected:hover {
 }
 
 .readings {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
   white-space: nowrap;
 }
 

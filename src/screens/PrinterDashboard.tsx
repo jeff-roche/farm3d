@@ -243,16 +243,17 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                         </div>
                         <div class={styles.cardFooter}>
                           <span>{printer.variantLabel}</span>
-                          <Show when={printer.runtimeStatus}>
-                            {(status) => (
-                              // An unreported reading is an em dash, never a
-                              // zero — "0 °C" reads as a real measurement.
-                              <span class={styles.readings}>
-                                {formatTemp(status().nozzleTempC)} / {formatTemp(status().bedTempC)}
-                              </span>
-                            )}
-                          </Show>
                         </div>
+                        <Show when={printer.runtimeStatus}>
+                          {(status) => (
+                            // An unreported reading is an em dash, never a
+                            // zero — "0 °C" reads as a real measurement.
+                            <div class={styles.readings}>
+                              Hotend: {formatTemp(status().nozzleTempC)} · Bed:{" "}
+                              {formatTemp(status().bedTempC)}
+                            </div>
+                          )}
+                        </Show>
                       </button>
                     )}
                   </For>
