@@ -27,10 +27,10 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just dev` | `npm run tauri dev` | Run the full desktop app (Rust + frontend) with hot reload |
 | `just web` | `npm run dev` | Run just the frontend in a browser at `localhost:1420` (no Tauri/Rust) |
 | `just build` | `npm run build` | Type-check and build the frontend for production |
-| `just package` | `NO_STRIP=1 npm run tauri build` (Linux) | Build the distributable desktop app; Linux disables linuxdeploy's legacy strip step because it cannot parse modern `.relr.dyn` sections |
+| `just package` | `NO_STRIP=1 npm run tauri build` (Linux) | Build clean distributable bundles, then reject any bundle that contains the developer-only catalog generator; Linux disables linuxdeploy's legacy strip step because it cannot parse modern `.relr.dyn` sections |
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
 | `just test-rust` | — | Run the Tauri backend's Rust test suite |
-| `just gen-catalog` | — | Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
+| `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
 
 ## Project structure
 

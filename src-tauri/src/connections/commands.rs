@@ -82,6 +82,14 @@ pub(crate) fn credential_store_if_needed(
     needed.then(|| detect(config_dir.to_path_buf()))
 }
 
+fn credential_store_needed(
+    secret: &Option<String>,
+    credential_to_clear: Option<&str>,
+    config: &ConnectionConfig,
+) -> bool {
+    secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some()
+}
+
 fn api_key_from(store: &CredentialStore, config: &ConnectionConfig) -> Result<Option<String>, String> {
     match &config.credential_ref {
         None => Ok(None),
@@ -165,7 +173,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     let credential_to_clear = credential_to_clear(previous_credential_ref.as_deref(), &config);
     let store = credential_store_if_needed(
         &dir,
-        secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some(),
+        credential_store_needed(&secret, credential_to_clear.as_deref(), &config),
         CredentialStore::detect,
     );
 
@@ -288,13 +296,28 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn credential_free_operation_does_not_detect_a_store() {
+    fn credential_free_first_save_does_not_detect_a_store() {
+        let submission = ConnectionSubmission {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: 7125,
+            use_tls: false,
+            api_key: Some(String::new()),
+        };
+        let api_key_omitted = submission.api_key.is_none();
+        let (mut config, secret) = split_submission(submission, "prn-1");
+        settle_credential_ref(&mut config, api_key_omitted, None);
+        let credential_to_clear = credential_to_clear(None, &config);
         let detections = Cell::new(0);
 
-        let store = credential_store_if_needed(Path::new("unused"), false, |dir| {
-            detections.set(detections.get() + 1);
-            CredentialStore::file_backed(dir)
-        });
+        let store = credential_store_if_needed(
+            Path::new("unused"),
+            credential_store_needed(&secret, credential_to_clear.as_deref(), &config),
+            |dir| {
+                detections.set(detections.get() + 1);
+                CredentialStore::file_backed(dir)
+            },
+        );
 
         assert_eq!((store.is_none(), detections.get()), (true, 0));
     }
