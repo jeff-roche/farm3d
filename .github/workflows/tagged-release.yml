@@ -56,19 +56,36 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          assets=(
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/rpm/*.rpm
-            src-tauri/target/release/bundle/appimage/*.AppImage
-          )
-          if [[ ${#assets[@]} -ne 3 ]]; then
-            printf 'expected 3 release assets, found %s\n' "${#assets[@]}" >&2
+          deb_assets=(src-tauri/target/release/bundle/deb/*.deb)
+          rpm_assets=(src-tauri/target/release/bundle/rpm/*.rpm)
+          appimage_assets=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [[ ${#deb_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 deb, found %s\n' "${#deb_assets[@]}" >&2
             exit 1
           fi
+          if [[ ${#rpm_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 rpm, found %s\n' "${#rpm_assets[@]}" >&2
+            exit 1
+          fi
+          if [[ ${#appimage_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 AppImage, found %s\n' "${#appimage_assets[@]}" >&2
+            exit 1
+          fi
+          assets=("${deb_assets[0]}" "${rpm_assets[0]}" "${appimage_assets[0]}")
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            declare -A desired_asset_names=()
+            for asset in "${assets[@]}"; do
+              desired_asset_names["${asset##*/}"]=1
+            done
+            while IFS= read -r existing_asset_name; do
+              if [[ -z ${desired_asset_names[$existing_asset_name]+x} ]]; then
+                gh release delete-asset "$GITHUB_REF_NAME" "$existing_asset_name" --yes
+              fi
+            done < <(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --verify-tag \
               --generate-notes \
               --title "$GITHUB_REF_NAME"
+          fi
