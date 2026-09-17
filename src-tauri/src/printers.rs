@@ -495,6 +495,42 @@ mod tests {
         std::env::temp_dir().join(format!("farm3d-printers-test-{}-{}", std::process::id(), id))
     }
 
+    fn persistence_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/persistence/v1")
+            .join(name)
+    }
+
+    #[test]
+    fn baseline_v1_printers_fixture_loads_through_the_storage_seam() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let fixture = persistence_fixture("printers.json");
+        fs::copy(&fixture, printers_file_path(&dir)).unwrap();
+
+        let loaded = load_printers_from(&dir).unwrap();
+
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.printers.len(), 2);
+        assert_eq!(loaded.printers[0].id, "prn-f0-profile-only");
+        assert_eq!(loaded.printers[0].connection, None);
+        assert_eq!(loaded.printers[0].overrides.printable_height_mm, Some(245.0));
+        assert_eq!(
+            loaded.printers[0].overrides.extra.get("futureBaselineField"),
+            Some(&serde_json::json!({ "preserved": true }))
+        );
+        let connected = &loaded.printers[1];
+        assert_eq!(connected.id, "prn-f0-connected");
+        assert_eq!(connected.connection.as_ref().unwrap().host, "moonraker.invalid");
+        assert_eq!(
+            connected.connection.as_ref().unwrap().credential_ref.as_deref(),
+            Some("farm3d/printer/prn-f0-connected/apikey")
+        );
+        let raw = fs::read_to_string(fixture).unwrap();
+        assert!(!raw.contains("F0_FIXTURE_SENTINEL"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
     fn a_printer() -> StoredPrinter {
         StoredPrinter {
             id: "prn-1".to_string(),

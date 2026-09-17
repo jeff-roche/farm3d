@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "printers": [
+    {
+      "id": "prn-f0-profile-only",
+      "name": "F0 Profile-only Printer",
+      "catalogRef": {
+        "vendor": "TestVendor",
+        "model": "Test Printer",
+        "variant": "Test Printer 0.4 nozzle",
+        "modelId": "TestVendor-TP",
+        "printerVariant": "0.4"
+      },
+      "group": "Baseline Bay",
+      "notes": "Profile-only migration fixture",
+      "overrides": {
+        "printableHeightMm": 245.0,
+        "futureBaselineField": { "preserved": true }
+      },
+      "lastKnownGood": {
+        "profile": {
+          "bedShape": {
+            "kind": "rectangular",
+            "widthMm": 256.0,
+            "depthMm": 256.0,
+            "originXMm": 0.0,
+            "originYMm": 0.0
+          },
+          "printableHeightMm": 256.0,
+          "bedExcludeAreas": [],
+          "defaultBedType": "4",
+          "nozzleDiameterMm": [0.4],
+          "nozzleType": "hardened_steel",
+          "gcodeFlavor": "klipper",
+          "hasAuxiliaryFan": true,
+          "supportsAirFiltration": true,
+          "supportsMultiFilament": false,
+          "suggestedHostType": null
+        },
+        "catalogVersion": "v2.4.2",
+        "resolvedAt": "2026-09-16T00:00:00Z"
+      }
+    },
+    {
+      "id": "prn-f0-connected",
+      "name": "F0 Connected Printer",
+      "catalogRef": {
+        "vendor": "TestVendor",
+        "model": "Test Printer",
+        "variant": "Test Printer 0.4 nozzle",
+        "modelId": "TestVendor-TP",
+        "printerVariant": "0.4"
+      },
+      "group": "Baseline Bay",
+      "notes": "Connection and credential-reference migration fixture",
+      "connection": {
+        "kind": "moonraker",
+        "host": "moonraker.invalid",
+        "port": 7125,
+        "useTls": false,
+        "credentialRef": "farm3d/printer/prn-f0-connected/apikey"
+      }
+    }
+  ]
+}

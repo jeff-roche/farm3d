@@ -84,7 +84,33 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("farm3d-settings-test-{}-{}", std::process::id(), id))
+        std::env::temp_dir().join(format!(
+            "farm3d-settings-test-{}-{}",
+            std::process::id(),
+            id
+        ))
+    }
+
+    fn persistence_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/persistence/v1")
+            .join(name)
+    }
+
+    #[test]
+    fn baseline_v1_settings_fixture_loads_through_the_storage_seam() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::copy(
+            persistence_fixture("settings.json"),
+            settings_file_path(&dir),
+        )
+        .unwrap();
+
+        let loaded = load_settings_from(&dir).unwrap();
+
+        assert_eq!(loaded.theme_mode, "farm3d-dark");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
