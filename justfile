@@ -32,7 +32,8 @@ build:
 
 # Build the distributable desktop app
 package:
-    npm run tauri build
+    # linuxdeploy's bundled strip cannot parse modern ELF sections such as .relr.dyn.
+    NO_STRIP=1 npm run tauri build
 
 # Run the frontend test suite
 test:
