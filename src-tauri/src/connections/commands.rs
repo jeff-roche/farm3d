@@ -11,6 +11,7 @@ use crate::catalog::Catalog;
 use crate::printers::{load_printers_from, write_printers_to};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -71,6 +72,14 @@ fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBu
 
 fn store<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<CredentialStore, String> {
     Ok(CredentialStore::detect(config_dir(app)?))
+}
+
+pub(crate) fn credential_store_if_needed(
+    config_dir: &Path,
+    needed: bool,
+    detect: impl FnOnce(PathBuf) -> CredentialStore,
+) -> Option<CredentialStore> {
+    needed.then(|| detect(config_dir.to_path_buf()))
 }
 
 fn api_key_from(store: &CredentialStore, config: &ConnectionConfig) -> Result<Option<String>, String> {
@@ -153,15 +162,21 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
 
     settle_credential_ref(&mut config, api_key_omitted, previous_credential_ref.as_deref());
 
-    // Detected ONCE per invocation: `CredentialStore::detect` is a Secret
-    // Service round trip on Linux, and re-detecting per use meant up to three
-    // of them (each able to raise an unlock prompt) for a single save.
-    let store = store(&app)?;
+    let credential_to_clear = credential_to_clear(previous_credential_ref.as_deref(), &config);
+    let store = credential_store_if_needed(
+        &dir,
+        secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some(),
+        CredentialStore::detect,
+    );
 
     // Write the secret BEFORE persisting the reference: a config pointing at
     // a credential that was never stored is worse than a stored credential
     // nothing points at yet.
-    if let (Some(secret), Some(key)) = (&secret, config.credential_ref.as_deref()) {
+    if let (Some(secret), Some(key), Some(store)) = (
+        &secret,
+        config.credential_ref.as_deref(),
+        store.as_ref(),
+    ) {
         store.set(key, secret)?;
     }
 
@@ -171,7 +186,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     // pointer while the secret itself sits orphaned in the store forever,
     // which is exactly the failure mode the None/empty asymmetry exists to
     // prevent.
-    if let Some(old_key) = credential_to_clear(previous_credential_ref.as_deref(), &config) {
+    if let (Some(old_key), Some(store)) = (credential_to_clear, store.as_ref()) {
         store.delete(&old_key)?;
     }
 
@@ -185,7 +200,10 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     }
     write_printers_to(&dir, &file)?;
 
-    let api_key = api_key_from(&store, &config)?;
+    let api_key = match store.as_ref() {
+        Some(store) => api_key_from(store, &config)?,
+        None => None,
+    };
     manager.start(id.clone(), config, api_key);
 
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
@@ -200,7 +218,14 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
     let mut file = load_printers_from(&dir)?;
-    manager.stop(&id);
+    manager.stop_and_wait(&id).await;
+
+    let credential_ref = file
+        .printers
+        .iter()
+        .find(|p| p.id == id)
+        .and_then(|p| p.connection.as_ref())
+        .and_then(|c| c.credential_ref.clone());
 
     {
         let stored = file
@@ -213,7 +238,9 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
     write_printers_to(&dir, &file)?;
     // Removing the secret last: a failure here leaves an orphaned credential,
     // which is harmless, rather than an unusable config.
-    store(&app)?.delete(&credential_ref_for(&id))?;
+    if let Some(credential_ref) = credential_ref {
+        CredentialStore::detect(dir).delete(&credential_ref)?;
+    }
 
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }
@@ -266,6 +293,20 @@ pub fn printer_statuses<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::path::Path;
+
+    #[test]
+    fn credential_free_operation_does_not_detect_a_store() {
+        let detections = Cell::new(0);
+
+        let store = credential_store_if_needed(Path::new("unused"), false, |dir| {
+            detections.set(detections.get() + 1);
+            CredentialStore::file_backed(dir)
+        });
+
+        assert_eq!((store.is_none(), detections.get()), (true, 0));
+    }
 
     #[test]
     fn a_submitted_api_key_never_lands_in_the_persisted_config() {

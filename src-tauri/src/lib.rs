@@ -24,25 +24,45 @@ pub fn restore_stored_connections<R: tauri::Runtime>(
 ) {
     if let Ok(dir) = app.path().app_config_dir() {
         if let Ok(file) = printers::load_printers_from(&dir) {
-            let store = connections::credentials::CredentialStore::detect(dir);
+            let needs_store = file.printers.iter().any(|stored| {
+                stored
+                    .connection
+                    .as_ref()
+                    .and_then(|config| config.credential_ref.as_ref())
+                    .is_some()
+            });
+            let store = connections::commands::credential_store_if_needed(
+                &dir,
+                needs_store,
+                connections::credentials::CredentialStore::detect,
+            );
             for stored in &file.printers {
                 let Some(config) = stored.connection.clone() else { continue };
                 let api_key = match config.credential_ref.as_deref() {
                     None => None,
-                    Some(key) => match store.get(key) {
-                        Ok(found) => found,
-                        Err(e) => {
-                            eprintln!(
-                                "farm3d: cannot read the stored credential for {}: {e}",
-                                stored.id
-                            );
+                    Some(key) => {
+                        let Some(store) = store.as_ref() else {
                             manager.report_error(
                                 &stored.id,
-                                format!("Could not read this printer's stored credential: {e}"),
+                                "Could not initialize this printer's credential store",
                             );
                             continue;
+                        };
+                        match store.get(key) {
+                            Ok(found) => found,
+                            Err(e) => {
+                                eprintln!(
+                                    "farm3d: cannot read the stored credential for {}: {e}",
+                                    stored.id
+                                );
+                                manager.report_error(
+                                    &stored.id,
+                                    format!("Could not read this printer's stored credential: {e}"),
+                                );
+                                continue;
+                            }
                         }
-                    },
+                    }
                 };
                 manager.start(stored.id.clone(), config, api_key);
             }

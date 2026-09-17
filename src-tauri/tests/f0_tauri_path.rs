@@ -1,6 +1,11 @@
 #![cfg(target_os = "linux")]
 
+use std::io::ErrorKind;
+use std::net::{TcpListener, TcpStream};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use farm3d_lib::catalog::Catalog;
@@ -12,6 +17,53 @@ use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
 use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+
+const CHILD_PROCESS: &str = "FARM3D_F0_TAURI_PATH_CHILD";
+
+struct LoopbackEndpoint {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl LoopbackEndpoint {
+    fn start() -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let thread = std::thread::spawn(move || {
+            while !thread_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => close(stream),
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("loopback listener failed: {error}"),
+                }
+            }
+        });
+        Self {
+            port,
+            shutdown,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for LoopbackEndpoint {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+fn close(stream: TcpStream) {
+    drop(stream);
+}
 
 fn invoke(
     webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
@@ -60,9 +112,31 @@ fn mock_app(
 
 #[test]
 fn ipc_create_connection_survives_restart_and_backfills_status() {
-    let original_config_home = std::env::var_os("XDG_CONFIG_HOME");
+    if std::env::var_os(CHILD_PROCESS).is_some() {
+        run_ipc_tracer();
+        return;
+    }
+
     let config_home = tempfile::tempdir().unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ipc_create_connection_survives_restart_and_backfills_status",
+            "--nocapture",
+        ])
+        .env(CHILD_PROCESS, "1")
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .status()
+        .unwrap();
+
+    assert!(
+        status.success(),
+        "isolated IPC tracer child failed: {status}"
+    );
+}
+
+fn run_ipc_tracer() {
+    let endpoint = LoopbackEndpoint::start();
 
     let catalog_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
@@ -100,21 +174,18 @@ fn ipc_create_connection_survives_restart_and_backfills_status() {
             "id": printer_id,
             "submission": {
                 "kind": "moonraker",
-                "host": "moonraker.invalid",
-                "port": 7125,
+                "host": "127.0.0.1",
+                "port": endpoint.port,
                 "useTls": false,
                 "apiKey": "",
             }
         }),
     )
     .unwrap();
-    assert_eq!(connected["connection"]["host"], "moonraker.invalid");
-    let ipc_responses = serde_json::to_string(&json!([created, connected])).unwrap();
-    assert!(!ipc_responses.contains("apiKey"));
-    assert!(!ipc_responses.contains("secret"));
-    assert!(!ipc_responses.contains("F0_FIXTURE_SENTINEL"));
+    assert_eq!(connected["connection"]["host"], "127.0.0.1");
+    assert_eq!(connected["connection"]["port"], endpoint.port);
 
-    manager.stop(&printer_id);
+    tauri::async_runtime::block_on(manager.stop_and_wait(&printer_id));
     drop(webview);
     drop(app);
     drop(manager);
@@ -133,14 +204,13 @@ fn ipc_create_connection_survives_restart_and_backfills_status() {
         restarted_manager.statuses()[&printer_id].connection_state,
         ConnectionState::Connecting | ConnectionState::Offline | ConnectionState::Error
     ));
+    let ipc_responses = serde_json::to_string(&json!([created, connected, statuses])).unwrap();
+    assert!(!ipc_responses.contains("apiKey"));
+    assert!(!ipc_responses.contains("secret"));
+    assert!(!ipc_responses.contains("F0_FIXTURE_SENTINEL"));
 
-    restarted_manager.stop(&printer_id);
+    tauri::async_runtime::block_on(restarted_manager.stop_and_wait(&printer_id));
     drop(restarted_webview);
     drop(restarted_app);
     drop(restarted_manager);
-    config_home.close().unwrap();
-    match original_config_home {
-        Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-        None => std::env::remove_var("XDG_CONFIG_HOME"),
-    }
 }
