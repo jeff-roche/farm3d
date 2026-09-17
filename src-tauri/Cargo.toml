@@ -32,3 +32,6 @@ async-trait = "0.1"
 futures-util = "0.3"
 keyring = "4.1"
 mdns-sd = "0.21"
+
+[dev-dependencies]
+tempfile = "3.27"

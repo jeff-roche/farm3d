@@ -214,14 +214,19 @@ mod tests {
 
     #[test]
     fn baseline_file_backed_credentials_fixture_loads_through_the_storage_seam() {
-        let dir = temp_dir();
-        fs::create_dir_all(&dir).unwrap();
+        let mut tempdir = tempfile::Builder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tempdir.permissions(fs::Permissions::from_mode(0o700));
+        }
+        let dir = tempdir.tempdir().unwrap();
         fs::copy(
             persistence_fixture("credentials.json"),
-            credentials_file_path(&dir),
+            credentials_file_path(dir.path()),
         )
         .unwrap();
-        let store = file_store(&dir);
+        let store = file_store(dir.path());
 
         assert_eq!(
             store
@@ -230,7 +235,6 @@ mod tests {
                 .as_deref(),
             Some("F0_FIXTURE_SENTINEL")
         );
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
