@@ -55,6 +55,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           shopt -s nullglob
           deb_assets=(src-tauri/target/release/bundle/deb/*.deb)
           rpm_assets=(src-tauri/target/release/bundle/rpm/*.rpm)
@@ -78,11 +79,12 @@ jobs:
             for asset in "${assets[@]}"; do
               desired_asset_names["${asset##*/}"]=1
             done
+            existing_asset_names="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
             while IFS= read -r existing_asset_name; do
               if [[ -z ${desired_asset_names[$existing_asset_name]+x} ]]; then
                 gh release delete-asset "$GITHUB_REF_NAME" "$existing_asset_name" --yes
               fi
-            done < <(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+            done <<< "$existing_asset_names"
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --verify-tag \
