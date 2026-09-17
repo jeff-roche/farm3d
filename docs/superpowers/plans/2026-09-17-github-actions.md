@@ -17,8 +17,9 @@
 - Packaging runs only for pushed tags matching `v*`.
 - The tag workflow creates or updates a GitHub Release and attaches `.deb`, `.rpm`, and AppImage assets.
 - The release workflow alone has `contents: write`.
+- Its checkout does not persist the write credential; publication receives an explicit `GH_TOKEN`.
 - Actions are pinned to immutable commit SHAs.
-- Use committed npm and Cargo lockfiles; do not add application dependencies.
+- Use committed npm and Cargo lockfiles and a pinned `just`; `ubuntu-latest`, Node.js 22, Rust stable, and Ubuntu apt streams intentionally float as the hosted-toolchain policy. Do not add application dependencies or broaden version-pinning scope.
 
 ---
 
@@ -169,6 +170,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -181,6 +184,7 @@ jobs:
             build-essential \
             libayatana-appindicator3-dev \
             libdbus-1-dev \
+            libarchive-tools \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
@@ -206,18 +210,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           shopt -s nullglob
-          assets=(
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/rpm/*.rpm
-            src-tauri/target/release/bundle/appimage/*.AppImage
-          )
-          if [[ ${#assets[@]} -ne 3 ]]; then
-            printf 'expected 3 release assets, found %s\n' "${#assets[@]}" >&2
+          deb_assets=(src-tauri/target/release/bundle/deb/*.deb)
+          rpm_assets=(src-tauri/target/release/bundle/rpm/*.rpm)
+          appimage_assets=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [[ ${#deb_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 deb, found %s\n' "${#deb_assets[@]}" >&2
             exit 1
           fi
+          if [[ ${#rpm_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 rpm, found %s\n' "${#rpm_assets[@]}" >&2
+            exit 1
+          fi
+          if [[ ${#appimage_assets[@]} -ne 1 ]]; then
+            printf 'expected 1 AppImage, found %s\n' "${#appimage_assets[@]}" >&2
+            exit 1
+          fi
+          assets=("${deb_assets[0]}" "${rpm_assets[0]}" "${appimage_assets[0]}")
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            declare -A desired_asset_names=()
+            for asset in "${assets[@]}"; do
+              desired_asset_names["${asset##*/}"]=1
+            done
+            existing_asset_names="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+            while IFS= read -r existing_asset_name; do
+              if [[ -z ${desired_asset_names[$existing_asset_name]+x} ]]; then
+                gh release delete-asset "$GITHUB_REF_NAME" "$existing_asset_name" --yes
+              fi
+            done <<< "$existing_asset_names"
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --verify-tag \
@@ -232,8 +254,18 @@ Run:
 
 ```bash
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
+perl -ne '$publish ||= /- name: Publish GitHub Release/; if ($publish && /^        run: \|/) { $script = 1; next } if ($script) { s/^          //; print }' .github/workflows/tagged-release.yml | bash -n
 test "$(rg -l 'just package' .github/workflows)" = ".github/workflows/tagged-release.yml"
 test "$(rg -l 'gh release (create|upload)' .github/workflows)" = ".github/workflows/tagged-release.yml"
+rg -U 'uses: actions/checkout@[0-9a-f]{40}\n        with:\n          persist-credentials: false' .github/workflows/tagged-release.yml
+rg '^\s+set -euo pipefail$' .github/workflows/tagged-release.yml
+rg -U 'deb_assets=.*\n\s+rpm_assets=.*\n\s+appimage_assets=' .github/workflows/tagged-release.yml
+rg 'gh release upload .* --clobber' .github/workflows/tagged-release.yml
+rg 'existing_asset_names=.*gh release view .*--json assets' .github/workflows/tagged-release.yml
+rg 'gh release delete-asset ' .github/workflows/tagged-release.yml
+# assert-package-contents.sh reads RPMs with bsdtar, which Ubuntu supplies via libarchive-tools.
+rg '^\s+libarchive-tools \\$' .github/workflows/tagged-release.yml
+rg '^\s*bsdtar -tf ' scripts/assert-package-contents.sh
 ```
 
 Expected: all commands exit 0 with no lint diagnostics.
@@ -260,8 +292,13 @@ git commit -m "ci: publish tagged Linux releases"
 
 ```bash
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
+perl -ne '$publish ||= /- name: Publish GitHub Release/; if ($publish && /^        run: \|/) { $script = 1; next } if ($script) { s/^          //; print }' .github/workflows/tagged-release.yml | bash -n
 test "$(rg -l 'just package' .github/workflows)" = ".github/workflows/tagged-release.yml"
 test "$(rg -l 'contents: write' .github/workflows)" = ".github/workflows/tagged-release.yml"
+test "$(rg -l 'persist-credentials: false' .github/workflows)" = ".github/workflows/tagged-release.yml"
+# assert-package-contents.sh reads RPMs with bsdtar, which Ubuntu supplies via libarchive-tools.
+rg '^\s+libarchive-tools \\$' .github/workflows/tagged-release.yml
+rg '^\s*bsdtar -tf ' scripts/assert-package-contents.sh
 ```
 
 Expected: all commands exit 0.
@@ -282,4 +319,4 @@ Expected: build succeeds; all frontend and Rust tests pass.
 git diff --check main...HEAD
 ```
 
-Expected: no whitespace errors, only intended files, and three focused commits including the design.
+Expected: no whitespace errors, only intended files, and focused commits including the design and any review fixes.

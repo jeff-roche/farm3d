@@ -4,7 +4,7 @@
 
 ## Goal
 
-Give pull requests fast, repeatable validation on the currently supported Linux
+Give pull requests fast, consistent validation on the currently supported Linux
 platform, and turn version tags into downloadable Linux release packages.
 Packaging must never run for a pull request or an ordinary branch push.
 
@@ -49,7 +49,16 @@ request workflow remains read-only and does not use `pull_request_target`, so
 forked code cannot execute with write credentials.
 
 The tagged workflow is the sole packaging and release path. Its write token is
-available only after a repository maintainer pushes a matching tag.
+available only after a repository maintainer pushes a matching tag. Checkout
+does not persist that write credential, so dependency installation and build
+scripts cannot access it; release publication receives the token explicitly as
+`GH_TOKEN`.
+
+Application dependency graphs, action revisions, and the installed `just`
+version are pinned. The hosted toolchain intentionally tracks `ubuntu-latest`,
+Node.js 22, Rust stable, and the selected Ubuntu apt streams. Validation is
+therefore repeatable at the dependency-policy level, not bit-for-bit
+reproducible across hosted-runner image and toolchain updates.
 
 ## Failure Behavior
 

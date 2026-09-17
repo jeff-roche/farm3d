@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -30,6 +32,7 @@ jobs:
             build-essential \
             libayatana-appindicator3-dev \
             libdbus-1-dev \
+            libarchive-tools \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
