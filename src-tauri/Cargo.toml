@@ -4,10 +4,24 @@ version = "0.1.0"
 description = "An app for 3D print farm management"
 authors = ["jeff-roche"]
 edition = "2021"
+autobins = false
 # Required once a second binary (gen-catalog) exists alongside the app
 # binary: Tauri's dev/build tooling invokes a bare `cargo run` with no
 # `--bin`, which is otherwise ambiguous and fails outright.
 default-run = "farm3d"
+
+[features]
+default = []
+catalog-generator = []
+
+[[bin]]
+name = "farm3d"
+path = "src/main.rs"
+
+[[bin]]
+name = "gen-catalog"
+path = "src/bin/gen-catalog.rs"
+required-features = ["catalog-generator"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -32,3 +46,7 @@ async-trait = "0.1"
 futures-util = "0.3"
 keyring = "4.1"
 mdns-sd = "0.21"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tempfile = "3.27"

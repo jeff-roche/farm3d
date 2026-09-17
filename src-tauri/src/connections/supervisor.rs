@@ -55,14 +55,14 @@ impl StatusMap {
     }
 }
 
-pub struct ConnectionManager {
-    app: AppHandle,
+pub struct ConnectionManager<R: tauri::Runtime> {
+    app: AppHandle<R>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     statuses: Arc<StatusMap>,
 }
 
-impl ConnectionManager {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: tauri::Runtime> ConnectionManager<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self { app, tasks: Mutex::new(HashMap::new()), statuses: Arc::new(StatusMap::default()) }
     }
 
@@ -149,6 +149,15 @@ impl ConnectionManager {
         }
         self.statuses.forget(printer_id);
     }
+
+    pub async fn stop_and_wait(&self, printer_id: &str) {
+        let handle = self.tasks.lock().unwrap().remove(printer_id);
+        if let Some(handle) = handle {
+            handle.abort();
+            let _ = handle.await;
+        }
+        self.statuses.forget(printer_id);
+    }
 }
 
 fn build(config: &ConnectionConfig, api_key: Option<String>) -> Option<Box<dyn PrinterConnection>> {
@@ -158,7 +167,12 @@ fn build(config: &ConnectionConfig, api_key: Option<String>) -> Option<Box<dyn P
     }
 }
 
-fn publish(app: &AppHandle, statuses: &StatusMap, id: &str, status: PrinterStatus) {
+fn publish<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    statuses: &StatusMap,
+    id: &str,
+    status: PrinterStatus,
+) {
     statuses.set(id, status.clone());
     // A failed emit means the window is gone; the status map is still
     // correct, so there is nothing to recover from here.
@@ -168,6 +182,7 @@ fn publish(app: &AppHandle, statuses: &StatusMap, id: &str, status: PrinterStatu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn backoff_grows_then_holds_at_a_ceiling() {
@@ -205,5 +220,33 @@ mod tests {
         map.set("prn-1", PrinterStatus::new(ConnectionState::Online));
         map.forget("prn-1");
         assert!(map.snapshot().is_empty());
+    }
+
+    #[test]
+    fn stop_and_wait_joins_the_aborted_task() {
+        struct Dropped(Arc<AtomicBool>);
+
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::new(app.handle().clone());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task_dropped = Arc::clone(&dropped);
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let handle = tauri::async_runtime::spawn(async move {
+            let _guard = Dropped(task_dropped);
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        manager.tasks.lock().unwrap().insert("prn-1".to_string(), handle);
+        started_rx.recv().unwrap();
+
+        tauri::async_runtime::block_on(manager.stop_and_wait("prn-1"));
+
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

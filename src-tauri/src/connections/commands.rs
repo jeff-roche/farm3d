@@ -11,6 +11,7 @@ use crate::catalog::Catalog;
 use crate::printers::{load_printers_from, write_printers_to};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -65,12 +66,28 @@ pub fn split_submission(
     )
 }
 
-fn config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
-fn store(app: &AppHandle) -> Result<CredentialStore, String> {
+fn store<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<CredentialStore, String> {
     Ok(CredentialStore::detect(config_dir(app)?))
+}
+
+pub(crate) fn credential_store_if_needed(
+    config_dir: &Path,
+    needed: bool,
+    detect: impl FnOnce(PathBuf) -> CredentialStore,
+) -> Option<CredentialStore> {
+    needed.then(|| detect(config_dir.to_path_buf()))
+}
+
+fn credential_store_needed(
+    secret: &Option<String>,
+    credential_to_clear: Option<&str>,
+    config: &ConnectionConfig,
+) -> bool {
+    secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some()
 }
 
 fn api_key_from(store: &CredentialStore, config: &ConnectionConfig) -> Result<Option<String>, String> {
@@ -132,10 +149,10 @@ fn settle_credential_ref(
 }
 
 #[tauri::command]
-pub async fn set_printer_connection(
-    app: AppHandle,
+pub async fn set_printer_connection<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager>>,
+    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
     id: String,
     submission: ConnectionSubmission,
 ) -> Result<ResolvedPrinter, String> {
@@ -153,15 +170,21 @@ pub async fn set_printer_connection(
 
     settle_credential_ref(&mut config, api_key_omitted, previous_credential_ref.as_deref());
 
-    // Detected ONCE per invocation: `CredentialStore::detect` is a Secret
-    // Service round trip on Linux, and re-detecting per use meant up to three
-    // of them (each able to raise an unlock prompt) for a single save.
-    let store = store(&app)?;
+    let credential_to_clear = credential_to_clear(previous_credential_ref.as_deref(), &config);
+    let store = credential_store_if_needed(
+        &dir,
+        credential_store_needed(&secret, credential_to_clear.as_deref(), &config),
+        CredentialStore::detect,
+    );
 
     // Write the secret BEFORE persisting the reference: a config pointing at
     // a credential that was never stored is worse than a stored credential
     // nothing points at yet.
-    if let (Some(secret), Some(key)) = (&secret, config.credential_ref.as_deref()) {
+    if let (Some(secret), Some(key), Some(store)) = (
+        &secret,
+        config.credential_ref.as_deref(),
+        store.as_ref(),
+    ) {
         store.set(key, secret)?;
     }
 
@@ -171,7 +194,7 @@ pub async fn set_printer_connection(
     // pointer while the secret itself sits orphaned in the store forever,
     // which is exactly the failure mode the None/empty asymmetry exists to
     // prevent.
-    if let Some(old_key) = credential_to_clear(previous_credential_ref.as_deref(), &config) {
+    if let (Some(old_key), Some(store)) = (credential_to_clear, store.as_ref()) {
         store.delete(&old_key)?;
     }
 
@@ -185,17 +208,20 @@ pub async fn set_printer_connection(
     }
     write_printers_to(&dir, &file)?;
 
-    let api_key = api_key_from(&store, &config)?;
+    let api_key = match store.as_ref() {
+        Some(store) => api_key_from(store, &config)?,
+        None => None,
+    };
     manager.start(id.clone(), config, api_key);
 
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }
 
 #[tauri::command]
-pub async fn clear_printer_connection(
-    app: AppHandle,
+pub async fn clear_printer_connection<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager>>,
+    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
     id: String,
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
@@ -256,8 +282,9 @@ pub async fn discover_printers() -> Vec<DiscoveredPrinter> {
 /// (a mutex lock and a clone), so there is nothing here that can block the
 /// main thread the way the credential-store commands can.
 #[tauri::command]
-pub fn printer_statuses(
-    manager: tauri::State<Arc<ConnectionManager>>,
+pub fn printer_statuses<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    manager: tauri::State<Arc<ConnectionManager<R>>>,
 ) -> HashMap<String, PrinterStatus> {
     manager.statuses()
 }
@@ -265,6 +292,35 @@ pub fn printer_statuses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::path::Path;
+
+    #[test]
+    fn credential_free_first_save_does_not_detect_a_store() {
+        let submission = ConnectionSubmission {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "voron.local".to_string(),
+            port: 7125,
+            use_tls: false,
+            api_key: Some(String::new()),
+        };
+        let api_key_omitted = submission.api_key.is_none();
+        let (mut config, secret) = split_submission(submission, "prn-1");
+        settle_credential_ref(&mut config, api_key_omitted, None);
+        let credential_to_clear = credential_to_clear(None, &config);
+        let detections = Cell::new(0);
+
+        let store = credential_store_if_needed(
+            Path::new("unused"),
+            credential_store_needed(&secret, credential_to_clear.as_deref(), &config),
+            |dir| {
+                detections.set(detections.get() + 1);
+                CredentialStore::file_backed(dir)
+            },
+        );
+
+        assert_eq!((store.is_none(), detections.get()), (true, 0));
+    }
 
     #[test]
     fn a_submitted_api_key_never_lands_in_the_persisted_config() {

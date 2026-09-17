@@ -53,7 +53,11 @@ impl CredentialStore {
     /// is exactly the availability check this needs.
     pub fn detect(config_dir: PathBuf) -> Self {
         match keyring::Entry::store_status() {
-            Ok(()) => Self { kind: CredentialStoreKind::Keychain, config_dir, unavailable_reason: None },
+            Ok(()) => Self {
+                kind: CredentialStoreKind::Keychain,
+                config_dir,
+                unavailable_reason: None,
+            },
             Err(e) => Self {
                 kind: CredentialStoreKind::File,
                 config_dir,
@@ -65,7 +69,11 @@ impl CredentialStore {
     /// Forces the file tier. Used by tests, and the only constructor that
     /// never touches the developer's real keychain.
     pub fn file_backed(config_dir: PathBuf) -> Self {
-        Self { kind: CredentialStoreKind::File, config_dir, unavailable_reason: None }
+        Self {
+            kind: CredentialStoreKind::File,
+            config_dir,
+            unavailable_reason: None,
+        }
     }
 
     pub fn kind(&self) -> CredentialStoreKind {
@@ -154,7 +162,8 @@ fn write_owner_only(path: &Path, contents: &str) -> Result<(), String> {
         .mode(0o600)
         .open(path)
         .map_err(|e| e.to_string())?;
-    file.write_all(contents.as_bytes()).map_err(|e| e.to_string())
+    file.write_all(contents.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(unix))]
@@ -197,9 +206,43 @@ mod tests {
         CredentialStore::file_backed(dir.to_path_buf())
     }
 
+    fn persistence_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/persistence/v1")
+            .join(name)
+    }
+
+    #[test]
+    fn baseline_file_backed_credentials_fixture_loads_through_the_storage_seam() {
+        let mut tempdir = tempfile::Builder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tempdir.permissions(fs::Permissions::from_mode(0o700));
+        }
+        let dir = tempdir.tempdir().unwrap();
+        fs::copy(
+            persistence_fixture("credentials.json"),
+            credentials_file_path(dir.path()),
+        )
+        .unwrap();
+        let store = file_store(dir.path());
+
+        assert_eq!(
+            store
+                .get("farm3d/printer/prn-f0-connected/apikey")
+                .unwrap()
+                .as_deref(),
+            Some("F0_FIXTURE_SENTINEL")
+        );
+    }
+
     #[test]
     fn credential_ref_is_namespaced_per_printer() {
-        assert_eq!(credential_ref_for("prn-8f2a"), "farm3d/printer/prn-8f2a/apikey");
+        assert_eq!(
+            credential_ref_for("prn-8f2a"),
+            "farm3d/printer/prn-8f2a/apikey"
+        );
     }
 
     #[test]
@@ -228,7 +271,10 @@ mod tests {
         store.set(&credential_ref_for("b"), "bbb").unwrap();
         store.delete(&credential_ref_for("a")).unwrap();
         assert_eq!(store.get(&credential_ref_for("a")).unwrap(), None);
-        assert_eq!(store.get(&credential_ref_for("b")).unwrap(), Some("bbb".to_string()));
+        assert_eq!(
+            store.get(&credential_ref_for("b")).unwrap(),
+            Some("bbb".to_string())
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -251,13 +297,19 @@ mod tests {
         store.set(&key, "first").unwrap();
 
         let path = credentials_file_path(&dir);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
 
         // A user (or a bad backup restore) loosening the mode must be
         // corrected on the next write, not merely on creation.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         store.set(&key, "second").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -272,7 +324,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = credentials_file_path(&dir);
         write_owner_only(&path, "{}").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -131,21 +131,28 @@ describe("printer-store", () => {
       // this module's own `listen(...)` string and payload shape. Both sides
       // otherwise mock each other away, so a rename on either would break
       // live status with a green test suite.
+      const calls: string[] = [];
       let handler: ((event: { payload: { id: string; status: unknown } }) => void) | undefined;
       const unlisten = vi.fn();
-      eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
+      eventMock.listen.mockImplementation((name: string, cb: typeof handler) => {
+        calls.push(`listen:${name}`);
         handler = cb;
         return Promise.resolve(unlisten);
       });
-      tauriMock.invoke.mockImplementation((command: string) =>
-        Promise.resolve(command === "list_printers" ? [structuredClone(A_RESOLVED_PRINTER)] : {}),
-      );
+      tauriMock.invoke.mockImplementation((command: string) => {
+        calls.push(`invoke:${command}`);
+        return Promise.resolve(command === "list_printers" ? [structuredClone(A_RESOLVED_PRINTER)] : {});
+      });
 
       const { loadPrinters, startStatusListener, printers } = await import("./printer-store");
       await loadPrinters();
       const stop = await startStatusListener();
 
       expect(eventMock.listen).toHaveBeenCalledWith("printer-status", expect.any(Function));
+      expect(calls.slice(-2)).toEqual([
+        "listen:printer-status",
+        "invoke:printer_statuses",
+      ]);
       handler!({
         payload: {
           id: "prn-1",

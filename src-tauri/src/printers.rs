@@ -179,7 +179,7 @@ pub struct PrinterPatch {
     pub notes: Option<String>,
 }
 
-fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn app_config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
@@ -221,8 +221,8 @@ fn baseline_from(variant: &CatalogVariant, catalog: &Catalog) -> LastKnownGood {
 }
 
 #[tauri::command]
-pub fn list_printers(
-    app: AppHandle,
+pub fn list_printers<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
 ) -> Result<Vec<ResolvedPrinter>, String> {
     let file = load_printers_from(&app_config_dir(&app)?)?;
@@ -230,8 +230,8 @@ pub fn list_printers(
 }
 
 #[tauri::command]
-pub fn create_printer(
-    app: AppHandle,
+pub fn create_printer<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
     draft: PrinterDraft,
 ) -> Result<ResolvedPrinter, String> {
@@ -298,9 +298,9 @@ fn credential_to_forget(file: &PrintersFile, id: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn delete_printer(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager>>,
+pub async fn delete_printer<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager<R>>>,
     id: String,
 ) -> Result<(), String> {
     let config_dir = app_config_dir(&app)?;
@@ -493,6 +493,42 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         std::env::temp_dir().join(format!("farm3d-printers-test-{}-{}", std::process::id(), id))
+    }
+
+    fn persistence_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/persistence/v1")
+            .join(name)
+    }
+
+    #[test]
+    fn baseline_v1_printers_fixture_loads_through_the_storage_seam() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let fixture = persistence_fixture("printers.json");
+        fs::copy(&fixture, printers_file_path(&dir)).unwrap();
+
+        let loaded = load_printers_from(&dir).unwrap();
+
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.printers.len(), 2);
+        assert_eq!(loaded.printers[0].id, "prn-f0-profile-only");
+        assert_eq!(loaded.printers[0].connection, None);
+        assert_eq!(loaded.printers[0].overrides.printable_height_mm, Some(245.0));
+        assert_eq!(
+            loaded.printers[0].overrides.extra.get("futureBaselineField"),
+            Some(&serde_json::json!({ "preserved": true }))
+        );
+        let connected = &loaded.printers[1];
+        assert_eq!(connected.id, "prn-f0-connected");
+        assert_eq!(connected.connection.as_ref().unwrap().host, "moonraker.invalid");
+        assert_eq!(
+            connected.connection.as_ref().unwrap().credential_ref.as_deref(),
+            Some("farm3d/printer/prn-f0-connected/apikey")
+        );
+        let raw = fs::read_to_string(fixture).unwrap();
+        assert!(!raw.contains("F0_FIXTURE_SENTINEL"));
+        fs::remove_dir_all(&dir).ok();
     }
 
     fn a_printer() -> StoredPrinter {

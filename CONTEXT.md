@@ -15,13 +15,10 @@ A physical 3D printer farm3d connects to, monitors, and can dispatch print
 Jobs to.
 _Avoid_: Device, machine
 
-**Printer Group**:
-The Fleet Dashboard's clustering of Printers that share the same Printer
-Model/Variant, shown as one card with multiple instances. Distinct from a
-Printer's free-text `group` field (e.g. "Bay 1"), which is just a
-user-assigned location label, not this clustering.
-_Avoid_: Group (unqualified) — always say "Printer Group" or "location
-group" for the two different senses.
+**Monitor Section**:
+A temporary visual grouping of individual Printer cards by location, Printer
+Model, or operational state. It is a view preference, not persisted Farm data.
+_Avoid_: Printer Group, Fleet Group
 
 **Printer Profile**:
 The physical and material capabilities of a Printer (build volume, nozzle
@@ -78,6 +75,11 @@ The curated set of Models a user has explicitly saved in farm3d, distinct
 from a Model merely opened for inspection.
 _Avoid_: Collection, catalog
 
+**Project**:
+An organizational folder for related Models in the Library. A Project does
+not carry production quantities, deadlines, or fulfillment state.
+_Avoid_: Order, batch, job folder
+
 **Slice**:
 The act of converting a Model into printable G-code for a specific Printer
 Profile, performed by farm3d's wrapped OrcaSlicer engine (ADR-0003). Not yet
@@ -85,8 +87,52 @@ implemented — OrcaSlicer is currently only invoked at build time to generate
 the printer catalog, not at runtime to slice a Model.
 _Avoid_: Export
 
+**Slice Revision**:
+An immutable slicing result for a particular Model or build plate, Printer
+Profile, material profile, and set of slicing choices. A Job dispatches one
+Slice Revision without changing it.
+_Avoid_: G-code version, export
+
+**Model Source Revision**:
+An immutable snapshot of a Model's source content at import or linked-source
+change time. Slice Revisions refer to one Model Source Revision so later file
+changes cannot alter existing work.
+_Avoid_: File version, Model version
+
+**Queue Entry**:
+A request to produce one physical run from a Slice Revision that has not yet
+been assigned to a Printer. It carries queue order and a Dispatch Policy.
+_Avoid_: Job, task, order
+
 **Job**:
-A Slice dispatched to a specific Printer for printing, tracked by farm3d
-from dispatch through completion (ADR-0005). Not yet implemented — no Job
-dispatch/tracking code exists yet.
+A Slice Revision assigned to a specific Printer for printing, tracked by
+farm3d from assignment through completion (ADR-0005). Not yet implemented —
+no Job dispatch/tracking code exists yet.
 _Avoid_: Print, task
+
+**Dispatch Policy**:
+A Queue Entry's rule for becoming a Job: operator-selected,
+farm3d-recommended, or automatically assigned. A Printer's own start-safety
+rule remains a separate gate after assignment.
+_Avoid_: Queue mode, automation level
+
+**Spool**:
+A physical supply of printable material, with an identity, location, and
+measured or estimated amount remaining. Reserved material is still part of
+the Spool until a Job consumes it.
+_Avoid_: Filament profile, material preset
+
+**Material Slot**:
+A named physical position on a Printer or attached feeder that can hold one
+Spool. A Printer has one or more Material Slots.
+_Avoid_: Bay, feeder (unless naming the hardware)
+
+**Incident**:
+A notable operational occurrence tied to a Printer or Job, preserving what
+happened and any available evidence or operator action.
+_Avoid_: Notification, log entry
+
+**Attention Event**:
+An operator-facing signal about a current or historical condition. Reading,
+acknowledging, and resolving an Attention Event are distinct states.
+_Avoid_: Toast, notification
