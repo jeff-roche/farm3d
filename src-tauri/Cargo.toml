@@ -34,4 +34,5 @@ keyring = "4.1"
 mdns-sd = "0.21"
 
 [dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 tempfile = "3.27"

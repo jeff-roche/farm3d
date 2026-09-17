@@ -65,11 +65,11 @@ pub fn split_submission(
     )
 }
 
-fn config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
-fn store(app: &AppHandle) -> Result<CredentialStore, String> {
+fn store<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<CredentialStore, String> {
     Ok(CredentialStore::detect(config_dir(app)?))
 }
 
@@ -132,10 +132,10 @@ fn settle_credential_ref(
 }
 
 #[tauri::command]
-pub async fn set_printer_connection(
-    app: AppHandle,
+pub async fn set_printer_connection<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager>>,
+    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
     id: String,
     submission: ConnectionSubmission,
 ) -> Result<ResolvedPrinter, String> {
@@ -192,10 +192,10 @@ pub async fn set_printer_connection(
 }
 
 #[tauri::command]
-pub async fn clear_printer_connection(
-    app: AppHandle,
+pub async fn clear_printer_connection<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager>>,
+    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
     id: String,
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
@@ -256,8 +256,9 @@ pub async fn discover_printers() -> Vec<DiscoveredPrinter> {
 /// (a mutex lock and a clone), so there is nothing here that can block the
 /// main thread the way the credential-store commands can.
 #[tauri::command]
-pub fn printer_statuses(
-    manager: tauri::State<Arc<ConnectionManager>>,
+pub fn printer_statuses<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    manager: tauri::State<Arc<ConnectionManager<R>>>,
 ) -> HashMap<String, PrinterStatus> {
     manager.statuses()
 }

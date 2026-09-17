@@ -179,7 +179,7 @@ pub struct PrinterPatch {
     pub notes: Option<String>,
 }
 
-fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn app_config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
@@ -221,8 +221,8 @@ fn baseline_from(variant: &CatalogVariant, catalog: &Catalog) -> LastKnownGood {
 }
 
 #[tauri::command]
-pub fn list_printers(
-    app: AppHandle,
+pub fn list_printers<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
 ) -> Result<Vec<ResolvedPrinter>, String> {
     let file = load_printers_from(&app_config_dir(&app)?)?;
@@ -230,8 +230,8 @@ pub fn list_printers(
 }
 
 #[tauri::command]
-pub fn create_printer(
-    app: AppHandle,
+pub fn create_printer<R: tauri::Runtime>(
+    app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
     draft: PrinterDraft,
 ) -> Result<ResolvedPrinter, String> {
@@ -298,9 +298,9 @@ fn credential_to_forget(file: &PrintersFile, id: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn delete_printer(
-    app: AppHandle,
-    manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager>>,
+pub async fn delete_printer<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager<R>>>,
     id: String,
 ) -> Result<(), String> {
     let config_dir = app_config_dir(&app)?;

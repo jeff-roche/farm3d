@@ -18,6 +18,38 @@ use std::sync::Arc;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
+pub fn restore_stored_connections<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    manager: &Arc<ConnectionManager<R>>,
+) {
+    if let Ok(dir) = app.path().app_config_dir() {
+        if let Ok(file) = printers::load_printers_from(&dir) {
+            let store = connections::credentials::CredentialStore::detect(dir);
+            for stored in &file.printers {
+                let Some(config) = stored.connection.clone() else { continue };
+                let api_key = match config.credential_ref.as_deref() {
+                    None => None,
+                    Some(key) => match store.get(key) {
+                        Ok(found) => found,
+                        Err(e) => {
+                            eprintln!(
+                                "farm3d: cannot read the stored credential for {}: {e}",
+                                stored.id
+                            );
+                            manager.report_error(
+                                &stored.id,
+                                format!("Could not read this printer's stored credential: {e}"),
+                            );
+                            continue;
+                        }
+                    },
+                };
+                manager.start(stored.id.clone(), config, api_key);
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -32,40 +64,7 @@ pub fn run() {
             app.manage(Arc::new(snapshot));
 
             let manager = Arc::new(ConnectionManager::new(app.handle().clone()));
-            // Reconnect everything that was already configured, so a printer
-            // is live on the dashboard without the user opening its tab.
-            if let Ok(dir) = app.path().app_config_dir() {
-                if let Ok(file) = printers::load_printers_from(&dir) {
-                    let store = connections::credentials::CredentialStore::detect(dir);
-                    for stored in &file.printers {
-                        let Some(config) = stored.connection.clone() else { continue };
-                        let api_key = match config.credential_ref.as_deref() {
-                            None => None,
-                            Some(key) => match store.get(key) {
-                                Ok(found) => found,
-                                // NOT the same as "no key configured": the
-                                // store itself is unreadable (a corrupt
-                                // credentials.json, a refused keychain).
-                                // Connecting with `None` would loop forever
-                                // reporting an AUTH failure, sending the user
-                                // after their API key instead of the store.
-                                Err(e) => {
-                                    eprintln!(
-                                        "farm3d: cannot read the stored credential for {}: {e}",
-                                        stored.id
-                                    );
-                                    manager.report_error(
-                                        &stored.id,
-                                        format!("Could not read this printer's stored credential: {e}"),
-                                    );
-                                    continue;
-                                }
-                            },
-                        };
-                        manager.start(stored.id.clone(), config, api_key);
-                    }
-                }
-            }
+            restore_stored_connections(app.handle(), &manager);
             app.manage(manager);
             Ok(())
         })

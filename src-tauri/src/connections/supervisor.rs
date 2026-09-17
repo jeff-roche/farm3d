@@ -55,14 +55,14 @@ impl StatusMap {
     }
 }
 
-pub struct ConnectionManager {
-    app: AppHandle,
+pub struct ConnectionManager<R: tauri::Runtime> {
+    app: AppHandle<R>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     statuses: Arc<StatusMap>,
 }
 
-impl ConnectionManager {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: tauri::Runtime> ConnectionManager<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self { app, tasks: Mutex::new(HashMap::new()), statuses: Arc::new(StatusMap::default()) }
     }
 
@@ -158,7 +158,12 @@ fn build(config: &ConnectionConfig, api_key: Option<String>) -> Option<Box<dyn P
     }
 }
 
-fn publish(app: &AppHandle, statuses: &StatusMap, id: &str, status: PrinterStatus) {
+fn publish<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    statuses: &StatusMap,
+    id: &str,
+    status: PrinterStatus,
+) {
     statuses.set(id, status.clone());
     // A failed emit means the window is gone; the status map is still
     // correct, so there is nothing to recover from here.
