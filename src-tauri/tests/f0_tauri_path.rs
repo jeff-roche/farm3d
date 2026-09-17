@@ -1,6 +1,5 @@
 #![cfg(target_os = "linux")]
 
-use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
@@ -18,24 +17,6 @@ use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
 use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
-
-const CHILD_PROCESS: &str = "FARM3D_F0_TAURI_PATH_CHILD";
-
-fn child_process_requested(marker: Option<&OsStr>, config_home: Option<&OsStr>) -> bool {
-    marker.is_some() && marker == config_home
-}
-
-#[test]
-fn child_marker_must_match_the_isolated_config_home() {
-    assert!(!child_process_requested(
-        Some(OsStr::new("/tmp/stale-marker")),
-        Some(OsStr::new("/tmp/current-config")),
-    ));
-    assert!(child_process_requested(
-        Some(OsStr::new("/tmp/current-config")),
-        Some(OsStr::new("/tmp/current-config")),
-    ));
-}
 
 struct LoopbackEndpoint {
     port: u16,
@@ -129,23 +110,13 @@ fn mock_app(
 
 #[test]
 fn ipc_create_connection_survives_restart_and_backfills_status() {
-    if child_process_requested(
-        std::env::var_os(CHILD_PROCESS).as_deref(),
-        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
-    ) {
-        run_ipc_tracer();
-        return;
-    }
-
-    let config_home = tempfile::tempdir().unwrap();
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "ipc_create_connection_survives_restart_and_backfills_status",
+            "ipc_create_connection_survives_restart_and_backfills_status_isolated_child",
+            "--ignored",
             "--nocapture",
         ])
-        .env(CHILD_PROCESS, config_home.path())
-        .env("XDG_CONFIG_HOME", config_home.path())
         .status()
         .unwrap();
 
@@ -153,6 +124,19 @@ fn ipc_create_connection_survives_restart_and_backfills_status() {
         status.success(),
         "isolated IPC tracer child failed: {status}"
     );
+}
+
+#[test]
+#[ignore = "run only in the isolated child process spawned by the parent tracer test"]
+fn ipc_create_connection_survives_restart_and_backfills_status_isolated_child() {
+    let config_home = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+
+    run_ipc_tracer();
+
+    // The tracer has joined both supervisors and dropped all app state before
+    // its isolated config root is removed.
+    drop(config_home);
 }
 
 fn run_ipc_tracer() {
