@@ -309,7 +309,7 @@ pub async fn delete_printer<R: tauri::Runtime>(
     // Stop the supervisor FIRST, before the config it's reconnecting
     // against is removed — otherwise it keeps retrying forever under an id
     // that no longer exists in printers.json.
-    manager.stop_and_wait(&id).await;
+    manager.stop(&id);
 
     // Then clean up any stored credential — a printer record is the only
     // place the UI can ever re-enter one, so once it's gone the credential

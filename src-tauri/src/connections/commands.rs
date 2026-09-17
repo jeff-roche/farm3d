@@ -218,14 +218,7 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
 ) -> Result<ResolvedPrinter, String> {
     let dir = config_dir(&app)?;
     let mut file = load_printers_from(&dir)?;
-    manager.stop_and_wait(&id).await;
-
-    let credential_ref = file
-        .printers
-        .iter()
-        .find(|p| p.id == id)
-        .and_then(|p| p.connection.as_ref())
-        .and_then(|c| c.credential_ref.clone());
+    manager.stop(&id);
 
     {
         let stored = file
@@ -238,9 +231,7 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
     write_printers_to(&dir, &file)?;
     // Removing the secret last: a failure here leaves an orphaned credential,
     // which is harmless, rather than an unusable config.
-    if let Some(credential_ref) = credential_ref {
-        CredentialStore::detect(dir).delete(&credential_ref)?;
-    }
+    store(&app)?.delete(&credential_ref_for(&id))?;
 
     Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
 }

@@ -1,5 +1,6 @@
 #![cfg(target_os = "linux")]
 
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
@@ -19,6 +20,22 @@ use tauri::webview::InvokeRequest;
 use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
 
 const CHILD_PROCESS: &str = "FARM3D_F0_TAURI_PATH_CHILD";
+
+fn child_process_requested(marker: Option<&OsStr>, config_home: Option<&OsStr>) -> bool {
+    marker.is_some() && marker == config_home
+}
+
+#[test]
+fn child_marker_must_match_the_isolated_config_home() {
+    assert!(!child_process_requested(
+        Some(OsStr::new("/tmp/stale-marker")),
+        Some(OsStr::new("/tmp/current-config")),
+    ));
+    assert!(child_process_requested(
+        Some(OsStr::new("/tmp/current-config")),
+        Some(OsStr::new("/tmp/current-config")),
+    ));
+}
 
 struct LoopbackEndpoint {
     port: u16,
@@ -112,7 +129,10 @@ fn mock_app(
 
 #[test]
 fn ipc_create_connection_survives_restart_and_backfills_status() {
-    if std::env::var_os(CHILD_PROCESS).is_some() {
+    if child_process_requested(
+        std::env::var_os(CHILD_PROCESS).as_deref(),
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+    ) {
         run_ipc_tracer();
         return;
     }
@@ -124,7 +144,7 @@ fn ipc_create_connection_survives_restart_and_backfills_status() {
             "ipc_create_connection_survives_restart_and_backfills_status",
             "--nocapture",
         ])
-        .env(CHILD_PROCESS, "1")
+        .env(CHILD_PROCESS, config_home.path())
         .env("XDG_CONFIG_HOME", config_home.path())
         .status()
         .unwrap();
