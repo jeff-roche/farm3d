@@ -31,7 +31,7 @@ claim.
 
 | Platform | v1 release status | F0 evidence | Required before platform claim |
 |---|---|---|---|
-| Linux x86_64 | Supported | On CachyOS x86_64: clean frontend build; 130 frontend and 115 top-level Cargo tests passed. Exact `just package` exited 0 and produced a 6,379,124-byte `.deb`, 6,375,071-byte `.rpm`, 109,718,008-byte unstripped AppImage, and 18,755,664-byte release executable. With display available, that newly built executable stayed alive for 10 seconds and was terminated by SIGTERM. No install or visual acceptance. | Clean build/test/package and packaged-executable launch met in F0; later feature-specific installed-bundle checks remain required |
+| Linux x86_64 | Supported | On CachyOS x86_64: clean frontend build; 130 frontend and 114 top-level Cargo tests passed; the parent IPC test separately executed the outer harness's one ignored child target successfully. Exact `just package` exited 0 and produced a 6,379,116-byte `.deb`, 6,375,071-byte `.rpm`, 109,718,008-byte unstripped AppImage, and 18,755,664-byte release executable. With display available, that newly built executable stayed alive for 10 seconds and was terminated by SIGTERM. No install or visual acceptance. | Clean build/test/package and packaged-executable launch met in F0; later feature-specific installed-bundle checks remain required |
 | Windows x86_64 | Candidate, unverified | Not run in F0 | Native clean build/test/package; installed launch; credential-store and later permission/notification/process checks |
 | Windows arm64 | Candidate, unverified | Not run in F0 | Native clean build/test/package; installed launch; credential-store and later permission/notification/process checks |
 | macOS x86_64 | Candidate, unverified | Not run in F0 | Native clean build/test/package; signed/notarized installation decision; launch; Keychain and later permission/notification/process checks |
@@ -57,15 +57,15 @@ installation decision before release support is claimed.
 
 | Evidence | UTC start | Result | Artifact/log |
 |---|---|---|---|
-| Frontend build | 2026-09-17T13:47:20Z | Exit 0; TypeScript/Vite passed | `/tmp/farm3d-f0/final/just-build.log` |
-| Frontend tests | 2026-09-17T13:47:33Z | Exit 0; 14 files, 130 tests passed | `/tmp/farm3d-f0/final/just-test.log` |
-| Rust tests | 2026-09-17T13:48:04Z | Exit 0; 110 library + 2 IPC integration + 3 snapshot tests passed | `/tmp/farm3d-f0/final/just-test-rust.log` |
+| Frontend build | 2026-09-17T14:02:26Z | Exit 0; TypeScript/Vite passed | `/tmp/farm3d-f0/final/just-build.log` |
+| Frontend tests | 2026-09-17T14:02:38Z | Exit 0; 14 files, 130 tests passed | `/tmp/farm3d-f0/final/just-test.log` |
+| Rust tests | 2026-09-17T14:02:57Z | Exit 0; 110 library + 1 parent IPC integration + 3 snapshot tests passed; 1 child target ignored by the outer harness and passed when invoked by the parent | `/tmp/farm3d-f0/final/just-test-rust.log` |
 | Frontend-only server | 2026-09-17T12:18:54Z | Root and catalog resource returned HTTP 200; not Tauri evidence | `/tmp/farm3d-f0/just-web-result.log` |
 | Original full package red | 2026-09-17T12:19:00Z | Exit 1; bundled strip rejected modern `.relr.dyn` sections | `/tmp/farm3d-f0/just-package.log` and `package-verbose.log` |
 | AppImage-only hypothesis | 2026-09-17T13:03:47Z | Exit 0 with `NO_STRIP=1`; AppImage completed | `/tmp/farm3d-f0/no-strip-appimage-hypothesis.log` |
-| Final exact full package | 2026-09-17T13:48:11Z | Exit 0; `.deb`, `.rpm`, and AppImage completed | `/tmp/farm3d-f0/final/just-package.log` |
-| Release executable launch | 2026-09-17T13:49:01Z | Rebuilt executable (mtime `2026-09-17T13:48:48Z`) alive for 10 seconds with display available; then SIGTERM, wait status 143 | `/tmp/farm3d-f0/final/launch-result.log` |
-| Live Moonraker | 2026-09-17T13:50:05Z | Not run; configured endpoint variable absent, no probe attempted | `/tmp/farm3d-f0/final/moonraker-presence.log` |
+| Final exact full package | 2026-09-17T14:03:04Z | Exit 0; `.deb`, `.rpm`, and AppImage completed | `/tmp/farm3d-f0/final/just-package.log` |
+| Release executable launch | 2026-09-17T14:03:48Z | Rebuilt executable (mtime `2026-09-17T14:03:40Z`) alive for 10 seconds with display available; then SIGTERM, wait status 143 | `/tmp/farm3d-f0/final/launch-result.log` |
+| Live Moonraker | 2026-09-17T14:04:46Z | Not run; configured endpoint variable absent, no probe attempted | `/tmp/farm3d-f0/final/moonraker-presence.log` |
 
 The package recipe sets `NO_STRIP=1` because linuxdeploy's bundled legacy
 `strip` cannot parse this host's modern ELF `.relr.dyn` sections. Upstream
