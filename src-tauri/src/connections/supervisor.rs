@@ -936,6 +936,7 @@ mod tests {
     use crate::printers::repository::PrinterRepository;
     use crate::printers::StoredPrinter;
     use chrono::{TimeZone, Utc};
+    use tauri::Listener;
 
     #[test]
     fn telemetry_observation_sets_a_thirty_second_freshness_window() {
@@ -1385,13 +1386,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_a_printer_clears_its_cache_warnings_from_backfill() {
+    async fn removing_a_printer_clears_only_its_cache_warnings_and_keeps_backfill_in_sequence() {
         let (_root, _lease, storage) = crate::test_storage();
+        PrinterRepository::new(Arc::clone(&storage))
+            .create(StoredPrinter {
+                id: "prn-hydrate".to_string(),
+                name: "Malformed cache".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO printer_status_snapshots (printer_id, telemetry_json, last_observed_at, persisted_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params!["prn-hydrate", "{}", "2026-09-18T12:00:00Z", "2026-09-18T12:00:00Z"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let app = tauri::test::mock_app();
         let manager = ConnectionManager::new(
             app.handle().clone(),
             Arc::new(StatusRepository::new(storage)),
         );
+        let (events_tx, events_rx) = std::sync::mpsc::channel();
+        app.listen(STATUS_EVENT, move |event| {
+            events_tx.send(event.payload().to_string()).unwrap();
+        });
         manager.apply_observation(
             "prn-1",
             ConnectionObservation::Telemetry(PrinterTelemetry {
@@ -1411,13 +1432,63 @@ mod tests {
             manager.statuses()["prn-1"].cache_warnings[0].operation,
             StatusCacheWarningOperation::Save
         );
+        let _: serde_json::Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
+        manager.apply_observation(
+            "prn-2",
+            ConnectionObservation::Telemetry(PrinterTelemetry {
+                host_activity: HostActivity::Idle,
+                host_activity_name: None,
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            }),
+            PrinterSetupFacts::complete(),
+        );
+        assert_eq!(
+            manager.statuses()["prn-2"].cache_warnings,
+            vec![StatusCacheWarning {
+                printer_id: Some("prn-2".to_string()),
+                operation: StatusCacheWarningOperation::Save,
+            }]
+        );
+        let _: serde_json::Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
 
         manager.stop_and_wait("prn-1").await;
 
+        let tombstone: serde_json::Value =
+            serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
         let backfill = manager.status_backfill();
-        assert!(manager.cache_warnings().is_empty());
-        assert!(backfill.statuses.is_empty());
-        assert!(backfill.cache_warnings.is_empty());
+        assert_eq!(tombstone["type"], "printer.status.removed");
+        assert_eq!(tombstone["subject"]["id"], "prn-1");
+        assert!(!manager.statuses().contains_key("prn-1"));
+        assert!(manager.statuses().contains_key("prn-2"));
+        assert!(backfill
+            .statuses
+            .iter()
+            .all(|row| row.printer_id != "prn-1"));
+        assert_eq!(backfill.statuses.len(), 1);
+        assert_eq!(backfill.statuses[0].printer_id, "prn-2");
+        assert_eq!(
+            serde_json::to_value(&backfill).unwrap()["snapshotSequence"],
+            tombstone["sequence"]
+        );
+        assert_eq!(
+            backfill.cache_warnings,
+            vec![
+                StatusCacheWarning {
+                    printer_id: None,
+                    operation: StatusCacheWarningOperation::Hydrate,
+                },
+                StatusCacheWarning {
+                    printer_id: Some("prn-2".to_string()),
+                    operation: StatusCacheWarningOperation::Save,
+                },
+            ]
+        );
     }
 
     #[tokio::test]
