@@ -27,6 +27,10 @@ const STATUS_CHANNEL_DEPTH: usize = 16;
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const TELEMETRY_FRESH_FOR: ChronoDuration = ChronoDuration::seconds(30);
 
+type ConnectionFactory = dyn Fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>
+    + Send
+    + Sync;
+
 struct SupervisorTask {
     stop: tokio::sync::watch::Sender<bool>,
     handle: JoinHandle<()>,
@@ -38,6 +42,14 @@ struct SupervisorTask {
 pub struct PrinterSetupFacts {
     pub has_usable_connection: bool,
     pub profile_resolved: bool,
+}
+
+/// Recoverable telemetry-cache failures, retained separately from printer
+/// status so cache trouble cannot masquerade as a connection failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusCacheWarning {
+    pub printer_id: Option<String>,
+    pub operation: &'static str,
 }
 
 impl PrinterSetupFacts {
@@ -76,12 +88,19 @@ pub enum PrinterStatusEventPayload {
     Removed,
 }
 
-pub type PrinterStatusEvent = EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>;
-
-#[derive(TS)]
+/// The exact envelope emitted on [`STATUS_EVENT`]. The transparent newtype
+/// gives ts-rs a named generated contract without changing the wire shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(transparent)]
 #[ts(export_to = "domain/PrinterStatusEvent.ts")]
-pub struct PrinterStatusEventContract {
-    pub event: PrinterStatusEvent,
+pub struct PrinterStatusEvent(pub EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>);
+
+impl std::ops::Deref for PrinterStatusEvent {
+    type Target = EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -108,6 +127,7 @@ struct StatusState {
     stream_id: String,
     values: HashMap<String, PrinterStatus>,
     hydrated: HashSet<String>,
+    epochs: HashMap<String, u64>,
     sequence: u64,
 }
 
@@ -117,6 +137,7 @@ impl Default for StatusState {
             stream_id: uuid::Uuid::new_v4().to_string(),
             values: HashMap::new(),
             hydrated: HashSet::new(),
+            epochs: HashMap::new(),
             sequence: 0,
         }
     }
@@ -137,6 +158,13 @@ impl Default for StatusMap {
 }
 
 impl StatusMap {
+    fn begin_supervision(&self, id: &str) -> u64 {
+        let mut state = self.state.lock().expect("status map lock");
+        let epoch = state.epochs.entry(id.to_string()).or_default();
+        *epoch = epoch.saturating_add(1);
+        *epoch
+    }
+
     fn snapshot(&self) -> HashMap<String, PrinterStatus> {
         self.state.lock().expect("status map lock").values.clone()
     }
@@ -206,8 +234,38 @@ impl StatusMap {
         envelope
     }
 
+    fn publish_changed_if_current(
+        &self,
+        id: &str,
+        epoch: u64,
+        status: PrinterStatus,
+        hydrated: bool,
+    ) -> Option<PrinterStatusEvent> {
+        let mut state = self.state.lock().expect("status map lock");
+        if state.epochs.get(id).copied() != Some(epoch) {
+            return None;
+        }
+        let envelope = next_envelope(
+            &mut state,
+            id,
+            PrinterStatusEventType::Changed,
+            PrinterStatusEventPayload::Changed {
+                status: Box::new(status.clone()),
+            },
+        );
+        state.values.insert(id.to_string(), status);
+        if hydrated {
+            state.hydrated.insert(id.to_string());
+        } else {
+            state.hydrated.remove(id);
+        }
+        Some(envelope)
+    }
+
     fn publish_removed(&self, id: &str) -> PrinterStatusEvent {
         let mut state = self.state.lock().expect("status map lock");
+        let epoch = state.epochs.entry(id.to_string()).or_default();
+        *epoch = epoch.saturating_add(1);
         state.values.remove(id);
         state.hydrated.remove(id);
         next_envelope(
@@ -230,7 +288,7 @@ fn next_envelope(
         state.sequence = 0;
     }
     state.sequence += 1;
-    EventEnvelope {
+    PrinterStatusEvent(EventEnvelope {
         contract_version: crate::contracts::ContractVersion::V1,
         stream_id: state.stream_id.clone(),
         sequence: JsSafeInteger::try_from(state.sequence).expect("guarded JS-safe sequence"),
@@ -242,7 +300,7 @@ fn next_envelope(
             id: id.to_string(),
         },
         payload,
-    }
+    })
 }
 
 pub fn backoff_delay(attempt: u32) -> Duration {
@@ -344,16 +402,19 @@ pub fn merge_status(
             now,
         ),
         ConnectionObservation::Health { state, observed_at } => {
-            // Liveness says only that the transport is alive. It must never
-            // turn retained telemetry into a new observation or extend its
-            // thirty-second freshness window.
+            // Liveness cannot validate hydrated cache readings. Once a live
+            // telemetry frame has established provenance, however, an online
+            // health observation keeps that live reading fresh.
             let _ = observed_at;
+            let fresh_until = (!hydrated_from_cache && state == ConnectionState::Online)
+                .then_some(now + TELEMETRY_FRESH_FOR)
+                .or_else(|| previous.fresh_until.as_deref().and_then(parse_time));
             status_from_parts(
                 state,
                 None,
                 previous.telemetry,
                 previous.last_observed_at.as_deref().and_then(parse_time),
-                previous.fresh_until.as_deref().and_then(parse_time),
+                fresh_until,
                 setup,
                 hydrated_from_cache,
                 now,
@@ -368,6 +429,8 @@ pub struct ConnectionManager<R: tauri::Runtime> {
     statuses: Arc<StatusMap>,
     repository: Arc<StatusRepository>,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    connection_factory: Arc<ConnectionFactory>,
+    cache_warnings: Arc<Mutex<Vec<StatusCacheWarning>>>,
     reconciliation: tokio::sync::Mutex<()>,
 }
 
@@ -381,15 +444,40 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         repository: Arc<StatusRepository>,
         clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static,
     ) -> Self {
+        Self::with_clock_and_factory(app, repository, clock, build)
+    }
+
+    pub fn with_clock_and_factory(
+        app: AppHandle<R>,
+        repository: Arc<StatusRepository>,
+        clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static,
+        connection_factory: impl Fn(
+                &ConnectionConfig,
+                Option<zeroize::Zeroizing<String>>,
+            ) -> Option<Box<dyn PrinterConnection>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
         let clock = Arc::new(clock);
         let statuses = Arc::new(StatusMap::default());
+        let cache_warnings = Arc::new(Mutex::new(Vec::new()));
         match repository.list() {
             Ok(snapshots) => {
                 for snapshot in snapshots {
                     statuses.seed_hydrated(snapshot, clock());
                 }
             }
-            Err(error) => eprintln!("farm3d: cannot hydrate telemetry cache: {error}"),
+            Err(error) => {
+                eprintln!("farm3d: cannot hydrate telemetry cache: {error}");
+                cache_warnings
+                    .lock()
+                    .expect("cache warning lock")
+                    .push(StatusCacheWarning {
+                        printer_id: None,
+                        operation: "hydrate",
+                    });
+            }
         }
         Self {
             app,
@@ -397,6 +485,8 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             statuses,
             repository,
             clock,
+            connection_factory: Arc::new(connection_factory),
+            cache_warnings,
             reconciliation: tokio::sync::Mutex::new(()),
         }
     }
@@ -409,6 +499,23 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
     }
     pub fn status_backfill(&self) -> PrinterStatusBackfill {
         self.statuses.backfill()
+    }
+
+    pub fn cache_warnings(&self) -> Vec<StatusCacheWarning> {
+        self.cache_warnings
+            .lock()
+            .expect("cache warning lock")
+            .clone()
+    }
+
+    fn record_cache_warning(&self, printer_id: Option<&str>, operation: &'static str) {
+        self.cache_warnings
+            .lock()
+            .expect("cache warning lock")
+            .push(StatusCacheWarning {
+                printer_id: printer_id.map(str::to_string),
+                operation,
+            });
     }
 
     pub fn reconcile_printer(&self, printer_id: &str, setup: PrinterSetupFacts) {
@@ -449,14 +556,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             (_, ConnectionObservation::Telemetry(_)) => Some(SnapshotWrite::Periodic),
             _ => None,
         };
-        let live = matches!(
-            &observation,
-            ConnectionObservation::Telemetry(_)
-                | ConnectionObservation::Health {
-                    state: ConnectionState::Online,
-                    ..
-                }
-        );
+        let telemetry_observed = matches!(&observation, ConnectionObservation::Telemetry(_));
         let next = merge_status(previous.as_ref(), observation, setup, hydrated, now);
         if let Some(write) = write {
             let snapshot = StoredTelemetrySnapshot {
@@ -469,9 +569,10 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             };
             if let Err(error) = self.repository.save_if_due(&snapshot, write) {
                 eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+                self.record_cache_warning(Some(printer_id), "save");
             }
         }
-        self.publish_changed(printer_id, next, hydrated && !live);
+        self.publish_changed(printer_id, next, hydrated && !telemetry_observed);
     }
 
     pub fn apply_connection_error(
@@ -499,48 +600,55 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         self.publish_changed(printer_id, status, false);
     }
 
-    pub fn start(
+    pub async fn start(
         &self,
         printer_id: String,
         config: ConnectionConfig,
         api_key: Option<zeroize::Zeroizing<String>>,
+        setup: PrinterSetupFacts,
     ) {
-        self.stop_task(&printer_id);
+        let _ = self.stop_task_and_wait(&printer_id).await;
+        let epoch = self.statuses.begin_supervision(&printer_id);
         self.apply_observation(
             &printer_id,
             ConnectionObservation::Health {
                 state: ConnectionState::Connecting,
                 observed_at: format_time(self.now()),
             },
-            PrinterSetupFacts::complete(),
+            setup,
         );
         let app = self.app.clone();
         let statuses = Arc::clone(&self.statuses);
         let repository = Arc::clone(&self.repository);
         let clock = Arc::clone(&self.clock);
+        let connection_factory = Arc::clone(&self.connection_factory);
+        let cache_warnings = Arc::clone(&self.cache_warnings);
         let id = printer_id.clone();
         let (stop, mut stop_requested) = tokio::sync::watch::channel(false);
         let handle = tauri::async_runtime::spawn(async move {
             let mut attempt = 0;
             loop {
                 let (tx, mut rx) = tokio::sync::mpsc::channel(STATUS_CHANNEL_DEPTH);
-                let connection = build(&config, api_key.clone());
+                let connection = connection_factory(&config, api_key.clone());
                 let forward = {
                     let app = app.clone();
                     let statuses = Arc::clone(&statuses);
                     let repository = Arc::clone(&repository);
                     let id = id.clone();
                     let clock = Arc::clone(&clock);
+                    let cache_warnings = Arc::clone(&cache_warnings);
                     tauri::async_runtime::spawn(async move {
                         while let Some(observation) = rx.recv().await {
                             apply_observation_to(
                                 &app,
                                 &statuses,
                                 &repository,
+                                &cache_warnings,
                                 &id,
                                 observation,
-                                PrinterSetupFacts::complete(),
+                                setup,
                                 (clock)(),
+                                epoch,
                             );
                         }
                     })
@@ -556,7 +664,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                             &statuses,
                             &id,
                             "This Connection kind is not supported by this build.",
-                            PrinterSetupFacts::complete(),
+                            setup,
                             (clock)(),
                         );
                         None
@@ -573,7 +681,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                         &statuses,
                         &id,
                         status_message(&error),
-                        PrinterSetupFacts::complete(),
+                        setup,
                         (clock)(),
                     ),
                 }
@@ -586,26 +694,31 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             .insert(printer_id, SupervisorTask { stop, handle });
     }
 
-    pub fn report_error(&self, printer_id: &str, message: impl Into<String>) {
-        self.stop_task(printer_id);
-        self.apply_connection_error(printer_id, message, PrinterSetupFacts::complete());
+    pub async fn report_error(
+        &self,
+        printer_id: &str,
+        message: impl Into<String>,
+        setup: PrinterSetupFacts,
+    ) {
+        let _ = self.stop_task_and_wait(printer_id).await;
+        self.apply_connection_error(printer_id, message, setup);
     }
 
-    pub fn stop(&self, printer_id: &str) {
-        self.stop_task(printer_id);
-        self.publish_removed(printer_id);
-    }
-
-    pub async fn stop_and_wait(&self, printer_id: &str) -> bool {
+    pub async fn stop(&self, printer_id: &str) -> bool {
         let graceful = self.stop_task_and_wait(printer_id).await;
         self.publish_removed(printer_id);
         graceful
+    }
+
+    pub async fn stop_and_wait(&self, printer_id: &str) -> bool {
+        self.stop(printer_id).await
     }
 
     pub async fn clear_connection(&self, printer_id: &str, profile_resolved: bool) -> bool {
         let graceful = self.stop_task_and_wait(printer_id).await;
         if let Err(error) = self.repository.delete(printer_id) {
             eprintln!("farm3d: cannot clear telemetry cache: {error}");
+            self.record_cache_warning(Some(printer_id), "delete");
         }
         let now = self.now();
         let next = status_from_parts(
@@ -625,17 +738,6 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         graceful
     }
 
-    fn stop_task(&self, printer_id: &str) {
-        if let Some(task) = self
-            .tasks
-            .lock()
-            .expect("supervisor map lock")
-            .remove(printer_id)
-        {
-            let _ = task.stop.send(true);
-            task.handle.abort();
-        }
-    }
     async fn stop_task_and_wait(&self, printer_id: &str) -> bool {
         let task = self
             .tasks
@@ -675,10 +777,12 @@ fn apply_observation_to<R: tauri::Runtime>(
     app: &AppHandle<R>,
     statuses: &StatusMap,
     repository: &StatusRepository,
+    cache_warnings: &Mutex<Vec<StatusCacheWarning>>,
     id: &str,
     observation: ConnectionObservation,
     setup: PrinterSetupFacts,
     now: DateTime<Utc>,
+    epoch: u64,
 ) {
     let (previous, hydrated) = statuses.status_and_hydration(id);
     let write = match (&previous, &observation) {
@@ -690,14 +794,7 @@ fn apply_observation_to<R: tauri::Runtime>(
         (_, ConnectionObservation::Telemetry(_)) => Some(SnapshotWrite::Periodic),
         _ => None,
     };
-    let live = matches!(
-        &observation,
-        ConnectionObservation::Telemetry(_)
-            | ConnectionObservation::Health {
-                state: ConnectionState::Online,
-                ..
-            }
-    );
+    let telemetry_observed = matches!(&observation, ConnectionObservation::Telemetry(_));
     let next = merge_status(previous.as_ref(), observation, setup, hydrated, now);
     if let Some(write) = write {
         let snapshot = StoredTelemetrySnapshot {
@@ -710,10 +807,20 @@ fn apply_observation_to<R: tauri::Runtime>(
         };
         if let Err(error) = repository.save_if_due(&snapshot, write) {
             eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+            cache_warnings
+                .lock()
+                .expect("cache warning lock")
+                .push(StatusCacheWarning {
+                    printer_id: Some(id.to_string()),
+                    operation: "save",
+                });
         }
     }
-    let event = statuses.publish_changed(id, next, hydrated && !live);
-    let _ = app.emit(STATUS_EVENT, event);
+    if let Some(event) =
+        statuses.publish_changed_if_current(id, epoch, next, hydrated && !telemetry_observed)
+    {
+        let _ = app.emit(STATUS_EVENT, event);
+    }
 }
 
 fn apply_error_to<R: tauri::Runtime>(
@@ -827,13 +934,44 @@ mod tests {
         let statuses = StatusMap::default();
         let status = PrinterStatus::new(ConnectionState::Online);
         let event = statuses.publish_changed("prn-1", status, false);
-        let PrinterStatusEventPayload::Changed { status } = event.payload else {
+        let PrinterStatusEventPayload::Changed { ref status } = event.payload else {
             panic!("expected changed payload")
         };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
             serde_json::to_value(statuses.backfill().statuses[0].status.clone()).unwrap()
         );
+    }
+
+    #[test]
+    fn generated_status_event_is_the_emitted_envelope_not_a_wrapper() {
+        let event = StatusMap::default().publish_changed(
+            "prn-1",
+            PrinterStatus::new(ConnectionState::Online),
+            false,
+        );
+        let value = serde_json::to_value(event).unwrap();
+
+        assert!(value.get("event").is_none());
+        assert_eq!(value["type"], "printer.status.changed");
+        assert_eq!(value["payload"]["type"], "changed");
+    }
+
+    #[test]
+    fn terminal_removal_fences_an_accepted_buffered_observation() {
+        let statuses = StatusMap::default();
+        let epoch = statuses.begin_supervision("prn-1");
+        statuses.publish_removed("prn-1");
+
+        let republished = statuses.publish_changed_if_current(
+            "prn-1",
+            epoch,
+            PrinterStatus::new(ConnectionState::Online),
+            false,
+        );
+
+        assert!(republished.is_none());
+        assert!(statuses.backfill().statuses.is_empty());
     }
 
     #[test]
@@ -859,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn liveness_does_not_extend_the_telemetry_freshness_window() {
+    fn liveness_extends_freshness_only_after_live_telemetry() {
         let observed_at = Utc.with_ymd_and_hms(2026, 9, 18, 12, 0, 0).unwrap();
         let telemetry = PrinterTelemetry {
             host_activity: HostActivity::Idle,
@@ -892,7 +1030,42 @@ mod tests {
         );
 
         assert_eq!(status.last_observed_at, live.last_observed_at);
-        assert_eq!(status.fresh_until, live.fresh_until);
+        assert_ne!(status.fresh_until, live.fresh_until);
+        assert_eq!(status.freshness, TelemetryFreshness::Fresh);
+    }
+
+    #[test]
+    fn online_health_keeps_hydrated_cache_telemetry_stale() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 18, 12, 0, 31).unwrap();
+        let cached = merge_status(
+            None,
+            ConnectionObservation::Telemetry(PrinterTelemetry {
+                host_activity: HostActivity::Idle,
+                host_activity_name: Some("standby".to_string()),
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            }),
+            PrinterSetupFacts::complete(),
+            false,
+            now - ChronoDuration::seconds(31),
+        );
+        let status = merge_status(
+            Some(&cached),
+            ConnectionObservation::Health {
+                state: ConnectionState::Online,
+                observed_at: format_time(now),
+            },
+            PrinterSetupFacts::complete(),
+            true,
+            now,
+        );
+
+        assert_eq!(status.telemetry.nozzle_temp_c, Some(215.0));
         assert_eq!(status.freshness, TelemetryFreshness::Stale);
     }
 
@@ -934,6 +1107,136 @@ mod tests {
 
         assert_eq!(status.telemetry.nozzle_temp_c, Some(215.0));
         assert_eq!(status.freshness, TelemetryFreshness::Stale);
+    }
+
+    #[tokio::test]
+    async fn supervisor_transitions_preserve_setup_incomplete_facts() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::with_clock_and_factory(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+            || Utc.with_ymd_and_hms(2026, 9, 18, 12, 0, 0).unwrap(),
+            |_config, _key| None,
+        );
+
+        manager
+            .start(
+                "prn-1".to_string(),
+                ConnectionConfig {
+                    kind: "unsupported".to_string(),
+                    host: "printer.local".to_string(),
+                    port: 7125,
+                    use_tls: false,
+                    credential_ref: None,
+                },
+                None,
+                PrinterSetupFacts {
+                    has_usable_connection: true,
+                    profile_resolved: false,
+                },
+            )
+            .await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            manager.statuses()["prn-1"].operational_state,
+            OperationalState::SetupIncomplete
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_error_retains_live_readings_as_stale() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::new(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+        );
+        manager.apply_observation(
+            "prn-1",
+            ConnectionObservation::Telemetry(PrinterTelemetry {
+                host_activity: HostActivity::Printing,
+                host_activity_name: Some("printing".to_string()),
+                job_name: None,
+                progress: Some(0.5),
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            }),
+            PrinterSetupFacts::complete(),
+        );
+        manager
+            .report_error("prn-1", "unreachable", PrinterSetupFacts::complete())
+            .await;
+
+        let status = manager.statuses()["prn-1"].clone();
+        assert_eq!(status.telemetry.nozzle_temp_c, Some(215.0));
+        assert_eq!(status.operational_state, OperationalState::Error);
+        assert_eq!(status.freshness, TelemetryFreshness::Stale);
+    }
+
+    #[test]
+    fn cache_write_failure_is_reported_without_replacing_live_status() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::new(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+        );
+        manager.apply_observation(
+            "prn-1",
+            ConnectionObservation::Telemetry(PrinterTelemetry {
+                host_activity: HostActivity::Idle,
+                host_activity_name: None,
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(f64::NAN),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            }),
+            PrinterSetupFacts::complete(),
+        );
+
+        assert_eq!(
+            manager.statuses()["prn-1"].connection_state,
+            ConnectionState::Online
+        );
+        assert_eq!(manager.cache_warnings()[0].operation, "save");
+    }
+
+    #[test]
+    fn cache_read_failure_is_reported_without_blocking_manager_startup() {
+        let (_root, _lease, storage) = crate::test_storage();
+        PrinterRepository::new(Arc::clone(&storage))
+            .create(StoredPrinter {
+                id: "prn-1".to_string(),
+                name: "Corrupt cache".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO printer_status_snapshots (printer_id, telemetry_json, last_observed_at, persisted_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params!["prn-1", "{}", "2026-09-18T12:00:00Z", "2026-09-18T12:00:00Z"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let app = tauri::test::mock_app();
+
+        let manager = ConnectionManager::new(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+        );
+
+        assert!(manager.statuses().is_empty());
+        assert_eq!(manager.cache_warnings()[0].operation, "hydrate");
     }
 
     #[test]

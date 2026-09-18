@@ -11,8 +11,8 @@ use farm3d_lib::connections::commands::{ConnectionSubmission, CredentialStoreInf
 use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
 use farm3d_lib::connections::supervisor::{
-    PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEventContract,
-    PrinterStatusEventPayload, PrinterStatusEventType, PrinterStatusRow,
+    PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEvent, PrinterStatusEventPayload,
+    PrinterStatusEventType, PrinterStatusRow,
 };
 use farm3d_lib::connections::{
     status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
@@ -210,7 +210,7 @@ fn export_registry() -> Vec<Export> {
         export::<PrinterSetupFacts>(),
         export::<PrinterStatusEventType>(),
         export::<PrinterStatusEventPayload>(),
-        export::<PrinterStatusEventContract>(),
+        export::<PrinterStatusEvent>(),
         export::<PrinterStatusRow>(),
         export::<PrinterStatusBackfill>(),
         export::<BedShape>(),
@@ -618,13 +618,13 @@ fn operational_policy_contracts_export_and_serialize_camel_case_values() {
             "operational": [OperationalState::SetupIncomplete, OperationalState::Ready],
             "readiness": PrinterReadiness {
                 state: ReadinessState::NotReady,
-                reason: Some(ReadinessReason::TelemetryStale),
+                reason: Some(ReadinessReason::StaleTelemetry),
             },
             "freshness": TelemetryFreshness::Stale,
         }),
         serde_json::json!({
             "operational": ["setupIncomplete", "ready"],
-            "readiness": { "state": "notReady", "reason": "telemetryStale" },
+            "readiness": { "state": "notReady", "reason": "staleTelemetry" },
             "freshness": "stale",
         })
     );

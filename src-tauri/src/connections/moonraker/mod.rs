@@ -234,10 +234,7 @@ impl PrinterConnection for MoonrakerConnection {
         // than assumed from the socket being open.
         let mut state = ConnectionState::Online;
 
-        let mut liveness = tokio::time::interval_at(
-            tokio::time::Instant::now() + LIVENESS_INTERVAL,
-            LIVENESS_INTERVAL,
-        );
+        let mut liveness = liveness_interval();
         loop {
             tokio::select! {
                 _ = liveness.tick() => {
@@ -270,6 +267,13 @@ impl PrinterConnection for MoonrakerConnection {
             }
         }
     }
+}
+
+fn liveness_interval() -> tokio::time::Interval {
+    tokio::time::interval_at(
+        tokio::time::Instant::now() + LIVENESS_INTERVAL,
+        LIVENESS_INTERVAL,
+    )
 }
 
 /// Returns true when supervision has dropped the receiver.
@@ -328,5 +332,27 @@ mod tests {
         // empty one would be rejected where sending none is accepted.
         let request = upgrade_request(&config(false), None).unwrap();
         assert!(request.headers().get("X-Api-Key").is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn liveness_scheduler_waits_ten_seconds_before_emitting_health() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut liveness = liveness_interval();
+        let sender = tokio::spawn(async move {
+            liveness.tick().await;
+            send_health(&tx, ConnectionState::Online).await
+        });
+
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        tokio::time::advance(LIVENESS_INTERVAL).await;
+        assert!(!sender.await.unwrap());
+        assert!(matches!(
+            rx.recv().await,
+            Some(ConnectionObservation::Health {
+                state: ConnectionState::Online,
+                ..
+            })
+        ));
     }
 }

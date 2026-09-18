@@ -157,11 +157,15 @@ pub fn restore_stored_connections<R: tauri::Runtime>(
                         }
                     }
                 };
-                manager.start(
+                tauri::async_runtime::block_on(manager.start(
                     stored.id.clone(),
                     config,
                     api_key.map(zeroize::Zeroizing::new),
-                );
+                    connections::supervisor::PrinterSetupFacts {
+                        has_usable_connection: true,
+                        profile_resolved: stored.last_known_good.is_some(),
+                    },
+                ));
             }
         }
     }
@@ -186,13 +190,11 @@ fn restore_persisted_connections<R: tauri::Runtime>(
                     .map(|reference| store.get(reference).ok().flatten().is_some())
                     .unwrap_or(true)
         });
-        manager.reconcile_printer(
-            &printer.id,
-            connections::supervisor::PrinterSetupFacts {
-                has_usable_connection,
-                profile_resolved,
-            },
-        );
+        let setup = connections::supervisor::PrinterSetupFacts {
+            has_usable_connection,
+            profile_resolved,
+        };
+        manager.reconcile_printer(&printer.id, setup);
         let Some(config) = printer.connection else {
             continue;
         };
@@ -212,7 +214,12 @@ fn restore_persisted_connections<R: tauri::Runtime>(
             },
             None => None,
         };
-        manager.start(printer.id, config, credential.map(zeroize::Zeroizing::new));
+        tauri::async_runtime::block_on(manager.start(
+            printer.id,
+            config,
+            credential.map(zeroize::Zeroizing::new),
+            setup,
+        ));
     }
     Ok(())
 }

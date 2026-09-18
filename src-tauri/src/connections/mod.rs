@@ -100,7 +100,7 @@ impl PrinterStatus {
             operational_state: OperationalState::Unknown,
             readiness: PrinterReadiness {
                 state: ReadinessState::NotReady,
-                reason: Some(ReadinessReason::TelemetryUnavailable),
+                reason: Some(ReadinessReason::UnknownState),
             },
             freshness: TelemetryFreshness::Unavailable,
             updated_at: crate::printers::now_rfc3339(),

@@ -50,9 +50,9 @@ pub enum ReadinessReason {
     ConnectionError,
     Offline,
     Refreshing,
-    TelemetryUnavailable,
-    TelemetryStale,
+    StaleTelemetry,
     PrinterBusy,
+    UnknownState,
 }
 
 /// The readiness state and its explanatory reason, when one exists.
@@ -126,18 +126,18 @@ pub fn evaluate_operational_status(
     } else if freshness == TelemetryFreshness::Unavailable {
         (
             OperationalState::Unknown,
-            Some(ReadinessReason::TelemetryUnavailable),
+            Some(ReadinessReason::UnknownState),
         )
     } else if freshness == TelemetryFreshness::Stale {
         (
             OperationalState::Unknown,
-            Some(ReadinessReason::TelemetryStale),
+            Some(ReadinessReason::StaleTelemetry),
         )
     } else {
         match input.host_activity {
             HostActivity::Unknown => (
                 OperationalState::Unknown,
-                Some(ReadinessReason::TelemetryUnavailable),
+                Some(ReadinessReason::UnknownState),
             ),
             HostActivity::Printing => (
                 OperationalState::Printing,
@@ -248,7 +248,7 @@ mod tests {
             (
                 input(HostActivity::Unknown),
                 OperationalState::Unknown,
-                Some(ReadinessReason::TelemetryUnavailable),
+                Some(ReadinessReason::UnknownState),
             ),
             (
                 input(HostActivity::Printing),
@@ -309,19 +309,19 @@ mod tests {
                 stale,
                 TelemetryFreshness::Stale,
                 OperationalState::Unknown,
-                Some(ReadinessReason::TelemetryStale),
+                Some(ReadinessReason::StaleTelemetry),
             ),
             (
                 cached,
                 TelemetryFreshness::Stale,
                 OperationalState::Unknown,
-                Some(ReadinessReason::TelemetryStale),
+                Some(ReadinessReason::StaleTelemetry),
             ),
             (
                 unavailable,
                 TelemetryFreshness::Unavailable,
                 OperationalState::Unknown,
-                Some(ReadinessReason::TelemetryUnavailable),
+                Some(ReadinessReason::UnknownState),
             ),
             (
                 connection_error,

@@ -324,7 +324,11 @@ fn complete_f1_mock_runtime_tracer_crosses_migration_restart_events_and_document
             event_tx.send(event.payload().to_string()).unwrap();
         },
     );
-    manager.report_error(&created_id, "safe tracer status");
+    tauri::async_runtime::block_on(manager.report_error(
+        &created_id,
+        "safe tracer status",
+        farm3d_lib::connections::supervisor::PrinterSetupFacts::complete(),
+    ));
     let event: Value = serde_json::from_str(&event_rx.recv().unwrap()).unwrap();
     let backfill = invoke(&webview, "printer_statuses", json!({"contractVersion":1})).unwrap();
     assert_eq!(event["sequence"], backfill["data"]["snapshotSequence"]);

@@ -349,6 +349,10 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         change,
     )?;
     let updated = committed.printer;
+    let profile_resolved =
+        crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &updated.catalog_ref)
+            .0
+            .is_some();
     let committed_config = updated
         .connection
         .clone()
@@ -366,7 +370,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
                     &id,
                     crate::connections::supervisor::PrinterSetupFacts {
                         has_usable_connection: false,
-                        profile_resolved: true,
+                        profile_resolved,
                     },
                 );
                 warnings.push(OperationWarning::credential_required(&id));
@@ -376,11 +380,18 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         _ => (None, true),
     };
     if credential_ready {
-        services.manager.start(
-            id.clone(),
-            committed_config,
-            api_key.map(zeroize::Zeroizing::new),
-        );
+        services
+            .manager
+            .start(
+                id.clone(),
+                committed_config,
+                api_key.map(zeroize::Zeroizing::new),
+                crate::connections::supervisor::PrinterSetupFacts {
+                    has_usable_connection: true,
+                    profile_resolved,
+                },
+            )
+            .await;
     }
     if committed.cleanup_pending {
         warnings.push(OperationWarning::cleanup());

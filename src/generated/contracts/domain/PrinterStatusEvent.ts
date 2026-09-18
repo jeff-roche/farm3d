@@ -3,4 +3,8 @@ import type { EventEnvelope } from "../event/EventEnvelope";
 import type { PrinterStatusEventPayload } from "./PrinterStatusEventPayload";
 import type { PrinterStatusEventType } from "./PrinterStatusEventType";
 
-export type PrinterStatusEventContract = { event: EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>, };
+/**
+ * The exact envelope emitted on [`STATUS_EVENT`]. The transparent newtype
+ * gives ts-rs a named generated contract without changing the wire shape.
+ */
+export type PrinterStatusEvent = EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>;

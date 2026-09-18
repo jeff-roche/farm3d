@@ -3,4 +3,4 @@
 /**
  * The policy reason for a non-ready printer.
  */
-export type ReadinessReason = "setupIncomplete" | "connectionError" | "offline" | "refreshing" | "telemetryUnavailable" | "telemetryStale" | "printerBusy";
+export type ReadinessReason = "setupIncomplete" | "connectionError" | "offline" | "refreshing" | "staleTelemetry" | "printerBusy" | "unknownState";

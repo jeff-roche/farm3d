@@ -46,8 +46,10 @@ F1 does **not** define schemas for Models, Projects, Model Source Revisions,
 Slice Revisions, Spools, Material Slots, Queue Entries, Jobs, Attention Events,
 Incidents, or immutable history. It does not add full-Farm backup/restore UI,
 diagnostics export, reset, OS deep-link registration, or new adapter protocols.
-Those remain with their owning phases. Raw host `jobState` and `jobName` remain
-telemetry and do not become Job records.
+Those remain with their owning phases. P1 supersedes the earlier raw host
+`jobState` treatment: adapters normalize it to canonical telemetry
+`hostActivity` (while retaining an optional `hostActivityName`) and `jobName`
+remains telemetry rather than becoming a Job record.
 
 ## Storage layout and injection
 
@@ -1048,7 +1050,11 @@ inventing an empty object.
 The only F1 frontend event name is `farm3d-event-v1`. Printer status uses:
 
 ```ts
-type PrinterStatusChanged = EventEnvelope<"printer.status.changed", PrinterStatus>;
+type PrinterStatusEvent = EventEnvelope<
+  "printer.status.changed" | "printer.status.removed",
+  { type: "changed"; status: PrinterStatus }
+  | { type: "removed" }
+>;
 
 type EventEnvelope<T extends string, P> = {
   contractVersion: 1;

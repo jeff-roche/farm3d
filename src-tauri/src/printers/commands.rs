@@ -627,11 +627,18 @@ pub async fn import_printers<R: tauri::Runtime>(
             );
             warnings.push(OperationWarning::credential_required(&printer.id));
         } else {
-            services.manager.start(
-                printer.id.clone(),
-                config,
-                credential.map(zeroize::Zeroizing::new),
-            );
+            services
+                .manager
+                .start(
+                    printer.id.clone(),
+                    config,
+                    credential.map(zeroize::Zeroizing::new),
+                    crate::connections::supervisor::PrinterSetupFacts {
+                        has_usable_connection: true,
+                        profile_resolved,
+                    },
+                )
+                .await;
         }
     }
     let resolved = stored
