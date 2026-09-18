@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn open_rejects_a_changed_applied_migration_checksum() {
+    fn open_rejects_a_changed_v1_migration_checksum() {
         let temp = tempfile::tempdir().expect("temporary root");
         let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
             .expect("storage paths");
@@ -279,7 +279,7 @@ mod tests {
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
             .execute(
-                "UPDATE schema_migrations SET checksum = ?1",
+                "UPDATE schema_migrations SET checksum = ?1 WHERE version = 1",
                 ["0".repeat(64)],
             )
             .expect("tamper checksum");
@@ -288,6 +288,29 @@ mod tests {
         let error = Storage::open(paths, &lease)
             .err()
             .expect("checksum mismatch must fail");
+
+        assert!(matches!(error, StorageError::MigrationFailed));
+    }
+
+    #[test]
+    fn open_rejects_a_changed_v2_migration_checksum() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
+            .expect("storage paths");
+        let lease = MetadataRootLease::acquire(&paths).expect("metadata lease");
+        drop(Storage::open(paths.clone(), &lease).expect("first open"));
+        let connection = rusqlite::Connection::open(paths.database()).expect("database");
+        connection
+            .execute(
+                "UPDATE schema_migrations SET checksum = ?1 WHERE version = 2",
+                ["0".repeat(64)],
+            )
+            .expect("tamper v2 checksum");
+        drop(connection);
+
+        let error = Storage::open(paths, &lease)
+            .err()
+            .expect("v2 checksum mismatch must fail");
 
         assert!(matches!(error, StorageError::MigrationFailed));
     }
@@ -313,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn open_rejects_a_changed_applied_migration_name() {
+    fn open_rejects_a_changed_v1_migration_name() {
         let temp = tempfile::tempdir().expect("temporary root");
         let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
             .expect("storage paths");
@@ -331,6 +354,29 @@ mod tests {
         let error = Storage::open(paths, &lease)
             .err()
             .expect("migration name mismatch must fail");
+
+        assert!(matches!(error, StorageError::MigrationFailed));
+    }
+
+    #[test]
+    fn open_rejects_a_changed_v2_migration_name() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
+            .expect("storage paths");
+        let lease = MetadataRootLease::acquire(&paths).expect("metadata lease");
+        drop(Storage::open(paths.clone(), &lease).expect("first open"));
+        let connection = rusqlite::Connection::open(paths.database()).expect("database");
+        connection
+            .execute(
+                "UPDATE schema_migrations SET name = '0002_changed' WHERE version = 2",
+                [],
+            )
+            .expect("tamper v2 migration name");
+        drop(connection);
+
+        let error = Storage::open(paths, &lease)
+            .err()
+            .expect("v2 migration name mismatch must fail");
 
         assert!(matches!(error, StorageError::MigrationFailed));
     }
