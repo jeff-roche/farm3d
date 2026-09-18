@@ -465,12 +465,15 @@ mod tests {
             .expect("initial snapshot");
         storage
             .write(|transaction| {
-                transaction.execute(
+                transaction.execute_batch("PRAGMA ignore_check_constraints = ON")?;
+                let update = transaction.execute(
                     "UPDATE printer_status_snapshots
-                     SET telemetry_json = '{\"hostActivity\":\"printing\",\"rawAdapterPayload\":{}}'
+                     SET telemetry_json = '{not json'
                      WHERE printer_id = 'prn-1'",
                     [],
-                )?;
+                );
+                transaction.execute_batch("PRAGMA ignore_check_constraints = OFF")?;
+                update?;
                 Ok(())
             })
             .expect("corrupt cache fixture");
