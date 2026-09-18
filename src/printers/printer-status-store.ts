@@ -1,27 +1,30 @@
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import type { PrinterStatusBackfill } from "../generated/contracts/domain/PrinterStatusBackfill";
 import type { EventEnvelope } from "../generated/contracts/event/EventEnvelope";
-import type { PrinterStatus } from "./types";
+import type { PrinterStatus, PrinterStatusEventPayload, PrinterStatusEventType } from "./types";
 
 const MAX_BUFFERED_EVENTS = 1_024;
 const MAX_SEEN_EVENT_IDS = 4_096;
 
-export type StatusEvent = EventEnvelope<"printer.status.changed", PrinterStatus>;
+export type StatusEvent = EventEnvelope<PrinterStatusEventType, PrinterStatusEventPayload>;
 export type StatusBackfill = PrinterStatusBackfill;
+export type StatusSyncState = "syncing" | "current" | "uncertain";
 
 export interface StatusDependencies {
   printerIds: () => string[];
   listen: (handler: (event: StatusEvent) => void) => Promise<() => void>;
   backfill: () => Promise<StatusBackfill>;
   onStatus?: (printerId: string, status: PrinterStatus) => void;
+  onStatusRemoved?: (printerId: string) => void;
   schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   cancel?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
 export function createPrinterStatusStore(dependencies: StatusDependencies) {
-  const [state, setState] = createStore<{ statuses: Record<string, PrinterStatus>; stale: boolean }>({
+  const [state, setState] = createStore<{ statuses: Record<string, PrinterStatus>; stale: boolean; syncing: boolean }>({
     statuses: {},
     stale: true,
+    syncing: false,
   });
   let disposed = false;
   let unlisten: (() => void) | undefined;
@@ -31,7 +34,6 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
   let buffer: StatusEvent[] = [];
   const seen = new Set<string>();
   const seenOrder: string[] = [];
-  let syncing = false;
   let resyncRequested = false;
   let bufferOverflowed = false;
   let observedStreamDuringSync: string | undefined;
@@ -60,8 +62,14 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
     setState("stale", true);
   }
 
+  function deleteStatus(printerId: string): void {
+    setState("statuses", produce((statuses) => {
+      delete statuses[printerId];
+    }));
+  }
+
   function apply(event: StatusEvent): void {
-    if (!validPrinter(event.subject.id) || seen.has(event.eventId)) return;
+    if (seen.has(event.eventId)) return;
     if (event.streamId !== streamId || event.sequence !== sequence + 1) {
       enqueue(event);
       scheduleSync();
@@ -69,21 +77,26 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
     }
     remember(event.eventId);
     sequence = event.sequence;
-    setState("statuses", event.subject.id, event.payload);
-    dependencies.onStatus?.(event.subject.id, event.payload);
+    if (event.type === "printer.status.changed" && event.payload.type === "changed" && validPrinter(event.subject.id)) {
+      setState("statuses", event.subject.id, event.payload.status);
+      dependencies.onStatus?.(event.subject.id, event.payload.status);
+    } else if (event.type === "printer.status.removed" && event.payload.type === "removed") {
+      deleteStatus(event.subject.id);
+      dependencies.onStatusRemoved?.(event.subject.id);
+    }
   }
 
   function scheduleSync(): void {
-    if (disposed || syncing || retryTimer !== undefined) return;
+    if (disposed || state.syncing || retryTimer !== undefined) return;
     retryTimer = schedule(() => {
       retryTimer = undefined;
       void synchronize();
     }, Math.min(1_000 * 2 ** retryAttempt, 30_000));
   }
 
-  async function synchronize(): Promise<void> {
-    if (disposed || syncing) return;
-    syncing = true;
+  async function synchronize(): Promise<boolean> {
+    if (disposed || state.syncing) return false;
+    setState("syncing", true);
     buffering = true;
     const currentGeneration = ++generation;
     const capturedStream = streamId;
@@ -91,18 +104,18 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
     resyncRequested = false;
     try {
       const snapshot = await dependencies.backfill();
-      if (disposed || currentGeneration !== generation) return;
+      if (disposed || currentGeneration !== generation) return false;
       if (capturedStream === undefined && observedStreamDuringSync !== undefined && snapshot.streamId !== observedStreamDuringSync) {
         streamId = observedStreamDuringSync;
         resyncRequested = true;
         setState("stale", true);
-        return;
+        return true;
       }
       if (capturedStream !== undefined && snapshot.streamId !== capturedStream) {
         streamId = snapshot.streamId;
         resyncRequested = true;
         setState("stale", true);
-        return;
+        return true;
       }
       streamId = snapshot.streamId;
       sequence = snapshot.snapshotSequence;
@@ -125,18 +138,24 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
         resyncRequested = true;
       }
       setState("stale", resyncRequested || buffer.length > 0);
+      return true;
     } catch {
       buffering = false;
       retryAttempt += 1;
       setState("stale", true);
+      return false;
     } finally {
-      syncing = false;
+      setState("syncing", false);
       if (state.stale || resyncRequested) scheduleSync();
     }
   }
 
   function receive(event: StatusEvent): void {
-    if (disposed || event.contractVersion !== 1 || event.type !== "printer.status.changed") return;
+    if (
+      disposed
+      || event.contractVersion !== 1
+      || (event.type !== "printer.status.changed" && event.type !== "printer.status.removed")
+    ) return;
     if (buffering) {
       if (streamId === undefined) {
         observedStreamDuringSync = event.streamId;
@@ -151,30 +170,50 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
   }
 
   async function start(): Promise<void> {
-    unlisten = await dependencies.listen(receive);
+    try {
+      unlisten = await dependencies.listen(receive);
+    } catch {
+      throw new Error("Printer status monitoring could not start.");
+    }
     if (disposed) {
       unlisten();
       unlisten = undefined;
       return;
     }
-    await synchronize();
+    if (!await synchronize()) {
+      dispose();
+      throw new Error("Printer status monitoring could not start.");
+    }
+  }
+
+  function prune(): void {
+    for (const printerId of Object.keys(state.statuses)) {
+      if (!validPrinter(printerId)) {
+        deleteStatus(printerId);
+        dependencies.onStatusRemoved?.(printerId);
+      }
+    }
+  }
+
+  function dispose(): void {
+    disposed = true;
+    generation += 1;
+    buffer = [];
+    seen.clear();
+    seenOrder.length = 0;
+    if (retryTimer !== undefined) cancel(retryTimer);
+    retryTimer = undefined;
+    unlisten?.();
+    unlisten = undefined;
   }
 
   return {
     dependencies,
     statuses: () => state.statuses,
     stale: () => state.stale,
+    syncState: (): StatusSyncState => state.syncing ? "syncing" : state.stale ? "uncertain" : "current",
     start,
-    dispose() {
-      disposed = true;
-      generation += 1;
-      buffer = [];
-      seen.clear();
-      seenOrder.length = 0;
-      if (retryTimer !== undefined) cancel(retryTimer);
-      retryTimer = undefined;
-      unlisten?.();
-      unlisten = undefined;
-    },
+    prune,
+    dispose,
   };
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PrinterStatus } from "./types";
 
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => tauriMock);
@@ -52,6 +53,19 @@ function flattenRecord(record: typeof A_PRINTER_RECORD) {
   return { ...printer, ...profileResolution };
 }
 const A_RESOLVED_PRINTER = flattenRecord(A_PRINTER_RECORD);
+const printerStatus = (
+  connectionState: PrinterStatus["connectionState"],
+  overrides: Partial<PrinterStatus> = {},
+): PrinterStatus => ({
+  connectionState,
+  telemetry: { hostActivity: "idle" },
+  operationalState: connectionState === "online" ? "ready" : connectionState,
+  readiness: { state: connectionState === "online" ? "ready" : "notReady", reason: connectionState === "online" ? null : "offline" },
+  freshness: "fresh",
+  cacheWarnings: [],
+  updatedAt: "2026-08-20T14:02:11Z",
+  ...overrides,
+});
 
 describe("printer-store", () => {
   describe("under Tauri", () => {
@@ -111,22 +125,28 @@ describe("printer-store", () => {
       expect(printers()).toEqual([]);
     });
 
-    it("settles an applied Printers import from the authoritative returned set", async () => {
+    it("preserves runtime status only for Printers that survive an applied import", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
-      const { loadPrinters, importPrinters, printers } = await import("./printer-store");
+      const { applyStatus, loadPrinters, importPrinters, printers } = await import("./printer-store");
       await loadPrinters();
-      const importedRecord = { ...structuredClone(A_PRINTER_RECORD), id: "é-printer", revision: 1 };
+      const liveStatus = printerStatus("online");
+      applyStatus("prn-1", liveStatus);
+      const importedRecord = { ...structuredClone(A_PRINTER_RECORD), name: "Imported Bay 1", revision: 2 };
+      const createdRecord = { ...structuredClone(A_PRINTER_RECORD), id: "é-printer", revision: 1 };
       tauriMock.invoke.mockResolvedValue({
         contractVersion: 1,
         data: {
-          status: "applied", printers: [importedRecord], createdCount: 1,
-          updatedCount: 0, deletedCount: 1, warnings: [],
+          status: "applied", printers: [importedRecord, createdRecord], createdCount: 1,
+          updatedCount: 1, deletedCount: 0, warnings: [],
         },
       });
 
       await importPrinters();
 
-      expect(printers()).toEqual([flattenRecord(importedRecord)]);
+      expect(printers()).toEqual([
+        { ...flattenRecord(importedRecord), runtimeStatus: liveStatus },
+        flattenRecord(createdRecord),
+      ]);
     });
 
     it("sorts import revision preconditions by exact UTF-8 bytes", async () => {
@@ -174,11 +194,7 @@ describe("printer-store", () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [structuredClone(A_PRINTER_RECORD)] });
       const { loadPrinters, applyStatus, updatePrinter, printers } = await import("./printer-store");
       await loadPrinters();
-      applyStatus("prn-1", {
-        connectionState: "error",
-        error: "Could not reach the printer",
-        updatedAt: "2026-08-20T14:02:11Z",
-      });
+      applyStatus("prn-1", printerStatus("error", { error: "Could not reach the printer" }));
 
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: {
         ...structuredClone(A_PRINTER_RECORD),
@@ -209,9 +225,11 @@ describe("printer-store", () => {
         return Promise.resolve({ contractVersion: 1, data: command === "list_printers" ? [structuredClone(A_PRINTER_RECORD)] : { streamId: "stream-a", snapshotSequence: 0, statuses: [] } });
       });
 
-      const { loadPrinters, startStatusListener, printers } = await import("./printer-store");
+      const { loadPrinters, printerStatusSyncState, startStatusListener, printers } = await import("./printer-store");
       await loadPrinters();
+      expect(printerStatusSyncState()).toBe("syncing");
       const stop = await startStatusListener();
+      expect(printerStatusSyncState()).toBe("current");
 
       expect(eventMock.listen).toHaveBeenCalledWith("farm3d-event-v1", expect.any(Function));
       expect(calls.slice(-2)).toEqual([
@@ -228,33 +246,75 @@ describe("printer-store", () => {
           type: "printer.status.changed",
           subject: { kind: "printer", id: "prn-1" },
           payload: {
-            connectionState: "online",
-            jobState: "printing",
-            jobName: "benchy.gcode",
-            progress: 0.42,
-            nozzleTempC: 210.5,
-            nozzleTargetC: 210,
-            bedTempC: 60.1,
-            bedTargetC: 60,
-            printDurationS: 812.5,
-            updatedAt: "2026-08-20T14:02:11Z",
+            type: "changed",
+            status: printerStatus("online", {
+              telemetry: {
+                hostActivity: "printing",
+                jobName: "benchy.gcode",
+                progress: 0.42,
+                nozzleTempC: 210.5,
+                nozzleTargetC: 210,
+                bedTempC: 60.1,
+                bedTargetC: 60,
+                printDurationS: 812.5,
+              },
+              operationalState: "printing",
+              readiness: { state: "notReady", reason: "printerBusy" },
+            }),
           },
         },
       });
 
-      expect(printers()[0].runtimeStatus).toEqual({
-        connectionState: "online",
-        jobState: "printing",
-        jobName: "benchy.gcode",
-        progress: 0.42,
-        nozzleTempC: 210.5,
-        nozzleTargetC: 210,
-        bedTempC: 60.1,
-        bedTargetC: 60,
-        printDurationS: 812.5,
-        updatedAt: "2026-08-20T14:02:11Z",
+      expect(printers()[0].runtimeStatus).toEqual(printerStatus("online", {
+        telemetry: {
+          hostActivity: "printing",
+          jobName: "benchy.gcode",
+          progress: 0.42,
+          nozzleTempC: 210.5,
+          nozzleTargetC: 210,
+          bedTempC: 60.1,
+          bedTargetC: 60,
+          printDurationS: 812.5,
+        },
+        operationalState: "printing",
+        readiness: { state: "notReady", reason: "printerBusy" },
+      }));
+      handler!({
+        payload: {
+          contractVersion: 1,
+          streamId: "stream-a",
+          sequence: 2,
+          eventId: "event-2",
+          occurredAt: "2026-08-20T14:02:12Z",
+          type: "printer.status.removed",
+          subject: { kind: "printer", id: "prn-1" },
+          payload: { type: "removed" },
+        },
       });
+      expect(printers()[0].runtimeStatus).toBeUndefined();
       stop();
+      expect(unlisten).toHaveBeenCalledOnce();
+    });
+
+    it("rejects listener startup errors with a user-safe message", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      eventMock.listen.mockRejectedValue(new Error("socket token leaked"));
+      const { loadPrinters, startStatusListener } = await import("./printer-store");
+      await loadPrinters();
+
+      await expect(startStatusListener()).rejects.toThrow("Printer status monitoring could not start.");
+    });
+
+    it("rejects backfill startup errors and disposes the listener", async () => {
+      const unlisten = vi.fn();
+      eventMock.listen.mockResolvedValue(unlisten);
+      tauriMock.invoke.mockImplementation((command: string) => command === "list_printers"
+        ? Promise.resolve({ contractVersion: 1, data: [A_PRINTER_RECORD] })
+        : Promise.reject(new Error("cache path exposed")));
+      const { loadPrinters, startStatusListener } = await import("./printer-store");
+      await loadPrinters();
+
+      await expect(startStatusListener()).rejects.toThrow("Printer status monitoring could not start.");
       expect(unlisten).toHaveBeenCalledOnce();
     });
 
@@ -391,13 +451,11 @@ describe("printer-store", () => {
       await store.loadPrinters();
       const [first, second] = store.printers();
 
-      store.applyStatus(first.id, {
-        connectionState: "online",
-        nozzleTempC: 201.4,
-        updatedAt: "2026-08-20T14:02:11Z",
-      });
+      store.applyStatus(first.id, printerStatus("online", {
+        telemetry: { hostActivity: "idle", nozzleTempC: 201.4 },
+      }));
 
-      expect(store.printers()[0].runtimeStatus?.nozzleTempC).toBe(201.4);
+      expect(store.printers()[0].runtimeStatus?.telemetry.nozzleTempC).toBe(201.4);
       expect(store.printers().find((p) => p.id === second.id)?.runtimeStatus).toBeUndefined();
     });
 
@@ -406,10 +464,7 @@ describe("printer-store", () => {
       const store = await import("./printer-store");
       await store.loadPrinters();
       const before = store.printers().length;
-      store.applyStatus("prn-ghost", {
-        connectionState: "online",
-        updatedAt: "2026-08-20T14:02:11Z",
-      });
+      store.applyStatus("prn-ghost", printerStatus("online"));
       expect(store.printers()).toHaveLength(before);
     });
 

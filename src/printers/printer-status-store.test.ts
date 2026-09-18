@@ -4,6 +4,11 @@ import type { PrinterStatus } from "./types";
 
 const status = (state: PrinterStatus["connectionState"]): PrinterStatus => ({
   connectionState: state,
+  telemetry: { hostActivity: "idle" },
+  operationalState: state === "online" ? "ready" : state,
+  readiness: { state: state === "online" ? "ready" : "notReady", reason: state === "online" ? null : "offline" },
+  freshness: "fresh",
+  cacheWarnings: [],
   updatedAt: "2026-09-17T00:00:00Z",
 });
 
@@ -15,11 +20,30 @@ const event = (sequence: number, state: PrinterStatus["connectionState"]): Statu
   occurredAt: "2026-09-17T00:00:00Z",
   type: "printer.status.changed",
   subject: { kind: "printer", id: "prn-1" },
-  payload: status(state),
+  payload: { type: "changed", status: status(state) },
+});
+
+const removedEvent = (sequence: number): StatusEvent => ({
+  ...event(sequence, "offline"),
+  eventId: `removed-${sequence}`,
+  type: "printer.status.removed",
+  payload: { type: "removed" },
 });
 
 describe("printer status reconciliation", () => {
   afterEach(() => vi.useRealTimers());
+  it("reports current synchronization after the initial backfill", async () => {
+    const store = createPrinterStatusStore({
+      printerIds: () => ["prn-1"],
+      listen: async () => () => undefined,
+      backfill: async () => ({ streamId: "stream-a", snapshotSequence: 0, statuses: [], cacheWarnings: [] }),
+    });
+
+    expect(store.syncState()).toBe("uncertain");
+    await store.start();
+    expect(store.syncState()).toBe("current");
+  });
+
   it("replays an event received while backfill is in flight exactly once", async () => {
     let receive!: (event: StatusEvent) => void;
     let resolveBackfill!: (value: unknown) => void;
@@ -40,6 +64,7 @@ describe("printer status reconciliation", () => {
       streamId: "stream-a",
       snapshotSequence: 1,
       statuses: [{ printerId: "prn-1", status: status("connecting") }],
+      cacheWarnings: [],
     });
     await started;
     receive(event(2, "offline"));
@@ -51,9 +76,9 @@ describe("printer status reconciliation", () => {
     vi.useFakeTimers();
     let receive!: (event: StatusEvent) => void;
     const backfill = vi.fn()
-      .mockResolvedValueOnce({ streamId: "stream-a", snapshotSequence: 1, statuses: [] })
-      .mockResolvedValueOnce({ streamId: "stream-b", snapshotSequence: 4, statuses: [{ printerId: "prn-1", status: status("offline") }] })
-      .mockResolvedValueOnce({ streamId: "stream-b", snapshotSequence: 4, statuses: [{ printerId: "prn-1", status: status("online") }] });
+      .mockResolvedValueOnce({ streamId: "stream-a", snapshotSequence: 1, statuses: [], cacheWarnings: [] })
+      .mockResolvedValueOnce({ streamId: "stream-b", snapshotSequence: 4, statuses: [{ printerId: "prn-1", status: status("offline") }], cacheWarnings: [] })
+      .mockResolvedValueOnce({ streamId: "stream-b", snapshotSequence: 4, statuses: [{ printerId: "prn-1", status: status("online") }], cacheWarnings: [] });
     const store = createPrinterStatusStore({
       printerIds: () => ["prn-1"],
       listen: async (handler) => { receive = handler; return () => undefined; },
@@ -71,19 +96,51 @@ describe("printer status reconciliation", () => {
     store.dispose();
   });
 
-  it("retries a failed backfill and discards statuses for removed printers", async () => {
+  it("keeps a stale cached status visible when a later backfill fails", async () => {
     vi.useFakeTimers();
-    const backfill = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({
-      streamId: "stream-a", snapshotSequence: 1,
-      statuses: [{ printerId: "removed", status: status("online") }],
+    let receive!: (event: StatusEvent) => void;
+    const backfill = vi.fn()
+      .mockResolvedValueOnce({
+        streamId: "stream-a", snapshotSequence: 1,
+        statuses: [{ printerId: "prn-1", status: { ...status("online"), freshness: "stale" } }],
+        cacheWarnings: [],
+      })
+      .mockRejectedValueOnce(new Error("offline"));
+    const store = createPrinterStatusStore({
+      printerIds: () => ["prn-1"],
+      listen: async (handler) => { receive = handler; return () => undefined; },
+      backfill,
     });
-    const store = createPrinterStatusStore({ printerIds: () => ["prn-1"], listen: async () => () => undefined, backfill });
     await store.start();
+    receive(event(3, "online"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
     expect(store.stale()).toBe(true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(store.statuses()).toEqual({});
-    expect(store.stale()).toBe(false);
+    expect(store.syncState()).toBe("uncertain");
+    expect(store.statuses()["prn-1"].freshness).toBe("stale");
     store.dispose();
+  });
+
+  it("deletes status and notifies dependents when a removed event arrives", async () => {
+    const onStatusRemoved = vi.fn();
+    let receive!: (event: StatusEvent) => void;
+    const store = createPrinterStatusStore({
+      printerIds: () => ["prn-1"],
+      listen: async (handler) => { receive = handler; return () => undefined; },
+      backfill: async () => ({
+        streamId: "stream-a",
+        snapshotSequence: 1,
+        statuses: [{ printerId: "prn-1", status: status("online") }],
+        cacheWarnings: [],
+      }),
+      onStatusRemoved,
+    });
+    await store.start();
+
+    receive(removedEvent(2));
+
+    expect(store.statuses()["prn-1"]).toBeUndefined();
+    expect(onStatusRemoved).toHaveBeenCalledWith("prn-1");
   });
 
   it("unlistens when disposed before listener registration resolves", async () => {
@@ -113,6 +170,7 @@ describe("printer status reconciliation", () => {
         streamId: "stream-b",
         snapshotSequence: 2,
         statuses: [{ printerId: "prn-1", status: status("online") }],
+        cacheWarnings: [],
       });
     const store = createPrinterStatusStore({
       printerIds: () => ["prn-1"],
@@ -127,6 +185,7 @@ describe("printer status reconciliation", () => {
       streamId: "stream-a",
       snapshotSequence: 9,
       statuses: [{ printerId: "prn-1", status: status("offline") }],
+      cacheWarnings: [],
     });
     await started;
     await vi.advanceTimersByTimeAsync(1_000);
@@ -149,7 +208,7 @@ describe("printer status reconciliation", () => {
     const started = store.start();
     await Promise.resolve();
     for (let sequence = 1; sequence <= 1_025; sequence += 1) receive(event(sequence, "online"));
-    resolveBackfill({ streamId: "stream-a", snapshotSequence: 1_025, statuses: [] });
+    resolveBackfill({ streamId: "stream-a", snapshotSequence: 1_025, statuses: [], cacheWarnings: [] });
     await started;
 
     expect(store.stale()).toBe(true);
