@@ -13,7 +13,9 @@ use crate::connections::{
     ProbeResult,
 };
 use futures_util::{SinkExt, StreamExt};
-use protocol::{parse_frame, probe_result_from, rpc_request, subscribe_params, Frame, StatusSnapshot};
+use protocol::{
+    parse_frame, probe_result_from, rpc_request, subscribe_params, Frame, StatusSnapshot,
+};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -32,11 +34,21 @@ const ID_SUBSCRIBE: u64 = 3;
 
 pub struct MoonrakerConnection {
     config: ConnectionConfig,
-    api_key: Option<String>,
+    api_key: Option<zeroize::Zeroizing<String>>,
 }
 
 impl MoonrakerConnection {
     pub fn new(config: ConnectionConfig, api_key: Option<String>) -> Self {
+        Self {
+            config,
+            api_key: api_key.map(zeroize::Zeroizing::new),
+        }
+    }
+
+    pub fn with_zeroizing_secret(
+        config: ConnectionConfig,
+        api_key: Option<zeroize::Zeroizing<String>>,
+    ) -> Self {
         Self { config, api_key }
     }
 }
@@ -64,9 +76,8 @@ pub fn upgrade_request(
     Ok(request)
 }
 
-type Socket = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn connect(
     config: &ConnectionConfig,
@@ -86,7 +97,9 @@ async fn connect(
 fn classify(error: tokio_tungstenite::tungstenite::Error) -> ConnectionError {
     use tokio_tungstenite::tungstenite::Error as WsError;
     match &error {
-        WsError::Http(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => {
+        WsError::Http(response)
+            if response.status().as_u16() == 401 || response.status().as_u16() == 403 =>
+        {
             ConnectionError::Auth(format!("HTTP {}", response.status()))
         }
         _ => ConnectionError::Unreachable(error.to_string()),
@@ -118,12 +131,28 @@ async fn next_frame(socket: &mut Socket) -> Option<Frame> {
 #[async_trait::async_trait]
 impl PrinterConnection for MoonrakerConnection {
     async fn probe(&self) -> Result<ProbeResult, ConnectionError> {
-        let mut socket = connect(&self.config, self.api_key.as_deref()).await?;
-        send(&mut socket, rpc_request(ID_SERVER_INFO, "server.info", None)).await?;
-        send(&mut socket, rpc_request(ID_PRINTER_INFO, "printer.info", None)).await?;
+        let mut socket = connect(
+            &self.config,
+            self.api_key.as_ref().map(|value| value.as_str()),
+        )
+        .await?;
         send(
             &mut socket,
-            rpc_request(ID_SUBSCRIBE, "printer.objects.query", Some(subscribe_params())),
+            rpc_request(ID_SERVER_INFO, "server.info", None),
+        )
+        .await?;
+        send(
+            &mut socket,
+            rpc_request(ID_PRINTER_INFO, "printer.info", None),
+        )
+        .await?;
+        send(
+            &mut socket,
+            rpc_request(
+                ID_SUBSCRIBE,
+                "printer.objects.query",
+                Some(subscribe_params()),
+            ),
         )
         .await?;
 
@@ -183,10 +212,18 @@ impl PrinterConnection for MoonrakerConnection {
     }
 
     async fn subscribe(&self, tx: Sender<PrinterStatus>) -> Result<(), ConnectionError> {
-        let mut socket = connect(&self.config, self.api_key.as_deref()).await?;
+        let mut socket = connect(
+            &self.config,
+            self.api_key.as_ref().map(|value| value.as_str()),
+        )
+        .await?;
         send(
             &mut socket,
-            rpc_request(ID_SUBSCRIBE, "printer.objects.subscribe", Some(subscribe_params())),
+            rpc_request(
+                ID_SUBSCRIBE,
+                "printer.objects.subscribe",
+                Some(subscribe_params()),
+            ),
         )
         .await?;
 
@@ -236,12 +273,18 @@ mod tests {
 
     #[test]
     fn builds_a_plain_websocket_url() {
-        assert_eq!(websocket_url(&config(false)), "ws://voron.local:7125/websocket");
+        assert_eq!(
+            websocket_url(&config(false)),
+            "ws://voron.local:7125/websocket"
+        );
     }
 
     #[test]
     fn builds_a_tls_websocket_url() {
-        assert_eq!(websocket_url(&config(true)), "wss://voron.local:7125/websocket");
+        assert_eq!(
+            websocket_url(&config(true)),
+            "wss://voron.local:7125/websocket"
+        );
     }
 
     #[test]

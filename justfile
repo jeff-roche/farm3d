@@ -14,6 +14,10 @@ install-rust:
 test-rust:
     cargo test --manifest-path src-tauri/Cargo.toml
 
+# Regenerate TypeScript contracts from the Rust wire types
+gen-contracts:
+    cargo test --locked --manifest-path src-tauri/Cargo.toml --test export_contracts regenerate_contracts -- --ignored --exact
+
 # Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
 gen-catalog tag="v2.4.2":
     cargo run --manifest-path src-tauri/Cargo.toml --features catalog-generator --bin gen-catalog -- {{ tag }}

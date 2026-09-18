@@ -44,9 +44,10 @@ const CENTAURI_MODEL = { modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo 
 function existingPrinter(name: string): ResolvedPrinter {
   return {
     id: `prn-${name}`,
+    revision: 1,
     name,
-    group: "",
     notes: "",
+    overrides: {},
     catalogRef: {
       vendor: "Elegoo", model: "Elegoo Centauri Carbon",
       variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
@@ -71,7 +72,8 @@ function existingPrinter(name: string): ResolvedPrinter {
     inherited: {},
     profileDrift: [],
     unknownOverrideKeys: [],
-    connection: null,
+    createdAt: "",
+    updatedAt: "",
   };
 }
 

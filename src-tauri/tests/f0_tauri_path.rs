@@ -1,73 +1,77 @@
-#![cfg(target_os = "linux")]
-
-use std::io::ErrorKind;
-use std::net::{TcpListener, TcpStream};
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
 
-use farm3d_lib::catalog::Catalog;
-use farm3d_lib::connections::supervisor::ConnectionManager;
-use farm3d_lib::connections::ConnectionState;
-use farm3d_lib::restore_stored_connections;
+use farm3d_lib::bootstrap::BootstrapState;
+use farm3d_lib::persistence::{migrate_legacy, MetadataRootLease, Storage, StoragePaths};
+use farm3d_lib::printers::repository::PrinterRepository;
+use farm3d_lib::RuntimeServices;
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
-use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
+use tauri::test::{mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
-use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Listener, Manager, WebviewWindowBuilder};
 
-struct LoopbackEndpoint {
-    port: u16,
-    shutdown: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+#[derive(Default)]
+struct TracerDocuments {
+    settings_import: Mutex<Vec<u8>>,
+    printers_import: Mutex<Vec<u8>>,
+    settings_export: Mutex<Vec<u8>>,
+    printers_export: Mutex<Vec<u8>>,
 }
 
-impl LoopbackEndpoint {
-    fn start() -> Self {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        listener.set_nonblocking(true).unwrap();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let thread_shutdown = Arc::clone(&shutdown);
-        let thread = std::thread::spawn(move || {
-            while !thread_shutdown.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, _)) => close(stream),
-                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("loopback listener failed: {error}"),
-                }
-            }
-        });
-        Self {
-            port,
-            shutdown,
-            thread: Some(thread),
+impl farm3d_lib::document_io::DocumentIo for TracerDocuments {
+    fn open_json(
+        &self,
+        kind: farm3d_lib::document_io::DocumentKind,
+    ) -> Result<Option<PathBuf>, farm3d_lib::contracts::command::CommandError> {
+        Ok(Some(match kind {
+            farm3d_lib::document_io::DocumentKind::Settings => PathBuf::from("settings.json"),
+            farm3d_lib::document_io::DocumentKind::Printers => PathBuf::from("printers.json"),
+        }))
+    }
+
+    fn save_json(
+        &self,
+        kind: farm3d_lib::document_io::DocumentKind,
+    ) -> Result<Option<PathBuf>, farm3d_lib::contracts::command::CommandError> {
+        self.open_json(kind)
+    }
+
+    fn read(&self, path: &Path) -> Result<Vec<u8>, farm3d_lib::contracts::command::CommandError> {
+        Ok(if path.file_name().unwrap() == "settings.json" {
+            self.settings_import.lock().unwrap().clone()
+        } else {
+            self.printers_import.lock().unwrap().clone()
+        })
+    }
+
+    fn atomic_write(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<(), farm3d_lib::contracts::command::CommandError> {
+        if path.file_name().unwrap() == "settings.json" {
+            *self.settings_export.lock().unwrap() = bytes.to_vec();
+        } else {
+            *self.printers_export.lock().unwrap() = bytes.to_vec();
         }
+        Ok(())
     }
 }
 
-impl Drop for LoopbackEndpoint {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
-        }
-    }
-}
-
-fn close(stream: TcpStream) {
-    drop(stream);
+fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/persistence/v1")
+        .join(name)
 }
 
 fn invoke(
     webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
     command: &str,
-    body: serde_json::Value,
-) -> Result<serde_json::Value, serde_json::Value> {
+    body: Value,
+) -> Result<Value, Value> {
     tauri::test::get_ipc_response(
         webview,
         InvokeRequest {
@@ -80,141 +84,269 @@ fn invoke(
             invoke_key: INVOKE_KEY.to_string(),
         },
     )
-    .map(|response| response.deserialize::<Value>().unwrap())
+    .map(|response| response.deserialize().unwrap())
 }
 
-fn mock_app(
-    catalog: Arc<Catalog>,
-) -> (
-    tauri::App<MockRuntime>,
-    Arc<ConnectionManager<MockRuntime>>,
-    WebviewWindow<MockRuntime>,
-) {
+#[test]
+fn f0_fixture_migrates_and_survives_repository_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let metadata = temp.path().join("metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    fs::copy(fixture("settings.json"), metadata.join("settings.json")).unwrap();
+    fs::copy(fixture("printers.json"), metadata.join("printers.json")).unwrap();
+    fs::copy(
+        fixture("credentials.json"),
+        metadata.join("credentials.json"),
+    )
+    .unwrap();
+    let paths = StoragePaths::new(&metadata, temp.path().join("data")).unwrap();
+    let lease = MetadataRootLease::acquire(&paths).unwrap();
+    let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
+    migrate_legacy(&storage).unwrap();
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let before = repository.list().unwrap();
+    let target = before
+        .iter()
+        .find(|printer| printer.id == "prn-f0-connected")
+        .unwrap();
+    let updated = repository
+        .update(&target.id, target.revision, |printer| {
+            printer.notes = "survives restart".to_string()
+        })
+        .unwrap();
+    assert_eq!(updated.revision, 2);
+    drop((repository, storage));
+
+    let reopened = Arc::new(Storage::open(paths, &lease).unwrap());
+    let after = PrinterRepository::new(reopened)
+        .get("prn-f0-connected")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (after.revision, after.notes.as_str()),
+        (2, "survives restart")
+    );
+    let database = fs::read(metadata.join("farm3d.sqlite3")).unwrap();
+    assert!(!String::from_utf8_lossy(&database).contains("F0_FIXTURE_SENTINEL"));
+}
+
+#[test]
+fn versioned_mock_runtime_command_mutation_survives_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+    let lease = MetadataRootLease::acquire(&paths).unwrap();
+    let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
+    let catalog_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
+    let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
+    let model = &catalog.models[0];
+    let variant = &model.variants[0];
     let app = mock_builder()
-        .manage(catalog)
         .invoke_handler(tauri::generate_handler![
-            farm3d_lib::printers::create_printer,
-            farm3d_lib::printers::list_printers,
-            farm3d_lib::connections::commands::set_printer_connection,
+            farm3d_lib::printers::commands::create_printer,
+            farm3d_lib::printers::commands::list_printers
+        ])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
+        app.handle().clone(),
+    ));
+    let documents: Arc<dyn farm3d_lib::document_io::DocumentIo> = Arc::new(
+        farm3d_lib::document_io::NativeDocumentIo::new(app.handle().clone()),
+    );
+    app.manage(BootstrapState::ready_with(Arc::new(
+        RuntimeServices::for_test(
+            Arc::clone(&storage),
+            Arc::clone(&catalog),
+            manager,
+            documents,
+        ),
+    )));
+    let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let created = invoke(&webview, "create_printer", json!({"contractVersion":1,
+        "name":"F1 tracer", "catalogRef":{"vendor":model.vendor,"model":model.model,"variant":variant.variant,"modelId":model.model_id,"printerVariant":variant.printer_variant}
+    })).unwrap();
+    assert_eq!(created["contractVersion"], 1);
+    let id = created["data"]["printer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    drop((webview, app, storage));
+
+    let reopened = Arc::new(Storage::open(paths, &lease).unwrap());
+    let restarted = mock_builder()
+        .invoke_handler(tauri::generate_handler![
+            farm3d_lib::printers::commands::list_printers
+        ])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
+        restarted.handle().clone(),
+    ));
+    let documents: Arc<dyn farm3d_lib::document_io::DocumentIo> = Arc::new(
+        farm3d_lib::document_io::NativeDocumentIo::new(restarted.handle().clone()),
+    );
+    restarted.manage(BootstrapState::ready_with(Arc::new(
+        RuntimeServices::for_test(Arc::clone(&reopened), catalog, manager, documents),
+    )));
+    let restarted_webview = WebviewWindowBuilder::new(&restarted, "main", Default::default())
+        .build()
+        .unwrap();
+    let listed = invoke(
+        &restarted_webview,
+        "list_printers",
+        json!({"contractVersion":1}),
+    )
+    .unwrap();
+    assert!(listed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|printer| printer["id"] == id));
+    let serialized = serde_json::to_string(&listed).unwrap();
+    assert!(!serialized.contains("F0_FIXTURE_SENTINEL"));
+}
+
+#[test]
+fn complete_f1_mock_runtime_tracer_crosses_migration_restart_events_and_documents() {
+    let temp = tempfile::tempdir().unwrap();
+    let metadata = temp.path().join("metadata");
+    fs::create_dir_all(&metadata).unwrap();
+    for name in ["settings.json", "printers.json", "credentials.json"] {
+        fs::copy(fixture(name), metadata.join(name)).unwrap();
+    }
+    let paths = StoragePaths::new(&metadata, temp.path().join("data")).unwrap();
+    let lease = MetadataRootLease::acquire(&paths).unwrap();
+    let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
+    migrate_legacy(&storage).unwrap();
+    let catalog_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
+    let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
+    let documents = Arc::new(TracerDocuments::default());
+    *documents.settings_import.lock().unwrap() = serde_json::to_vec(&json!({
+        "schemaVersion": 1,
+        "exportedAt": "2026-09-17T00:00:00Z",
+        "settings": {"themeMode": "farm3d-light"}
+    }))
+    .unwrap();
+
+    let app = mock_builder()
+        .invoke_handler(tauri::generate_handler![
+            farm3d_lib::settings::commands::load_settings,
+            farm3d_lib::settings::commands::export_settings,
+            farm3d_lib::settings::commands::import_settings,
+            farm3d_lib::printers::commands::list_printers,
+            farm3d_lib::printers::commands::create_printer,
+            farm3d_lib::printers::commands::export_printers,
+            farm3d_lib::printers::commands::import_printers,
             farm3d_lib::connections::commands::printer_statuses,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
-    let manager = Arc::new(ConnectionManager::new(app.handle().clone()));
-    app.manage(Arc::clone(&manager));
+    let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
+        app.handle().clone(),
+    ));
+    let document_boundary: Arc<dyn farm3d_lib::document_io::DocumentIo> = documents.clone();
+    app.manage(BootstrapState::ready_with(Arc::new(
+        RuntimeServices::for_test(
+            Arc::clone(&storage),
+            Arc::clone(&catalog),
+            Arc::clone(&manager),
+            document_boundary,
+        ),
+    )));
     let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
         .unwrap();
-    (app, manager, webview)
-}
 
-#[test]
-fn ipc_create_connection_survives_restart_and_backfills_status() {
-    let status = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "ipc_create_connection_survives_restart_and_backfills_status_isolated_child",
-            "--ignored",
-            "--nocapture",
-        ])
-        .status()
-        .unwrap();
+    let initial = invoke(&webview, "list_printers", json!({"contractVersion":1})).unwrap();
+    assert_eq!(initial["data"].as_array().unwrap().len(), 2);
+    let model = &catalog.models[0];
+    let variant = &model.variants[0];
+    let created = invoke(&webview, "create_printer", json!({"contractVersion":1,
+        "name":"Vertical tracer",
+        "catalogRef":{"vendor":model.vendor,"model":model.model,"variant":variant.variant,"modelId":model.model_id,"printerVariant":variant.printer_variant}
+    })).unwrap();
+    let created_id = created["data"]["printer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    assert!(
-        status.success(),
-        "isolated IPC tracer child failed: {status}"
+    invoke(&webview, "export_settings", json!({"contractVersion":1})).unwrap();
+    invoke(&webview, "export_printers", json!({"contractVersion":1})).unwrap();
+    assert!(!documents.settings_export.lock().unwrap().is_empty());
+    let printers_export = documents.printers_export.lock().unwrap().clone();
+    assert!(!printers_export.is_empty());
+    *documents.printers_import.lock().unwrap() = printers_export;
+    invoke(
+        &webview,
+        "import_settings",
+        json!({"contractVersion":1,"expectedRevision":1}),
+    )
+    .unwrap();
+    let before_import = invoke(&webview, "list_printers", json!({"contractVersion":1})).unwrap();
+    let expected = before_import["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|printer| {
+            json!({
+                "id": printer["id"], "revision": printer["revision"]
+            })
+        })
+        .collect::<Vec<_>>();
+    invoke(
+        &webview,
+        "import_printers",
+        json!({
+            "contractVersion":1, "expectedRevisions": expected
+        }),
+    )
+    .unwrap();
+
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    app.listen(
+        farm3d_lib::connections::supervisor::STATUS_EVENT,
+        move |event| {
+            event_tx.send(event.payload().to_string()).unwrap();
+        },
     );
-}
+    manager.report_error(&created_id, "safe tracer status");
+    let event: Value = serde_json::from_str(&event_rx.recv().unwrap()).unwrap();
+    let backfill = invoke(&webview, "printer_statuses", json!({"contractVersion":1})).unwrap();
+    assert_eq!(event["sequence"], backfill["data"]["snapshotSequence"]);
+    assert_eq!(event["streamId"], backfill["data"]["streamId"]);
+    assert_eq!(
+        backfill["data"]["statuses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["printerId"] == created_id)
+            .count(),
+        1
+    );
 
-#[test]
-#[ignore = "run only in the isolated child process spawned by the parent tracer test"]
-fn ipc_create_connection_survives_restart_and_backfills_status_isolated_child() {
-    let config_home = tempfile::tempdir().unwrap();
-    std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+    drop((webview, app, storage));
+    let reopened = Arc::new(Storage::open(paths, &lease).unwrap());
+    let persisted = PrinterRepository::new(Arc::clone(&reopened))
+        .get(&created_id)
+        .unwrap()
+        .unwrap();
+    assert!(persisted.revision >= 2);
+    let settings = farm3d_lib::settings::repository::SettingsRepository::new(reopened)
+        .load()
+        .unwrap();
+    assert_eq!(
+        (settings.revision, settings.theme_mode.as_str()),
+        (2, "farm3d-light")
+    );
 
-    run_ipc_tracer();
-
-    // The tracer has joined both supervisors and dropped all app state before
-    // its isolated config root is removed.
-    drop(config_home);
-}
-
-fn run_ipc_tracer() {
-    let endpoint = LoopbackEndpoint::start();
-
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
-    let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
-    let model = catalog.models.first().unwrap();
-    let variant = model.variants.first().unwrap();
-    let catalog_ref = json!({
-        "vendor": model.vendor,
-        "model": model.model,
-        "variant": variant.variant,
-        "modelId": model.model_id,
-        "printerVariant": variant.printer_variant,
-    });
-
-    let (app, manager, webview) = mock_app(Arc::clone(&catalog));
-    let created = invoke(
-        &webview,
-        "create_printer",
-        json!({
-            "draft": {
-                "name": "F0 IPC Printer",
-                "catalogRef": catalog_ref,
-                "group": "F0",
-            }
-        }),
+    let generated = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/generated/contracts/command/CommandContracts.ts"),
     )
     .unwrap();
-    let printer_id = created["id"].as_str().unwrap().to_string();
-    assert_eq!(created["name"], "F0 IPC Printer");
-
-    let connected = invoke(
-        &webview,
-        "set_printer_connection",
-        json!({
-            "id": printer_id,
-            "submission": {
-                "kind": "moonraker",
-                "host": "127.0.0.1",
-                "port": endpoint.port,
-                "useTls": false,
-                "apiKey": "",
-            }
-        }),
-    )
-    .unwrap();
-    assert_eq!(connected["connection"]["host"], "127.0.0.1");
-    assert_eq!(connected["connection"]["port"], endpoint.port);
-
-    tauri::async_runtime::block_on(manager.stop_and_wait(&printer_id));
-    drop(webview);
-    drop(app);
-    drop(manager);
-
-    let (restarted_app, restarted_manager, restarted_webview) = mock_app(catalog);
-    restore_stored_connections(restarted_app.handle(), &restarted_manager);
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !restarted_manager.statuses().contains_key(&printer_id) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let statuses = invoke(&restarted_webview, "printer_statuses", json!({})).unwrap();
-    let state = statuses[&printer_id]["connectionState"].as_str().unwrap();
-    assert!(matches!(state, "connecting" | "offline" | "error"));
-    assert!(matches!(
-        restarted_manager.statuses()[&printer_id].connection_state,
-        ConnectionState::Connecting | ConnectionState::Offline | ConnectionState::Error
-    ));
-    let ipc_responses = serde_json::to_string(&json!([created, connected, statuses])).unwrap();
-    assert!(!ipc_responses.contains("apiKey"));
-    assert!(!ipc_responses.contains("secret"));
-    assert!(!ipc_responses.contains("F0_FIXTURE_SENTINEL"));
-
-    tauri::async_runtime::block_on(restarted_manager.stop_and_wait(&printer_id));
-    drop(restarted_webview);
-    drop(restarted_app);
-    drop(restarted_manager);
+    assert!(!generated.contains("F0_FIXTURE_SENTINEL"));
 }

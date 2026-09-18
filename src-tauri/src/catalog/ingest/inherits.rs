@@ -55,13 +55,19 @@ mod tests {
     use serde_json::json;
 
     fn index(entries: &[(&str, Value)]) -> HashMap<String, Value> {
-        entries.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
     fn leaf_with_no_own_fields_inherits_everything() {
         let idx = index(&[
-            ("base", json!({ "printable_height": 250, "gcode_flavor": "klipper" })),
+            (
+                "base",
+                json!({ "printable_height": 250, "gcode_flavor": "klipper" }),
+            ),
             ("leaf", json!({ "inherits": "base", "name": "leaf" })),
         ]);
         let resolved = resolve_machine_preset(&idx, "leaf").unwrap();
@@ -73,9 +79,18 @@ mod tests {
     #[test]
     fn three_deep_chain_merges_base_to_derived_with_derived_winning() {
         let idx = index(&[
-            ("fdm_machine_common", json!({ "printable_height": 200, "auxiliary_fan": 0 })),
-            ("family_common", json!({ "inherits": "fdm_machine_common", "auxiliary_fan": 1 })),
-            ("leaf", json!({ "inherits": "family_common", "printable_height": 256 })),
+            (
+                "fdm_machine_common",
+                json!({ "printable_height": 200, "auxiliary_fan": 0 }),
+            ),
+            (
+                "family_common",
+                json!({ "inherits": "fdm_machine_common", "auxiliary_fan": 1 }),
+            ),
+            (
+                "leaf",
+                json!({ "inherits": "family_common", "printable_height": 256 }),
+            ),
         ]);
         let resolved = resolve_machine_preset(&idx, "leaf").unwrap();
         // Derived (leaf) overrides the common ancestor's printable_height.

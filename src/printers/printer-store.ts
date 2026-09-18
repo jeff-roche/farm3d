@@ -1,5 +1,9 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
 import { createStore } from "solid-js/store";
+import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import type { JsonValue } from "../generated/contracts/command/JsonValue";
+import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
+import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
+import { createPrinterStatusStore, type StatusEvent } from "./printer-status-store";
 import { resolveWebCatalogVariant } from "./printer-catalog";
 import type {
   CatalogRef,
@@ -14,23 +18,37 @@ import type {
   ProbeResult,
   ResolvedPrinter,
 } from "./types";
+import { resolvePrinterRecord } from "./types";
 
 interface PrinterStoreState {
   printers: ResolvedPrinter[];
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
+  retryable: boolean;
+}
+function compareUtf8(left: string, right: string): number {
+  const encoder = new TextEncoder();
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] - rightBytes[index];
+  }
+  return leftBytes.length - rightBytes.length;
 }
 
 const [state, setState] = createStore<PrinterStoreState>({
   printers: [],
   status: "idle",
   error: null,
+  retryable: false,
 });
 
 /** Reactive getter — read inside JSX/createMemo for Solid to track it. */
 export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
+export const printerStoreRetryable = () => state.retryable;
 
 /**
  * Mutations report failures into `state.error` (surfaced by App's banner)
@@ -38,11 +56,14 @@ export const printerStoreError = () => state.error;
  * would only relocate the unhandled rejection.
  */
 function reportError(e: unknown): void {
-  setState("error", String(e));
+  setState({
+    error: isCommandError(e) ? e.message : "The operation could not be completed.",
+    retryable: isCommandError(e) && e.retryable,
+  });
 }
 
 export function dismissPrinterStoreError(): void {
-  setState("error", null);
+  setState({ error: null, retryable: false });
 }
 
 const EMPTY_PROFILE: PrinterProfile = {
@@ -62,7 +83,6 @@ const EMPTY_PROFILE: PrinterProfile = {
 interface WebFallbackSpec {
   id: string;
   name: string;
-  group: string;
   notes: string;
   vendor: string;
   model: string;
@@ -77,16 +97,16 @@ interface WebFallbackSpec {
  *  grouping and rebinding; the Prusa MK4 is a second, unrelated model. */
 const WEB_FALLBACK_SPECS: WebFallbackSpec[] = [
   {
-    id: "prn-web-cc-1", name: "Elegoo Centauri Carbon — Bay 1", group: "Bay 1", notes: "",
+    id: "prn-web-cc-1", name: "Elegoo Centauri Carbon — Bay 1", notes: "",
     vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
   },
   {
-    id: "prn-web-cc-2", name: "Elegoo Centauri Carbon — Bay 2", group: "Bay 2",
+    id: "prn-web-cc-2", name: "Elegoo Centauri Carbon — Bay 2",
     notes: "Running a 0.6mm nozzle for coarse drafts.",
     vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.6",
   },
   {
-    id: "prn-web-mk4-1", name: "Prusa MK4 — Bay 3", group: "Bay 3", notes: "",
+    id: "prn-web-mk4-1", name: "Prusa MK4 — Bay 3", notes: "",
     vendor: "Prusa", model: "Prusa MK4", printerVariant: "0.4",
   },
 ];
@@ -101,9 +121,10 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
       if (!match) return null;
       return {
         id: spec.id,
+        revision: 1,
         name: spec.name,
-        group: spec.group,
         notes: spec.notes,
+        overrides: {},
         catalogRef: match.catalogRef,
         catalogStatus: "ok",
         modelLabel: match.modelLabel,
@@ -113,7 +134,8 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         inherited: {},
         profileDrift: [],
         unknownOverrideKeys: [],
-        connection: null,
+        createdAt: "",
+        updatedAt: "",
       };
     }),
   );
@@ -122,15 +144,19 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
 
 export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
-  if (!isTauri()) {
-    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null });
+  if (!desktopAvailable()) {
+    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, retryable: false });
     return;
   }
   try {
-    const loaded = await invoke<ResolvedPrinter[]>("list_printers");
-    setState({ printers: loaded, status: "ready", error: null });
+    const loaded = (await command("list_printers")).map(resolvePrinterRecord);
+    setState({ printers: loaded, status: "ready", error: null, retryable: false });
   } catch (e) {
-    setState({ status: "error", error: String(e) });
+    setState({
+      status: "error",
+      error: isCommandError(e) ? e.message : "farm3d could not finish starting.",
+      retryable: isCommandError(e) && e.retryable,
+    });
   }
 }
 
@@ -154,7 +180,7 @@ function removeById(id: string): void {
 }
 
 export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     const id = `prn-web-${state.printers.length + 1}`;
     // The Add dialog's Brand/Model/Nozzle selects are themselves backed by
     // the real catalog in web mode now (see printer-catalog.ts), so this
@@ -170,9 +196,10 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
       ...list,
       {
         id,
+        revision: 1,
         name: draft.name,
-        group: draft.group ?? "",
         notes: "",
+        overrides: {},
         catalogRef: draft.catalogRef,
         catalogStatus: "ok",
         modelLabel: match?.modelLabel ?? draft.catalogRef.model,
@@ -182,13 +209,15 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
         inherited: {},
         profileDrift: [],
         unknownOverrideKeys: [],
-        connection: null,
+        createdAt: "",
+        updatedAt: "",
       },
     ]);
     return id;
   }
   try {
-    const resolved = await invoke<ResolvedPrinter>("create_printer", { draft });
+    const { printer } = await command("create_printer", draft);
+    const resolved = resolvePrinterRecord(printer);
     setState("printers", (list) => [...list, resolved]);
     return resolved.id;
   } catch (e) {
@@ -198,12 +227,13 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
 }
 
 export async function updatePrinter(id: string, patch: PrinterPatch): Promise<void> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     setState("printers", (p) => p.id === id, (p) => ({ ...p, ...patch }));
     return;
   }
   try {
-    const resolved = await invoke<ResolvedPrinter>("update_printer", { id, patch });
+    const { printer } = await command("update_printer", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, patch });
+    const resolved = resolvePrinterRecord(printer);
     spliceResolved(resolved);
   } catch (e) {
     reportError(e);
@@ -211,12 +241,12 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
 }
 
 export async function removePrinter(id: string): Promise<void> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     removeById(id);
     return;
   }
   try {
-    await invoke("delete_printer", { id });
+    await command("delete_printer", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 });
     removeById(id);
   } catch (e) {
     reportError(e);
@@ -228,11 +258,12 @@ export async function removePrinter(id: string): Promise<void> {
 export async function overrideField(
   id: string,
   field: OverridableField,
-  value: unknown,
+  value: JsonValue,
 ): Promise<void> {
-  if (!isTauri()) return; // web fallback has no catalog to resolve overrides against
+  if (!desktopAvailable()) return; // web fallback has no catalog to resolve overrides against
   try {
-    const resolved = await invoke<ResolvedPrinter>("set_printer_override", { id, field, value });
+    const { printer } = await command("set_printer_override", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, field, value });
+    const resolved = resolvePrinterRecord(printer);
     spliceResolved(resolved);
   } catch (e) {
     reportError(e);
@@ -240,21 +271,22 @@ export async function overrideField(
 }
 
 export async function revertField(id: string, field: OverridableField): Promise<void> {
-  if (!isTauri()) return;
+  if (!desktopAvailable()) return;
   try {
-    const resolved = await invoke<ResolvedPrinter>("set_printer_override", {
+    const { printer } = await command("set_printer_override", {
       id,
+      expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
       field,
       value: null,
     });
-    spliceResolved(resolved);
+    spliceResolved(resolvePrinterRecord(printer));
   } catch (e) {
     reportError(e);
   }
 }
 
 export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise<void> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     // Unlike overrideField/revertField (still no-ops -- there's no per-field
     // override machinery to resolve against in web mode), a rebind has
     // somewhere real to go now: the same bundled catalog the Nozzle/variant
@@ -282,7 +314,8 @@ export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise
     return;
   }
   try {
-    const resolved = await invoke<ResolvedPrinter>("rebind_printer", { id, catalogRef });
+    const { printer } = await command("rebind_printer", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, catalogRef });
+    const resolved = resolvePrinterRecord(printer);
     spliceResolved(resolved);
   } catch (e) {
     reportError(e);
@@ -290,19 +323,37 @@ export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise
 }
 
 export async function resolveDrift(id: string, action: "accept" | "pin"): Promise<void> {
-  if (!isTauri()) return;
+  if (!desktopAvailable()) return;
   try {
-    const resolved = await invoke<ResolvedPrinter>("resolve_profile_drift", { id, action });
+    const { printer } = await command("resolve_profile_drift", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, action });
+    const resolved = resolvePrinterRecord(printer);
     spliceResolved(resolved);
   } catch (e) {
     reportError(e);
   }
 }
 
-export async function openPrintersFile(): Promise<void> {
-  if (!isTauri()) return;
+export async function exportPrinters(): Promise<PrintersExportOutcome | undefined> {
+  if (!desktopAvailable()) return { status: "unsupported", reason: "desktopRequired" };
   try {
-    await invoke("open_printers_file");
+    return await command("export_printers");
+  } catch (e) {
+    reportError(e);
+  }
+}
+
+export async function importPrinters(): Promise<PrintersImportOutcome | undefined> {
+  if (!desktopAvailable()) return { status: "unsupported", reason: "desktopRequired" };
+  try {
+    const result = await command("import_printers", {
+      expectedRevisions: state.printers
+        .map((printer) => ({ id: printer.id, revision: printer.revision ?? 1 }))
+        .sort((left, right) => compareUtf8(left.id, right.id)),
+    });
+    if (result.status === "applied") {
+      setState("printers", result.printers.map(resolvePrinterRecord));
+    }
+    return result;
   } catch (e) {
     reportError(e);
   }
@@ -319,34 +370,31 @@ export function applyStatus(id: string, status: PrinterStatus): void {
  *  already knows — a printer that came online before this listener attached
  *  would otherwise show nothing until its next change. Returns an unlisten fn. */
 export async function startStatusListener(): Promise<() => void> {
-  if (!isTauri()) return () => {};
+  if (!desktopAvailable()) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
-  const unlisten = await listen<{ id: string; status: PrinterStatus }>(
-    "printer-status",
-    (event) => applyStatus(event.payload.id, event.payload.status),
-  );
-  try {
-    const known = await invoke<Record<string, PrinterStatus>>("printer_statuses");
-    for (const [id, status] of Object.entries(known)) applyStatus(id, status);
-  } catch (e) {
-    reportError(e);
-  }
-  return unlisten;
+  const statusStore = createPrinterStatusStore({
+    printerIds: () => state.printers.map((printer) => printer.id),
+    listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => handler(event.payload)),
+    backfill: () => command("printer_statuses"),
+    onStatus: applyStatus,
+  });
+  await statusStore.start();
+  return () => statusStore.dispose();
 }
 
 export async function setConnection(id: string, submission: ConnectionSubmission): Promise<void> {
-  if (!isTauri()) return;
+  if (!desktopAvailable()) return;
   try {
-    spliceResolved(await invoke<ResolvedPrinter>("set_printer_connection", { id, submission }));
+    spliceResolved(resolvePrinterRecord((await command("set_printer_connection", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, submission })).printer));
   } catch (e) {
     reportError(e);
   }
 }
 
 export async function clearConnection(id: string): Promise<void> {
-  if (!isTauri()) return;
+  if (!desktopAvailable()) return;
   try {
-    spliceResolved(await invoke<ResolvedPrinter>("clear_printer_connection", { id }));
+    spliceResolved(resolvePrinterRecord((await command("clear_printer_connection", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 })).printer));
   } catch (e) {
     reportError(e);
   }
@@ -358,24 +406,24 @@ export async function testConnection(
   id: string,
   submission: ConnectionSubmission,
 ): Promise<ProbeResult> {
-  if (!isTauri()) throw new Error("Testing a connection needs the desktop app");
-  return invoke<ProbeResult>("test_printer_connection", { id, submission });
+  if (!desktopAvailable()) throw new Error("Testing a connection needs the desktop app");
+  return command("test_printer_connection", { id, submission });
 }
 
 export async function discoverPrinters(): Promise<DiscoveredPrinter[]> {
-  if (!isTauri()) return [];
+  if (!desktopAvailable()) return [];
   try {
-    return await invoke<DiscoveredPrinter[]>("discover_printers");
+    return await command("discover_printers");
   } catch (e) {
     reportError(e);
-    return [];
+    throw e;
   }
 }
 
 export async function credentialStoreInfo(): Promise<CredentialStoreInfo | null> {
-  if (!isTauri()) return null;
+  if (!desktopAvailable()) return null;
   try {
-    return await invoke<CredentialStoreInfo>("credential_store_info");
+    return await command("credential_store_info");
   } catch (e) {
     reportError(e);
     return null;

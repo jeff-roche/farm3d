@@ -1,15 +1,16 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMismatches, PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import type { PrinterProfile, ResolvedPrinter } from "../printers/types";
 
 const setConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const testConnection = vi.hoisted(() => vi.fn());
+const discoverPrinters = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock("../printers/printer-store", () => ({
   setConnection,
   clearConnection: vi.fn(),
   testConnection,
-  discoverPrinters: vi.fn().mockResolvedValue([]),
+  discoverPrinters,
   credentialStoreInfo: vi.fn().mockResolvedValue({ kind: "keychain" }),
 }));
 
@@ -66,7 +67,6 @@ describe("PrinterConnectionPanel", () => {
     id: "prn-1",
     name: "Bay 1",
     profile: PROFILE,
-    connection: null,
   } as unknown as ResolvedPrinter;
 
   it("defaults the kind from the catalog's suggestedHostType", async () => {
@@ -89,6 +89,20 @@ describe("PrinterConnectionPanel", () => {
     );
   });
 
+  it("releases the API key field after a save settles", async () => {
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    const apiKey = screen.getByLabelText("API key") as HTMLInputElement;
+    fireEvent.input(apiKey, { target: { value: "submitted-secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(apiKey.value).toBe(""));
+    expect(setConnection).toHaveBeenCalledWith(
+      "prn-1",
+      expect.objectContaining({ credential: "submitted-secret" }),
+    );
+  });
+
   it("renders a probe failure inline rather than throwing it away", async () => {
     testConnection.mockRejectedValueOnce("Could not reach the printer: refused");
     render(() => <PrinterConnectionPanel printer={printer} />);
@@ -99,6 +113,14 @@ describe("PrinterConnectionPanel", () => {
   it("shows which credential store is live", async () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     expect(await screen.findByText(/OS keychain/)).toBeInTheDocument();
+  });
+
+  it("distinguishes discovery failure from a successful empty scan", async () => {
+    discoverPrinters.mockRejectedValueOnce(new Error("Discovery worker failed"));
+    render(() => <PrinterConnectionPanel printer={printer} />);
+
+    expect(await screen.findByText("Discovery failed — enter the host above.")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing found — enter the host above.")).not.toBeInTheDocument();
   });
 
   it("renders the Kind label exactly once, not doubled by an extra Field wrapper", async () => {

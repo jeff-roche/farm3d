@@ -5,9 +5,20 @@ pub mod resolve;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/BedShape.ts"
+)]
 pub enum BedShape {
     Rectangular {
         width_mm: f64,
@@ -20,8 +31,9 @@ pub enum BedShape {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PointMm.ts")]
 pub struct PointMm {
     pub x_mm: f64,
     pub y_mm: f64,
@@ -72,8 +84,9 @@ pub fn load_snapshot(path: &Path) -> Result<Catalog, String> {
 /// present, whether inherited from the catalog or overridden. Distinct from
 /// `CatalogVariant`, which additionally carries `variant`/`printer_variant`
 /// identity fields that describe the catalog entry, not a resolved instance.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterProfile.ts")]
 pub struct PrinterProfile {
     pub bed_shape: BedShape,
     pub printable_height_mm: f64,

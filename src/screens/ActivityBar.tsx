@@ -3,7 +3,7 @@ import { IconButton } from "../design-system";
 import { SettingsMenu } from "./SettingsMenu";
 import styles from "./ActivityBar.module.css";
 
-export type ScreenId = "printers" | "library";
+export type ScreenId = "monitor" | "library";
 
 export interface ActivityBarProps {
   active: ScreenId;
@@ -15,8 +15,8 @@ export function ActivityBar(props: ActivityBarProps) {
     <nav class={styles.bar} aria-label="Primary">
       <IconButton
         aria-label="Printers"
-        active={props.active === "printers"}
-        onClick={() => props.onSelect("printers")}
+        active={props.active === "monitor"}
+        onClick={() => props.onSelect("monitor")}
       >
         <IconPrinter size={18} />
       </IconButton>

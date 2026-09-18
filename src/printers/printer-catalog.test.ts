@@ -49,7 +49,7 @@ afterEach(() => {
 describe("printer-catalog", () => {
   it("caches list_catalog_models after the first call", async () => {
     tauriMock.isTauri.mockReturnValue(true);
-    tauriMock.invoke.mockResolvedValue([{ modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon" }]);
+    tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [{ modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon" }] });
     const { listCatalogModels } = await import("./printer-catalog");
 
     await listCatalogModels();
@@ -83,7 +83,7 @@ describe("printer-catalog", () => {
 
   it("listCatalogVariants keys on (vendor, model), not modelId", async () => {
     tauriMock.isTauri.mockReturnValue(true);
-    tauriMock.invoke.mockResolvedValue([]);
+    tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
     const { listCatalogVariants } = await import("./printer-catalog");
 
     await listCatalogVariants("Elegoo", "Elegoo Centauri Carbon");
@@ -91,18 +91,19 @@ describe("printer-catalog", () => {
     expect(tauriMock.invoke).toHaveBeenCalledWith("list_catalog_variants", {
       vendor: "Elegoo",
       model: "Elegoo Centauri Carbon",
+      contractVersion: 1,
     });
   });
 
   it("previewProfile forwards the catalogRef", async () => {
     tauriMock.isTauri.mockReturnValue(true);
     const ref = { vendor: "Elegoo", model: "Elegoo Centauri Carbon", variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4" };
-    tauriMock.invoke.mockResolvedValue({});
+    tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: {} });
     const { previewProfile } = await import("./printer-catalog");
 
     await previewProfile(ref);
 
-    expect(tauriMock.invoke).toHaveBeenCalledWith("preview_profile", { catalogRef: ref });
+    expect(tauriMock.invoke).toHaveBeenCalledWith("preview_profile", { contractVersion: 1, catalogRef: ref });
   });
 
   it("under just web, listCatalogVariants reads real variants for a known model", async () => {

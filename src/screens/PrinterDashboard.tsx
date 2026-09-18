@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from
 import { IconPlus, IconX } from "@tabler/icons-solidjs";
 import { Button, IconButton, Tabs, TextField } from "../design-system";
 import type { CatalogModelSummary, PrinterDraft, ResolvedPrinter } from "../printers/types";
-import { openPrintersFile, updatePrinter } from "../printers/printer-store";
+import { exportPrinters, importPrinters, updatePrinter } from "../printers/printer-store";
 import { PrinterAddDialog } from "./PrinterAddDialog";
 import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
@@ -86,6 +86,8 @@ function formatTemp(value: number | undefined): string {
 
 export interface PrinterDashboardProps {
   printers: ResolvedPrinter[];
+  selectedPrinterId?: string;
+  onSelectionChange?: (id: string | null) => void;
   onAddPrinter?: (draft: PrinterDraft) => Promise<ResolvedPrinter | undefined>;
   onRemovePrinter?: (id: string) => void;
 }
@@ -95,12 +97,19 @@ const MIN_DETAIL_WIDTH = 220;
 const MAX_DETAIL_WIDTH = 560;
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
-  const [selectedId, setSelectedId] = createSignal<string | null>(null);
+  const [selectedId, setSelectedId] = createSignal<string | null>(props.selectedPrinterId ?? null);
   const selected = createMemo(() => props.printers.find((p) => p.id === selectedId()));
   const groups = createMemo(() => groupPrintersByModel(props.printers));
   const [detailWidth, setDetailWidth] = createSignal(DEFAULT_DETAIL_WIDTH);
   const [addDialogOpen, setAddDialogOpen] = createSignal(false);
   const [prefillModel, setPrefillModel] = createSignal<CatalogModelSummary | null>(null);
+
+  createEffect(() => setSelectedId(props.selectedPrinterId ?? null));
+
+  function selectPrinter(id: string | null) {
+    setSelectedId(id);
+    props.onSelectionChange?.(id);
+  }
 
   function openAddDialog(prefill: CatalogModelSummary | null) {
     setPrefillModel(prefill);
@@ -142,10 +151,11 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           so the resizable detail aside remains a sibling, not nested here. */}
       <div class={styles.main}>
         <div class={styles.toolbar}>
-          {/* An escape hatch for hand-editing — notably the only way to
-              recover a printer whose catalog ref no longer resolves. */}
-          <Button variant="ghost" onClick={() => void openPrintersFile()}>
-            Open printers.json
+          <Button variant="ghost" onClick={() => void exportPrinters()}>
+            Export Printers...
+          </Button>
+          <Button variant="ghost" onClick={() => void importPrinters()}>
+            Import Printers...
           </Button>
           <PrinterAddDialog
             open={addDialogOpen()}
@@ -194,7 +204,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                       <button
                         class={styles.card}
                         classList={{ [styles.cardSelected]: printer.id === selectedId() }}
-                        onClick={() => setSelectedId(printer.id)}
+                        onClick={() => selectPrinter(printer.id)}
                       >
                         <div class={styles.cardHeader}>
                           <span class={styles.cardName}>{printer.name}</span>
@@ -324,7 +334,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                     <Button variant="danger" onClick={() => props.onRemovePrinter?.(printer().id)}>
                       Remove
                     </Button>
-                    <IconButton aria-label="Close printer detail" onClick={() => setSelectedId(null)}>
+                    <IconButton aria-label="Close printer detail" onClick={() => selectPrinter(null)}>
                       <IconX size={16} />
                     </IconButton>
                   </div>

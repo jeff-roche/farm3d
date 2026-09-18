@@ -13,12 +13,14 @@ pub mod moonraker;
 pub mod supervisor;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 pub const MOONRAKER_KIND: &str = "moonraker";
 pub const DEFAULT_MOONRAKER_PORT: u16 = 7125;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ConnectionConfig.ts")]
 pub struct ConnectionConfig {
     /// `"moonraker"` today; phase 3 adds `"octoprint"` and `"elegoolink"`.
     /// A free string rather than an enum so an unknown kind written by a
@@ -29,7 +31,7 @@ pub struct ConnectionConfig {
     pub port: u16,
     #[serde(default)]
     pub use_tls: bool,
-    /// A key INTO the credential store — never the secret itself. See the
+    /// A key into the credential store — never the credential value. See the
     /// module docs on `credentials`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<String>,
@@ -38,8 +40,9 @@ pub struct ConnectionConfig {
 /// farm3d's connection vocabulary, deliberately orthogonal to the print-job
 /// state the card already shows. A live socket to a shut-down Klipper is
 /// `Offline`, not `Online`.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ConnectionState.ts")]
 pub enum ConnectionState {
     Connecting,
     Online,
@@ -53,28 +56,38 @@ pub enum ConnectionState {
 /// PARTIAL updates (see `moonraker::protocol`), and a printer can be online
 /// with no job loaded and no heaters configured. A `None` means "not
 /// reported", which must render as an em dash — never as `0`.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterStatus.ts")]
 pub struct PrinterStatus {
     pub connection_state: ConnectionState,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub job_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub job_name: Option<String>,
     /// `0.0..=1.0`, from `display_status.progress`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub progress: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub nozzle_temp_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub nozzle_target_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_temp_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_target_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub print_duration_s: Option<f64>,
     /// farm3d's own clock, deliberately NOT Moonraker's `eventtime` — that
     /// value is a Klipper-uptime float, meaningless to a user and
@@ -108,8 +121,9 @@ impl PrinterStatus {
 
 /// What "Test connection" renders. Its job is to let a user confirm they
 /// reached the machine they meant to reach.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ProbeResult.ts")]
 pub struct ProbeResult {
     pub kind: String,
     /// The host software, e.g. Moonraker's own version.
@@ -129,14 +143,18 @@ pub struct ProbeResult {
 /// The comparison itself happens in the frontend, which already holds the
 /// `ResolvedPrinter` carrying the catalog's numbers; doing it here would mean
 /// a second catalog lookup for no gain.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ReportedCapabilities.ts")]
 pub struct ReportedCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_width_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_depth_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub printable_height_mm: Option<f64>,
 }
 
@@ -216,7 +234,10 @@ mod tests {
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains(r#""credentialRef":"farm3d/printer/prn-1/apikey""#));
-        assert_eq!(serde_json::from_str::<ConnectionConfig>(&json).unwrap(), config);
+        assert_eq!(
+            serde_json::from_str::<ConnectionConfig>(&json).unwrap(),
+            config
+        );
     }
 
     #[test]

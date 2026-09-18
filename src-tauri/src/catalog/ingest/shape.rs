@@ -21,8 +21,12 @@ pub fn parse_printable_area(points: &[String]) -> Result<BedShape, ShapeError> {
                 .split_once('x')
                 .ok_or_else(|| ShapeError(format!("malformed point: {p:?}")))?;
             Ok(PointMm {
-                x_mm: x.parse().map_err(|_| ShapeError(format!("bad x in {p:?}")))?,
-                y_mm: y.parse().map_err(|_| ShapeError(format!("bad y in {p:?}")))?,
+                x_mm: x
+                    .parse()
+                    .map_err(|_| ShapeError(format!("bad x in {p:?}")))?,
+                y_mm: y
+                    .parse()
+                    .map_err(|_| ShapeError(format!("bad y in {p:?}")))?,
             })
         })
         .collect::<Result<_, ShapeError>>()?;
@@ -41,9 +45,15 @@ fn as_axis_aligned_rectangle(points: &[PointMm]) -> Option<BedShape> {
         return None;
     }
     let min_x = points.iter().map(|p| p.x_mm).fold(f64::INFINITY, f64::min);
-    let max_x = points.iter().map(|p| p.x_mm).fold(f64::NEG_INFINITY, f64::max);
+    let max_x = points
+        .iter()
+        .map(|p| p.x_mm)
+        .fold(f64::NEG_INFINITY, f64::max);
     let min_y = points.iter().map(|p| p.y_mm).fold(f64::INFINITY, f64::min);
-    let max_y = points.iter().map(|p| p.y_mm).fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points
+        .iter()
+        .map(|p| p.y_mm)
+        .fold(f64::NEG_INFINITY, f64::max);
 
     let is_corner =
         |p: &PointMm| (p.x_mm == min_x || p.x_mm == max_x) && (p.y_mm == min_y || p.y_mm == max_y);
@@ -52,7 +62,12 @@ fn as_axis_aligned_rectangle(points: &[PointMm]) -> Option<BedShape> {
     }
     let mut corners: Vec<(i64, i64)> = points
         .iter()
-        .map(|p| ((p.x_mm * 1000.0).round() as i64, (p.y_mm * 1000.0).round() as i64))
+        .map(|p| {
+            (
+                (p.x_mm * 1000.0).round() as i64,
+                (p.y_mm * 1000.0).round() as i64,
+            )
+        })
         .collect();
     corners.sort_unstable();
     corners.dedup();
@@ -142,13 +157,37 @@ mod tests {
         let json = serde_json::to_string(&shape).unwrap();
         // Fields should be in camelCase (widthMm, depthMm, originXMm, originYMm)
         // not snake_case (width_mm, depth_mm, origin_x_mm, origin_y_mm)
-        assert!(json.contains("\"widthMm\""), "missing camelCase widthMm in: {json}");
-        assert!(json.contains("\"depthMm\""), "missing camelCase depthMm in: {json}");
-        assert!(json.contains("\"originXMm\""), "missing camelCase originXMm in: {json}");
-        assert!(json.contains("\"originYMm\""), "missing camelCase originYMm in: {json}");
-        assert!(!json.contains("\"width_mm\""), "found snake_case width_mm in: {json}");
-        assert!(!json.contains("\"depth_mm\""), "found snake_case depth_mm in: {json}");
-        assert!(!json.contains("\"origin_x_mm\""), "found snake_case origin_x_mm in: {json}");
-        assert!(!json.contains("\"origin_y_mm\""), "found snake_case origin_y_mm in: {json}");
+        assert!(
+            json.contains("\"widthMm\""),
+            "missing camelCase widthMm in: {json}"
+        );
+        assert!(
+            json.contains("\"depthMm\""),
+            "missing camelCase depthMm in: {json}"
+        );
+        assert!(
+            json.contains("\"originXMm\""),
+            "missing camelCase originXMm in: {json}"
+        );
+        assert!(
+            json.contains("\"originYMm\""),
+            "missing camelCase originYMm in: {json}"
+        );
+        assert!(
+            !json.contains("\"width_mm\""),
+            "found snake_case width_mm in: {json}"
+        );
+        assert!(
+            !json.contains("\"depth_mm\""),
+            "found snake_case depth_mm in: {json}"
+        );
+        assert!(
+            !json.contains("\"origin_x_mm\""),
+            "found snake_case origin_x_mm in: {json}"
+        );
+        assert!(
+            !json.contains("\"origin_y_mm\""),
+            "found snake_case origin_y_mm in: {json}"
+        );
     }
 }

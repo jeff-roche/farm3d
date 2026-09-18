@@ -1,44 +1,180 @@
 //! The `#[tauri::command]` surface for connections. Thin by design — every
 //! decision worth testing lives in a sibling module.
 
-use super::credentials::{credential_ref_for, CredentialStore, CredentialStoreKind};
+use super::credentials::{
+    credential_ref_for, CredentialBackend, CredentialStore, CredentialStoreKind,
+};
 use super::discovery::{discover, DiscoveredPrinter};
 use super::moonraker::MoonrakerConnection;
-use super::supervisor::ConnectionManager;
-use super::{ConnectionConfig, PrinterConnection, PrinterStatus, ProbeResult, MOONRAKER_KIND};
-use crate::catalog::resolve::{resolve_printer, ResolvedPrinter};
-use crate::catalog::Catalog;
-use crate::printers::{load_printers_from, write_printers_to};
+use super::{ConnectionConfig, PrinterConnection, ProbeResult, MOONRAKER_KIND};
+use crate::catalog::resolve::resolve_printer;
+use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
+use crate::persistence::Storage;
+use crate::printers::commands::{OperationWarning, PrinterMutationResult};
+use crate::printers::repository::PrinterRepository;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+use ts_rs::TS;
+use zeroize::Zeroize;
 
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(3);
+const DISCOVERY_HARD_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Deserialize, Clone)]
+fn credential_coordinator() -> &'static Mutex<()> {
+    static COORDINATOR: OnceLock<Mutex<()>> = OnceLock::new();
+    COORDINATOR.get_or_init(|| Mutex::new(()))
+}
+
+pub fn with_credential_coordination<T>(
+    operation: impl FnOnce() -> Result<T, crate::persistence::RepositoryError>,
+) -> Result<T, crate::persistence::RepositoryError> {
+    let _guard = credential_coordinator().lock().map_err(|_| {
+        crate::persistence::RepositoryError::Storage(
+            crate::persistence::StorageError::PersistenceUnavailable,
+        )
+    })?;
+    operation()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialSubmission<'a> {
+    Preserve,
+    Clear,
+    Replace(&'a str),
+}
+
+#[derive(Debug)]
+pub struct ConnectionCommit {
+    pub printer: crate::printers::StoredPrinter,
+    pub cleanup_pending: bool,
+}
+
+fn storage_command_error(error: crate::persistence::StorageError) -> CommandError {
+    match error {
+        crate::persistence::StorageError::UnsupportedSchemaVersion => {
+            CommandError::unsupported_schema(2)
+        }
+        crate::persistence::StorageError::MigrationFailed => CommandError::migration_failed(),
+        crate::persistence::StorageError::CorruptData { .. } => CommandError::database_corrupt(),
+        crate::persistence::StorageError::InvalidSnapshot
+        | crate::persistence::StorageError::Database => CommandError::persistence_unavailable(),
+        crate::persistence::StorageError::PathCollision
+        | crate::persistence::StorageError::PersistenceUnavailable
+        | crate::persistence::StorageError::UnsupportedLocking
+        | crate::persistence::StorageError::Filesystem
+        | crate::persistence::StorageError::OperationFailed => {
+            CommandError::persistence_unavailable()
+        }
+    }
+}
+
+/// Coordinates the SQLite/credential-store replacement protocol under the
+/// process-wide credential mutex. The new secret is durable before a Printer
+/// can reference it; every uncommitted value remains queued for startup cleanup.
+pub fn coordinate_connection_change(
+    storage: &Arc<Storage>,
+    store: &dyn CredentialBackend,
+    id: &str,
+    expected_revision: i64,
+    mut config: ConnectionConfig,
+    submission: CredentialSubmission<'_>,
+) -> Result<ConnectionCommit, CommandError> {
+    if expected_revision <= 0 {
+        return Err(CommandError::validation_at(
+            "expectedRevision",
+            "The expected revision must be positive.",
+        ));
+    }
+    let _guard = credential_coordinator()
+        .lock()
+        .map_err(|_| CommandError::internal())?;
+    let repository = PrinterRepository::new(Arc::clone(storage));
+    let existing = repository
+        .get(id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(id))?;
+    let previous_reference = existing
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.credential_ref.clone());
+
+    let provisional = match submission {
+        CredentialSubmission::Preserve => {
+            config.credential_ref = previous_reference.clone();
+            None
+        }
+        CredentialSubmission::Clear => {
+            config.credential_ref = None;
+            None
+        }
+        CredentialSubmission::Replace(secret) => {
+            let reference = format!("farm3d/credential/{}", uuid::Uuid::new_v4());
+            repository
+                .enqueue_credential_cleanup(&reference, Some(id), "provisional")
+                .map_err(storage_command_error)?;
+            if store.set(&reference, secret).is_err() {
+                return Err(CommandError::credential_unavailable("configured"));
+            }
+            config.credential_ref = Some(reference.clone());
+            Some(reference)
+        }
+    };
+
+    let updated = repository
+        .set_connection(
+            id,
+            expected_revision,
+            Some(config),
+            provisional.as_deref(),
+            if matches!(submission, CredentialSubmission::Clear) {
+                "cleared"
+            } else {
+                "replaced"
+            },
+        )
+        .map_err(CommandError::from_repository)?;
+    let cleanup_pending = previous_reference
+        != updated
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.credential_ref.clone())
+        && retry_pending_credential_cleanup_locked(storage, store).is_err();
+    Ok(ConnectionCommit {
+        printer: updated,
+        cleanup_pending,
+    })
+}
+
+#[derive(Deserialize, Clone, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ConnectionSubmission.ts")]
 pub struct ConnectionSubmission {
     pub kind: String,
     pub host: String,
     pub port: u16,
     #[serde(default)]
     pub use_tls: bool,
-    /// `None` = leave the stored secret untouched (the UI never echoes it
+    /// `None` = leave the stored credential untouched (the UI never echoes it
     /// back). `Some("")` = clear it. These must stay distinct.
-    #[serde(default)]
+    #[serde(default, rename = "credential")]
+    #[ts(optional, rename = "credential")]
     pub api_key: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/CredentialStoreInfo.ts")]
 pub struct CredentialStoreInfo {
     pub kind: CredentialStoreKind,
     /// Why the keychain was unavailable, so the Connection tab can explain
     /// the fallback rather than silently downgrading.
-    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason_code: Option<String>,
 }
 
 /// Splits a submission into what gets persisted and what goes to the
@@ -66,14 +202,6 @@ pub fn split_submission(
     )
 }
 
-fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
-    app.path().app_config_dir().map_err(|e| e.to_string())
-}
-
-fn store<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<CredentialStore, String> {
-    Ok(CredentialStore::detect(config_dir(app)?))
-}
-
 pub(crate) fn credential_store_if_needed(
     config_dir: &Path,
     needed: bool,
@@ -82,6 +210,7 @@ pub(crate) fn credential_store_if_needed(
     needed.then(|| detect(config_dir.to_path_buf()))
 }
 
+#[cfg(test)]
 fn credential_store_needed(
     secret: &Option<String>,
     credential_to_clear: Option<&str>,
@@ -90,26 +219,15 @@ fn credential_store_needed(
     secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some()
 }
 
-fn api_key_from(store: &CredentialStore, config: &ConnectionConfig) -> Result<Option<String>, String> {
-    match &config.credential_ref {
-        None => Ok(None),
-        Some(key) => store.get(key),
-    }
-}
-
-fn api_key_for(app: &AppHandle, config: &ConnectionConfig) -> Result<Option<String>, String> {
-    match &config.credential_ref {
-        None => Ok(None),
-        Some(_) => api_key_from(&store(app)?, config),
-    }
-}
-
 fn adapter(
     config: &ConnectionConfig,
-    api_key: Option<String>,
+    api_key: Option<zeroize::Zeroizing<String>>,
 ) -> Result<Box<dyn PrinterConnection>, String> {
     match config.kind.as_str() {
-        MOONRAKER_KIND => Ok(Box::new(MoonrakerConnection::new(config.clone(), api_key))),
+        MOONRAKER_KIND => Ok(Box::new(MoonrakerConnection::with_zeroizing_secret(
+            config.clone(),
+            api_key,
+        ))),
         other => Err(format!("This build cannot speak `{other}` connections")),
     }
 }
@@ -122,7 +240,11 @@ fn adapter(
 /// same key: the "omitted" case round-trips the same ref on purpose.
 ///
 /// Pure over the two refs so this is testable without a Tauri `AppHandle`.
-fn credential_to_clear(previous_ref: Option<&str>, new_config: &ConnectionConfig) -> Option<String> {
+#[cfg(test)]
+fn credential_to_clear(
+    previous_ref: Option<&str>,
+    new_config: &ConnectionConfig,
+) -> Option<String> {
     if new_config.credential_ref.is_some() {
         return None;
     }
@@ -138,6 +260,7 @@ fn credential_to_clear(previous_ref: Option<&str>, new_config: &ConnectionConfig
 /// forward instead is a no-op for the edit case and the truth for a first save.
 ///
 /// Pure so it is testable without a Tauri `AppHandle`.
+#[cfg(test)]
 fn settle_credential_ref(
     config: &mut ConnectionConfig,
     api_key_omitted: bool,
@@ -150,132 +273,349 @@ fn settle_credential_ref(
 
 #[tauri::command]
 pub async fn set_printer_connection<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
     id: String,
-    submission: ConnectionSubmission,
-) -> Result<ResolvedPrinter, String> {
-    let dir = config_dir(&app)?;
-    let mut file = load_printers_from(&dir)?;
-    let api_key_omitted = submission.api_key.is_none();
-    let (mut config, secret) = split_submission(submission, &id);
-
-    let previous_credential_ref = file
-        .printers
-        .iter()
-        .find(|p| p.id == id)
-        .and_then(|p| p.connection.as_ref())
+    mut submission: ConnectionSubmission,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    if expected_revision <= 0 {
+        return Err(CommandError::validation_at(
+            "expectedRevision",
+            "The expected revision must be positive.",
+        ));
+    }
+    if submission.host.is_empty() {
+        return Err(CommandError::validation_at("host", "A host is required."));
+    }
+    if submission.port == 0 {
+        return Err(CommandError::validation_at(
+            "port",
+            "The port must be positive.",
+        ));
+    }
+    if submission.kind != MOONRAKER_KIND {
+        return Err(CommandError::unsupported_adapter(submission.kind));
+    }
+    let services = bootstrap.ready()?;
+    let repository = PrinterRepository::new(Arc::clone(&services.storage));
+    let existing = repository
+        .get(&id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(&id))?;
+    if existing.revision != expected_revision {
+        return Err(CommandError::revision_conflict(
+            &id,
+            expected_revision,
+            existing.revision,
+        ));
+    }
+    let previous_credential_ref = existing
+        .connection
+        .as_ref()
         .and_then(|c| c.credential_ref.clone());
-
-    settle_credential_ref(&mut config, api_key_omitted, previous_credential_ref.as_deref());
-
-    let credential_to_clear = credential_to_clear(previous_credential_ref.as_deref(), &config);
-    let store = credential_store_if_needed(
-        &dir,
-        credential_store_needed(&secret, credential_to_clear.as_deref(), &config),
-        CredentialStore::detect,
-    );
-
-    // Write the secret BEFORE persisting the reference: a config pointing at
-    // a credential that was never stored is worse than a stored credential
-    // nothing points at yet.
-    if let (Some(secret), Some(key), Some(store)) = (
-        &secret,
-        config.credential_ref.as_deref(),
-        store.as_ref(),
-    ) {
-        store.set(key, secret)?;
-    }
-
-    // An explicit clear (submission.api_key was `Some("")`) means the new
-    // config carries no credential_ref at all. That must also delete the
-    // OLD stored secret — otherwise "clear credential" only forgets the
-    // pointer while the secret itself sits orphaned in the store forever,
-    // which is exactly the failure mode the None/empty asymmetry exists to
-    // prevent.
-    if let (Some(old_key), Some(store)) = (credential_to_clear, store.as_ref()) {
-        store.delete(&old_key)?;
-    }
-
-    {
-        let stored = file
-            .printers
-            .iter_mut()
-            .find(|p| p.id == id)
-            .ok_or_else(|| format!("no printer with id {id:?}"))?;
-        stored.connection = Some(config.clone());
-    }
-    write_printers_to(&dir, &file)?;
-
-    let api_key = match store.as_ref() {
-        Some(store) => api_key_from(store, &config)?,
-        None => None,
+    let submitted_secret = submission.api_key.take().map(zeroize::Zeroizing::new);
+    let credential_store = (submitted_secret
+        .as_ref()
+        .map(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty())
+        || previous_credential_ref.is_some())
+    .then(|| Arc::clone(&services.credentials));
+    let config = ConnectionConfig {
+        kind: submission.kind,
+        host: submission.host,
+        port: submission.port,
+        use_tls: submission.use_tls,
+        credential_ref: None,
     };
-    manager.start(id.clone(), config, api_key);
-
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+    let change = match submitted_secret.as_ref().map(|value| value.as_str()) {
+        None => CredentialSubmission::Preserve,
+        Some("") => CredentialSubmission::Clear,
+        Some(secret) => CredentialSubmission::Replace(secret),
+    };
+    let no_store =
+        CredentialStore::file_backed(std::env::temp_dir().join("farm3d-unused-credential-store"));
+    let committed = coordinate_connection_change(
+        &services.storage,
+        credential_store
+            .as_ref()
+            .map(|store| store.as_ref() as &dyn CredentialBackend)
+            .unwrap_or(&no_store),
+        &id,
+        expected_revision,
+        config,
+        change,
+    )?;
+    let updated = committed.printer;
+    let committed_config = updated
+        .connection
+        .clone()
+        .expect("a successful Connection commit stores its submitted config");
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    let mut warnings = Vec::new();
+    if !services.manager.stop_and_wait(&id).await {
+        warnings.push(OperationWarning::supervisor(&id));
+    }
+    let (api_key, credential_ready) = match (
+        credential_store.as_ref(),
+        committed_config.credential_ref.as_deref(),
+    ) {
+        (Some(store), Some(reference)) => match store.get(reference) {
+            Ok(Some(value)) => (Some(value), true),
+            Ok(None) | Err(_) => {
+                services
+                    .manager
+                    .report_error(&id, "A credential is required for this Connection.");
+                warnings.push(OperationWarning::credential_required(&id));
+                (None, false)
+            }
+        },
+        _ => (None, true),
+    };
+    if credential_ready {
+        services.manager.start(
+            id.clone(),
+            committed_config,
+            api_key.map(zeroize::Zeroizing::new),
+        );
+    }
+    if committed.cleanup_pending {
+        warnings.push(OperationWarning::cleanup());
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: resolve_printer(&services.catalog, &updated),
+        warnings,
+    }))
 }
 
 #[tauri::command]
 pub async fn clear_printer_connection<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    catalog: tauri::State<'_, Arc<Catalog>>,
-    manager: tauri::State<'_, Arc<ConnectionManager<R>>>,
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
     id: String,
-) -> Result<ResolvedPrinter, String> {
-    let dir = config_dir(&app)?;
-    let mut file = load_printers_from(&dir)?;
-    manager.stop(&id);
-
-    {
-        let stored = file
-            .printers
-            .iter_mut()
-            .find(|p| p.id == id)
-            .ok_or_else(|| format!("no printer with id {id:?}"))?;
-        stored.connection = None;
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    if expected_revision <= 0 {
+        return Err(CommandError::validation_at(
+            "expectedRevision",
+            "The expected revision must be positive.",
+        ));
     }
-    write_printers_to(&dir, &file)?;
-    // Removing the secret last: a failure here leaves an orphaned credential,
-    // which is harmless, rather than an unusable config.
-    store(&app)?.delete(&credential_ref_for(&id))?;
-
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+    let services = bootstrap.ready()?;
+    let repository = PrinterRepository::new(Arc::clone(&services.storage));
+    let existing = repository
+        .get(&id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(&id))?;
+    if existing.revision != expected_revision {
+        return Err(CommandError::revision_conflict(
+            &id,
+            expected_revision,
+            existing.revision,
+        ));
+    }
+    let old = existing
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.credential_ref.clone());
+    if existing.connection.is_none() {
+        return Err(CommandError::revision_conflict(
+            &id,
+            expected_revision,
+            existing.revision,
+        ));
+    }
+    let updated = with_credential_coordination(|| {
+        repository.set_connection(&id, expected_revision, None, None, "cleared")
+    })
+    .map_err(CommandError::from_repository)?;
+    let mut warnings = Vec::new();
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    if !services.manager.stop_and_wait(&id).await {
+        warnings.push(OperationWarning::supervisor(&id));
+    }
+    if let Some(reference) = old.as_deref() {
+        let credential_store = Arc::clone(&services.credentials);
+        let _ = reference;
+        if retry_pending_credential_cleanup(&services.storage, credential_store.as_ref()).is_err() {
+            warnings.push(OperationWarning::cleanup());
+        }
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: resolve_printer(&services.catalog, &updated),
+        warnings,
+    }))
 }
 
 /// Probes the SUBMITTED config, not the stored one, so "Test connection"
 /// validates what the user typed before they commit it.
 #[tauri::command]
-pub async fn test_printer_connection(
-    app: AppHandle,
+pub async fn test_printer_connection<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
     id: String,
-    submission: ConnectionSubmission,
-) -> Result<ProbeResult, String> {
-    let (config, secret) = split_submission(submission, &id);
-    let api_key = match secret {
-        Some(secret) => Some(secret),
-        None => api_key_for(&app, &config)?,
+    mut submission: ConnectionSubmission,
+) -> Result<CommandSuccess<ProbeResult>, CommandError> {
+    contract_version.validate()?;
+    if submission.host.is_empty() {
+        return Err(CommandError::validation_at("host", "A host is required."));
+    }
+    if submission.port == 0 {
+        return Err(CommandError::validation_at(
+            "port",
+            "The port must be positive.",
+        ));
+    }
+    let services = bootstrap.ready()?;
+    let existing = PrinterRepository::new(Arc::clone(&services.storage))
+        .get(&id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(&id))?;
+    let omitted = submission.api_key.is_none();
+    let explicit = submission
+        .api_key
+        .take()
+        .map(zeroize::Zeroizing::new)
+        .map(|mut value| {
+            let trimmed = value.trim().to_string();
+            value.zeroize();
+            zeroize::Zeroizing::new(trimmed)
+        });
+    let committed_ref = if omitted {
+        existing
+            .connection
+            .and_then(|connection| connection.credential_ref)
+    } else {
+        None
     };
-    adapter(&config, api_key)?.probe().await.map_err(|e| e.to_string())
+    let config = ConnectionConfig {
+        kind: submission.kind,
+        host: submission.host,
+        port: submission.port,
+        use_tls: submission.use_tls,
+        credential_ref: committed_ref.clone(),
+    };
+    let api_key = match explicit {
+        Some(value) if value.is_empty() => None,
+        Some(value) => Some(value),
+        None => match committed_ref {
+            Some(reference) => Some(zeroize::Zeroizing::new(
+                services
+                    .credentials
+                    .get(&reference)
+                    .map_err(|_| {
+                        CommandError::credential_unavailable(match services.credentials.kind() {
+                            CredentialStoreKind::Keychain => "keychain",
+                            CredentialStoreKind::File => "fallbackFile",
+                        })
+                    })?
+                    .ok_or_else(|| CommandError::credential_required(&id))?,
+            )),
+            None => None,
+        },
+    };
+    let adapter_kind = config.kind.clone();
+    let connection =
+        adapter(&config, api_key).map_err(|_| CommandError::unsupported_adapter(&adapter_kind))?;
+    connection
+        .probe()
+        .await
+        .map(CommandSuccess::new)
+        .map_err(|error| {
+            use crate::connections::ConnectionError;
+            let (code, message, recovery, retryable) = match error {
+                ConnectionError::Unreachable(_) => (
+                    crate::contracts::command::ErrorCode::PrinterUnreachable,
+                    "The Printer could not be reached.",
+                    vec![
+                        crate::contracts::command::RecoveryCode::CheckConnection,
+                        crate::contracts::command::RecoveryCode::Retry,
+                    ],
+                    true,
+                ),
+                ConnectionError::Auth(_) => (
+                    crate::contracts::command::ErrorCode::AuthenticationFailed,
+                    "The Printer rejected the credential.",
+                    vec![
+                        crate::contracts::command::RecoveryCode::CheckCredentials,
+                        crate::contracts::command::RecoveryCode::ReenterCredential,
+                    ],
+                    false,
+                ),
+                ConnectionError::Protocol(_) => (
+                    crate::contracts::command::ErrorCode::ProtocolError,
+                    "The Printer returned an unexpected response.",
+                    vec![
+                        crate::contracts::command::RecoveryCode::CheckConnection,
+                        crate::contracts::command::RecoveryCode::Retry,
+                    ],
+                    true,
+                ),
+                ConnectionError::Timeout => (
+                    crate::contracts::command::ErrorCode::Timeout,
+                    "The Printer did not respond in time.",
+                    vec![
+                        crate::contracts::command::RecoveryCode::CheckConnection,
+                        crate::contracts::command::RecoveryCode::Retry,
+                    ],
+                    true,
+                ),
+            };
+            CommandError::safe_network(code, message, recovery, retryable, &id, &adapter_kind)
+        })
 }
 
 #[tauri::command]
-pub async fn credential_store_info(app: AppHandle) -> Result<CredentialStoreInfo, String> {
-    let store = store(&app)?;
-    Ok(CredentialStoreInfo {
+pub async fn credential_store_info<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<CredentialStoreInfo>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let store = &services.credentials;
+    Ok(CommandSuccess::new(CredentialStoreInfo {
         kind: store.kind(),
-        reason: store.unavailable_reason().map(str::to_string),
-    })
+        reason_code: store.unavailable_reason_code().map(str::to_string),
+    }))
 }
 
 #[tauri::command]
-pub async fn discover_printers() -> Vec<DiscoveredPrinter> {
+pub async fn discover_printers<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<Vec<DiscoveredPrinter>>, CommandError> {
+    contract_version.validate()?;
+    let _services = bootstrap.ready()?;
     // mdns-sd's receiver is blocking, so this belongs on the blocking pool
     // rather than parked on an async worker for three seconds.
-    tauri::async_runtime::spawn_blocking(|| discover(DISCOVERY_WINDOW))
+    let worker = async {
+        tauri::async_runtime::spawn_blocking(|| discover(DISCOVERY_WINDOW))
+            .await
+            .map_err(|_| CommandError::internal())?
+            .map_err(|_| CommandError::internal())
+    };
+    await_discovery(worker, DISCOVERY_HARD_TIMEOUT)
         .await
-        .unwrap_or_default()
+        .map(CommandSuccess::new)
+}
+
+async fn await_discovery<F>(
+    worker: F,
+    hard_timeout: Duration,
+) -> Result<Vec<DiscoveredPrinter>, CommandError>
+where
+    F: std::future::Future<Output = Result<Vec<DiscoveredPrinter>, CommandError>>,
+{
+    tokio::time::timeout(hard_timeout, worker)
+        .await
+        .map_err(|_| CommandError::discovery_timeout())?
 }
 
 /// Stays synchronous deliberately: this reads only the in-memory `StatusMap`
@@ -284,16 +624,134 @@ pub async fn discover_printers() -> Vec<DiscoveredPrinter> {
 #[tauri::command]
 pub fn printer_statuses<R: tauri::Runtime>(
     _app: AppHandle<R>,
-    manager: tauri::State<Arc<ConnectionManager<R>>>,
-) -> HashMap<String, PrinterStatus> {
-    manager.statuses()
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<crate::connections::supervisor::PrinterStatusBackfill>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    Ok(CommandSuccess::new(services.manager.status_backfill()))
+}
+
+/// Retries cleanup work that is safe to perform automatically. Imported
+/// orphan references are deliberately retained until a user resolves them.
+pub fn retry_pending_credential_cleanup(
+    storage: &Storage,
+    store: &dyn CredentialBackend,
+) -> Result<(), String> {
+    let _guard = credential_coordinator()
+        .lock()
+        .map_err(|_| "credential coordinator unavailable")?;
+    retry_pending_credential_cleanup_locked(storage, store)
+}
+
+fn retry_pending_credential_cleanup_locked(
+    storage: &Storage,
+    store: &dyn CredentialBackend,
+) -> Result<(), String> {
+    let pending = storage
+        .read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT credential_ref FROM pending_credential_cleanup WHERE reason != 'import_orphan' ORDER BY credential_ref",
+            )?;
+            let references = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(references)
+        })
+        .map_err(|error| error.to_string())?;
+    for reference in pending {
+        let reachable = storage.read(|connection| connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM printers WHERE json_extract(connection_json, '$.credentialRef') = ?1)",
+            [&reference], |row| row.get::<_, bool>(0)
+        )).map_err(|error| error.to_string())?;
+        if reachable {
+            continue;
+        }
+        if store.delete(&reference).is_err() {
+            storage.write(|transaction| {
+                transaction.execute("UPDATE pending_credential_cleanup SET attempt_count=attempt_count+1, last_error_code='CREDENTIAL_UNAVAILABLE', last_attempt_at=?2 WHERE credential_ref=?1", rusqlite::params![reference, crate::printers::now_rfc3339()])?;
+                Ok(())
+            }).map_err(|storage_error| storage_error.to_string())?;
+            return Err("credential cleanup unavailable".to_string());
+        }
+        storage
+            .write(|transaction| {
+                transaction.execute(
+                    "DELETE FROM pending_credential_cleanup WHERE credential_ref = ?1",
+                    [&reference],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contracts::command::ErrorCode;
     use std::cell::Cell;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn discovery_worker_failure_is_internal() {
+        let error = await_discovery(
+            async { Err(CommandError::internal()) },
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::Internal);
+    }
+
+    #[tokio::test]
+    async fn discovery_hard_guard_is_timeout() {
+        let error = await_discovery(
+            std::future::pending::<Result<Vec<DiscoveredPrinter>, CommandError>>(),
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::Timeout);
+        assert!(error.retryable);
+    }
+
+    #[test]
+    fn startup_cleanup_deletes_eligible_orphans_and_retains_import_orphans() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::persistence::StoragePaths::new(
+            temp.path().join("metadata"),
+            temp.path().join("data"),
+        )
+        .unwrap();
+        let lease = crate::persistence::MetadataRootLease::acquire(&paths).unwrap();
+        let storage = crate::persistence::Storage::open(paths, &lease).unwrap();
+        let store = CredentialStore::file_backed(temp.path().join("credentials"));
+        store.set("eligible", "DELETE_ME").unwrap();
+        store.set("imported", "KEEP_ME").unwrap();
+        storage.write(|transaction| {
+            transaction.execute("INSERT INTO pending_credential_cleanup(credential_ref, reason, created_at) VALUES ('eligible','provisional','now'), ('imported','import_orphan','now')", [])?;
+            Ok(())
+        }).unwrap();
+
+        retry_pending_credential_cleanup(&storage, &store).unwrap();
+
+        assert_eq!(store.get("eligible").unwrap(), None);
+        assert_eq!(store.get("imported").unwrap().as_deref(), Some("KEEP_ME"));
+        let rows = storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM pending_credential_cleanup",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
 
     #[test]
     fn credential_free_first_save_does_not_detect_a_store() {
@@ -324,18 +782,27 @@ mod tests {
 
     #[test]
     fn a_submitted_api_key_never_lands_in_the_persisted_config() {
-        let (config, secret) = split_submission(ConnectionSubmission {
-            kind: MOONRAKER_KIND.to_string(),
-            host: "voron.local".to_string(),
-            port: 7125,
-            use_tls: false,
-            api_key: Some("s3cret".to_string()),
-        }, "prn-1");
+        let (config, secret) = split_submission(
+            ConnectionSubmission {
+                kind: MOONRAKER_KIND.to_string(),
+                host: "voron.local".to_string(),
+                port: 7125,
+                use_tls: false,
+                api_key: Some("s3cret".to_string()),
+            },
+            "prn-1",
+        );
 
         assert_eq!(secret.as_deref(), Some("s3cret"));
-        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(
+            config.credential_ref.as_deref(),
+            Some("farm3d/printer/prn-1/apikey")
+        );
         let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("s3cret"), "the secret leaked into the persisted config");
+        assert!(
+            !json.contains("s3cret"),
+            "the secret leaked into the persisted config"
+        );
     }
 
     #[test]
@@ -343,13 +810,16 @@ mod tests {
         // Trusted-LAN Moonraker instances need no key; a dangling
         // credentialRef pointing at nothing would make the Connection tab
         // claim a credential exists when none does.
-        let (config, secret) = split_submission(ConnectionSubmission {
-            kind: MOONRAKER_KIND.to_string(),
-            host: "voron.local".to_string(),
-            port: 7125,
-            use_tls: false,
-            api_key: Some("   ".to_string()),
-        }, "prn-1");
+        let (config, secret) = split_submission(
+            ConnectionSubmission {
+                kind: MOONRAKER_KIND.to_string(),
+                host: "voron.local".to_string(),
+                port: 7125,
+                use_tls: false,
+                api_key: Some("   ".to_string()),
+            },
+            "prn-1",
+        );
         assert_eq!(secret, None);
         assert_eq!(config.credential_ref, None);
     }
@@ -358,15 +828,21 @@ mod tests {
     fn omitting_the_api_key_field_preserves_the_existing_reference() {
         // The UI never echoes a stored secret back, so "no api_key in this
         // submission" must mean "leave the stored one alone", not "clear it".
-        let (config, secret) = split_submission(ConnectionSubmission {
-            kind: MOONRAKER_KIND.to_string(),
-            host: "voron.local".to_string(),
-            port: 7125,
-            use_tls: false,
-            api_key: None,
-        }, "prn-1");
+        let (config, secret) = split_submission(
+            ConnectionSubmission {
+                kind: MOONRAKER_KIND.to_string(),
+                host: "voron.local".to_string(),
+                port: 7125,
+                use_tls: false,
+                api_key: None,
+            },
+            "prn-1",
+        );
         assert_eq!(secret, None);
-        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(
+            config.credential_ref.as_deref(),
+            Some("farm3d/printer/prn-1/apikey")
+        );
     }
 
     #[test]
@@ -374,15 +850,21 @@ mod tests {
         // A pasted key with accidental leading/trailing whitespace must not
         // be stored verbatim — it would fail as an `X-Api-Key` header value
         // against the real printer with no indication why.
-        let (config, secret) = split_submission(ConnectionSubmission {
-            kind: MOONRAKER_KIND.to_string(),
-            host: "voron.local".to_string(),
-            port: 7125,
-            use_tls: false,
-            api_key: Some("  s3cret  \n".to_string()),
-        }, "prn-1");
+        let (config, secret) = split_submission(
+            ConnectionSubmission {
+                kind: MOONRAKER_KIND.to_string(),
+                host: "voron.local".to_string(),
+                port: 7125,
+                use_tls: false,
+                api_key: Some("  s3cret  \n".to_string()),
+            },
+            "prn-1",
+        );
         assert_eq!(secret.as_deref(), Some("s3cret"));
-        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(
+            config.credential_ref.as_deref(),
+            Some("farm3d/printer/prn-1/apikey")
+        );
     }
 
     fn moonraker_config(credential_ref: Option<&str>) -> ConnectionConfig {
@@ -414,7 +896,10 @@ mod tests {
         // fresh key for the same printer, the new config still names a
         // credential — there is nothing to delete.
         let new_config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
-        assert_eq!(credential_to_clear(Some("farm3d/printer/prn-1/apikey"), &new_config), None);
+        assert_eq!(
+            credential_to_clear(Some("farm3d/printer/prn-1/apikey"), &new_config),
+            None
+        );
     }
 
     #[test]
@@ -441,7 +926,10 @@ mod tests {
         // secret is untouched must keep pointing at it.
         let mut config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
         settle_credential_ref(&mut config, true, Some("farm3d/printer/prn-1/apikey"));
-        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(
+            config.credential_ref.as_deref(),
+            Some("farm3d/printer/prn-1/apikey")
+        );
     }
 
     #[test]
@@ -450,6 +938,9 @@ mod tests {
         // the derived ref stands whether or not one was stored before.
         let mut config = moonraker_config(Some("farm3d/printer/prn-1/apikey"));
         settle_credential_ref(&mut config, false, None);
-        assert_eq!(config.credential_ref.as_deref(), Some("farm3d/printer/prn-1/apikey"));
+        assert_eq!(
+            config.credential_ref.as_deref(),
+            Some("farm3d/printer/prn-1/apikey")
+        );
     }
 }

@@ -5,6 +5,10 @@ use crate::catalog::{BedShape, PointMm, PrinterProfile};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
+
+pub mod commands;
+pub mod repository;
 
 const PRINTERS_FILE_NAME: &str = "printers.json";
 const PRINTERS_SCHEMA_VERSION: u32 = 1;
@@ -20,9 +24,10 @@ pub struct PrintersFile {
 #[serde(rename_all = "camelCase", default)]
 pub struct StoredPrinter {
     pub id: String,
+    #[serde(default)]
+    pub revision: i64,
     pub name: String,
     pub catalog_ref: CatalogRef,
-    pub group: String,
     pub notes: String,
     #[serde(skip_serializing_if = "PrinterProfileOverrides::is_empty")]
     pub overrides: PrinterProfileOverrides,
@@ -33,10 +38,15 @@ pub struct StoredPrinter {
     /// never here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<crate::connections::ConnectionConfig>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
 #[serde(rename_all = "camelCase", default)]
+#[ts(rename_all = "camelCase", export_to = "domain/CatalogRef.ts")]
 pub struct CatalogRef {
     pub vendor: String,
     pub model: String,
@@ -78,8 +88,9 @@ impl PrinterProfileOverrides {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/LastKnownGood.ts")]
 pub struct LastKnownGood {
     pub profile: PrinterProfile,
     pub catalog_version: String,
@@ -122,7 +133,10 @@ pub fn load_printers_from(config_dir: &Path) -> Result<PrintersFile, String> {
             // Quarantine, never silently default to empty — unlike settings.json,
             // the next save here would overwrite the user's Farm with `[]`.
             use std::time::{SystemTime, UNIX_EPOCH};
-            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let quarantine_path = config_dir.join(format!("{PRINTERS_FILE_NAME}.corrupt-{ts}"));
             fs::rename(&path, &quarantine_path).map_err(|e| e.to_string())?;
             Err(format!(
@@ -139,7 +153,9 @@ pub fn apply_override(
     value: Option<serde_json::Value>,
 ) -> Result<PrinterProfileOverrides, String> {
     if !OVERRIDABLE_FIELDS.contains(&field) {
-        return Err(format!("`{field}` is not an overridable Printer Profile field"));
+        return Err(format!(
+            "`{field}` is not an overridable Printer Profile field"
+        ));
     }
     let mut map = match serde_json::to_value(overrides).map_err(|e| e.to_string())? {
         serde_json::Value::Object(m) => m,
@@ -161,21 +177,21 @@ use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, ResolvedPrin
 use crate::catalog::{Catalog, CatalogVariant};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_opener::OpenerExt;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrinterDraft {
     pub name: String,
     pub catalog_ref: CatalogRef,
-    pub group: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "command/PrinterPatch.ts")]
 pub struct PrinterPatch {
+    #[ts(optional)]
     pub name: Option<String>,
-    pub group: Option<String>,
+    #[ts(optional)]
     pub notes: Option<String>,
 }
 
@@ -202,7 +218,10 @@ static ID_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32:
 fn generate_id() -> String {
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("prn-{:x}-{:x}", nanos & 0xFFFF_FFFF, seq)
 }
@@ -220,17 +239,19 @@ fn baseline_from(variant: &CatalogVariant, catalog: &Catalog) -> LastKnownGood {
     }
 }
 
-#[tauri::command]
-pub fn list_printers<R: tauri::Runtime>(
+pub fn list_printers_legacy<R: tauri::Runtime>(
     app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
 ) -> Result<Vec<ResolvedPrinter>, String> {
     let file = load_printers_from(&app_config_dir(&app)?)?;
-    Ok(file.printers.iter().map(|p| resolve_printer(&catalog, p)).collect())
+    Ok(file
+        .printers
+        .iter()
+        .map(|p| resolve_printer(&catalog, p))
+        .collect())
 }
 
-#[tauri::command]
-pub fn create_printer<R: tauri::Runtime>(
+pub fn create_printer_legacy<R: tauri::Runtime>(
     app: AppHandle<R>,
     catalog: tauri::State<Arc<Catalog>>,
     draft: PrinterDraft,
@@ -245,13 +266,15 @@ pub fn create_printer<R: tauri::Runtime>(
 
     let stored = StoredPrinter {
         id: generate_id(),
+        revision: 0,
         name: draft.name,
         catalog_ref: draft.catalog_ref,
-        group: draft.group.unwrap_or_default(),
         notes: String::new(),
         overrides: PrinterProfileOverrides::default(),
         last_known_good: Some(baseline_from(variant, &catalog)),
         connection: None,
+        created_at: String::new(),
+        updated_at: String::new(),
     };
 
     let resolved = resolve_printer(&catalog, &stored);
@@ -260,8 +283,7 @@ pub fn create_printer<R: tauri::Runtime>(
     Ok(resolved)
 }
 
-#[tauri::command]
-pub fn update_printer(
+pub fn update_printer_legacy(
     app: AppHandle,
     catalog: tauri::State<Arc<Catalog>>,
     id: String,
@@ -274,15 +296,15 @@ pub fn update_printer(
         if let Some(name) = patch.name {
             stored.name = name;
         }
-        if let Some(group) = patch.group {
-            stored.group = group;
-        }
         if let Some(notes) = patch.notes {
             stored.notes = notes;
         }
     }
     write_printers_to(&config_dir, &file)?;
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+    Ok(resolve_printer(
+        &catalog,
+        file.printers.iter().find(|p| p.id == id).unwrap(),
+    ))
 }
 
 /// The credential (if any) a deleted printer's connection pointed at, so the
@@ -297,8 +319,7 @@ fn credential_to_forget(file: &PrintersFile, id: &str) -> Option<String> {
         .and_then(|c| c.credential_ref.clone())
 }
 
-#[tauri::command]
-pub async fn delete_printer<R: tauri::Runtime>(
+pub async fn delete_printer_legacy<R: tauri::Runtime>(
     app: AppHandle<R>,
     manager: tauri::State<'_, Arc<crate::connections::supervisor::ConnectionManager<R>>>,
     id: String,
@@ -315,15 +336,15 @@ pub async fn delete_printer<R: tauri::Runtime>(
     // place the UI can ever re-enter one, so once it's gone the credential
     // would otherwise be orphaned in the keychain/file store forever.
     if let Some(key) = credential_to_forget(&file, &id) {
-        crate::connections::credentials::CredentialStore::detect(config_dir.clone()).delete(&key)?;
+        crate::connections::credentials::CredentialStore::detect(config_dir.clone())
+            .delete(&key)?;
     }
 
     file.printers.retain(|p| p.id != id);
     write_printers_to(&config_dir, &file)
 }
 
-#[tauri::command]
-pub fn set_printer_override(
+pub fn set_printer_override_legacy(
     app: AppHandle,
     catalog: tauri::State<Arc<Catalog>>,
     id: String,
@@ -337,11 +358,13 @@ pub fn set_printer_override(
         stored.overrides = apply_override(&stored.overrides, &field, value)?;
     }
     write_printers_to(&config_dir, &file)?;
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+    Ok(resolve_printer(
+        &catalog,
+        file.printers.iter().find(|p| p.id == id).unwrap(),
+    ))
 }
 
-#[tauri::command]
-pub fn rebind_printer(
+pub fn rebind_printer_legacy(
     app: AppHandle,
     catalog: tauri::State<Arc<Catalog>>,
     id: String,
@@ -360,7 +383,10 @@ pub fn rebind_printer(
         stored.last_known_good = Some(baseline_from(variant, &catalog));
     }
     write_printers_to(&config_dir, &file)?;
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
+    Ok(resolve_printer(
+        &catalog,
+        file.printers.iter().find(|p| p.id == id).unwrap(),
+    ))
 }
 
 /// "Keep my value": pins each drifted field back to its OLD (last-known-good)
@@ -381,13 +407,12 @@ fn pin_drift(
         if !OVERRIDABLE_FIELDS.contains(&d.field.as_str()) {
             continue;
         }
-        updated = apply_override(&updated, &d.field, Some(d.from.clone()))?;
+        updated = apply_override(&updated, &d.field, Some(d.from.clone().into_serde_value()))?;
     }
     Ok(updated)
 }
 
-#[tauri::command]
-pub fn resolve_profile_drift(
+pub fn resolve_profile_drift_legacy(
     app: AppHandle,
     catalog: tauri::State<Arc<Catalog>>,
     id: String,
@@ -409,28 +434,19 @@ pub fn resolve_profile_drift(
                 stored_ref.last_known_good = Some(baseline_from(variant, &catalog));
             }
             "pin" => {
-                stored_ref.overrides = pin_drift(&stored_ref.overrides, &resolved.profile_drift)?;
+                stored_ref.overrides = pin_drift(
+                    &stored_ref.overrides,
+                    &resolved.profile_resolution.profile_drift,
+                )?;
             }
             other => return Err(format!("unknown drift action: {other:?}")),
         }
     }
     write_printers_to(&config_dir, &file)?;
-    Ok(resolve_printer(&catalog, file.printers.iter().find(|p| p.id == id).unwrap()))
-}
-
-#[tauri::command]
-pub fn open_printers_file(app: AppHandle) -> Result<(), String> {
-    let config_dir = app_config_dir(&app)?;
-    let path = printers_file_path(&config_dir);
-    if !path.exists() {
-        write_printers_to(
-            &config_dir,
-            &PrintersFile { schema_version: PRINTERS_SCHEMA_VERSION, printers: vec![] },
-        )?;
-    }
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+    Ok(resolve_printer(
+        &catalog,
+        file.printers.iter().find(|p| p.id == id).unwrap(),
+    ))
 }
 
 /// A dependency-free RFC3339 UTC timestamp for `LastKnownGood.resolved_at` —
@@ -439,7 +455,10 @@ pub fn open_printers_file(app: AppHandle) -> Result<(), String> {
 /// wouldn't be portable inside the shipped app).
 pub fn now_rfc3339() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     rfc3339_from_unix_seconds(secs)
 }
 
@@ -479,7 +498,10 @@ mod rfc3339_tests {
     #[test]
     fn a_known_timestamp_round_trips_correctly() {
         // 946684800 is the well-known Unix timestamp for 2000-01-01T00:00:00Z.
-        assert_eq!(rfc3339_from_unix_seconds(946_684_800), "2000-01-01T00:00:00Z");
+        assert_eq!(
+            rfc3339_from_unix_seconds(946_684_800),
+            "2000-01-01T00:00:00Z"
+        );
     }
 }
 
@@ -492,7 +514,11 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("farm3d-printers-test-{}-{}", std::process::id(), id))
+        std::env::temp_dir().join(format!(
+            "farm3d-printers-test-{}-{}",
+            std::process::id(),
+            id
+        ))
     }
 
     fn persistence_fixture(name: &str) -> PathBuf {
@@ -514,16 +540,30 @@ mod tests {
         assert_eq!(loaded.printers.len(), 2);
         assert_eq!(loaded.printers[0].id, "prn-f0-profile-only");
         assert_eq!(loaded.printers[0].connection, None);
-        assert_eq!(loaded.printers[0].overrides.printable_height_mm, Some(245.0));
         assert_eq!(
-            loaded.printers[0].overrides.extra.get("futureBaselineField"),
+            loaded.printers[0].overrides.printable_height_mm,
+            Some(245.0)
+        );
+        assert_eq!(
+            loaded.printers[0]
+                .overrides
+                .extra
+                .get("futureBaselineField"),
             Some(&serde_json::json!({ "preserved": true }))
         );
         let connected = &loaded.printers[1];
         assert_eq!(connected.id, "prn-f0-connected");
-        assert_eq!(connected.connection.as_ref().unwrap().host, "moonraker.invalid");
         assert_eq!(
-            connected.connection.as_ref().unwrap().credential_ref.as_deref(),
+            connected.connection.as_ref().unwrap().host,
+            "moonraker.invalid"
+        );
+        assert_eq!(
+            connected
+                .connection
+                .as_ref()
+                .unwrap()
+                .credential_ref
+                .as_deref(),
             Some("farm3d/printer/prn-f0-connected/apikey")
         );
         let raw = fs::read_to_string(fixture).unwrap();
@@ -534,6 +574,7 @@ mod tests {
     fn a_printer() -> StoredPrinter {
         StoredPrinter {
             id: "prn-1".to_string(),
+            revision: 0,
             name: "Test Printer".to_string(),
             catalog_ref: CatalogRef {
                 vendor: "TestVendor".to_string(),
@@ -542,11 +583,12 @@ mod tests {
                 model_id: "TestVendor-TP".to_string(),
                 printer_variant: "0.4".to_string(),
             },
-            group: String::new(),
             notes: String::new(),
             overrides: PrinterProfileOverrides::default(),
             last_known_good: None,
             connection: None,
+            created_at: String::new(),
+            updated_at: String::new(),
         }
     }
 
@@ -554,7 +596,13 @@ mod tests {
     fn load_creates_empty_file_when_missing() {
         let dir = temp_dir();
         let loaded = load_printers_from(&dir).unwrap();
-        assert_eq!(loaded, PrintersFile { schema_version: 1, printers: vec![] });
+        assert_eq!(
+            loaded,
+            PrintersFile {
+                schema_version: 1,
+                printers: vec![]
+            }
+        );
         assert!(printers_file_path(&dir).exists());
         fs::remove_dir_all(&dir).ok();
     }
@@ -562,7 +610,10 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let dir = temp_dir();
-        let file = PrintersFile { schema_version: 1, printers: vec![a_printer()] };
+        let file = PrintersFile {
+            schema_version: 1,
+            printers: vec![a_printer()],
+        };
         write_printers_to(&dir, &file).unwrap();
         let loaded = load_printers_from(&dir).unwrap();
         assert_eq!(loaded, file);
@@ -576,14 +627,25 @@ mod tests {
         fs::write(printers_file_path(&dir), "not valid json").unwrap();
 
         let result = load_printers_from(&dir);
-        assert!(result.is_err(), "a corrupt printers.json must be an error, not a silent default");
+        assert!(
+            result.is_err(),
+            "a corrupt printers.json must be an error, not a silent default"
+        );
 
         let quarantined: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains("printers.json.corrupt-"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("printers.json.corrupt-")
+            })
             .collect();
-        assert_eq!(quarantined.len(), 1, "corrupt file should be quarantined, not deleted");
+        assert_eq!(
+            quarantined.len(),
+            1,
+            "corrupt file should be quarantined, not deleted"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -605,7 +667,10 @@ mod tests {
             .overrides
             .extra
             .insert("printabelHeight".to_string(), serde_json::json!(300));
-        let file = PrintersFile { schema_version: 1, printers: vec![printer] };
+        let file = PrintersFile {
+            schema_version: 1,
+            printers: vec![printer],
+        };
         write_printers_to(&dir, &file).unwrap();
 
         let loaded = load_printers_from(&dir).unwrap();
@@ -619,8 +684,12 @@ mod tests {
     #[test]
     fn apply_override_sets_a_field() {
         let overrides = PrinterProfileOverrides::default();
-        let updated =
-            apply_override(&overrides, "printableHeightMm", Some(serde_json::json!(240.0))).unwrap();
+        let updated = apply_override(
+            &overrides,
+            "printableHeightMm",
+            Some(serde_json::json!(240.0)),
+        )
+        .unwrap();
         assert_eq!(updated.printable_height_mm, Some(240.0));
     }
 
@@ -635,14 +704,22 @@ mod tests {
     #[test]
     fn apply_override_rejects_a_non_overridable_field() {
         let overrides = PrinterProfileOverrides::default();
-        let result = apply_override(&overrides, "nozzleDiameterMm", Some(serde_json::json!([0.6])));
+        let result = apply_override(
+            &overrides,
+            "nozzleDiameterMm",
+            Some(serde_json::json!([0.6])),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn apply_override_with_wrong_type_errors_and_leaves_struct_untouched() {
         let overrides = PrinterProfileOverrides::default();
-        let result = apply_override(&overrides, "printableHeightMm", Some(serde_json::json!("not a number")));
+        let result = apply_override(
+            &overrides,
+            "printableHeightMm",
+            Some(serde_json::json!("not a number")),
+        );
         assert!(result.is_err());
     }
 
@@ -729,19 +806,40 @@ mod tests {
         });
 
         let resolved = resolve_printer(&catalog, &printer);
-        let drifted: Vec<_> = resolved.profile_drift.iter().map(|d| d.field.as_str()).collect();
-        assert!(drifted.contains(&"printableHeightMm"), "expected height drift, got {drifted:?}");
-        assert!(drifted.contains(&"nozzleType"), "expected nozzleType drift, got {drifted:?}");
+        let drifted: Vec<_> = resolved
+            .profile_resolution
+            .profile_drift
+            .iter()
+            .map(|d| d.field.as_str())
+            .collect();
+        assert!(
+            drifted.contains(&"printableHeightMm"),
+            "expected height drift, got {drifted:?}"
+        );
+        assert!(
+            drifted.contains(&"nozzleType"),
+            "expected nozzleType drift, got {drifted:?}"
+        );
 
-        let pinned = pin_drift(&printer.overrides, &resolved.profile_drift)
-            .expect("pinning must not fail just because drift includes a non-overridable field");
+        let pinned = pin_drift(
+            &printer.overrides,
+            &resolved.profile_resolution.profile_drift,
+        )
+        .expect("pinning must not fail just because drift includes a non-overridable field");
 
         // The overridable field is pinned to its OLD value...
         assert_eq!(pinned.printable_height_mm, Some(200.0));
         // ...and the non-overridable one is simply not recorded anywhere.
         let json = serde_json::to_value(&pinned).unwrap();
-        assert!(json.get("nozzleType").is_none(), "nozzleType must not be pinned");
-        assert!(pinned.extra.is_empty(), "no stray override keys: {:?}", pinned.extra);
+        assert!(
+            json.get("nozzleType").is_none(),
+            "nozzleType must not be pinned"
+        );
+        assert!(
+            pinned.extra.is_empty(),
+            "no stray override keys: {:?}",
+            pinned.extra
+        );
     }
 
     #[test]
@@ -803,7 +901,10 @@ mod tests {
             use_tls: false,
             credential_ref: Some("farm3d/printer/prn-1/apikey".to_string()),
         });
-        let file = PrintersFile { schema_version: 1, printers: vec![printer] };
+        let file = PrintersFile {
+            schema_version: 1,
+            printers: vec![printer],
+        };
 
         assert_eq!(
             credential_to_forget(&file, "prn-1"),
@@ -813,7 +914,10 @@ mod tests {
 
     #[test]
     fn credential_to_forget_is_none_when_the_printer_has_no_connection() {
-        let file = PrintersFile { schema_version: 1, printers: vec![a_printer()] };
+        let file = PrintersFile {
+            schema_version: 1,
+            printers: vec![a_printer()],
+        };
         assert_eq!(credential_to_forget(&file, "prn-1"), None);
         // Also None for an id that isn't even in the file, rather than panicking.
         assert_eq!(credential_to_forget(&file, "prn-ghost"), None);
@@ -840,7 +944,10 @@ mod tests {
             use_tls: false,
             credential_ref: Some(key.clone()),
         });
-        let mut file = PrintersFile { schema_version: 1, printers: vec![printer] };
+        let mut file = PrintersFile {
+            schema_version: 1,
+            printers: vec![printer],
+        };
         write_printers_to(&dir, &file).unwrap();
 
         let store = CredentialStore::file_backed(dir.clone());
@@ -855,7 +962,11 @@ mod tests {
         file.printers.retain(|p| p.id != "prn-1");
         write_printers_to(&dir, &file).unwrap();
 
-        assert_eq!(store.get(&key).unwrap(), None, "credential must not survive printer deletion");
+        assert_eq!(
+            store.get(&key).unwrap(),
+            None,
+            "credential must not survive printer deletion"
+        );
         assert!(load_printers_from(&dir).unwrap().printers.is_empty());
         fs::remove_dir_all(&dir).ok();
     }
@@ -867,6 +978,10 @@ mod tests {
         // creating several printers in a tight loop (exactly what an "add
         // another like this" shortcut does) could produce duplicate ids.
         let ids: std::collections::HashSet<String> = (0..1000).map(|_| generate_id()).collect();
-        assert_eq!(ids.len(), 1000, "generate_id produced a duplicate under rapid, repeated calls");
+        assert_eq!(
+            ids.len(),
+            1000,
+            "generate_id produced a duplicate under rapid, repeated calls"
+        );
     }
 }
