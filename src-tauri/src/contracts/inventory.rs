@@ -142,7 +142,7 @@ impl ts_rs::TS for CommandContracts {
         r#"type ContractRequest = { contractVersion: 1 };
 export type LoadSettingsRequest = NoArgsRequest;
 export type LoadSettingsResult = CommandSuccess<SettingsRecord>;
-export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string };
+export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string; monitorSection: MonitorSection; monitorDensity: MonitorDensity };
 export type SaveSettingsResult = CommandSuccess<SettingsRecord>;
 export type ExportSettingsRequest = NoArgsRequest;
 export type ExportSettingsResult = CommandSuccess<SettingsExportOutcome>;
@@ -196,6 +196,8 @@ export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_
         visitor.visit::<crate::contracts::command::JsonValue>();
         visitor.visit::<crate::contracts::domain::NoArgsRequest>();
         visitor.visit::<crate::settings::commands::SettingsRecord>();
+        visitor.visit::<crate::settings::commands::MonitorSection>();
+        visitor.visit::<crate::settings::commands::MonitorDensity>();
         visitor.visit::<crate::settings::commands::ExportResult>();
         visitor.visit::<crate::settings::commands::SettingsImportResult>();
         visitor.visit::<crate::printers::commands::PrinterRevisionPrecondition>();

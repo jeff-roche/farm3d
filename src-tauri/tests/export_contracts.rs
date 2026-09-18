@@ -31,7 +31,8 @@ use farm3d_lib::printers::commands::{
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch};
 use farm3d_lib::settings::commands::{
-    ExportResult as SettingsExportResult, SettingsImportResult, SettingsRecord,
+    ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
+    SettingsRecord,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -182,6 +183,8 @@ fn export_registry() -> Vec<Export> {
         export::<CommandContracts>(),
         export::<NoArgsRequest>(),
         export::<SettingsRecord>(),
+        export::<MonitorSection>(),
+        export::<MonitorDensity>(),
         export::<PrinterRevisionPrecondition>(),
         export::<ConnectionConfig>(),
         export::<ConnectionSubmission>(),

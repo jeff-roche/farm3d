@@ -11,6 +11,56 @@ use crate::persistence::{SnapshotKind, Storage};
 
 use super::repository::{SettingsRecord as PersistedSettingsRecord, SettingsRepository};
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/MonitorSection.ts")]
+pub enum MonitorSection {
+    Location,
+    PrinterModel,
+    OperationalState,
+    None,
+}
+
+impl MonitorSection {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Location => "location",
+            Self::PrinterModel => "printerModel",
+            Self::OperationalState => "operationalState",
+            Self::None => "none",
+        }
+    }
+}
+
+impl Default for MonitorSection {
+    fn default() -> Self {
+        Self::PrinterModel
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/MonitorDensity.ts")]
+pub enum MonitorDensity {
+    Comfortable,
+    Compact,
+}
+
+impl MonitorDensity {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Comfortable => "comfortable",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+impl Default for MonitorDensity {
+    fn default() -> Self {
+        Self::Comfortable
+    }
+}
+
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/SettingsRecord.ts")]
@@ -18,6 +68,8 @@ pub struct SettingsRecord {
     #[ts(type = "number")]
     revision: i64,
     theme_mode: String,
+    monitor_section: MonitorSection,
+    monitor_density: MonitorDensity,
     updated_at: String,
 }
 
@@ -26,6 +78,8 @@ impl From<PersistedSettingsRecord> for SettingsRecord {
         Self {
             revision: value.revision,
             theme_mode: value.theme_mode,
+            monitor_section: value.monitor_section,
+            monitor_density: value.monitor_density,
             updated_at: value.updated_at,
         }
     }
@@ -87,6 +141,8 @@ struct SettingsDocument<'a> {
 #[serde(rename_all = "camelCase")]
 struct SettingsData<'a> {
     theme_mode: &'a str,
+    monitor_section: MonitorSection,
+    monitor_density: MonitorDensity,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +159,10 @@ struct ImportedSettingsDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ImportedSettings {
     theme_mode: String,
+    #[serde(default)]
+    monitor_section: MonitorSection,
+    #[serde(default)]
+    monitor_density: MonitorDensity,
 }
 
 fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, CommandError> {
@@ -117,11 +177,11 @@ fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, Com
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 1 {
+    if version > 2 {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 {
-        return Err(CommandError::validation("schemaVersion must be 1."));
+    if !(1..=2).contains(&version) {
+        return Err(CommandError::validation("schemaVersion must be 1 or 2."));
     }
     let document: ImportedSettingsDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Settings document has an invalid shape.")
@@ -157,11 +217,18 @@ pub fn save_settings<R: tauri::Runtime>(
     contract_version: IncomingContractVersion,
     expected_revision: i64,
     theme_mode: String,
+    monitor_section: MonitorSection,
+    monitor_density: MonitorDensity,
 ) -> Result<CommandSuccess<SettingsRecord>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
     repository(&services.storage)
-        .save(expected_revision, &theme_mode)
+        .save(
+            expected_revision,
+            &theme_mode,
+            monitor_section,
+            monitor_density,
+        )
         .map(|record| CommandSuccess::new(record.into()))
         .map_err(CommandError::from_repository)
 }
@@ -182,10 +249,12 @@ pub async fn export_settings<R: tauri::Runtime>(
         .map_err(|error| CommandError::from_repository(error.into()))?;
     let exported_at = crate::printers::now_rfc3339();
     let document = SettingsDocument {
-        schema_version: 1,
+        schema_version: 2,
         exported_at: &exported_at,
         settings: SettingsData {
             theme_mode: &record.theme_mode,
+            monitor_section: record.monitor_section,
+            monitor_density: record.monitor_density,
         },
     };
     let bytes = serde_json::to_vec_pretty(&document).map_err(|_| CommandError::internal())?;
@@ -226,7 +295,12 @@ pub async fn import_settings<R: tauri::Runtime>(
         .map_err(|_| CommandError::persistence_unavailable())?;
     services.documents.after_snapshot(DocumentKind::Settings)?;
     let settings = repository(&services.storage)
-        .save(expected_revision, &document.settings.theme_mode)
+        .save(
+            expected_revision,
+            &document.settings.theme_mode,
+            document.settings.monitor_section,
+            document.settings.monitor_density,
+        )
         .map_err(CommandError::from_repository)?;
     Ok(CommandSuccess::new(SettingsImportResult::Applied {
         settings: settings.into(),
@@ -247,7 +321,7 @@ mod tests {
         );
         assert_eq!(
             parse_settings_document(
-                br#"{"schemaVersion":2,"exportedAt":"x","settings":{"themeMode":"system"}}"#
+                br#"{"schemaVersion":3,"exportedAt":"x","settings":{"themeMode":"system"}}"#
             )
             .unwrap_err()
             .code,
@@ -264,12 +338,57 @@ mod tests {
     }
 
     #[test]
-    fn settings_import_accepts_only_the_schema_one_shape() {
+    fn settings_import_accepts_schema_one_defaults_and_schema_two_preferences() {
         let document = parse_settings_document(
             br#"{"schemaVersion":1,"exportedAt":"x","settings":{"themeMode":"farm3d-dark"}}"#,
         )
         .unwrap();
         assert_eq!(document.settings.theme_mode, "farm3d-dark");
+        assert_eq!(
+            document.settings.monitor_section,
+            MonitorSection::PrinterModel
+        );
+        assert_eq!(
+            document.settings.monitor_density,
+            MonitorDensity::Comfortable
+        );
+
+        let document = parse_settings_document(
+            br#"{"schemaVersion":2,"exportedAt":"x","settings":{"themeMode":"farm3d-dark","monitorSection":"operationalState","monitorDensity":"compact"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            document.settings.monitor_section,
+            MonitorSection::OperationalState
+        );
+        assert_eq!(document.settings.monitor_density, MonitorDensity::Compact);
+        assert!(parse_settings_document(br#"{"schemaVersion":2,"exportedAt":"x","settings":{"themeMode":"system","monitorSection":"invalid","monitorDensity":"comfortable"}}"#).is_err());
         assert!(parse_settings_document(br#"{"schemaVersion":1,"exportedAt":"x","settings":{"themeMode":"system","extra":true}}"#).is_err());
+    }
+
+    #[test]
+    fn settings_export_uses_schema_two_with_explicit_monitor_preferences() {
+        let document = SettingsDocument {
+            schema_version: 2,
+            exported_at: "2026-09-18T00:00:00Z",
+            settings: SettingsData {
+                theme_mode: "farm3d-dark",
+                monitor_section: MonitorSection::OperationalState,
+                monitor_density: MonitorDensity::Compact,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(document).expect("settings document"),
+            serde_json::json!({
+                "schemaVersion": 2,
+                "exportedAt": "2026-09-18T00:00:00Z",
+                "settings": {
+                    "themeMode": "farm3d-dark",
+                    "monitorSection": "operationalState",
+                    "monitorDensity": "compact"
+                }
+            })
+        );
     }
 }

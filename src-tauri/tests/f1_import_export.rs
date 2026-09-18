@@ -8,6 +8,7 @@ use farm3d_lib::document_io::{DocumentIo, DocumentKind};
 use farm3d_lib::persistence::{FailurePoint, MetadataRootLease, Storage, StoragePaths};
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::{CatalogRef, StoredPrinter};
+use farm3d_lib::settings::commands::{MonitorDensity, MonitorSection};
 use farm3d_lib::settings::repository::SettingsRepository;
 use farm3d_lib::RuntimeServices;
 use serde_json::{json, Value};
@@ -254,7 +255,12 @@ fn settings_import_maps_read_snapshot_validation_and_stale_failures_without_writ
                 let storage = Arc::clone(&storage);
                 *documents.after_snapshot.lock().unwrap() = Some(Box::new(move || {
                     SettingsRepository::new(storage)
-                        .save(1, "farm3d-light")
+                        .save(
+                            1,
+                            "farm3d-light",
+                            MonitorSection::PrinterModel,
+                            MonitorDensity::Comfortable,
+                        )
                         .unwrap();
                 }));
             }

@@ -19,6 +19,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
 
     use super::*;
@@ -177,14 +178,75 @@ mod tests {
 
         let state = storage
             .read(|connection| {
-                let version = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+                let version: i64 =
+                    connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
                 let settings =
                     connection.query_row("SELECT count(*) FROM settings", [], |row| row.get(0))?;
                 Ok((version, settings))
             })
             .expect("schema state");
 
-        assert_eq!(state, (1_i64, 0_i64));
+        assert_eq!(state, (2_i64, 0_i64));
+    }
+
+    #[test]
+    fn opening_a_v1_database_applies_monitor_preferences_without_changing_settings() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
+            .expect("storage paths");
+        let lease = MetadataRootLease::acquire(&paths).expect("metadata lease");
+        let connection = rusqlite::Connection::open(paths.database()).expect("v1 database");
+        let foundation = include_str!("../../migrations/0001_foundation.sql");
+        connection
+            .execute_batch(foundation)
+            .expect("foundation schema");
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (1, '0001_foundation', ?1, '2026-09-18T00:00:00Z')",
+                [format!("{:x}", Sha256::digest(foundation.as_bytes()))],
+            )
+            .expect("foundation ledger entry");
+        connection
+            .execute(
+                "INSERT INTO settings(singleton_id, revision, theme_mode, updated_at) VALUES (1, 7, 'farm3d-dark', '2026-09-18T00:00:00Z')",
+                [],
+            )
+            .expect("v1 settings");
+        connection
+            .execute_batch("PRAGMA user_version = 1")
+            .expect("v1 version");
+        drop(connection);
+
+        let storage = Storage::open(paths, &lease).expect("migrated storage");
+        let state = storage
+            .read(|connection| {
+                let version: i64 =
+                    connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+                let settings = connection.query_row(
+                    "SELECT revision, theme_mode, monitor_section, monitor_density FROM settings WHERE singleton_id = 1",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+                )?;
+                let cache_exists = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'printer_status_snapshots')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                Ok((version, settings, cache_exists))
+            })
+            .expect("migrated state");
+
+        assert_eq!(state.0, 2_i64);
+        assert_eq!(
+            state.1,
+            (
+                7_i64,
+                "farm3d-dark".to_string(),
+                "printerModel".to_string(),
+                "comfortable".to_string()
+            )
+        );
+        assert!(state.2);
     }
 
     #[test]
@@ -204,7 +266,7 @@ mod tests {
             })
             .expect("migration count");
 
-        assert_eq!(migration_count, 1_i64);
+        assert_eq!(migration_count, 2_i64);
     }
 
     #[test]
@@ -259,7 +321,10 @@ mod tests {
         drop(Storage::open(paths.clone(), &lease).expect("first open"));
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
-            .execute("UPDATE schema_migrations SET name = '0001_changed'", [])
+            .execute(
+                "UPDATE schema_migrations SET name = '0001_changed' WHERE version = 1",
+                [],
+            )
             .expect("tamper migration name");
         drop(connection);
 
@@ -373,7 +438,7 @@ mod tests {
         drop(Storage::open(paths.clone(), &lease).expect("first open"));
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
-            .execute_batch("PRAGMA user_version = 2")
+            .execute_batch("PRAGMA user_version = 3")
             .expect("future version");
         drop(connection);
 
@@ -1014,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn foundation_schema_inventory_is_exact_and_strict() {
+    fn current_schema_inventory_is_exact_and_strict() {
         let (_temp, _paths, _lease, storage) = open_storage();
 
         let inventory = storage
@@ -1053,6 +1118,7 @@ mod tests {
                     ("table", "legacy_imports"),
                     ("table", "migration_warnings"),
                     ("table", "pending_credential_cleanup"),
+                    ("table", "printer_status_snapshots"),
                     ("table", "printers"),
                     ("table", "schema_migrations"),
                     ("table", "settings"),
@@ -1063,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn foundation_schema_columns_defaults_nullability_and_warning_index_are_exact() {
+    fn current_schema_columns_defaults_nullability_and_warning_index_are_exact() {
         let (_temp, _paths, _lease, storage) = open_storage();
 
         let (columns, warning_index_sql) = storage
@@ -1165,6 +1231,31 @@ mod tests {
                 None,
                 0,
             ),
+            ("printer_status_snapshots", "printer_id", "TEXT", 1, None, 1),
+            (
+                "printer_status_snapshots",
+                "telemetry_json",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            (
+                "printer_status_snapshots",
+                "last_observed_at",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            (
+                "printer_status_snapshots",
+                "persisted_at",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             ("printers", "id", "TEXT", 1, None, 1),
             ("printers", "revision", "INTEGER", 1, None, 0),
             ("printers", "name", "TEXT", 1, None, 0),
@@ -1187,6 +1278,22 @@ mod tests {
             ("settings", "revision", "INTEGER", 1, None, 0),
             ("settings", "theme_mode", "TEXT", 1, None, 0),
             ("settings", "updated_at", "TEXT", 1, None, 0),
+            (
+                "settings",
+                "monitor_section",
+                "TEXT",
+                1,
+                Some("'printerModel'"),
+                0,
+            ),
+            (
+                "settings",
+                "monitor_density",
+                "TEXT",
+                1,
+                Some("'comfortable'"),
+                0,
+            ),
         ];
         let actual: Vec<_> = columns
             .iter()
@@ -1493,7 +1600,7 @@ mod tests {
             .expect("snapshot");
         let connection = rusqlite::Connection::open(snapshot.path()).expect("snapshot database");
         connection
-            .execute_batch("PRAGMA user_version = 2")
+            .execute_batch("PRAGMA user_version = 3")
             .expect("future schema");
         drop(connection);
 
