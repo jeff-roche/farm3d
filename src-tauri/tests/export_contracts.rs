@@ -12,7 +12,7 @@ use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
 use farm3d_lib::connections::supervisor::{
     PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEvent, PrinterStatusEventPayload,
-    PrinterStatusEventType, PrinterStatusRow,
+    PrinterStatusEventType, PrinterStatusRow, StatusCacheWarning, StatusCacheWarningOperation,
 };
 use farm3d_lib::connections::{
     status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
@@ -211,6 +211,8 @@ fn export_registry() -> Vec<Export> {
         export::<PrinterStatusEventType>(),
         export::<PrinterStatusEventPayload>(),
         export::<PrinterStatusEvent>(),
+        export::<StatusCacheWarningOperation>(),
+        export::<StatusCacheWarning>(),
         export::<PrinterStatusRow>(),
         export::<PrinterStatusBackfill>(),
         export::<BedShape>(),

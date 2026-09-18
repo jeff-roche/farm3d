@@ -1071,6 +1071,8 @@ type PrinterStatusBackfill = {
   streamId: string;
   snapshotSequence: number;
   statuses: Array<{ printerId: string; status: PrinterStatus }>;
+  // Recoverable cache failures; status remains authoritative and non-error.
+  cacheWarnings: Array<{ printerId?: string; operation: "hydrate" | "save" | "delete" }>;
 };
 ```
 

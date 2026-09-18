@@ -464,7 +464,17 @@ fn status_runtime_hydrates_stale_then_publishes_live_and_removal_once() {
         farm3d_lib::connections::supervisor::PrinterSetupFacts::complete(),
     );
     let live_event: Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
+    assert_eq!(live_event["type"], "printer.status.changed");
+    assert_eq!(live_event["payload"]["type"], "changed");
     assert_eq!(live_event["payload"]["status"]["freshness"], "fresh");
+    let racing_backfill = serde_json::to_value(second_manager.status_backfill()).unwrap();
+    assert_eq!(racing_backfill["streamId"], live_event["streamId"]);
+    assert_eq!(racing_backfill["snapshotSequence"], live_event["sequence"]);
+    assert_eq!(racing_backfill["statuses"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        racing_backfill["statuses"][0]["status"],
+        live_event["payload"]["status"]
+    );
     assert!(
         events_rx.try_recv().is_err(),
         "one observation must emit one event"
@@ -474,4 +484,68 @@ fn status_runtime_hydrates_stale_then_publishes_live_and_removal_once() {
     let removed: Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
     assert_eq!(removed["payload"]["type"], "removed");
     assert!(second_manager.status_backfill().statuses.is_empty());
+}
+
+#[test]
+fn printer_statuses_command_exposes_recoverable_cache_write_warning() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+    let lease = MetadataRootLease::acquire(&paths).unwrap();
+    let storage = Arc::new(Storage::open(paths, &lease).unwrap());
+    let app = mock_builder()
+        .invoke_handler(tauri::generate_handler![
+            farm3d_lib::connections::commands::printer_statuses
+        ])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
+        app.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
+    ));
+    manager.apply_observation(
+        "prn-cache-warning",
+        farm3d_lib::connections::ConnectionObservation::Telemetry(
+            farm3d_lib::connections::status_repository::PrinterTelemetry {
+                host_activity: farm3d_lib::printers::operational::HostActivity::Idle,
+                host_activity_name: None,
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            },
+        ),
+        farm3d_lib::connections::supervisor::PrinterSetupFacts::complete(),
+    );
+    let catalog = Arc::new(farm3d_lib::catalog::Catalog {
+        generated_at: String::new(),
+        source_tag: String::new(),
+        notice: String::new(),
+        models: Vec::new(),
+    });
+    let documents: Arc<dyn farm3d_lib::document_io::DocumentIo> = Arc::new(
+        farm3d_lib::document_io::NativeDocumentIo::new(app.handle().clone()),
+    );
+    app.manage(BootstrapState::ready_with(Arc::new(
+        RuntimeServices::for_test(storage, catalog, manager, documents),
+    )));
+    let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let backfill = invoke(&webview, "printer_statuses", json!({"contractVersion": 1})).unwrap();
+
+    assert_eq!(
+        backfill["data"]["statuses"][0]["status"]["connectionState"],
+        "online"
+    );
+    assert_eq!(backfill["data"]["cacheWarnings"][0]["operation"], "save");
+    assert_eq!(
+        backfill["data"]["cacheWarnings"][0]["printerId"],
+        "prn-cache-warning"
+    );
 }

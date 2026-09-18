@@ -46,10 +46,26 @@ pub struct PrinterSetupFacts {
 
 /// Recoverable telemetry-cache failures, retained separately from printer
 /// status so cache trouble cannot masquerade as a connection failure.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/StatusCacheWarningOperation.ts"
+)]
+pub enum StatusCacheWarningOperation {
+    Hydrate,
+    Save,
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/StatusCacheWarning.ts")]
 pub struct StatusCacheWarning {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub printer_id: Option<String>,
-    pub operation: &'static str,
+    pub operation: StatusCacheWarningOperation,
 }
 
 impl PrinterSetupFacts {
@@ -113,6 +129,7 @@ pub struct PrinterStatusBackfill {
     pub stream_id: String,
     pub snapshot_sequence: JsSafeInteger,
     pub statuses: Vec<PrinterStatusRow>,
+    pub cache_warnings: Vec<StatusCacheWarning>,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -207,6 +224,7 @@ impl StatusMap {
             snapshot_sequence: JsSafeInteger::try_from(state.sequence)
                 .expect("status sequence is JS-safe"),
             statuses,
+            cache_warnings: Vec::new(),
         }
     }
 
@@ -475,7 +493,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                     .expect("cache warning lock")
                     .push(StatusCacheWarning {
                         printer_id: None,
-                        operation: "hydrate",
+                        operation: StatusCacheWarningOperation::Hydrate,
                     });
             }
         }
@@ -498,7 +516,9 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         self.statuses.snapshot()
     }
     pub fn status_backfill(&self) -> PrinterStatusBackfill {
-        self.statuses.backfill()
+        let mut backfill = self.statuses.backfill();
+        backfill.cache_warnings = self.cache_warnings();
+        backfill
     }
 
     pub fn cache_warnings(&self) -> Vec<StatusCacheWarning> {
@@ -508,7 +528,11 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             .clone()
     }
 
-    fn record_cache_warning(&self, printer_id: Option<&str>, operation: &'static str) {
+    fn record_cache_warning(
+        &self,
+        printer_id: Option<&str>,
+        operation: StatusCacheWarningOperation,
+    ) {
         self.cache_warnings
             .lock()
             .expect("cache warning lock")
@@ -569,7 +593,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             };
             if let Err(error) = self.repository.save_if_due(&snapshot, write) {
                 eprintln!("farm3d: cannot cache Printer telemetry: {error}");
-                self.record_cache_warning(Some(printer_id), "save");
+                self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Save);
             }
         }
         self.publish_changed(printer_id, next, hydrated && !telemetry_observed);
@@ -718,7 +742,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         let graceful = self.stop_task_and_wait(printer_id).await;
         if let Err(error) = self.repository.delete(printer_id) {
             eprintln!("farm3d: cannot clear telemetry cache: {error}");
-            self.record_cache_warning(Some(printer_id), "delete");
+            self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         }
         let now = self.now();
         let next = status_from_parts(
@@ -812,7 +836,7 @@ fn apply_observation_to<R: tauri::Runtime>(
                 .expect("cache warning lock")
                 .push(StatusCacheWarning {
                     printer_id: Some(id.to_string()),
-                    operation: "save",
+                    operation: StatusCacheWarningOperation::Save,
                 });
         }
     }
@@ -1206,7 +1230,10 @@ mod tests {
             manager.statuses()["prn-1"].connection_state,
             ConnectionState::Online
         );
-        assert_eq!(manager.cache_warnings()[0].operation, "save");
+        assert_eq!(
+            manager.cache_warnings()[0].operation,
+            StatusCacheWarningOperation::Save
+        );
     }
 
     #[test]
@@ -1236,7 +1263,10 @@ mod tests {
         );
 
         assert!(manager.statuses().is_empty());
-        assert_eq!(manager.cache_warnings()[0].operation, "hydrate");
+        assert_eq!(
+            manager.cache_warnings()[0].operation,
+            StatusCacheWarningOperation::Hydrate
+        );
     }
 
     #[test]
