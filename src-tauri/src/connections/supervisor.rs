@@ -362,6 +362,13 @@ fn clear_cache_warning_in(
         });
 }
 
+fn clear_cache_warnings_for_in(warnings: &Mutex<Vec<StatusCacheWarning>>, printer_id: &str) {
+    warnings
+        .lock()
+        .expect("cache warning lock")
+        .retain(|warning| warning.printer_id.as_deref() != Some(printer_id));
+}
+
 fn cache_warnings_for(
     warnings: &Mutex<Vec<StatusCacheWarning>>,
     printer_id: &str,
@@ -558,6 +565,10 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         operation: StatusCacheWarningOperation,
     ) {
         clear_cache_warning_in(&self.cache_warnings, printer_id, operation);
+    }
+
+    fn clear_cache_warnings_for(&self, printer_id: &str) {
+        clear_cache_warnings_for_in(&self.cache_warnings, printer_id);
     }
 
     fn cache_warnings_for(&self, printer_id: &str) -> Vec<StatusCacheWarning> {
@@ -762,6 +773,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
 
     pub async fn stop(&self, printer_id: &str) -> bool {
         let graceful = self.stop_task_and_wait(printer_id).await;
+        self.clear_cache_warnings_for(printer_id);
         self.publish_removed(printer_id);
         graceful
     }
@@ -1370,6 +1382,42 @@ mod tests {
 
         assert!(matches!(event.payload, PrinterStatusEventPayload::Removed));
         assert!(statuses.backfill().statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn removing_a_printer_clears_its_cache_warnings_from_backfill() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::new(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+        );
+        manager.apply_observation(
+            "prn-1",
+            ConnectionObservation::Telemetry(PrinterTelemetry {
+                host_activity: HostActivity::Idle,
+                host_activity_name: None,
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            }),
+            PrinterSetupFacts::complete(),
+        );
+        assert_eq!(
+            manager.statuses()["prn-1"].cache_warnings[0].operation,
+            StatusCacheWarningOperation::Save
+        );
+
+        manager.stop_and_wait("prn-1").await;
+
+        let backfill = manager.status_backfill();
+        assert!(manager.cache_warnings().is_empty());
+        assert!(backfill.statuses.is_empty());
+        assert!(backfill.cache_warnings.is_empty());
     }
 
     #[tokio::test]

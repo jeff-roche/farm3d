@@ -1071,10 +1071,26 @@ type PrinterStatusBackfill = {
   streamId: string;
   snapshotSequence: number;
   statuses: Array<{ printerId: string; status: PrinterStatus }>;
-  // Current recoverable cache failures, mirrored on the affected PrinterStatus.
+  // Current recoverable cache failures. See the lifetime rules below.
   cacheWarnings: Array<{ printerId?: string; operation: "hydrate" | "save" | "delete" }>;
 };
 ```
+
+Cache warnings are recoverable telemetry-cache metadata; they never change a
+Printer's connection or operational state. A process-wide `hydrate` warning has
+no `printerId`, is created only when startup cache hydration fails, appears only
+in `PrinterStatusBackfill.cacheWarnings`, and remains until that backend process
+ends. It is not added to a `PrinterStatus` and does not produce a status event.
+
+A warning with a `printerId` (`save` or `delete`) is present in the backfill
+aggregate and on that current Printer's `PrinterStatus`, including the `status`
+in its next `printer.status.changed` event. Equivalent warnings are deduplicated
+and clear after a successful equivalent cache operation. Deleting a Printer
+clears all of its per-Printer warnings before publishing its
+`printer.status.removed` tombstone; later backfills and status events contain no
+warning for a deleted Printer. Clients must read the global hydrate warning from
+backfill only and must discard per-Printer warning data when the corresponding
+durable Printer is absent.
 
 One backend process creates one stream UUID and starts its safe-integer sequence
 at `0`. Under the same status-map mutex, publication updates the status, adds
