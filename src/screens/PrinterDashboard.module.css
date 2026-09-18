@@ -1,181 +1,47 @@
 .dashboard {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-}
-
-/* Column wrapper for the toolbar (Task 15) stacked above the scrollable
-   printer grid. `.dashboard` stays row-direction so the resizable detail
-   aside remains a sibling, not a child, of this column. */
-.main {
-  flex: 1;
-  min-width: 0;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
+  background-color: var(--f3d-color-surface);
 }
 
-.toolbar {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem 0;
-}
-
-.groups {
+.content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
 }
 
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
+.section { display: flex; flex-direction: column; gap: 0.5rem; }
+.section + .section { margin-top: 1rem; }
 
-.groupHeader {
+.sectionHeader {
   position: sticky;
-  top: 0;
+  top: -0.75rem;
   z-index: 1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
-  padding: 0.25rem 0;
+  padding: 0.375rem 0;
   background-color: var(--f3d-color-surface);
 }
 
-.groupTitle {
+.sectionTitle {
+  margin: 0;
+  color: var(--f3d-color-text);
   font-family: var(--f3d-type-heading-font);
   font-size: var(--f3d-type-heading-size);
   font-weight: var(--f3d-type-heading-weight);
-  color: var(--f3d-color-text);
+  letter-spacing: var(--f3d-type-heading-tracking);
 }
 
-.groupCount {
-  font-family: var(--f3d-type-mono-font);
-  font-size: var(--f3d-type-body-small-size);
-  color: var(--f3d-color-text-muted);
-}
-
-.groupAddButton {
-  margin-left: auto;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  gap: 0.75rem;
-}
-
-.card {
-  composes: focusRing from "../design-system/components/shared.module.css";
-  composes: resetButton from "../design-system/components/shared.module.css";
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  text-align: left;
-}
-
-button.card {
-  padding: 0.75rem;
-  background-color: var(--f3d-color-surface-raised);
-  border: 1px solid var(--f3d-color-border);
-  border-radius: var(--f3d-radius-md);
-}
-
-button.card:hover {
-  border-color: var(--f3d-color-border-strong);
-}
-
-button.cardSelected,
-button.cardSelected:hover {
-  border-color: var(--f3d-color-accent);
-}
-
-.cardHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.cardName {
-  font-family: var(--f3d-type-heading-font);
-  font-size: var(--f3d-type-heading-size);
-  font-weight: var(--f3d-type-heading-weight);
-  color: var(--f3d-color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.badgeRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-.badge {
-  padding: 0.125rem 0.5rem;
-  border-radius: var(--f3d-radius-full);
-  font-family: var(--f3d-type-label-font);
-  font-size: var(--f3d-type-label-size);
-  font-weight: var(--f3d-type-label-weight);
-  letter-spacing: var(--f3d-type-label-tracking);
-}
-
-.badgeWarning {
-  background-color: var(--f3d-color-warning);
-  color: var(--f3d-color-on-warning);
-}
-
-.badgeAccent {
-  background-color: var(--f3d-color-accent);
-  color: var(--f3d-color-on-accent);
-}
-
-.badgeMuted {
-  background-color: var(--f3d-color-surface-hover);
-  color: var(--f3d-color-text-muted);
-}
-
-.state_online {
-  composes: badgeAccent;
-}
-
-.state_connecting {
-  composes: badgeMuted;
-}
-
-.state_offline {
-  composes: badgeMuted;
-}
-
-.state_error {
-  composes: badgeWarning;
-}
-
-.cardFooter {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--f3d-type-mono-font);
-  font-size: var(--f3d-type-body-small-size);
-  color: var(--f3d-color-text-muted);
-}
-
-.readings {
-  font-family: var(--f3d-type-mono-font);
-  font-size: var(--f3d-type-body-small-size);
-  color: var(--f3d-color-text-muted);
-  white-space: nowrap;
-}
+.printers { min-width: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; }
+.rows { display: none; flex-direction: column; gap: 0.375rem; }
+.compact .cards { display: none; }
+.compact .rows { display: flex; }
 
 .empty {
   display: flex;
@@ -183,69 +49,29 @@ button.cardSelected:hover {
   align-items: center;
   gap: 0.75rem;
   padding: 3rem 1rem;
-}
-
-.emptyMessage {
-  margin: 0;
   color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-font);
   font-size: var(--f3d-type-body-size);
+  text-align: center;
 }
 
-.resizeHandle {
-  flex-shrink: 0;
-  width: 5px;
-  margin-left: -1px;
-  cursor: col-resize;
-  background-color: transparent;
-  z-index: 1;
-}
+.empty p, .loadingNotice, .syncNotice { margin: 0; }
 
-.resizeHandle:hover,
-.resizeHandle:active {
-  background-color: var(--f3d-color-accent);
-}
-
-.detail {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow-y: auto;
-  background-color: var(--f3d-color-surface);
-  border-left: 1px solid var(--f3d-color-border);
-}
-
-.detailHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+.loadingNotice, .syncNotice {
+  padding: 0.375rem 0.75rem;
   border-bottom: 1px solid var(--f3d-color-border);
-  font-family: var(--f3d-type-heading-font);
-  font-size: var(--f3d-type-heading-size);
-  font-weight: var(--f3d-type-heading-weight);
-  letter-spacing: var(--f3d-type-heading-tracking);
-  color: var(--f3d-color-text);
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
 }
 
-.detailHeaderActions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.syncNotice { color: var(--f3d-color-warning); }
+
+@container (max-width: 44rem) {
+  .cards { display: none; }
+  .rows { display: flex; }
 }
 
-/* The inline rename field replaces what was a plain <span> here -- fills
-   the available header width the same way, alongside the Remove/Close
-   actions. */
-.detailNameField {
-  flex: 1;
-  min-width: 0;
-}
-
-.detailBody {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.75rem;
+@media (prefers-reduced-motion: reduce) {
+  .dashboard * { transition: none; }
 }
