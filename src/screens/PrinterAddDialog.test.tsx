@@ -193,6 +193,22 @@ describe("PrinterAddDialog", () => {
     );
   });
 
+  it("uses the full Monitor name list when suggesting a name", async () => {
+    render(() => (
+      <PrinterAddDialog
+        open
+        onOpenChange={() => {}}
+        onAdd={vi.fn()}
+        prefillModel={CENTAURI_MODEL}
+        existingPrinterNames={["Elegoo Centauri Carbon", "Elegoo Centauri Carbon 2"]}
+      />
+    ));
+
+    expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Elegoo Centauri Carbon 3",
+    );
+  });
+
   it("resets every signal after closing, even with no prefill on the next open", async () => {
     const [open, setOpen] = createSignal(true);
     render(() => <PrinterAddDialog open={open()} onOpenChange={setOpen} onAdd={vi.fn()} />);

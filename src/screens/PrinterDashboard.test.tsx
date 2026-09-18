@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
@@ -61,7 +61,18 @@ describe("PrinterDashboard", () => {
 
     expect(screen.getByText("X1 Carbon")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Live status is still reconciling.");
-    await fireEvent.click(screen.getAllByRole("button", { name: /North Bay; status unavailable/ })[0]);
+    await fireEvent.click(screen.getAllByRole("button", { name: /North Bay; Status unavailable/ })[0]);
     expect(onSelectionChange).toHaveBeenCalledWith("prn-1");
+  });
+
+  it("returns View all to the complete section instead of leaving the roster action inert", async () => {
+    const printers = Array.from({ length: 9 }, (_, index) => printer({ id: `prn-${index}`, name: `Bay ${index}` }));
+    const monitor = store(printers);
+    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+
+    const heading = screen.getByRole("heading", { name: "X1 Carbon" });
+    await fireEvent.focus(screen.getByRole("button", { name: "9 Printers" }));
+    await fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    await waitFor(() => expect(heading).toHaveFocus());
   });
 });

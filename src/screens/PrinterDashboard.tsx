@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createSignal } from "solid-js";
+import { For, Match, Show, Switch, createSignal, onCleanup } from "solid-js";
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
@@ -6,7 +6,6 @@ import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterAddDialog } from "./PrinterAddDialog";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
-import { operationalLabel } from "./monitor-printer-presentation";
 import styles from "./PrinterDashboard.module.css";
 
 export interface PrinterDashboardProps {
@@ -22,6 +21,8 @@ export interface PrinterDashboardProps {
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [addDialogOpen, setAddDialogOpen] = createSignal(false);
+  const sections = new Map<string, HTMLElement>();
+  let focusTimer: number | undefined;
   const selectPrinter = (id: string) => {
     props.store.setSelectedPrinterId(id);
     props.onSelectionChange?.(id);
@@ -32,6 +33,15 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   };
   const loadingWithNoPrinters = () => Boolean(props.loading) && !props.store.hasPrinters();
   const isFirstRun = () => Boolean(props.isFirstRun) && !props.store.hasPrinters();
+  const focusSection = (key: string) => {
+    window.clearTimeout(focusTimer);
+    focusTimer = window.setTimeout(() => {
+      const section = sections.get(key);
+      section?.scrollIntoView?.({ block: "start" });
+      section?.querySelector<HTMLElement>("h2")?.focus();
+    });
+  };
+  onCleanup(() => window.clearTimeout(focusTimer));
 
   return (
     <div class={styles.dashboard}>
@@ -64,18 +74,19 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           <Match when={props.store.hasPrinters()}>
             <For each={props.store.sections()}>
               {(section) => (
-                <section class={styles.section}>
+                <section ref={(element) => sections.set(section.key, element)} class={styles.section}>
                   <Show when={section.label}>
                     <header class={styles.sectionHeader}>
-                      <h2 class={styles.sectionTitle}>{section.label}</h2>
+                      <h2 class={styles.sectionTitle} tabIndex={-1}>{section.label}</h2>
                       <PrinterRoster
                         label={section.printers.length === 1 ? "Printer" : "Printers"}
                         count={section.printers.length}
                         printers={section.printers.map((printer) => ({
                           id: printer.id,
                           name: printer.name,
-                          stateLabel: operationalLabel(printer),
+                          stateLabel: printer.operationalLabel,
                         }))}
+                        onViewAll={() => focusSection(section.key)}
                       />
                     </header>
                   </Show>
@@ -119,6 +130,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
         open={addDialogOpen()}
         onOpenChange={setAddDialogOpen}
         onAdd={(draft) => props.onAddPrinter?.(draft) ?? Promise.resolve(undefined)}
+        existingPrinterNames={props.store.printerNames()}
       />
     </div>
   );

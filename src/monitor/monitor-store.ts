@@ -16,11 +16,16 @@ export interface MonitorPrinterView {
   catalogStatus: ResolvedPrinter["catalogStatus"];
   status?: PrinterStatus;
   operationalState?: PrinterStatus["operationalState"];
+  operationalLabel: string;
   readiness?: PrinterStatus["readiness"];
   freshness?: PrinterStatus["freshness"];
+  freshnessLabel?: string;
   severity: MonitorSeverity;
+  severityLabel?: string;
   hostActivity: PrinterStatus["telemetry"]["hostActivity"] | undefined;
   hostActivityName?: string;
+  statusSummary: string;
+  hasMissingReadings: boolean;
   readings: Pick<
     PrinterStatus["telemetry"],
     "progress" | "nozzleTempC" | "nozzleTargetC" | "bedTempC" | "bedTargetC" | "printDurationS"
@@ -67,6 +72,7 @@ export interface MonitorStore {
   setSection(next: MonitorSection): void;
   setDensity(next: MonitorDensity): void;
   setSelectedPrinterId(next: string | null): void;
+  printerNames(): readonly string[];
   visiblePrinters(): readonly MonitorPrinterView[];
   sections(): readonly MonitorSectionView[];
   rosters(): readonly MonitorRosterView[];
@@ -89,11 +95,86 @@ function severityFor(status: PrinterStatus | undefined): MonitorSeverity {
   return "info";
 }
 
+const operationalLabels: Record<NonNullable<PrinterStatus["operationalState"]>, string> = {
+  setupIncomplete: "Setup incomplete",
+  error: "Error",
+  offline: "Offline",
+  connecting: "Connecting",
+  printing: "Printing",
+  paused: "Paused",
+  busy: "Busy",
+  ready: "Ready",
+  unknown: "Unknown",
+};
+
+const readinessLabels = {
+  setupIncomplete: "Setup incomplete",
+  connectionError: "Connection error",
+  offline: "Offline",
+  refreshing: "Refreshing status",
+  staleTelemetry: "Stale telemetry",
+  printerBusy: "Printer busy",
+  unknownState: "Unknown state",
+} as const;
+
+function operationalLabel(status: PrinterStatus | undefined): string {
+  return status ? operationalLabels[status.operationalState] : "Status unavailable";
+}
+
+function statusSummary(status: PrinterStatus | undefined): string {
+  if (!status || status.freshness === "unavailable") return "Telemetry unavailable";
+  const telemetry = status.telemetry;
+  const activity = telemetry.hostActivity === "printing" ? "Host print" : "Host activity";
+  const detail = telemetry.hostActivityName
+    ? `${activity}: ${telemetry.hostActivityName}`
+    : telemetry.hostActivity !== "unknown"
+      ? `${activity}: ${capitalize(telemetry.hostActivity)}`
+      : status.readiness.reason
+        ? readinessLabels[status.readiness.reason]
+        : "Telemetry unavailable";
+  return status.operationalState === "printing" && status.freshness === "fresh" && telemetry.progress !== undefined
+    ? `${detail} · ${Math.round(telemetry.progress)}%`
+    : detail;
+}
+
+function freshnessLabel(status: PrinterStatus | undefined): string | undefined {
+  if (!status || status.freshness === "fresh") return undefined;
+  if (status.freshness === "unavailable") return "Telemetry unavailable";
+  return status.lastObservedAt ? `Stale; last seen ${formatAge(status.lastObservedAt)}` : "Stale telemetry";
+}
+
+function severityLabel(severity: MonitorSeverity): string | undefined {
+  if (severity === "fatal") return "Connection error";
+  if (severity === "warning") return "Monitor cache warning";
+  return undefined;
+}
+
+function hasMissingReadings(status: PrinterStatus | undefined): boolean {
+  const telemetry = status?.telemetry;
+  return telemetry?.nozzleTempC === undefined || telemetry?.nozzleTargetC === undefined
+    || telemetry?.bedTempC === undefined || telemetry?.bedTargetC === undefined;
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatAge(timestamp: string): string {
+  const elapsed = Date.now() - Date.parse(timestamp);
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "just now";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
 function toView(printer: ResolvedPrinter): MonitorPrinterView {
   const status = printer.runtimeStatus;
   const telemetry = status?.telemetry;
-  const state = status?.operationalState ?? "status unavailable";
-  const detail = telemetry?.hostActivityName ?? status?.readiness.reason ?? "telemetry unavailable";
+  const severity = severityFor(status);
+  const currentOperationalLabel = operationalLabel(status);
+  const currentStatusSummary = statusSummary(status);
+  const currentFreshnessLabel = freshnessLabel(status);
 
   return {
     id: printer.id,
@@ -104,11 +185,16 @@ function toView(printer: ResolvedPrinter): MonitorPrinterView {
     catalogStatus: printer.catalogStatus,
     status,
     operationalState: status?.operationalState,
+    operationalLabel: currentOperationalLabel,
     readiness: status?.readiness,
     freshness: status?.freshness,
-    severity: severityFor(status),
+    freshnessLabel: currentFreshnessLabel,
+    severity,
+    severityLabel: severityLabel(severity),
     hostActivity: telemetry?.hostActivity,
     hostActivityName: telemetry?.hostActivityName,
+    statusSummary: currentStatusSummary,
+    hasMissingReadings: hasMissingReadings(status),
     readings: {
       progress: telemetry?.progress,
       nozzleTempC: telemetry?.nozzleTempC,
@@ -120,7 +206,9 @@ function toView(printer: ResolvedPrinter): MonitorPrinterView {
     lastObservedAt: status?.lastObservedAt,
     freshUntil: status?.freshUntil,
     updatedAt: status?.updatedAt,
-    accessibleSummary: `${printer.name}; ${state}; ${detail}`,
+    accessibleSummary: [printer.name, currentOperationalLabel, currentStatusSummary, currentFreshnessLabel]
+      .filter((item, index, items) => Boolean(item) && items.indexOf(item) === index)
+      .join("; "),
   };
 }
 
@@ -253,6 +341,7 @@ export function createMonitorStore(dependencies: MonitorStoreDependencies): Moni
       queuePreferenceWrite();
     },
     setSelectedPrinterId,
+    printerNames: () => dependencies.printers().map((printer) => printer.name),
     visiblePrinters,
     sections,
     rosters: () => sections().map((current) => ({

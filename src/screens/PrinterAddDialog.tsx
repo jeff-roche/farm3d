@@ -52,6 +52,9 @@ export interface PrinterAddDialogProps {
    *  name and warning on a typed duplicate. Omitted (treated as empty) by
    *  callers that don't care, e.g. existing tests of this component. */
   existingPrinters?: ResolvedPrinter[];
+  /** Names from the Monitor view when Dashboard intentionally does not receive
+   * durable Printer records. Takes precedence over the legacy full-record prop. */
+  existingPrinterNames?: readonly string[];
 }
 
 /** Base name is unique on its own if nothing already has it; otherwise
@@ -74,6 +77,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
   const [nameTouched, setNameTouched] = createSignal(false);
   const [step, setStep] = createSignal<"details" | "connection">("details");
   const [createdPrinter, setCreatedPrinter] = createSignal<ResolvedPrinter | null>(null);
+  const existingNames = () => props.existingPrinterNames ?? (props.existingPrinters ?? []).map((printer) => printer.name);
 
   function resetForm() {
     setSelectedVendor(null);
@@ -124,8 +128,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
     if (match) {
       setSelectedVendor(match.vendor);
       setSelectedModel(match);
-      const existingNames = new Set((props.existingPrinters ?? []).map((p) => p.name));
-      setName(suggestUniqueName(match.model, existingNames));
+      setName(suggestUniqueName(match.model, new Set(existingNames())));
     }
     seededThisOpen = true;
   });
@@ -193,7 +196,7 @@ export function PrinterAddDialog(props: PrinterAddDialogProps) {
   const nameWarning = createMemo(() => {
     const current = name().trim();
     if (current === "") return undefined;
-    const clash = (props.existingPrinters ?? []).some((p) => p.name === current);
+    const clash = existingNames().includes(current);
     return clash ? "Another printer is already named this" : undefined;
   });
   const canAdd = createMemo(() => !!catalogRef() && !nameError());

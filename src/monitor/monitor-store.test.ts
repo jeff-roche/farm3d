@@ -104,6 +104,32 @@ describe("Monitor store", () => {
     expect(store.visiblePrinters().map((item) => item.id)).toEqual(["warning", "fatal"]);
   });
 
+  it("derives one presentation summary for current status, progress, freshness, and accessibility", () => {
+    const store = monitor([printer({
+      name: "North Bay",
+      runtimeStatus: status({
+        telemetry: { hostActivity: "printing", hostActivityName: "Calibration cube", progress: 42 },
+        operationalState: "printing",
+        readiness: { state: "notReady", reason: "printerBusy" },
+        freshness: "stale",
+        lastObservedAt: "2026-09-18T11:57:00Z",
+      }),
+    })]);
+
+    const [view] = store.visiblePrinters();
+    expect(view.operationalLabel).toBe("Printing");
+    expect(view.statusSummary).toBe("Host print: Calibration cube");
+    expect(view.freshnessLabel).toMatch(/^Stale; last seen/);
+    expect(view.hasMissingReadings).toBe(true);
+    expect(view.accessibleSummary).toMatch(/^North Bay; Printing; Host print: Calibration cube; Stale; last seen/);
+  });
+
+  it("exposes every durable Printer name to the add flow without leaking durable records into the Dashboard", () => {
+    const store = monitor([printer({ id: "a", name: "North Bay" }), printer({ id: "b", name: "South Bay" })]);
+
+    expect(store.printerNames()).toEqual(["North Bay", "South Bay"]);
+  });
+
   it("groups models by vendor/model identity and places unlinked printers last", () => {
     const store = monitor([
       printer({ id: "prusa", name: "Zulu", catalogRef: { ...printer().catalogRef, vendor: "Prusa", model: "X1 Carbon" }, modelLabel: "X1 Carbon" }),

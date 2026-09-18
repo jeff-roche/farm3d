@@ -7,7 +7,8 @@ function view(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {
     id: "prn-1", name: "North Bay", vendor: "Bambu Lab", model: "X1 Carbon", modelLabel: "X1 Carbon",
     catalogStatus: "ok", operationalState: "printing", readiness: { state: "notReady", reason: "printerBusy" },
-    freshness: "fresh", severity: "warning", hostActivity: "printing", hostActivityName: "Calibration cube",
+    operationalLabel: "Printing", freshness: "fresh", severity: "warning", severityLabel: "Monitor cache warning",
+    hostActivity: "printing", hostActivityName: "Calibration cube", statusSummary: "Host print: Calibration cube · 42%", hasMissingReadings: false,
     readings: { progress: 42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 55, bedTargetC: 60 },
     lastObservedAt: "2026-09-18T12:00:00Z", accessibleSummary: "North Bay; printing; Calibration cube",
     ...overrides,
@@ -17,7 +18,7 @@ function view(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
 describe("PrinterCard", () => {
   afterEach(cleanup);
 
-  it("shows shared operational information and selects by click and keyboard", async () => {
+  it("shows the store-derived status summary and lets native keyboard activation select once", async () => {
     const onSelect = vi.fn();
     render(() => <PrinterCard printer={view()} onSelect={onSelect} />);
 
@@ -28,16 +29,17 @@ describe("PrinterCard", () => {
     expect(card).toHaveTextContent("210 °C / 215 °C");
     expect(card).toHaveTextContent("Monitor cache warning");
 
-    await fireEvent.click(card);
     await fireEvent.keyDown(card, { key: "Enter" });
-    expect(onSelect).toHaveBeenCalledTimes(2);
+    await fireEvent.click(card);
+    expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenLastCalledWith("prn-1");
   });
 
   it("keeps stale ages and missing telemetry visibly unavailable", () => {
     render(() => <PrinterCard printer={view({
       operationalState: "offline", freshness: "stale", hostActivityName: undefined,
-      readings: {}, lastObservedAt: "2026-09-18T11:57:00Z", severity: "info",
+      operationalLabel: "Offline", statusSummary: "Host print: Printing", freshnessLabel: "Stale; last seen 3 minutes ago",
+      readings: {}, lastObservedAt: "2026-09-18T11:57:00Z", severity: "info", severityLabel: undefined, hasMissingReadings: true,
     })} onSelect={vi.fn()} />);
 
     expect(screen.getByText(/Stale; last seen/)).toBeInTheDocument();
