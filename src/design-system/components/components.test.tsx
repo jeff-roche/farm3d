@@ -388,18 +388,22 @@ const rosterPrinters = Array.from({ length: 10 }, (_, index) => ({
 
 describe("PrinterRoster", () => {
   it("opens on keyboard focus and returns focus after Escape", async () => {
-    render(() => <PrinterRoster label="offline Printers" count={3} printers={rosterPrinters} />);
+    render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
 
-    const trigger = screen.getByLabelText("3 offline Printers");
+    const trigger = screen.getByLabelText("10 offline Printers");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     trigger.focus();
     await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
+    const viewAll = screen.getByRole("button", { name: "View all" });
+    viewAll.focus();
+    expect(viewAll).toHaveFocus();
+
     await fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
-    expect(trigger).toHaveFocus();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("opens on pointer hover and bounds rows with a View all action", async () => {
