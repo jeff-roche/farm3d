@@ -303,6 +303,23 @@ fn build_runtime_services<R: tauri::Runtime>(
 }
 
 #[cfg(test)]
+pub(crate) fn test_storage() -> (
+    tempfile::TempDir,
+    persistence::MetadataRootLease,
+    Arc<persistence::Storage>,
+) {
+    let temporary_root = tempfile::tempdir().expect("temporary root");
+    let paths = persistence::StoragePaths::new(
+        temporary_root.path().join("metadata"),
+        temporary_root.path().join("data"),
+    )
+    .expect("storage paths");
+    let lease = persistence::MetadataRootLease::acquire(&paths).expect("metadata lease");
+    let storage = Arc::new(persistence::Storage::open(paths, &lease).expect("storage"));
+    (temporary_root, lease, storage)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::connections::{ConnectionConfig, MOONRAKER_KIND};

@@ -10,6 +10,7 @@ pub mod commands;
 pub mod credentials;
 pub mod discovery;
 pub mod moonraker;
+pub mod status_repository;
 pub mod supervisor;
 
 use serde::{Deserialize, Serialize};
