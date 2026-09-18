@@ -44,6 +44,7 @@ ts-rs = "12"
 tokio = { version = "1.53", features = ["sync", "time", "rt", "macros"] }
 tokio-tungstenite = "0.30"
 async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 keyring = "4.1"
 mdns-sd = "0.21"

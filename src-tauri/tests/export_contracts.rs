@@ -28,6 +28,10 @@ use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
     OperationWarningCode, PrinterMutationResult, PrinterRevisionPrecondition, PrintersImportResult,
 };
+use farm3d_lib::printers::operational::{
+    HostActivity, OperationalInput, OperationalResult, OperationalState, PrinterReadiness,
+    ReadinessReason, ReadinessState, TelemetryFreshness,
+};
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch};
 use farm3d_lib::settings::commands::{
@@ -189,6 +193,14 @@ fn export_registry() -> Vec<Export> {
         export::<ConnectionConfig>(),
         export::<ConnectionSubmission>(),
         export::<ConnectionState>(),
+        export::<HostActivity>(),
+        export::<OperationalState>(),
+        export::<ReadinessState>(),
+        export::<ReadinessReason>(),
+        export::<PrinterReadiness>(),
+        export::<TelemetryFreshness>(),
+        export::<OperationalInput>(),
+        export::<OperationalResult>(),
         export::<PrinterStatus>(),
         export::<PrinterStatusRow>(),
         export::<PrinterStatusBackfill>(),
@@ -569,6 +581,44 @@ fn contract_version_serializes_as_one_and_rejects_other_versions() {
     );
     assert!(serde_json::from_str::<ContractVersion>("1").is_ok());
     assert!(serde_json::from_str::<ContractVersion>("2").is_err());
+}
+
+#[test]
+fn operational_policy_contracts_export_and_serialize_camel_case_values() {
+    let temporary = TempDir::new().expect("temporary export directory should be created");
+    write_exports(temporary.path());
+
+    for contract in [
+        "domain/HostActivity.ts",
+        "domain/OperationalInput.ts",
+        "domain/OperationalResult.ts",
+        "domain/OperationalState.ts",
+        "domain/PrinterReadiness.ts",
+        "domain/ReadinessReason.ts",
+        "domain/ReadinessState.ts",
+        "domain/TelemetryFreshness.ts",
+    ] {
+        assert!(
+            temporary.path().join(contract).exists(),
+            "missing operational policy contract {contract}"
+        );
+    }
+
+    assert_eq!(
+        serde_json::json!({
+            "operational": [OperationalState::SetupIncomplete, OperationalState::Ready],
+            "readiness": PrinterReadiness {
+                state: ReadinessState::NotReady,
+                reason: Some(ReadinessReason::TelemetryStale),
+            },
+            "freshness": TelemetryFreshness::Stale,
+        }),
+        serde_json::json!({
+            "operational": ["setupIncomplete", "ready"],
+            "readiness": { "state": "notReady", "reason": "telemetryStale" },
+            "freshness": "stale",
+        })
+    );
 }
 
 #[test]

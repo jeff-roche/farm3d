@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 pub mod commands;
+pub mod operational;
 pub mod repository;
 
 const PRINTERS_FILE_NAME: &str = "printers.json";
