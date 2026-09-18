@@ -165,16 +165,17 @@ pub fn evaluate_operational_status(
 }
 
 fn telemetry_freshness(input: &OperationalInput, now: DateTime<Utc>) -> TelemetryFreshness {
-    if input.hydrated_from_cache
-        || input.connection_error
+    if input.hydrated_from_cache {
+        TelemetryFreshness::Stale
+    } else if input.last_observed_at.is_none() {
+        TelemetryFreshness::Unavailable
+    } else if input.connection_error
         || matches!(
             input.connection_state,
             ConnectionState::Error | ConnectionState::Offline
         )
     {
         TelemetryFreshness::Stale
-    } else if input.last_observed_at.is_none() {
-        TelemetryFreshness::Unavailable
     } else if input
         .fresh_until
         .is_some_and(|fresh_until| now <= fresh_until)

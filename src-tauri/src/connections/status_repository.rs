@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::persistence::{Storage, StorageError};
 use crate::printers::operational::HostActivity;
@@ -10,25 +11,34 @@ use crate::printers::operational::HostActivity;
 const PERIODIC_WRITE_INTERVAL: Duration = Duration::seconds(30);
 
 /// The normalized data retained for Monitor after live adapter telemetry ends.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterTelemetry.ts")]
 pub struct PrinterTelemetry {
     pub host_activity: HostActivity,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub host_activity_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub job_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub progress: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub nozzle_temp_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub nozzle_target_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_temp_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub bed_target_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub print_duration_s: Option<f64>,
 }
 

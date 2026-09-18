@@ -10,9 +10,13 @@ use farm3d_lib::catalog::{BedShape, PointMm, PrinterProfile};
 use farm3d_lib::connections::commands::{ConnectionSubmission, CredentialStoreInfo};
 use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
-use farm3d_lib::connections::supervisor::{PrinterStatusBackfill, PrinterStatusRow};
+use farm3d_lib::connections::supervisor::{
+    PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEventContract,
+    PrinterStatusEventPayload, PrinterStatusEventType, PrinterStatusRow,
+};
 use farm3d_lib::connections::{
-    ConnectionConfig, ConnectionState, PrinterStatus, ProbeResult, ReportedCapabilities,
+    status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
+    ProbeResult, ReportedCapabilities,
 };
 use farm3d_lib::contracts::command::{
     CommandError, CommandSuccess, CorrelationId, ErrorCode, JsonNumber, JsonValue, RecoveryCode,
@@ -202,6 +206,11 @@ fn export_registry() -> Vec<Export> {
         export::<OperationalInput>(),
         export::<OperationalResult>(),
         export::<PrinterStatus>(),
+        export::<PrinterTelemetry>(),
+        export::<PrinterSetupFacts>(),
+        export::<PrinterStatusEventType>(),
+        export::<PrinterStatusEventPayload>(),
+        export::<PrinterStatusEventContract>(),
         export::<PrinterStatusRow>(),
         export::<PrinterStatusBackfill>(),
         export::<BedShape>(),

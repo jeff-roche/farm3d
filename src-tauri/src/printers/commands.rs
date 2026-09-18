@@ -141,6 +141,13 @@ pub fn create_printer<R: tauri::Runtime>(
     let stored = PrinterRepository::new(Arc::clone(&services.storage))
         .create(stored)
         .map_err(CommandError::from_repository)?;
+    services.manager.reconcile_printer(
+        &stored.id,
+        crate::connections::supervisor::PrinterSetupFacts {
+            has_usable_connection: false,
+            profile_resolved: true,
+        },
+    );
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &stored,
     )))
@@ -578,13 +585,27 @@ pub async fn import_printers<R: tauri::Runtime>(
     });
     let credential_store = needs_store.then(|| Arc::clone(&services.credentials));
     for printer in &stored {
+        let profile_resolved =
+            crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &printer.catalog_ref)
+                .0
+                .is_some();
         let Some(config) = printer.connection.clone() else {
+            services.manager.reconcile_printer(
+                &printer.id,
+                crate::connections::supervisor::PrinterSetupFacts {
+                    has_usable_connection: false,
+                    profile_resolved,
+                },
+            );
             continue;
         };
         if config.kind != crate::connections::MOONRAKER_KIND {
-            services.manager.report_error(
+            services.manager.reconcile_printer(
                 &printer.id,
-                "This Connection kind is not supported by this build.",
+                crate::connections::supervisor::PrinterSetupFacts {
+                    has_usable_connection: false,
+                    profile_resolved,
+                },
             );
             warnings.push(OperationWarning::supervisor(&printer.id));
             continue;
@@ -597,9 +618,13 @@ pub async fn import_printers<R: tauri::Runtime>(
                 .flatten(),
         };
         if config.credential_ref.is_some() && credential.is_none() {
-            services
-                .manager
-                .report_error(&printer.id, "A credential is required for this Connection.");
+            services.manager.reconcile_printer(
+                &printer.id,
+                crate::connections::supervisor::PrinterSetupFacts {
+                    has_usable_connection: false,
+                    profile_resolved,
+                },
+            );
             warnings.push(OperationWarning::credential_required(&printer.id));
         } else {
             services.manager.start(

@@ -129,9 +129,12 @@ pub fn restore_stored_connections<R: tauri::Runtime>(
                     None => None,
                     Some(key) => {
                         let Some(store) = store.as_ref() else {
-                            manager.report_error(
+                            manager.reconcile_printer(
                                 &stored.id,
-                                "Could not initialize this printer's credential store",
+                                connections::supervisor::PrinterSetupFacts {
+                                    has_usable_connection: false,
+                                    profile_resolved: true,
+                                },
                             );
                             continue;
                         };
@@ -142,9 +145,12 @@ pub fn restore_stored_connections<R: tauri::Runtime>(
                                     "farm3d: cannot read the stored credential for {}: {e}",
                                     stored.id
                                 );
-                                manager.report_error(
+                                manager.reconcile_printer(
                                     &stored.id,
-                                    format!("Could not read this printer's stored credential: {e}"),
+                                    connections::supervisor::PrinterSetupFacts {
+                                        has_usable_connection: false,
+                                        profile_resolved: true,
+                                    },
                                 );
                                 continue;
                             }
@@ -165,9 +171,28 @@ fn restore_persisted_connections<R: tauri::Runtime>(
     manager: &Arc<ConnectionManager<R>>,
     storage: Arc<persistence::Storage>,
     store: &connections::credentials::CredentialStore,
+    catalog: &catalog::Catalog,
 ) -> Result<(), persistence::StorageError> {
     let stored_printers = printers::repository::PrinterRepository::new(storage).list()?;
     for printer in stored_printers {
+        let profile_resolved = catalog::resolve::resolve_catalog_ref(catalog, &printer.catalog_ref)
+            .0
+            .is_some();
+        let has_usable_connection = printer.connection.as_ref().is_some_and(|config| {
+            config.kind == connections::MOONRAKER_KIND
+                && config
+                    .credential_ref
+                    .as_deref()
+                    .map(|reference| store.get(reference).ok().flatten().is_some())
+                    .unwrap_or(true)
+        });
+        manager.reconcile_printer(
+            &printer.id,
+            connections::supervisor::PrinterSetupFacts {
+                has_usable_connection,
+                profile_resolved,
+            },
+        );
         let Some(config) = printer.connection else {
             continue;
         };
@@ -175,8 +200,13 @@ fn restore_persisted_connections<R: tauri::Runtime>(
             Some(reference) => match store.get(reference).ok().flatten() {
                 Some(value) => Some(value),
                 None => {
-                    manager
-                        .report_error(&printer.id, "A credential is required for this Connection.");
+                    manager.reconcile_printer(
+                        &printer.id,
+                        connections::supervisor::PrinterSetupFacts {
+                            has_usable_connection: false,
+                            profile_resolved,
+                        },
+                    );
                     continue;
                 }
             },
@@ -284,9 +314,19 @@ fn build_runtime_services<R: tauri::Runtime>(
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
     }
 
-    let manager = Arc::new(ConnectionManager::new(app.clone()));
-    restore_persisted_connections(&manager, Arc::clone(&storage), credential_store.as_ref())
-        .map_err(startup_error)?;
+    let manager = Arc::new(ConnectionManager::new(
+        app.clone(),
+        Arc::new(connections::status_repository::StatusRepository::new(
+            Arc::clone(&storage),
+        )),
+    ));
+    restore_persisted_connections(
+        &manager,
+        Arc::clone(&storage),
+        credential_store.as_ref(),
+        &catalog,
+    )
+    .map_err(startup_error)?;
     let lease = retained_lease
         .lock()
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?
@@ -380,11 +420,23 @@ mod tests {
         let app = tauri::test::mock_builder()
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
-        let manager = Arc::new(ConnectionManager::new(app.handle().clone()));
+        let manager = Arc::new(ConnectionManager::new(
+            app.handle().clone(),
+            Arc::new(connections::status_repository::StatusRepository::new(
+                Arc::clone(&storage),
+            )),
+        ));
         let credentials =
             connections::credentials::CredentialStore::file_backed(temp.path().join("credentials"));
 
-        let error = restore_persisted_connections(&manager, storage, &credentials).unwrap_err();
+        let catalog = Arc::new(catalog::Catalog {
+            generated_at: String::new(),
+            source_tag: String::new(),
+            notice: String::new(),
+            models: vec![],
+        });
+        let error =
+            restore_persisted_connections(&manager, storage, &credentials, &catalog).unwrap_err();
 
         assert!(matches!(
             error,

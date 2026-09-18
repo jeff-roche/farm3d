@@ -9,7 +9,7 @@
 //! cue to reconnect.
 
 use crate::connections::{
-    ConnectionConfig, ConnectionError, ConnectionState, PrinterConnection, PrinterStatus,
+    ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
     ProbeResult,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -27,6 +27,7 @@ pub mod protocol;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
 const ID_SERVER_INFO: u64 = 1;
 const ID_PRINTER_INFO: u64 = 2;
@@ -211,7 +212,7 @@ impl PrinterConnection for MoonrakerConnection {
         Ok(probe_result_from(&server_info, &printer_info, &snapshot))
     }
 
-    async fn subscribe(&self, tx: Sender<PrinterStatus>) -> Result<(), ConnectionError> {
+    async fn subscribe(&self, tx: Sender<ConnectionObservation>) -> Result<(), ConnectionError> {
         let mut socket = connect(
             &self.config,
             self.api_key.as_ref().map(|value| value.as_str()),
@@ -233,27 +234,55 @@ impl PrinterConnection for MoonrakerConnection {
         // than assumed from the socket being open.
         let mut state = ConnectionState::Online;
 
-        while let Some(frame) = next_frame(&mut socket).await {
-            match frame {
-                Frame::Response { id, result } if id == ID_SUBSCRIBE => {
-                    snapshot.merge(&result["status"]);
+        let mut liveness = tokio::time::interval_at(
+            tokio::time::Instant::now() + LIVENESS_INTERVAL,
+            LIVENESS_INTERVAL,
+        );
+        loop {
+            tokio::select! {
+                _ = liveness.tick() => {
+                    if send_health(&tx, state).await { return Ok(()); }
                 }
-                Frame::StatusUpdate(update) => snapshot.merge(&update),
-                Frame::KlippyReady => state = ConnectionState::Online,
-                Frame::KlippyDown => state = ConnectionState::Offline,
-                Frame::Error { message, code, .. } if code == Some(401) || code == Some(403) => {
-                    return Err(ConnectionError::Auth(message));
+                frame = next_frame(&mut socket) => {
+                    let Some(frame) = frame else { return Ok(()); };
+                    match frame {
+                        Frame::Response { id, result } if id == ID_SUBSCRIBE => {
+                            snapshot.merge(&result["status"]);
+                            if tx.send(ConnectionObservation::Telemetry(snapshot.to_telemetry())).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                        Frame::StatusUpdate(update) => {
+                            snapshot.merge(&update);
+                            if tx.send(ConnectionObservation::Telemetry(snapshot.to_telemetry())).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                        Frame::KlippyReady => state = ConnectionState::Online,
+                        Frame::KlippyDown => state = ConnectionState::Offline,
+                        Frame::Error { message, code, .. } if code == Some(401) || code == Some(403) => {
+                            return Err(ConnectionError::Auth(message));
+                        }
+                        _ => continue,
+                    }
+                    if send_health(&tx, state).await { return Ok(()); }
                 }
-                _ => continue,
-            }
-            // A closed receiver means the supervisor dropped this printer.
-            // Ending cleanly beats logging into the void.
-            if tx.send(snapshot.to_status(state)).await.is_err() {
-                return Ok(());
             }
         }
-        Ok(())
     }
+}
+
+/// Returns true when supervision has dropped the receiver.
+pub(crate) async fn send_health(
+    tx: &Sender<ConnectionObservation>,
+    state: ConnectionState,
+) -> bool {
+    tx.send(ConnectionObservation::Health {
+        state,
+        observed_at: chrono::Utc::now().to_rfc3339(),
+    })
+    .await
+    .is_err()
 }
 
 #[cfg(test)]

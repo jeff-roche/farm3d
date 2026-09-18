@@ -150,6 +150,9 @@ fn versioned_mock_runtime_command_mutation_survives_restart() {
         .unwrap();
     let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
         app.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
     ));
     let documents: Arc<dyn farm3d_lib::document_io::DocumentIo> = Arc::new(
         farm3d_lib::document_io::NativeDocumentIo::new(app.handle().clone()),
@@ -184,6 +187,11 @@ fn versioned_mock_runtime_command_mutation_survives_restart() {
         .unwrap();
     let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
         restarted.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(
+                &reopened,
+            )),
+        ),
     ));
     let documents: Arc<dyn farm3d_lib::document_io::DocumentIo> = Arc::new(
         farm3d_lib::document_io::NativeDocumentIo::new(restarted.handle().clone()),
@@ -247,6 +255,9 @@ fn complete_f1_mock_runtime_tracer_crosses_migration_restart_events_and_document
         .unwrap();
     let manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
         app.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
     ));
     let document_boundary: Arc<dyn farm3d_lib::document_io::DocumentIo> = documents.clone();
     app.manage(BootstrapState::ready_with(Arc::new(
@@ -349,4 +360,114 @@ fn complete_f1_mock_runtime_tracer_crosses_migration_restart_events_and_document
     )
     .unwrap();
     assert!(!generated.contains("F0_FIXTURE_SENTINEL"));
+}
+
+#[test]
+fn status_runtime_hydrates_stale_then_publishes_live_and_removal_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+    let lease = MetadataRootLease::acquire(&paths).unwrap();
+    let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
+    PrinterRepository::new(Arc::clone(&storage))
+        .create(farm3d_lib::printers::StoredPrinter {
+            id: "prn-status".to_string(),
+            name: "Status tracer".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let first = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let first_manager = Arc::new(farm3d_lib::connections::supervisor::ConnectionManager::new(
+        first.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
+    ));
+    let (first_events_tx, first_events_rx) = std::sync::mpsc::channel();
+    first.listen(
+        farm3d_lib::connections::supervisor::STATUS_EVENT,
+        move |event| {
+            first_events_tx.send(event.payload().to_string()).unwrap();
+        },
+    );
+    first_manager.apply_observation(
+        "prn-status",
+        farm3d_lib::connections::ConnectionObservation::Telemetry(
+            farm3d_lib::connections::status_repository::PrinterTelemetry {
+                host_activity: farm3d_lib::printers::operational::HostActivity::Idle,
+                host_activity_name: Some("standby".to_string()),
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            },
+        ),
+        farm3d_lib::connections::supervisor::PrinterSetupFacts::complete(),
+    );
+    let first_event: Value = serde_json::from_str(&first_events_rx.recv().unwrap()).unwrap();
+    assert_eq!(first_event["payload"]["type"], "changed");
+    assert_eq!(first_event["payload"]["status"]["freshness"], "fresh");
+    drop((first_manager, first, storage));
+
+    let reopened = Arc::new(Storage::open(paths, &lease).unwrap());
+    let second = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let second_manager = Arc::new(
+        farm3d_lib::connections::supervisor::ConnectionManager::with_clock(
+            second.handle().clone(),
+            Arc::new(
+                farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(
+                    &reopened,
+                )),
+            ),
+            || {
+                chrono::DateTime::parse_from_rfc3339("2026-09-18T12:00:10Z")
+                    .unwrap()
+                    .into()
+            },
+        ),
+    );
+    let backfill = serde_json::to_value(second_manager.status_backfill()).unwrap();
+    assert_eq!(backfill["statuses"][0]["status"]["freshness"], "stale");
+    assert_eq!(
+        backfill["statuses"][0]["status"]["telemetry"]["nozzleTempC"],
+        215.0
+    );
+
+    let (events_tx, events_rx) = std::sync::mpsc::channel();
+    second.listen(
+        farm3d_lib::connections::supervisor::STATUS_EVENT,
+        move |event| {
+            events_tx.send(event.payload().to_string()).unwrap();
+        },
+    );
+    second_manager.apply_observation(
+        "prn-status",
+        farm3d_lib::connections::ConnectionObservation::Telemetry(
+            farm3d_lib::connections::status_repository::PrinterTelemetry {
+                host_activity: farm3d_lib::printers::operational::HostActivity::Idle,
+                host_activity_name: Some("standby".to_string()),
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: Some(215.0),
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            },
+        ),
+        farm3d_lib::connections::supervisor::PrinterSetupFacts::complete(),
+    );
+    let live_event: Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
+    assert_eq!(live_event["payload"]["status"]["freshness"], "fresh");
+    assert!(
+        events_rx.try_recv().is_err(),
+        "one observation must emit one event"
+    );
+
+    tauri::async_runtime::block_on(second_manager.stop_and_wait("prn-status"));
+    let removed: Value = serde_json::from_str(&events_rx.recv().unwrap()).unwrap();
+    assert_eq!(removed["payload"]["type"], "removed");
+    assert!(second_manager.status_backfill().statuses.is_empty());
 }

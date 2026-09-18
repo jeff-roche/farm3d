@@ -16,6 +16,12 @@ pub mod supervisor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::connections::status_repository::PrinterTelemetry;
+use crate::printers::operational::{
+    HostActivity, OperationalState, PrinterReadiness, ReadinessReason, ReadinessState,
+    TelemetryFreshness,
+};
+
 pub const MOONRAKER_KIND: &str = "moonraker";
 pub const DEFAULT_MOONRAKER_PORT: u16 = 7125;
 
@@ -51,12 +57,7 @@ pub enum ConnectionState {
     Error,
 }
 
-/// Everything the dashboard renders live.
-///
-/// Every reading is `Option` for two independent reasons: Moonraker sends
-/// PARTIAL updates (see `moonraker::protocol`), and a printer can be online
-/// with no job loaded and no heaters configured. A `None` means "not
-/// reported", which must render as an em dash — never as `0`.
+/// Canonical runtime status for a durable Printer.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/PrinterStatus.ts")]
@@ -65,34 +66,16 @@ pub struct PrinterStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub error: Option<String>,
+    pub telemetry: PrinterTelemetry,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub job_state: Option<String>,
+    pub last_observed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub job_name: Option<String>,
-    /// `0.0..=1.0`, from `display_status.progress`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub progress: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub nozzle_temp_c: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub nozzle_target_c: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub bed_temp_c: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub bed_target_c: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub print_duration_s: Option<f64>,
-    /// farm3d's own clock, deliberately NOT Moonraker's `eventtime` — that
-    /// value is a Klipper-uptime float, meaningless to a user and
-    /// incomparable across printers.
+    pub fresh_until: Option<String>,
+    pub operational_state: OperationalState,
+    pub readiness: PrinterReadiness,
+    pub freshness: TelemetryFreshness,
     pub updated_at: String,
 }
 
@@ -101,14 +84,25 @@ impl PrinterStatus {
         Self {
             connection_state,
             error: None,
-            job_state: None,
-            job_name: None,
-            progress: None,
-            nozzle_temp_c: None,
-            nozzle_target_c: None,
-            bed_temp_c: None,
-            bed_target_c: None,
-            print_duration_s: None,
+            telemetry: PrinterTelemetry {
+                host_activity: HostActivity::Unknown,
+                host_activity_name: None,
+                job_name: None,
+                progress: None,
+                nozzle_temp_c: None,
+                nozzle_target_c: None,
+                bed_temp_c: None,
+                bed_target_c: None,
+                print_duration_s: None,
+            },
+            last_observed_at: None,
+            fresh_until: None,
+            operational_state: OperationalState::Unknown,
+            readiness: PrinterReadiness {
+                state: ReadinessState::NotReady,
+                reason: Some(ReadinessReason::TelemetryUnavailable),
+            },
+            freshness: TelemetryFreshness::Unavailable,
             updated_at: crate::printers::now_rfc3339(),
         }
     }
@@ -118,6 +112,16 @@ impl PrinterStatus {
         status.error = Some(message.into());
         status
     }
+}
+
+/// Normalized data sent from an adapter to the protocol-neutral supervisor.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ConnectionObservation {
+    Telemetry(PrinterTelemetry),
+    Health {
+        state: ConnectionState,
+        observed_at: String,
+    },
 }
 
 /// What "Test connection" renders. Its job is to let a user confirm they
@@ -200,7 +204,7 @@ pub trait PrinterConnection: Send + Sync {
 
     async fn subscribe(
         &self,
-        tx: tokio::sync::mpsc::Sender<PrinterStatus>,
+        tx: tokio::sync::mpsc::Sender<ConnectionObservation>,
     ) -> Result<(), ConnectionError>;
 }
 
