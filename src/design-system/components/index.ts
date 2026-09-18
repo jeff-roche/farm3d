@@ -24,3 +24,5 @@ export {
 export { Progress, type ProgressProps } from "./Progress";
 export { NumberField, type NumberFieldProps } from "./NumberField";
 export { Logo, type LogoProps } from "./Logo";
+export { SeverityMarker, type SeverityMarkerProps } from "./SeverityMarker";
+export { PrinterRoster, type PrinterRosterProps, type PrinterRosterEntry } from "./PrinterRoster";

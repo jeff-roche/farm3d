@@ -21,6 +21,8 @@ import {
   Logo,
   NumberField,
   Field,
+  SeverityMarker,
+  PrinterRoster,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -223,6 +225,40 @@ export function Showcase() {
         <div class={styles.column}>
           <Progress label="Loading assets" showValue value={65} />
           <Progress label="Indeterminate" indeterminate />
+        </div>
+      </Panel>
+
+      <Panel title="SeverityMarker">
+        <div class={styles.row}>
+          <SeverityMarker severity="fatal" label="Connection error" />
+          <SeverityMarker severity="warning" label="Cache unavailable" />
+          <SeverityMarker severity="info" label="Telemetry unavailable" />
+          <SeverityMarker severity="resolved" label="Ready" />
+        </div>
+      </Panel>
+
+      <Panel title="PrinterRoster">
+        <div class={styles.rosterExamples}>
+          <PrinterRoster label="Printers" count={0} printers={[]} />
+          <PrinterRoster
+            label="offline Printers"
+            count={3}
+            printers={[
+              { id: "1", name: "Atlas", stateLabel: "Offline" },
+              { id: "2", name: "Forge", stateLabel: "Offline" },
+              { id: "3", name: "Nova", stateLabel: "Offline" },
+            ]}
+          />
+          <PrinterRoster
+            label="Printers"
+            count={10}
+            printers={Array.from({ length: 10 }, (_, index) => ({
+              id: String(index + 1),
+              name: `Printer ${index + 1}`,
+              stateLabel: index % 2 === 0 ? "Ready" : "Printing",
+            }))}
+            onViewAll={() => {}}
+          />
         </div>
       </Panel>
     </div>

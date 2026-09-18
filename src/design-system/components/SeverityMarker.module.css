@@ -1,0 +1,31 @@
+.marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  line-height: var(--f3d-type-label-line-height);
+}
+
+.marker svg {
+  flex: none;
+  width: 1em;
+  height: 1em;
+}
+
+.fatal {
+  color: var(--f3d-color-danger);
+}
+
+.warning {
+  color: var(--f3d-color-warning);
+}
+
+.info {
+  color: var(--f3d-color-accent);
+}
+
+.resolved {
+  color: var(--f3d-color-success);
+}
