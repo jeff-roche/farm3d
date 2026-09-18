@@ -3,9 +3,10 @@ import type { ConnectionState } from "./ConnectionState";
 import type { OperationalState } from "./OperationalState";
 import type { PrinterReadiness } from "./PrinterReadiness";
 import type { PrinterTelemetry } from "./PrinterTelemetry";
+import type { StatusCacheWarning } from "./StatusCacheWarning";
 import type { TelemetryFreshness } from "./TelemetryFreshness";
 
 /**
  * Canonical runtime status for a durable Printer.
  */
-export type PrinterStatus = { connectionState: ConnectionState, error?: string, telemetry: PrinterTelemetry, lastObservedAt?: string, freshUntil?: string, operationalState: OperationalState, readiness: PrinterReadiness, freshness: TelemetryFreshness, updatedAt: string, };
+export type PrinterStatus = { connectionState: ConnectionState, error?: string, telemetry: PrinterTelemetry, lastObservedAt?: string, freshUntil?: string, operationalState: OperationalState, readiness: PrinterReadiness, freshness: TelemetryFreshness, cacheWarnings: Array<StatusCacheWarning>, updatedAt: string, };

@@ -57,6 +57,30 @@ pub enum ConnectionState {
     Error,
 }
 
+/// A recoverable current condition in the telemetry cache, not a Printer
+/// connection failure.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/StatusCacheWarningOperation.ts"
+)]
+pub enum StatusCacheWarningOperation {
+    Hydrate,
+    Save,
+    Delete,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/StatusCacheWarning.ts")]
+pub struct StatusCacheWarning {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub printer_id: Option<String>,
+    pub operation: StatusCacheWarningOperation,
+}
+
 /// Canonical runtime status for a durable Printer.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +100,7 @@ pub struct PrinterStatus {
     pub operational_state: OperationalState,
     pub readiness: PrinterReadiness,
     pub freshness: TelemetryFreshness,
+    pub cache_warnings: Vec<StatusCacheWarning>,
     pub updated_at: String,
 }
 
@@ -103,6 +128,7 @@ impl PrinterStatus {
                 reason: Some(ReadinessReason::UnknownState),
             },
             freshness: TelemetryFreshness::Unavailable,
+            cache_warnings: Vec::new(),
             updated_at: crate::printers::now_rfc3339(),
         }
     }

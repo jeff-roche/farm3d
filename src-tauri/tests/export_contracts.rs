@@ -12,11 +12,11 @@ use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
 use farm3d_lib::connections::supervisor::{
     PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEvent, PrinterStatusEventPayload,
-    PrinterStatusEventType, PrinterStatusRow, StatusCacheWarning, StatusCacheWarningOperation,
+    PrinterStatusEventType, PrinterStatusRow,
 };
 use farm3d_lib::connections::{
     status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
-    ProbeResult, ReportedCapabilities,
+    ProbeResult, ReportedCapabilities, StatusCacheWarning, StatusCacheWarningOperation,
 };
 use farm3d_lib::contracts::command::{
     CommandError, CommandSuccess, CorrelationId, ErrorCode, JsonNumber, JsonValue, RecoveryCode,
