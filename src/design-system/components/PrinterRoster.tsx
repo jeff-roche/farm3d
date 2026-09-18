@@ -22,6 +22,7 @@ const CLOSE_DELAY_MS = 200;
 export function PrinterRoster(props: PrinterRosterProps) {
   const [open, setOpen] = createSignal(false);
   let closeTimeout: ReturnType<typeof setTimeout> | undefined;
+  let ignoreRestoredTriggerFocus = false;
 
   const cancelClose = () => {
     if (closeTimeout !== undefined) {
@@ -41,6 +42,21 @@ export function PrinterRoster(props: PrinterRosterProps) {
       closeTimeout = undefined;
       setOpen(false);
     }, CLOSE_DELAY_MS);
+  };
+
+  const openOnTriggerFocus = () => {
+    if (ignoreRestoredTriggerFocus) {
+      ignoreRestoredTriggerFocus = false;
+      return;
+    }
+    openRoster();
+  };
+
+  const ignoreNextRestoredTriggerFocus = () => {
+    ignoreRestoredTriggerFocus = true;
+    queueMicrotask(() => {
+      ignoreRestoredTriggerFocus = false;
+    });
   };
 
   onCleanup(cancelClose);
@@ -63,7 +79,7 @@ export function PrinterRoster(props: PrinterRosterProps) {
         onPointerLeave={(event: PointerEvent) => {
           if (event.pointerType !== "touch") closeRosterSoon();
         }}
-        onFocus={openRoster}
+        onFocus={openOnTriggerFocus}
         onBlur={closeRosterSoon}
       >
         <span class={styles.count}>{props.count}</span>
@@ -76,6 +92,7 @@ export function PrinterRoster(props: PrinterRosterProps) {
           onPointerLeave={closeRosterSoon}
           onFocus={cancelClose}
           onBlur={closeRosterSoon}
+          onCloseAutoFocus={ignoreNextRestoredTriggerFocus}
         >
           <div class={styles.heading}>{props.label}</div>
           <Show

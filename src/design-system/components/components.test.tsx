@@ -403,7 +403,11 @@ describe("PrinterRoster", () => {
 
     await fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
-    await waitFor(() => expect(trigger).toHaveFocus());
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
+    });
   });
 
   it("opens on pointer hover and bounds rows with a View all action", async () => {
