@@ -126,6 +126,12 @@ export function createPrinterStatusStore(dependencies: StatusDependencies) {
         current[row.printerId] = row.status;
         dependencies.onStatus?.(row.printerId, row.status);
       }
+      for (const printerId of Object.keys(state.statuses)) {
+        if (!Object.prototype.hasOwnProperty.call(current, printerId)) {
+          deleteStatus(printerId);
+          dependencies.onStatusRemoved?.(printerId);
+        }
+      }
       setState("statuses", current);
       const replay = buffer.filter((candidate) => candidate.streamId === streamId && candidate.sequence > sequence)
         .sort((left, right) => left.sequence - right.sequence);

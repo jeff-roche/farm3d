@@ -32,16 +32,60 @@ const removedEvent = (sequence: number): StatusEvent => ({
 
 describe("printer status reconciliation", () => {
   afterEach(() => vi.useRealTimers());
-  it("reports current synchronization after the initial backfill", async () => {
+  it("reports current synchronization after a successful stale backfill", async () => {
     const store = createPrinterStatusStore({
       printerIds: () => ["prn-1"],
       listen: async () => () => undefined,
-      backfill: async () => ({ streamId: "stream-a", snapshotSequence: 0, statuses: [], cacheWarnings: [] }),
+      backfill: async () => ({
+        streamId: "stream-a",
+        snapshotSequence: 0,
+        statuses: [{ printerId: "prn-1", status: { ...status("online"), freshness: "stale" } }],
+        cacheWarnings: [],
+      }),
     });
 
     expect(store.syncState()).toBe("uncertain");
     await store.start();
     expect(store.syncState()).toBe("current");
+  });
+
+  it("removes statuses absent from an authoritative sequence-gap backfill", async () => {
+    vi.useFakeTimers();
+    const onStatusRemoved = vi.fn();
+    let receive!: (event: StatusEvent) => void;
+    const backfill = vi.fn()
+      .mockResolvedValueOnce({
+        streamId: "stream-a",
+        snapshotSequence: 1,
+        statuses: [
+          { printerId: "prn-1", status: status("online") },
+          { printerId: "prn-2", status: status("online") },
+        ],
+        cacheWarnings: [],
+      })
+      .mockResolvedValueOnce({
+        streamId: "stream-a",
+        snapshotSequence: 3,
+        statuses: [{ printerId: "prn-1", status: status("online") }],
+        cacheWarnings: [],
+      });
+    const store = createPrinterStatusStore({
+      printerIds: () => ["prn-1", "prn-2"],
+      listen: async (handler) => { receive = handler; return () => undefined; },
+      backfill,
+      onStatusRemoved,
+    });
+    await store.start();
+
+    receive(event(3, "online"));
+
+    expect(store.statuses()["prn-1"].freshness).toBe("fresh");
+    expect(store.syncState()).toBe("uncertain");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(store.statuses()["prn-2"]).toBeUndefined();
+    expect(onStatusRemoved).toHaveBeenCalledWith("prn-2");
+    expect(store.syncState()).toBe("current");
+    store.dispose();
   });
 
   it("replays an event received while backfill is in flight exactly once", async () => {
