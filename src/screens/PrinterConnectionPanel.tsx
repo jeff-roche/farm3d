@@ -85,7 +85,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
     host: host().trim(),
     port: Number(port()) || DEFAULT_PORTS[kind()] || 7125,
     useTls: existing()?.useTls ?? false,
-    apiKey: apiKey() === "" ? undefined : apiKey(),
+    credential: apiKey() === "" ? undefined : apiKey(),
   });
 
   const mismatches = createMemo(() => {
@@ -102,7 +102,16 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
       setProbe(null);
       setProbeError(String(e));
     } finally {
+      setApiKey("");
       setTesting(false);
+    }
+  }
+
+  async function onSave() {
+    try {
+      await setConnection(props.printer.id, submission());
+    } finally {
+      setApiKey("");
     }
   }
 
@@ -135,7 +144,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
           <p class={styles.note}>
             Credentials stored in:{" "}
             {info().kind === "keychain" ? "OS keychain" : "credentials.json"}
-            <Show when={info().reason}>
+            <Show when={info().reasonCode}>
               {(reason) => <span class={styles.warn}> — no OS keychain available ({reason()})</span>}
             </Show>
           </p>
@@ -151,23 +160,28 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
           </Button>
         </div>
         <Show
-          when={(discovered() ?? []).length > 0}
-          fallback={<p class={styles.note}>Nothing found — enter the host above.</p>}
+          when={!discovered.error}
+          fallback={<p class={styles.warn}>Discovery failed — enter the host above.</p>}
         >
-          <For each={discovered()}>
-            {(found) => (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setKind(found.kind);
-                  setHost(found.host);
-                  setPort(String(found.port));
-                }}
-              >
-                {found.name} — {found.host}:{found.port}
-              </Button>
-            )}
-          </For>
+          <Show
+            when={(discovered() ?? []).length > 0}
+            fallback={<p class={styles.note}>Nothing found — enter the host above.</p>}
+          >
+            <For each={discovered()}>
+              {(found) => (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setKind(found.kind);
+                    setHost(found.host);
+                    setPort(String(found.port));
+                  }}
+                >
+                  {found.name} — {found.host}:{found.port}
+                </Button>
+              )}
+            </For>
+          </Show>
         </Show>
       </div>
 
@@ -175,7 +189,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
         <Button variant="secondary" disabled={testing()} onClick={() => void onTest()}>
           {testing() ? "Testing…" : "Test connection"}
         </Button>
-        <Button variant="primary" onClick={() => void setConnection(props.printer.id, submission())}>
+        <Button variant="primary" onClick={() => void onSave()}>
           Save
         </Button>
         <Show when={existing()}>

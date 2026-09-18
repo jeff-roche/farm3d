@@ -24,45 +24,45 @@ describe("settings-store", () => {
     });
 
     it("loads settings via the load_settings command and caches them", async () => {
-      tauriMock.invoke.mockResolvedValue({ themeMode: "farm3d-dark" });
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "farm3d-dark", updatedAt: "now" } });
       const { loadSettings, getSettings } = await import("./settings-store");
 
       const settings = await loadSettings();
 
-      expect(tauriMock.invoke).toHaveBeenCalledWith("load_settings");
-      expect(settings).toEqual({ themeMode: "farm3d-dark" });
-      expect(getSettings()).toEqual({ themeMode: "farm3d-dark" });
+      expect(tauriMock.invoke).toHaveBeenCalledWith("load_settings", { contractVersion: 1 });
+      expect(settings).toEqual({ revision: 1, themeMode: "farm3d-dark", updatedAt: "now" });
+      expect(getSettings()).toEqual(settings);
     });
 
     it("falls back to the default theme mode when the backend returns an empty string", async () => {
-      tauriMock.invoke.mockResolvedValue({ themeMode: "" });
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "", updatedAt: "now" } });
       const { loadSettings } = await import("./settings-store");
 
       const settings = await loadSettings();
 
-      expect(settings).toEqual({ themeMode: "system" });
+      expect(settings.themeMode).toBe("system");
     });
 
     it("persists merged settings via the save_settings command", async () => {
-      tauriMock.invoke.mockResolvedValue({ themeMode: "system" });
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "system", updatedAt: "now" } });
       const { loadSettings, updateSettings } = await import("./settings-store");
       await loadSettings();
-      tauriMock.invoke.mockResolvedValue(undefined);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 2, themeMode: "farm3d-light", updatedAt: "later" } });
 
       await updateSettings({ themeMode: "farm3d-light" });
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("save_settings", {
-        settings: { themeMode: "farm3d-light" },
+        contractVersion: 1, expectedRevision: 1, themeMode: "farm3d-light",
       });
     });
 
-    it("invokes open_settings_file", async () => {
-      tauriMock.invoke.mockResolvedValue(undefined);
-      const { openSettingsFile } = await import("./settings-store");
+    it("invokes export_settings", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { status: "cancelled" } });
+      const { exportSettings } = await import("./settings-store");
 
-      await openSettingsFile();
+      await exportSettings();
 
-      expect(tauriMock.invoke).toHaveBeenCalledWith("open_settings_file");
+      expect(tauriMock.invoke).toHaveBeenCalledWith("export_settings", { contractVersion: 1 });
     });
   });
 
@@ -76,7 +76,7 @@ describe("settings-store", () => {
 
       const settings = await loadSettings();
 
-      expect(settings).toEqual({ themeMode: "system" });
+      expect(settings.themeMode).toBe("system");
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
 
@@ -86,14 +86,14 @@ describe("settings-store", () => {
 
       await updateSettings({ themeMode: "farm3d-dark" });
 
-      expect(getSettings()).toEqual({ themeMode: "farm3d-dark" });
+      expect(getSettings().themeMode).toBe("farm3d-dark");
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
 
-    it("resolves openSettingsFile without invoking any command", async () => {
-      const { openSettingsFile } = await import("./settings-store");
+    it("reports export unsupported without invoking any command", async () => {
+      const { exportSettings } = await import("./settings-store");
 
-      await expect(openSettingsFile()).resolves.toBeUndefined();
+      await expect(exportSettings()).resolves.toEqual({ status: "unsupported", reason: "desktopRequired" });
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
   });

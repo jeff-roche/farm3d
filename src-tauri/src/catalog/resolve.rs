@@ -1,9 +1,13 @@
 use crate::catalog::{BedShape, Catalog, CatalogVariant, PrinterProfile};
-use crate::printers::{CatalogRef, PrinterProfileOverrides, StoredPrinter};
+use crate::contracts::command::JsonValue;
+use crate::printers::{CatalogRef, LastKnownGood, PrinterProfileOverrides, StoredPrinter};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/CatalogStatus.ts")]
 pub enum CatalogStatus {
     Ok,
     Rematched,
@@ -12,31 +16,53 @@ pub enum CatalogStatus {
     VendorMissing,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ProfileDrift.ts")]
 pub struct ProfileDrift {
     pub field: String,
-    pub from: serde_json::Value,
-    pub to: serde_json::Value,
+    pub from: JsonValue,
+    pub to: JsonValue,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolvedPrinter {
-    pub id: String,
-    pub name: String,
-    pub group: String,
-    pub notes: String,
-    pub catalog_ref: CatalogRef,
+#[ts(rename_all = "camelCase", export_to = "domain/ProfileResolution.ts")]
+pub struct ProfileResolution {
     pub catalog_status: CatalogStatus,
     pub model_label: String,
     pub variant_label: String,
     pub profile: PrinterProfile,
     pub overridden_fields: Vec<String>,
-    pub inherited: serde_json::Map<String, serde_json::Value>,
+    pub inherited: BTreeMap<String, JsonValue>,
     pub profile_drift: Vec<ProfileDrift>,
     pub unknown_override_keys: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename = "PrinterRecord",
+    rename_all = "camelCase",
+    export_to = "domain/PrinterRecord.ts"
+)]
+pub struct ResolvedPrinter {
+    pub id: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub name: String,
+    pub catalog_ref: CatalogRef,
+    pub notes: String,
+    pub overrides: BTreeMap<String, JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_known_good: Option<LastKnownGood>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub connection: Option<crate::connections::ConnectionConfig>,
+    pub profile_resolution: ProfileResolution,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 pub fn resolve_catalog_ref<'a>(
@@ -117,7 +143,10 @@ pub fn resolve_catalog_ref<'a>(
 }
 
 fn normalize(s: &str) -> String {
-    s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }
 
 pub fn merge_profile(
@@ -191,21 +220,35 @@ pub fn resolve_printer(catalog: &Catalog, stored: &StoredPrinter) -> ResolvedPri
         .map(|lkg| diff_profile(&lkg.profile, &base_profile, &overridden))
         .unwrap_or_default();
 
+    let overrides = serde_json::to_value(&stored.overrides)
+        .ok()
+        .and_then(|value| JsonValue::from_serde_value(value).ok())
+        .and_then(|value| match value {
+            JsonValue::Object(values) => Some(values),
+            _ => None,
+        })
+        .unwrap_or_default();
     ResolvedPrinter {
         id: stored.id.clone(),
+        revision: stored.revision,
         name: stored.name.clone(),
-        group: stored.group.clone(),
-        notes: stored.notes.clone(),
         catalog_ref: stored.catalog_ref.clone(),
-        catalog_status: status,
-        model_label,
-        variant_label,
-        profile,
-        overridden_fields: overridden.iter().map(|s| s.to_string()).collect(),
-        inherited,
-        profile_drift,
-        unknown_override_keys: stored.overrides.extra.keys().cloned().collect(),
+        notes: stored.notes.clone(),
+        overrides,
+        last_known_good: stored.last_known_good.clone(),
         connection: stored.connection.clone(),
+        profile_resolution: ProfileResolution {
+            catalog_status: status,
+            model_label,
+            variant_label,
+            profile,
+            overridden_fields: overridden.iter().map(|s| s.to_string()).collect(),
+            inherited,
+            profile_drift,
+            unknown_override_keys: stored.overrides.extra.keys().cloned().collect(),
+        },
+        created_at: stored.created_at.clone(),
+        updated_at: stored.updated_at.clone(),
     }
 }
 
@@ -233,12 +276,14 @@ fn empty_profile() -> PrinterProfile {
 fn inherited_subset(
     base: &PrinterProfile,
     overridden_fields: &[&'static str],
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut subset = serde_json::Map::new();
+) -> BTreeMap<String, JsonValue> {
+    let mut subset = BTreeMap::new();
     if let serde_json::Value::Object(map) = serde_json::to_value(base).unwrap() {
         for field in overridden_fields {
             if let Some(v) = map.get(*field) {
-                subset.insert(field.to_string(), v.clone());
+                if let Ok(value) = JsonValue::from_serde_value(v.clone()) {
+                    subset.insert(field.to_string(), value);
+                }
             }
         }
     }
@@ -269,8 +314,10 @@ fn diff_profile(
             if last_value != current_value {
                 drift.push(ProfileDrift {
                     field: key.clone(),
-                    from: last_value.clone(),
-                    to: current_value.clone(),
+                    from: JsonValue::from_serde_value(last_value.clone())
+                        .expect("profile values are valid wire JSON"),
+                    to: JsonValue::from_serde_value(current_value.clone())
+                        .expect("profile values are valid wire JSON"),
                 });
             }
         }
@@ -289,7 +336,10 @@ mod tests {
             variant: name.to_string(),
             printer_variant: printer_variant.to_string(),
             bed_shape: BedShape::Rectangular {
-                width_mm: 256.0, depth_mm: 256.0, origin_x_mm: 0.0, origin_y_mm: 0.0,
+                width_mm: 256.0,
+                depth_mm: 256.0,
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
             },
             printable_height_mm: height,
             bed_exclude_areas: vec![],
@@ -453,7 +503,10 @@ mod tests {
         assert_eq!(status, CatalogStatus::Ok);
         let v = v.unwrap();
         assert_eq!(v.variant, "Model B 0.4 nozzle");
-        assert_eq!(v.printable_height_mm, 200.0, "resolved to Model A's variant");
+        assert_eq!(
+            v.printable_height_mm, 200.0,
+            "resolved to Model A's variant"
+        );
     }
 
     /// Step 2 ((vendor, modelId) match, reached only when step 1's exact
@@ -532,17 +585,26 @@ mod tests {
             id: "prn-1".to_string(),
             name: "My Centauri".to_string(),
             catalog_ref: a_ref(),
-            group: String::new(),
             notes: String::new(),
             overrides: PrinterProfileOverrides::default(),
             last_known_good: None,
             connection: None,
+            ..Default::default()
         };
         let resolved = resolve_printer(&catalog, &stored);
-        assert_eq!(resolved.catalog_status, CatalogStatus::Ok);
-        assert_eq!(resolved.profile.printable_height_mm, 256.0);
-        assert!(resolved.overridden_fields.is_empty());
-        assert_eq!(resolved.model_label, "Elegoo Centauri Carbon");
+        assert_eq!(
+            resolved.profile_resolution.catalog_status,
+            CatalogStatus::Ok
+        );
+        assert_eq!(
+            resolved.profile_resolution.profile.printable_height_mm,
+            256.0
+        );
+        assert!(resolved.profile_resolution.overridden_fields.is_empty());
+        assert_eq!(
+            resolved.profile_resolution.model_label,
+            "Elegoo Centauri Carbon"
+        );
     }
 
     #[test]
@@ -556,7 +618,6 @@ mod tests {
             id: "prn-1".to_string(),
             name: "My Centauri".to_string(),
             catalog_ref: r,
-            group: String::new(),
             notes: String::new(),
             overrides: PrinterProfileOverrides::default(),
             last_known_good: Some(LastKnownGood {
@@ -565,10 +626,14 @@ mod tests {
                 resolved_at: "2026-08-01T00:00:00Z".to_string(),
             }),
             connection: None,
+            ..Default::default()
         };
         let resolved = resolve_printer(&catalog, &stored);
-        assert_eq!(resolved.catalog_status, CatalogStatus::ModelMissing);
-        assert_eq!(resolved.profile, fallback_profile);
+        assert_eq!(
+            resolved.profile_resolution.catalog_status,
+            CatalogStatus::ModelMissing
+        );
+        assert_eq!(resolved.profile_resolution.profile, fallback_profile);
     }
 
     #[test]
@@ -581,7 +646,6 @@ mod tests {
             id: "prn-1".to_string(),
             name: "My Centauri".to_string(),
             catalog_ref: a_ref(),
-            group: String::new(),
             notes: String::new(),
             overrides,
             last_known_good: Some(LastKnownGood {
@@ -590,29 +654,39 @@ mod tests {
                 resolved_at: "2026-08-01T00:00:00Z".to_string(),
             }),
             connection: None,
+            ..Default::default()
         };
         let resolved = resolve_printer(&catalog, &stored);
         // printableHeightMm is overridden, so it must NOT appear as drift even
         // though the stale snapshot's value (100) differs from the catalog's (256).
-        assert!(!resolved.profile_drift.iter().any(|d| d.field == "printableHeightMm"));
+        assert!(!resolved
+            .profile_resolution
+            .profile_drift
+            .iter()
+            .any(|d| d.field == "printableHeightMm"));
     }
 
     #[test]
     fn unknown_override_keys_are_surfaced() {
         let catalog = a_catalog();
         let mut overrides = PrinterProfileOverrides::default();
-        overrides.extra.insert("printabelHeight".to_string(), serde_json::json!(300));
+        overrides
+            .extra
+            .insert("printabelHeight".to_string(), serde_json::json!(300));
         let stored = StoredPrinter {
             id: "prn-1".to_string(),
             name: "My Centauri".to_string(),
             catalog_ref: a_ref(),
-            group: String::new(),
             notes: String::new(),
             overrides,
             last_known_good: None,
             connection: None,
+            ..Default::default()
         };
         let resolved = resolve_printer(&catalog, &stored);
-        assert_eq!(resolved.unknown_override_keys, vec!["printabelHeight".to_string()]);
+        assert_eq!(
+            resolved.profile_resolution.unknown_override_keys,
+            vec!["printabelHeight".to_string()]
+        );
     }
 }

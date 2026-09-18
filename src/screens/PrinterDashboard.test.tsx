@@ -55,8 +55,8 @@ function printer(overrides: Partial<ResolvedPrinter>): ResolvedPrinter {
   return {
     id: "prn-1",
     name: "Printer",
-    group: "",
     notes: "",
+    overrides: overrides.overrides ?? {},
     catalogRef: {
       vendor: "Elegoo", model: "Elegoo Centauri Carbon",
       variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
@@ -69,8 +69,10 @@ function printer(overrides: Partial<ResolvedPrinter>): ResolvedPrinter {
     inherited: {},
     profileDrift: [],
     unknownOverrideKeys: [],
-    connection: null,
     ...overrides,
+    revision: overrides.revision ?? 1,
+    createdAt: overrides.createdAt ?? "",
+    updatedAt: overrides.updatedAt ?? "",
   };
 }
 

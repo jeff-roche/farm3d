@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe("SettingsMenu", () => {
-  it("shows a 'Theme...' item and an 'Open settings file' action", async () => {
+  it("shows theme and explicit settings import/export actions", async () => {
     render(() => <SettingsMenu />);
 
     await fireEvent.pointerDown(screen.getByLabelText("Settings"), {
@@ -16,7 +16,8 @@ describe("SettingsMenu", () => {
     });
 
     expect(await screen.findByText("Theme...")).toBeInTheDocument();
-    expect(screen.getByText("Open settings file")).toBeInTheDocument();
+    expect(screen.getByText("Export settings...")).toBeInTheDocument();
+    expect(screen.getByText("Import settings...")).toBeInTheDocument();
   });
 
   it("opens the theme popover with theme options when 'Theme...' is selected", async () => {

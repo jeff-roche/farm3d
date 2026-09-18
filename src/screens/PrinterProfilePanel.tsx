@@ -1,5 +1,6 @@
 import { createEffect, createMemo, on, onCleanup, Show } from "solid-js";
 import { Button, Field, NumberField, Select, Switch } from "../design-system";
+import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import { overrideField, resolveDrift, revertField } from "../printers/printer-store";
 import type { BedShape, OverridableField, ResolvedPrinter } from "../printers/types";
 import styles from "./PrinterProfilePanel.module.css";
@@ -57,7 +58,7 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
 
   function debouncedOverride(
     field: OverridableField,
-    value: unknown,
+    value: JsonValue,
     timer: () => ReturnType<typeof setTimeout> | undefined,
     setTimer: (t: ReturnType<typeof setTimeout>) => void,
   ) {

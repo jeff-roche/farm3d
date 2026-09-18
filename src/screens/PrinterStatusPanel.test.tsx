@@ -24,9 +24,10 @@ afterEach(() => {
 
 const PRINTER: ResolvedPrinter = {
   id: "prn-1",
+  revision: 1,
   name: "Centauri Carbon — Bay 1",
-  group: "",
   notes: "",
+  overrides: {},
   catalogRef: {
     vendor: "Elegoo", model: "Elegoo Centauri Carbon",
     variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
@@ -51,7 +52,8 @@ const PRINTER: ResolvedPrinter = {
   inherited: {},
   profileDrift: [],
   unknownOverrideKeys: [],
-  connection: null,
+  createdAt: "",
+  updatedAt: "",
 };
 
 describe("PrinterStatusPanel", () => {

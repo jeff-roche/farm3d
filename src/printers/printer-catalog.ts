@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { command, desktopAvailable } from "../ipc/client";
 import type { CatalogModelSummary, CatalogRef, CatalogVariantSummary, PrinterProfile } from "./types";
 
 let modelsCache: CatalogModelSummary[] | null = null;
@@ -6,8 +6,8 @@ let modelsCache: CatalogModelSummary[] | null = null;
 /** The ~370-model list, cached after first load — used only by the add-printer flow. */
 export async function listCatalogModels(): Promise<CatalogModelSummary[]> {
   if (modelsCache) return modelsCache;
-  modelsCache = isTauri()
-    ? await invoke<CatalogModelSummary[]>("list_catalog_models")
+  modelsCache = desktopAvailable()
+    ? await command("list_catalog_models")
     : (await fetchWebCatalog()).map((m) => ({ modelId: m.modelId, vendor: m.vendor, model: m.model }));
   return modelsCache;
 }
@@ -20,21 +20,21 @@ export async function listCatalogVariants(
   vendor: string,
   model: string,
 ): Promise<CatalogVariantSummary[]> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     const match = findModel(await fetchWebCatalog(), vendor, model);
     return (match?.variants ?? []).map((v) => ({ variant: v.variant, printerVariant: v.printerVariant }));
   }
-  return invoke<CatalogVariantSummary[]>("list_catalog_variants", { vendor, model });
+  return command("list_catalog_variants", { vendor, model });
 }
 
 export async function previewProfile(catalogRef: CatalogRef): Promise<PrinterProfile> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     const match = findModel(await fetchWebCatalog(), catalogRef.vendor, catalogRef.model);
     const variant = match?.variants.find((v) => v.variant === catalogRef.variant);
     if (!variant) throw new Error(`No catalog variant matches ${catalogRef.variant}`);
     return toPrinterProfile(variant);
   }
-  return invoke<PrinterProfile>("preview_profile", { catalogRef });
+  return command("preview_profile", { catalogRef });
 }
 
 // --- `just web` fallback: reads the real, bundled catalog directly -------

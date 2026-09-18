@@ -1,20 +1,20 @@
 import { IconSettings } from "@tabler/icons-solidjs";
 import { createSignal } from "solid-js";
 import { DropdownMenu } from "../design-system";
-import { openSettingsFile } from "../settings/settings-store";
+import { exportSettings, importSettings } from "../settings/settings-store";
 import { ThemePopover } from "./ThemePopover";
 import styles from "./SettingsMenu.module.css";
-
-function handleOpenSettingsFile() {
-  void openSettingsFile().catch((error) => {
-    console.error("Failed to open settings file:", error);
-  });
-}
 
 /** Compact settings entry point for the activity bar — opens the theme picker or the settings file. */
 export function SettingsMenu() {
   let triggerRef: HTMLSpanElement | undefined;
   const [themePopoverOpen, setThemePopoverOpen] = createSignal(false);
+  const [operationError, setOperationError] = createSignal<string | null>(null);
+
+  function run<T>(operation: () => Promise<T>) {
+    setOperationError(null);
+    void operation().catch((error) => setOperationError(String(error)));
+  }
 
   // The DropdownMenu item's own pointer-up/click (which closes the menu) is still
   // being processed when onSelect fires; opening the Popover synchronously means its
@@ -35,9 +35,11 @@ export function SettingsMenu() {
         items={[
           { label: "Theme...", onSelect: openThemePopover },
           { type: "separator" as const },
-          { label: "Open settings file", onSelect: handleOpenSettingsFile },
+          { label: "Export settings...", onSelect: () => run(exportSettings) },
+          { label: "Import settings...", onSelect: () => run(importSettings) },
         ]}
       />
+      {operationError() ? <span role="alert">{operationError()}</span> : null}
       <ThemePopover
         open={themePopoverOpen()}
         onOpenChange={setThemePopoverOpen}

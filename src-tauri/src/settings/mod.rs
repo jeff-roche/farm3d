@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_opener::OpenerExt;
+
+pub mod commands;
+pub mod repository;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
@@ -53,26 +55,12 @@ fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn load_settings(app: AppHandle) -> Result<Settings, String> {
+pub fn load_settings_legacy(app: AppHandle) -> Result<Settings, String> {
     load_settings_from(&app_config_dir(&app)?)
 }
 
-#[tauri::command]
-pub fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+pub fn save_settings_legacy(app: AppHandle, settings: Settings) -> Result<(), String> {
     write_settings_to(&app_config_dir(&app)?, &settings)
-}
-
-#[tauri::command]
-pub fn open_settings_file(app: AppHandle) -> Result<(), String> {
-    let config_dir = app_config_dir(&app)?;
-    let path = settings_file_path(&config_dir);
-    if !path.exists() {
-        write_settings_to(&config_dir, &Settings::default())?;
-    }
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

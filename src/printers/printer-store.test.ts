@@ -18,84 +18,149 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const A_RESOLVED_PRINTER = {
+const A_PRINTER_RECORD = {
   id: "prn-1",
+  revision: 1,
   name: "Centauri Carbon — Bay 1",
-  group: "Bay 1",
   notes: "",
+  overrides: {},
   catalogRef: {
     vendor: "Elegoo", model: "Elegoo Centauri Carbon",
     variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
   },
-  catalogStatus: "ok",
-  modelLabel: "Elegoo Centauri Carbon",
-  variantLabel: "Elegoo Centauri Carbon 0.4 nozzle",
-  profile: {
-    bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
-    printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
-    nozzleDiameterMm: [0.4], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
-    hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true,
-    suggestedHostType: "elegoolink",
+  profileResolution: {
+    catalogStatus: "ok" as const,
+    modelLabel: "Elegoo Centauri Carbon",
+    variantLabel: "Elegoo Centauri Carbon 0.4 nozzle",
+    profile: {
+      bedShape: { kind: "rectangular" as const, widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+      printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
+      nozzleDiameterMm: [0.4], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
+      hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true,
+      suggestedHostType: "elegoolink",
+    },
+    overriddenFields: [],
+    inherited: {},
+    profileDrift: [],
+    unknownOverrideKeys: [],
   },
-  overriddenFields: [],
-  inherited: {},
-  profileDrift: [],
-  unknownOverrideKeys: [],
-  connection: null,
+  createdAt: "",
+  updatedAt: "",
 };
+function flattenRecord(record: typeof A_PRINTER_RECORD) {
+  const { profileResolution, ...printer } = record;
+  return { ...printer, ...profileResolution };
+}
+const A_RESOLVED_PRINTER = flattenRecord(A_PRINTER_RECORD);
 
 describe("printer-store", () => {
   describe("under Tauri", () => {
     beforeEach(() => tauriMock.isTauri.mockReturnValue(true));
 
     it("loads printers via list_printers", async () => {
-      tauriMock.invoke.mockResolvedValue([A_RESOLVED_PRINTER]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, printers } = await import("./printer-store");
       await loadPrinters();
-      expect(tauriMock.invoke).toHaveBeenCalledWith("list_printers");
+      expect(tauriMock.invoke).toHaveBeenCalledWith("list_printers", { contractVersion: 1 });
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
     });
 
     it("adds a printer via create_printer and appends the resolved result", async () => {
-      tauriMock.invoke.mockResolvedValue([]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
       const { loadPrinters, addPrinter, printers } = await import("./printer-store");
       await loadPrinters();
-      tauriMock.invoke.mockResolvedValue(A_RESOLVED_PRINTER);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
 
       const id = await addPrinter({ name: "Centauri Carbon — Bay 1", catalogRef: A_RESOLVED_PRINTER.catalogRef });
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", {
-        draft: { name: "Centauri Carbon — Bay 1", catalogRef: A_RESOLVED_PRINTER.catalogRef },
+        contractVersion: 1,
+        name: "Centauri Carbon — Bay 1",
+        catalogRef: A_RESOLVED_PRINTER.catalogRef,
       });
       expect(id).toBe("prn-1");
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
     });
 
     it("revertField sends value: null", async () => {
-      tauriMock.invoke.mockResolvedValue([A_RESOLVED_PRINTER]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, revertField } = await import("./printer-store");
       await loadPrinters();
-      tauriMock.invoke.mockResolvedValue(A_RESOLVED_PRINTER);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
 
       await revertField("prn-1", "printableHeightMm");
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("set_printer_override", {
         id: "prn-1",
+        contractVersion: 1,
+        expectedRevision: 1,
         field: "printableHeightMm",
         value: null,
       });
     });
 
     it("removePrinter invokes delete_printer and drops the row", async () => {
-      tauriMock.invoke.mockResolvedValue([A_RESOLVED_PRINTER]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, removePrinter, printers } = await import("./printer-store");
       await loadPrinters();
-      tauriMock.invoke.mockResolvedValue(undefined);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { deletedId: "prn-1", deletedRevision: 1, credentialCleanupPending: false, warnings: [] } });
 
       await removePrinter("prn-1");
 
-      expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { id: "prn-1" });
+      expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { contractVersion: 1, expectedRevision: 1, id: "prn-1" });
       expect(printers()).toEqual([]);
+    });
+
+    it("settles an applied Printers import from the authoritative returned set", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, importPrinters, printers } = await import("./printer-store");
+      await loadPrinters();
+      const importedRecord = { ...structuredClone(A_PRINTER_RECORD), id: "é-printer", revision: 1 };
+      tauriMock.invoke.mockResolvedValue({
+        contractVersion: 1,
+        data: {
+          status: "applied", printers: [importedRecord], createdCount: 1,
+          updatedCount: 0, deletedCount: 1, warnings: [],
+        },
+      });
+
+      await importPrinters();
+
+      expect(printers()).toEqual([flattenRecord(importedRecord)]);
+    });
+
+    it("sorts import revision preconditions by exact UTF-8 bytes", async () => {
+      const astral = { ...structuredClone(A_PRINTER_RECORD), id: "\u{10000}", revision: 4 };
+      const privateUse = { ...structuredClone(A_PRINTER_RECORD), id: "\u{e000}", revision: 3 };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [astral, privateUse] });
+      const { loadPrinters, importPrinters } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { status: "cancelled" } });
+
+      await importPrinters();
+
+      expect(tauriMock.invoke).toHaveBeenLastCalledWith("import_printers", {
+        contractVersion: 1,
+        expectedRevisions: [
+          { id: privateUse.id, revision: 3 },
+          { id: astral.id, revision: 4 },
+        ],
+      });
+    });
+
+    it("does not turn a discovery command error into an empty successful scan", async () => {
+      const commandError = {
+        contractVersion: 1,
+        code: "TIMEOUT",
+        message: "Printer discovery did not finish in time.",
+        recovery: ["CHECK_CONNECTION", "RETRY"],
+        retryable: true,
+      };
+      tauriMock.invoke.mockRejectedValue(commandError);
+      const { discoverPrinters, printerStoreError } = await import("./printer-store");
+
+      await expect(discoverPrinters()).rejects.toEqual(commandError);
+      expect(printerStoreError()).toBe(commandError.message);
     });
 
     it("keeps live runtimeStatus when a mutation splices in a fresh ResolvedPrinter", async () => {
@@ -106,7 +171,7 @@ describe("printer-store", () => {
       // Clones, not the shared fixture: the store mutates what it is handed,
       // so reusing the literal would smuggle `runtimeStatus` into the
       // "fresh from Rust" value and make this pass without the fix.
-      tauriMock.invoke.mockResolvedValue([structuredClone(A_RESOLVED_PRINTER)]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [structuredClone(A_PRINTER_RECORD)] });
       const { loadPrinters, applyStatus, updatePrinter, printers } = await import("./printer-store");
       await loadPrinters();
       applyStatus("prn-1", {
@@ -115,10 +180,10 @@ describe("printer-store", () => {
         updatedAt: "2026-08-20T14:02:11Z",
       });
 
-      tauriMock.invoke.mockResolvedValue({
-        ...structuredClone(A_RESOLVED_PRINTER),
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: {
+        ...structuredClone(A_PRINTER_RECORD),
         name: "Bay 1 — renamed",
-      });
+      }, warnings: [] } });
       await updatePrinter("prn-1", { name: "Bay 1 — renamed" });
 
       expect(printers()[0].name).toBe("Bay 1 — renamed");
@@ -132,7 +197,7 @@ describe("printer-store", () => {
       // otherwise mock each other away, so a rename on either would break
       // live status with a green test suite.
       const calls: string[] = [];
-      let handler: ((event: { payload: { id: string; status: unknown } }) => void) | undefined;
+      let handler: ((event: { payload: unknown }) => void) | undefined;
       const unlisten = vi.fn();
       eventMock.listen.mockImplementation((name: string, cb: typeof handler) => {
         calls.push(`listen:${name}`);
@@ -141,22 +206,28 @@ describe("printer-store", () => {
       });
       tauriMock.invoke.mockImplementation((command: string) => {
         calls.push(`invoke:${command}`);
-        return Promise.resolve(command === "list_printers" ? [structuredClone(A_RESOLVED_PRINTER)] : {});
+        return Promise.resolve({ contractVersion: 1, data: command === "list_printers" ? [structuredClone(A_PRINTER_RECORD)] : { streamId: "stream-a", snapshotSequence: 0, statuses: [] } });
       });
 
       const { loadPrinters, startStatusListener, printers } = await import("./printer-store");
       await loadPrinters();
       const stop = await startStatusListener();
 
-      expect(eventMock.listen).toHaveBeenCalledWith("printer-status", expect.any(Function));
+      expect(eventMock.listen).toHaveBeenCalledWith("farm3d-event-v1", expect.any(Function));
       expect(calls.slice(-2)).toEqual([
-        "listen:printer-status",
+        "listen:farm3d-event-v1",
         "invoke:printer_statuses",
       ]);
       handler!({
         payload: {
-          id: "prn-1",
-          status: {
+          contractVersion: 1,
+          streamId: "stream-a",
+          sequence: 1,
+          eventId: "event-1",
+          occurredAt: "2026-08-20T14:02:11Z",
+          type: "printer.status.changed",
+          subject: { kind: "printer", id: "prn-1" },
+          payload: {
             connectionState: "online",
             jobState: "printing",
             jobName: "benchy.gcode",
@@ -183,17 +254,24 @@ describe("printer-store", () => {
         printDurationS: 812.5,
         updatedAt: "2026-08-20T14:02:11Z",
       });
-      expect(stop).toBe(unlisten);
+      stop();
+      expect(unlisten).toHaveBeenCalledOnce();
     });
 
     it("a rejected mutation surfaces the message instead of rejecting, and can be dismissed", async () => {
-      tauriMock.invoke.mockResolvedValue([A_RESOLVED_PRINTER]);
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, overrideField, printerStoreError, dismissPrinterStoreError } =
         await import("./printer-store");
       await loadPrinters();
       expect(printerStoreError()).toBeNull();
 
-      tauriMock.invoke.mockRejectedValue(new Error("printers.json is read-only"));
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1,
+        code: "PERSISTENCE_UNAVAILABLE",
+        message: "printers.json is read-only",
+        recovery: ["RETRY"],
+        retryable: true,
+      });
       // Must not reject: every call site discards the promise with `void`.
       await expect(overrideField("prn-1", "printableHeightMm", 240)).resolves.toBeUndefined();
 

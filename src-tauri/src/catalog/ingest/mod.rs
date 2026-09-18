@@ -68,12 +68,19 @@ pub fn ingest_profiles_dir(dir: &Path) -> Result<Vec<CatalogModel>, IngestError>
         let machine_dir = dir.join(&vendor_name).join("machine");
         let index = index_machine_dir(&machine_dir)?;
 
-        let model_list = bundle["machine_model_list"].as_array().cloned().unwrap_or_default();
-        let machine_list = bundle["machine_list"].as_array().cloned().unwrap_or_default();
+        let model_list = bundle["machine_model_list"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let machine_list = bundle["machine_list"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
 
         for model_entry in &model_list {
             let sub_path = model_entry["sub_path"].as_str().unwrap_or_default();
-            let model_json: Value = match fs::read_to_string(dir.join(&vendor_name).join(sub_path)) {
+            let model_json: Value = match fs::read_to_string(dir.join(&vendor_name).join(sub_path))
+            {
                 Ok(s) => match serde_json::from_str(&s) {
                     Ok(v) => v,
                     Err(_) => continue,
@@ -86,7 +93,10 @@ pub fn ingest_profiles_dir(dir: &Path) -> Result<Vec<CatalogModel>, IngestError>
                 }
             }
             let model_name = model_json["name"].as_str().unwrap_or_default().to_string();
-            let model_id = model_json["model_id"].as_str().unwrap_or_default().to_string();
+            let model_id = model_json["model_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
 
             let mut variants = Vec::new();
             for variant_entry in &machine_list {
@@ -98,7 +108,9 @@ pub fn ingest_profiles_dir(dir: &Path) -> Result<Vec<CatalogModel>, IngestError>
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if resolved.get("printer_model").and_then(|v| v.as_str()) != Some(model_name.as_str()) {
+                if resolved.get("printer_model").and_then(|v| v.as_str())
+                    != Some(model_name.as_str())
+                {
                     continue;
                 }
                 if let Ok(variant) = extract_variant(variant_name, &resolved) {
@@ -195,14 +207,26 @@ fn extract_variant(name: &str, resolved: &Value) -> Result<CatalogVariant, Inges
 
     Ok(CatalogVariant {
         variant: name.to_string(),
-        printer_variant: resolved["printer_variant"].as_str().unwrap_or_default().to_string(),
+        printer_variant: resolved["printer_variant"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         bed_shape,
         printable_height_mm,
         bed_exclude_areas,
-        default_bed_type: resolved["default_bed_type"].as_str().unwrap_or_default().to_string(),
+        default_bed_type: resolved["default_bed_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         nozzle_diameter_mm,
-        nozzle_type: resolved["nozzle_type"].as_str().unwrap_or_default().to_string(),
-        gcode_flavor: resolved["gcode_flavor"].as_str().unwrap_or_default().to_string(),
+        nozzle_type: resolved["nozzle_type"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        gcode_flavor: resolved["gcode_flavor"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         has_auxiliary_fan: flag("auxiliary_fan"),
         supports_air_filtration: flag("support_air_filtration"),
         supports_multi_filament: flag("support_multi_filament"),
@@ -263,8 +287,14 @@ mod tests {
     #[test]
     fn multi_toolhead_nozzle_diameter_is_preserved_as_an_array() {
         let models = ingest_profiles_dir(&fixtures_dir()).unwrap();
-        let t5 = models.iter().find(|m| m.model == "Test Printer 5T").unwrap();
-        assert_eq!(t5.variants[0].nozzle_diameter_mm, vec![0.4, 0.4, 0.4, 0.4, 0.4]);
+        let t5 = models
+            .iter()
+            .find(|m| m.model == "Test Printer 5T")
+            .unwrap();
+        assert_eq!(
+            t5.variants[0].nozzle_diameter_mm,
+            vec![0.4, 0.4, 0.4, 0.4, 0.4]
+        );
     }
 
     #[test]

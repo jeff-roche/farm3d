@@ -1,11 +1,12 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { command, desktopAvailable } from "../ipc/client";
+import type { SettingsRecord } from "../generated/contracts/domain/SettingsRecord";
+import type { SettingsExportOutcome } from "../generated/contracts/command/SettingsExportOutcome";
+import type { SettingsImportOutcome } from "../generated/contracts/command/SettingsImportOutcome";
 import type { ThemeMode } from "../design-system/theme-engine";
 
-export interface Settings {
-  themeMode: ThemeMode;
-}
+export type Settings = Omit<SettingsRecord, "themeMode"> & { themeMode: ThemeMode };
 
-const DEFAULT_SETTINGS: Settings = { themeMode: "system" };
+const DEFAULT_SETTINGS: Settings = { revision: 1, themeMode: "system", updatedAt: "" };
 
 let cached: Settings | null = null;
 
@@ -15,11 +16,11 @@ let cached: Settings | null = null;
  * result for getSettings(). Safe to call more than once.
  */
 export async function loadSettings(): Promise<Settings> {
-  if (!isTauri()) {
+  if (!desktopAvailable()) {
     cached = { ...DEFAULT_SETTINGS };
     return cached;
   }
-  const loaded = await invoke<Settings>("load_settings");
+  const loaded = await command("load_settings");
   cached = {
     ...DEFAULT_SETTINGS,
     ...loaded,
@@ -44,12 +45,23 @@ export function getSettings(): Settings {
 export async function updateSettings(partial: Partial<Settings>): Promise<void> {
   const next = { ...(cached ?? DEFAULT_SETTINGS), ...partial };
   cached = next;
-  if (!isTauri()) return;
-  await invoke("save_settings", { settings: next });
+  if (!desktopAvailable()) return;
+  cached = await command("save_settings", {
+    expectedRevision: next.revision,
+    themeMode: next.themeMode,
+  });
 }
 
-/** Opens the settings file in the OS-default editor. A no-op under `just web`. */
-export async function openSettingsFile(): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("open_settings_file");
+export async function exportSettings(): Promise<SettingsExportOutcome> {
+  if (!desktopAvailable()) return { status: "unsupported", reason: "desktopRequired" };
+  return command("export_settings");
+}
+
+export async function importSettings(): Promise<SettingsImportOutcome> {
+  if (!desktopAvailable()) return { status: "unsupported", reason: "desktopRequired" };
+  const result = await command("import_settings", {
+    expectedRevision: (cached ?? DEFAULT_SETTINGS).revision,
+  });
+  if (result.status === "applied") cached = result.settings as Settings;
+  return result;
 }

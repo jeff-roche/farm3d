@@ -31,6 +31,7 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
 | `just test-rust` | — | Run the Tauri backend's Rust test suite |
 | `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
+| `just gen-contracts` | — | Regenerate committed TypeScript contracts from Rust wire types |
 
 ## Project structure
 

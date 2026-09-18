@@ -52,9 +52,20 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+      - name: Install just
+        run: cargo install just --locked --version 1.58.0
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
+      - name: Regenerate TypeScript contracts
+        run: just gen-contracts
+      - name: Reject generated contract drift
+        run: |
+          drift="$(git status --porcelain --untracked-files=all -- src/generated/contracts)"
+          if [ -n "$drift" ]; then
+            printf '%s\n' "$drift"
+            exit 1
+          fi
       - name: Test Rust backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
