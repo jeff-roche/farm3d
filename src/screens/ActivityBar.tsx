@@ -14,7 +14,8 @@ export function ActivityBar(props: ActivityBarProps) {
   return (
     <nav class={styles.bar} aria-label="Primary">
       <IconButton
-        aria-label="Printers"
+        aria-label="Monitor"
+        aria-current={props.active === "monitor" ? "page" : undefined}
         active={props.active === "monitor"}
         onClick={() => props.onSelect("monitor")}
       >
@@ -22,6 +23,7 @@ export function ActivityBar(props: ActivityBarProps) {
       </IconButton>
       <IconButton
         aria-label="Library"
+        aria-current={props.active === "library" ? "page" : undefined}
         active={props.active === "library"}
         onClick={() => props.onSelect("library")}
       >
