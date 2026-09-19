@@ -102,4 +102,23 @@ describe("PrinterDashboard", () => {
     await waitFor(() => expect(screen.getByRole("complementary", { name: "North Bay" })).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+
+  it("uses an overlay dialog at a 1024px workspace", async () => {
+    class NarrowWorkspaceObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 1024 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", NarrowWorkspaceObserver);
+    const monitor = store([printer()]);
+    monitor.setSelectedPrinterId("prn-1");
+
+    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument());
+    expect(screen.queryByRole("complementary", { name: "North Bay" })).not.toBeInTheDocument();
+  });
 });

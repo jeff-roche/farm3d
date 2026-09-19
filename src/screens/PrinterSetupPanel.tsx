@@ -12,6 +12,7 @@ export interface PrinterSetupPanelProps {
 const DEBOUNCE_MS = 300;
 
 export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
+  let nameTimer: ReturnType<typeof setTimeout> | undefined;
   let notesTimer: ReturnType<typeof setTimeout> | undefined;
   const [variants] = createResource(
     () => [props.printer.catalogRef.vendor, props.printer.catalogRef.model] as const,
@@ -19,14 +20,24 @@ export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
   );
 
   createEffect(on(() => props.printer.id, (_id, previousId) => {
-    if (previousId !== undefined) clearTimeout(notesTimer);
-  }));
-  onCleanup(() => clearTimeout(notesTimer));
-
-  const saveNotes = (value: string) => {
+    if (previousId === undefined) return;
+    clearTimeout(nameTimer);
     clearTimeout(notesTimer);
+  }));
+  onCleanup(() => {
+    clearTimeout(nameTimer);
+    clearTimeout(notesTimer);
+  });
+
+  const saveAfterDelay = (
+    field: "name" | "notes",
+    value: string,
+    currentTimer: () => ReturnType<typeof setTimeout> | undefined,
+    setTimer: (timer: ReturnType<typeof setTimeout>) => void,
+  ) => {
+    clearTimeout(currentTimer());
     const printerId = props.printer.id;
-    notesTimer = setTimeout(() => void updatePrinter(printerId, { notes: value }), DEBOUNCE_MS);
+    setTimer(setTimeout(() => void updatePrinter(printerId, { [field]: value }), DEBOUNCE_MS));
   };
   const rebind = (variant: CatalogVariantSummary) => {
     if (variant.variant === props.printer.catalogRef.variant) return;
@@ -58,7 +69,17 @@ export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
           onChange={rebind}
         />
       </Show>
-      <TextField label="Notes" value={props.printer.notes} onChange={saveNotes} placeholder="Spare parts, quirks, anything worth remembering" />
+      <TextField
+        label="Name"
+        value={props.printer.name}
+        onChange={(value) => saveAfterDelay("name", value, () => nameTimer, (timer) => (nameTimer = timer))}
+      />
+      <TextField
+        label="Notes"
+        value={props.printer.notes}
+        onChange={(value) => saveAfterDelay("notes", value, () => notesTimer, (timer) => (notesTimer = timer))}
+        placeholder="Spare parts, quirks, anything worth remembering"
+      />
     </div>
   );
 }

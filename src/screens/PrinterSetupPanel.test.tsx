@@ -1,5 +1,5 @@
 import { createSignal, Show } from "solid-js";
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedPrinter } from "../printers/types";
 import { PrinterSetupPanel } from "./PrinterSetupPanel";
@@ -23,6 +23,7 @@ const printer: ResolvedPrinter = {
 
 describe("PrinterSetupPanel", () => {
   afterEach(() => {
+    cleanup();
     vi.clearAllMocks();
     vi.useRealTimers();
   });
@@ -34,6 +35,39 @@ describe("PrinterSetupPanel", () => {
 
     await fireEvent.input(screen.getByLabelText("Notes"), { target: { value: "for printer A" } });
     setSelected({ ...printer, id: "prn-2", notes: "Printer B note" });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).not.toHaveBeenCalled();
+  });
+
+  it("persists a renamed Printer after the debounce", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterSetupPanel printer={printer} />);
+
+    await fireEvent.input(screen.getByLabelText("Name"), { target: { value: "South Bay" } });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { name: "South Bay" });
+  });
+
+  it("continues to persist notes after the debounce", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterSetupPanel printer={printer} />);
+
+    await fireEvent.input(screen.getByLabelText("Notes"), { target: { value: "spare nozzle" } });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { notes: "spare nozzle" });
+  });
+
+  it("cancels pending name and notes edits when the selected Printer changes", async () => {
+    vi.useFakeTimers();
+    const [selected, setSelected] = createSignal(printer);
+    render(() => <Show when={selected()}>{(current) => <PrinterSetupPanel printer={current()} />}</Show>);
+
+    await fireEvent.input(screen.getByLabelText("Name"), { target: { value: "South Bay" } });
+    await fireEvent.input(screen.getByLabelText("Notes"), { target: { value: "for printer A" } });
+    setSelected({ ...printer, id: "prn-2", name: "Printer B", notes: "Printer B note" });
     vi.advanceTimersByTime(300);
 
     expect(updatePrinter).not.toHaveBeenCalled();

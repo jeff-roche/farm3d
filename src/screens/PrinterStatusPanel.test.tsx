@@ -1,5 +1,5 @@
-import { render, screen } from "@solidjs/testing-library";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@solidjs/testing-library";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedPrinter } from "../printers/types";
 import { PrinterStatusPanel } from "./PrinterStatusPanel";
 
@@ -16,6 +16,11 @@ const printer: ResolvedPrinter = {
 };
 
 describe("PrinterStatusPanel", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("renders generated operational state, telemetry, and reconciliation uncertainty", () => {
     render(() => <PrinterStatusPanel printer={printer} syncState="uncertain" />);
 
@@ -33,5 +38,25 @@ describe("PrinterStatusPanel", () => {
     render(() => <PrinterStatusPanel printer={{ ...printer, runtimeStatus: undefined }} />);
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("formats stale observations as a relative age", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T12:02:00Z"));
+    render(() => <PrinterStatusPanel printer={{
+      ...printer,
+      runtimeStatus: { ...printer.runtimeStatus!, freshness: "stale" },
+    }} />);
+
+    expect(screen.getByText("2 minutes ago")).toBeInTheDocument();
+  });
+
+  it("shows Last observed as unavailable without an observation", () => {
+    render(() => <PrinterStatusPanel printer={{
+      ...printer,
+      runtimeStatus: { ...printer.runtimeStatus!, lastObservedAt: undefined },
+    }} />);
+
+    expect(screen.getByText("Last observed").nextElementSibling).toHaveTextContent("Unavailable");
   });
 });

@@ -18,6 +18,17 @@ const readinessLabels = {
   unknownState: "Unknown state",
 } as const;
 
+function formatObservedAge(timestamp: string | undefined): string {
+  if (!timestamp) return "Unavailable";
+  const elapsed = Date.now() - Date.parse(timestamp);
+  if (!Number.isFinite(elapsed)) return "Unavailable";
+  if (elapsed < 60_000) return "just now";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
 export function PrinterStatusPanel(props: PrinterStatusPanelProps) {
   const status = () => props.printer.runtimeStatus;
   const readings = () => status()?.telemetry;
@@ -31,7 +42,7 @@ export function PrinterStatusPanel(props: PrinterStatusPanelProps) {
     ["Nozzle", formatTemperature(readings()?.nozzleTempC, readings()?.nozzleTargetC)],
     ["Bed", formatTemperature(readings()?.bedTempC, readings()?.bedTargetC)],
     ["Freshness", status()?.freshness ?? "Unavailable"],
-    ["Last observed", status()?.lastObservedAt ?? "—"],
+    ["Last observed", formatObservedAge(status()?.lastObservedAt)],
   ];
 
   return (
