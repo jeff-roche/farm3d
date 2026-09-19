@@ -50,6 +50,16 @@ export interface MonitorRosterView {
   remainingCount: number;
 }
 
+export interface MonitorShellView {
+  printerRoster: MonitorRosterView;
+  operationalRosters: readonly MonitorRosterView[];
+  adapterHealth: {
+    severity: MonitorSeverity;
+    label: string;
+  };
+  lastLiveEventAt?: string;
+}
+
 export interface MonitorStoreDependencies {
   printers: () => ResolvedPrinter[];
   initialSection: MonitorSection;
@@ -77,6 +87,7 @@ export interface MonitorStore {
   visiblePrinters(): readonly MonitorPrinterView[];
   sections(): readonly MonitorSectionView[];
   rosters(): readonly MonitorRosterView[];
+  shell(): MonitorShellView;
   hasPrinters(): boolean;
   isFilteredEmpty(): boolean;
 }
@@ -277,6 +288,32 @@ function orderSections(section: MonitorSectionView[]): MonitorSectionView[] {
   });
 }
 
+function roster(key: string, label: string, printers: readonly MonitorPrinterView[]): MonitorRosterView {
+  return {
+    key,
+    label,
+    count: printers.length,
+    printers: printers.slice(0, ROSTER_LIMIT),
+    remainingCount: Math.max(0, printers.length - ROSTER_LIMIT),
+  };
+}
+
+function adapterHealth(printers: readonly MonitorPrinterView[]): MonitorShellView["adapterHealth"] {
+  const states = printers.flatMap((printer) => printer.status ? [printer.status.connectionState] : []);
+  if (states.length === 0) return { severity: "info", label: "Waiting for adapter status" };
+  if (states.includes("error")) return { severity: "fatal", label: "Adapter error" };
+  if (states.includes("offline")) return { severity: "warning", label: "Adapters offline" };
+  if (states.includes("connecting")) return { severity: "info", label: "Connecting adapters" };
+  return { severity: "resolved", label: "Adapters connected" };
+}
+
+function latestLiveEventAt(printers: readonly MonitorPrinterView[]): string | undefined {
+  return printers
+    .map((printer) => printer.updatedAt)
+    .filter((timestamp): timestamp is string => timestamp !== undefined && !Number.isNaN(Date.parse(timestamp)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
 export function createMonitorStore(dependencies: MonitorStoreDependencies): MonitorStore {
   const [search, setSearch] = createSignal("");
   const [filter, setFilter] = createSignal<MonitorFilter>("all");
@@ -286,10 +323,13 @@ export function createMonitorStore(dependencies: MonitorStoreDependencies): Moni
   const [preferenceError, setPreferenceError] = createSignal<string | null>(null);
   let preferenceWrite: Promise<void> | undefined;
 
-  const visiblePrinters = (): readonly MonitorPrinterView[] => dependencies.printers()
+  const snapshot = (): readonly MonitorPrinterView[] => dependencies.printers()
     .map(toView)
-    .filter((printer) => matchesSearch(printer, search()) && matchesFilter(printer, filter()))
     .sort(compareByName);
+
+  const visiblePrinters = (): readonly MonitorPrinterView[] => snapshot()
+    .filter((printer) => matchesSearch(printer, search()) && matchesFilter(printer, filter()))
+    ;
 
   const sections = (): readonly MonitorSectionView[] => {
     const grouped = new Map<string, MonitorSectionView>();
@@ -346,13 +386,21 @@ export function createMonitorStore(dependencies: MonitorStoreDependencies): Moni
     printerNames: () => dependencies.printers().map((printer) => printer.name),
     visiblePrinters,
     sections,
-    rosters: () => sections().map((current) => ({
-      key: current.key,
-      label: current.label,
-      count: current.printers.length,
-      printers: current.printers.slice(0, ROSTER_LIMIT),
-      remainingCount: Math.max(0, current.printers.length - ROSTER_LIMIT),
-    })),
+    rosters: () => sections().map((current) => roster(current.key, current.label, current.printers)),
+    shell: () => {
+      const printers = snapshot();
+      return {
+        printerRoster: roster("all", "Printers", printers),
+        operationalRosters: [
+          roster("ready", "Ready", printers.filter((printer) => printer.readiness?.state === "ready")),
+          roster("printing", "Printing", printers.filter((printer) => printer.operationalState === "printing" && printer.freshness === "fresh")),
+          roster("offline", "Offline", printers.filter((printer) => printer.operationalState === "offline")),
+          roster("setupIncomplete", "Setup incomplete", printers.filter((printer) => printer.operationalState === "setupIncomplete")),
+        ],
+        adapterHealth: adapterHealth(printers),
+        lastLiveEventAt: latestLiveEventAt(printers),
+      };
+    },
     hasPrinters: () => dependencies.printers().length > 0,
     isFilteredEmpty: () => dependencies.printers().length > 0 && visiblePrinters().length === 0,
   };

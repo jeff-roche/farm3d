@@ -1,8 +1,9 @@
 // src/App.tsx
-import { onCleanup, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./monitor/monitor-store";
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
-import { PrinterDashboard, summarizePrinters } from "./screens/PrinterDashboard";
+import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import {
   addPrinter,
@@ -11,10 +12,13 @@ import {
   printers,
   printerStoreError,
   printerStoreRetryable,
+  printerStoreStatus,
+  printerStatusSyncState,
   removePrinter,
   startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
+import { loadSettings, updateSettings } from "./settings/settings-store";
 import styles from "./App.module.css";
 import {
   navigation,
@@ -29,47 +33,86 @@ const MODELS: Model[] = [
 ];
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
-  monitor: "Printers",
+  monitor: "Monitor",
   queue: "Queue",
   library: "Library",
   spools: "Spools",
   settings: "Settings",
 };
 
+const EMPTY_SHELL: MonitorShellView = {
+  printerRoster: { key: "all", label: "Printers", count: 0, printers: [], remainingCount: 0 },
+  operationalRosters: [],
+  adapterHealth: { severity: "info", label: "Waiting for adapter status" },
+};
+
 function App() {
+  const [monitorStore, setMonitorStore] = createSignal<MonitorStore>();
+  const [statusStartupError, setStatusStartupError] = createSignal<string | null>(null);
+  let retryStatusListener: (() => void) | undefined;
   const active = () => navigation.target().destination;
   const shellActive = () => (active() === "library" ? "library" : "monitor") satisfies ScreenId;
+  const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
+  const navigationContext = () => ({
+    availableDestinations: ["monitor", "library"] as NavigationDestination[],
+    availableIds: printers().map((printer) => printer.id),
+  });
+  const reconcileNavigation = () => {
+    navigation.navigate(navigation.target(), navigationContext());
+    const target = navigation.target();
+    monitorStore()?.setSelectedPrinterId(
+      navigation.availability() === "available" && target.destination === "monitor" && target.selection?.kind === "printer"
+        ? target.selection.id
+        : null,
+    );
+  };
   const navigate = (target: Parameters<typeof navigation.navigate>[0]) => {
-    navigation.navigate(target, {
-      availableDestinations: ["monitor", "library"],
-      availableIds: printers().map((printer) => printer.id),
-    });
+    navigation.navigate(target, navigationContext());
+    reconcileNavigation();
     window.location.hash = serializeNavigationTarget(target).slice(1);
   };
   const setActive = (destination: ScreenId) => navigate({ version: 1, destination });
 
   onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const startMonitoring = () => {
+      setStatusStartupError(null);
+      void startStatusListener().then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      }).catch(() => {
+        if (!disposed) setStatusStartupError("Live Printer status could not be started.");
+      });
+    };
+    retryStatusListener = startMonitoring;
     const applyFragment = () => {
       const target = parseNavigationTarget(window.location.hash);
       if (target) navigate(target);
     };
     applyFragment();
     window.addEventListener("hashchange", applyFragment);
-    let unlisten: (() => void) | undefined;
-    // Sequenced, not concurrent: `applyStatus` drops events for ids it does
-    // not know yet, so any status arriving before the printer list has loaded
-    // — including the backfill inside `startStatusListener` — is discarded
-    // with no retry.
-    void loadPrinters()
-      .then(() => {
-        navigation.navigate(navigation.target(), {
-          availableDestinations: ["monitor", "library"],
-          availableIds: printers().map((printer) => printer.id),
-        });
-        return startStatusListener();
+    // Printers must be known before the listener's backfill arrives; status
+    // events for unknown ids are deliberately ignored by the reconciliation store.
+    void loadSettings()
+      .then(async (settings) => {
+        await loadPrinters();
+        if (disposed) return;
+        setMonitorStore(createMonitorStore({
+          printers,
+          initialSection: settings.monitorSection,
+          initialDensity: settings.monitorDensity,
+          persistPreferences: (next) => updateSettings(next),
+        }));
+        reconcileNavigation();
+        startMonitoring();
       })
-      .then((fn) => (unlisten = fn));
+      .catch(() => {
+        if (!disposed) setStatusStartupError("Monitor settings could not be loaded.");
+      });
     onCleanup(() => {
+      disposed = true;
+      retryStatusListener = undefined;
       unlisten?.();
       window.removeEventListener("hashchange", applyFragment);
     });
@@ -80,7 +123,10 @@ function App() {
       active={shellActive()}
       onSelect={setActive}
       title={SCREEN_TITLE[active()]}
-      statusSummary={summarizePrinters(printers())}
+      printerRoster={shell().printerRoster}
+      operationalRosters={shell().operationalRosters}
+      adapterHealth={shell().adapterHealth}
+      lastLiveEventAt={shell().lastLiveEventAt}
     >
       <Show when={printerStoreError()}>
         {(message) => (
@@ -97,10 +143,25 @@ function App() {
           </div>
         )}
       </Show>
+      <Show when={statusStartupError()}>
+        {(message) => (
+          <div class={styles.errorBanner} role="alert">
+            <p class={styles.errorMessage}>{message()}</p>
+            <Button variant="ghost" onClick={() => {
+              retryStatusListener?.();
+            }}>
+              Retry monitoring
+            </Button>
+            <Button variant="ghost" onClick={() => setStatusStartupError(null)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
       <Show when={navigation.availability() === "destinationUnavailable"}>
         <div class={styles.errorBanner} role="status">
           <p class={styles.errorMessage}>{SCREEN_TITLE[active()]} is not available in this version.</p>
-          <Button variant="ghost" onClick={() => setActive("monitor")}>Open Printers</Button>
+          <Button variant="ghost" onClick={() => setActive("monitor")}>Open Monitor</Button>
         </div>
       </Show>
       <Show when={navigation.availability() === "selectionUnavailable"}>
@@ -116,20 +177,26 @@ function App() {
           </Show>
         }
       >
-        <PrinterDashboard
-          printers={printers()}
-          selectedPrinterId={navigation.target().selection?.kind === "printer" ? navigation.target().selection?.id : undefined}
-          onSelectionChange={(id) => navigate({
-            version: 1,
-            destination: "monitor",
-            ...(id ? { selection: { kind: "printer", id } } : {}),
-          })}
-          onAddPrinter={async (draft) => {
-            const id = await addPrinter(draft);
-            return id ? printers().find((p) => p.id === id) : undefined;
-          }}
-          onRemovePrinter={(id) => void removePrinter(id)}
-        />
+        <Show when={monitorStore()}>
+          {(store) => (
+            <PrinterDashboard
+              store={store()}
+              loading={printerStoreStatus() === "loading"}
+              isFirstRun={printerStoreStatus() === "ready" && !store().hasPrinters()}
+              syncState={printerStatusSyncState()}
+              onSelectionChange={(id) => navigate({
+                version: 1,
+                destination: "monitor",
+                ...(id ? { selection: { kind: "printer", id } } : {}),
+              })}
+              onAddPrinter={async (draft) => {
+                const id = await addPrinter(draft);
+                return id ? printers().find((p) => p.id === id) : undefined;
+              }}
+              onRemovePrinter={(id) => void removePrinter(id).then(reconcileNavigation)}
+            />
+          )}
+        </Show>
       </Show>
     </AppShell>
   );
