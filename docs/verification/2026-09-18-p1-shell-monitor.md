@@ -2,18 +2,18 @@
 
 **Date:** 2026-09-18
 **Platform:** Linux
-**Validated source:** Task 11 working tree based on `536e9687aff178432da1376c05bd1384f00cf8a0` (Task 10 completion range: `74ed74a..536e968`).
+**Validated source:** Task 11 fix-round-1 working tree at `93579f9b757cfd1e331e579a25d26b0bc738bda0` plus the uncommitted fix-round-1 changes recorded in this note.
 
 ## Automated evidence
 
 | Command | Result |
 | --- | --- |
-| `npm test -- src/App.test.tsx` | Passed: 1 file, 5 tests. Covers settings → durable Printer → listener/backfill ordering, syncing content, valid/unknown Printer deep links, recoverable listener failure, and late listener disposal. |
+| `npm test -- src/App.test.tsx` | Passed: 1 file, 9 tests. Covers settings → durable Printer → listener/backfill ordering, sync-state transitions, valid/unknown Printer deep links, import reconciliation, recoverable startup failures, retry orchestration, and late listener disposal. |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 26 files, 195 tests. The runner emitted three existing jsdom notices: `Not implemented: Window's scrollTo() method`; it exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 229 library tests, 28 export-contract tests, 5 `f0_tauri_path` tests, 3 `f1_contract_path` tests, 8 `f1_import_export` tests, 5 `f1_migration` tests, 4 `f1_repositories` tests, 12 `f1_residual_acceptance` tests, and 3 snapshot tests. Two existing `ts-rs` warnings report that serde `transparent` cannot be parsed. |
+| `just test` | Passed: 26 files, 199 tests. The runner emitted three existing jsdom notices: `Not implemented: Window's scrollTo() method`; it exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 229 library tests, 28 export-contract tests, 5 `f0_tauri_path` tests, 3 `f1_contract_path` tests, 8 `f1_import_export` tests, 5 `f1_migration` tests, 4 `f1_repositories` tests, 12 `f1_residual_acceptance` tests, and 3 snapshot tests. Three existing `ts-rs` warnings report that serde `transparent` cannot be parsed (two before tests and one during doc-tests). |
 
-The existing `status_runtime_hydrates_stale_then_publishes_live_and_removal_once` Tauri tracer already covers restart hydration, stale-to-live publication, racing backfill equivalence, exactly-once status emission, and removal. Task 11 found no genuine Tauri integration gap, so `src-tauri/tests/f0_tauri_path.rs` was not changed.
+The existing `status_runtime_hydrates_stale_then_publishes_live_and_removal_once` Tauri tracer already covers restart hydration, stale-to-live publication, a racing backfill whose status matches the emitted event status and stream/sequence, exactly-once status emission, and removal. Task 11 found no genuine Tauri integration gap, so `src-tauri/tests/f0_tauri_path.rs` was not changed.
 
 ## Desktop launch attempt
 

@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
@@ -44,13 +45,17 @@ const [state, setState] = createStore<PrinterStoreState>({
   retryable: false,
 });
 let statusStore: ReturnType<typeof createPrinterStatusStore> | undefined;
+const [statusStoreRevision, setStatusStoreRevision] = createSignal(0);
 
 /** Reactive getter — read inside JSX/createMemo for Solid to track it. */
 export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
-export const printerStatusSyncState = () => statusStore?.syncState() ?? "syncing";
+export const printerStatusSyncState = () => {
+  statusStoreRevision();
+  return statusStore?.syncState() ?? "syncing";
+};
 
 /**
  * Mutations report failures into `state.error` (surfaced by App's banner)
@@ -399,13 +404,16 @@ export async function startStatusListener(): Promise<() => void> {
     statusStore?.dispose();
     statusStore = store;
     await store.start();
+    setStatusStoreRevision((revision) => revision + 1);
     return () => {
       store.dispose();
       if (statusStore === store) statusStore = undefined;
+      setStatusStoreRevision((revision) => revision + 1);
     };
   } catch {
     statusStore?.dispose();
     statusStore = undefined;
+    setStatusStoreRevision((revision) => revision + 1);
     throw new Error("Printer status monitoring could not start.");
   }
 }

@@ -8,6 +8,8 @@ import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import {
   addPrinter,
   dismissPrinterStoreError,
+  exportPrinters,
+  importPrinters,
   loadPrinters,
   printers,
   printerStoreError,
@@ -49,7 +51,7 @@ const EMPTY_SHELL: MonitorShellView = {
 function App() {
   const [monitorStore, setMonitorStore] = createSignal<MonitorStore>();
   const [statusStartupError, setStatusStartupError] = createSignal<string | null>(null);
-  let retryStatusListener: (() => void) | undefined;
+  let retryStartup: (() => void) | undefined;
   const active = () => navigation.target().destination;
   const shellActive = () => (active() === "library" ? "library" : "monitor") satisfies ScreenId;
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
@@ -76,16 +78,44 @@ function App() {
   onMount(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const startMonitoring = () => {
+    let startupGeneration = 0;
+    const start = () => {
+      const generation = ++startupGeneration;
       setStatusStartupError(null);
-      void startStatusListener().then((dispose) => {
-        if (disposed) dispose();
-        else unlisten = dispose;
-      }).catch(() => {
-        if (!disposed) setStatusStartupError("Live Printer status could not be started.");
-      });
+      unlisten?.();
+      unlisten = undefined;
+      void (async () => {
+        let settings;
+        try {
+          settings = await loadSettings();
+          await loadPrinters();
+          if (printerStoreStatus() === "error") throw new Error("Printer loading failed");
+        } catch {
+          if (!disposed && generation === startupGeneration) {
+            setStatusStartupError("Monitor startup could not be completed.");
+          }
+          return;
+        }
+        if (disposed || generation !== startupGeneration) return;
+        setMonitorStore(createMonitorStore({
+          printers,
+          initialSection: settings.monitorSection,
+          initialDensity: settings.monitorDensity,
+          persistPreferences: (next) => updateSettings(next),
+        }));
+        reconcileNavigation();
+        try {
+          const dispose = await startStatusListener();
+          if (disposed || generation !== startupGeneration) dispose();
+          else unlisten = dispose;
+        } catch {
+          if (!disposed && generation === startupGeneration) {
+            setStatusStartupError("Live Printer status could not be started.");
+          }
+        }
+      })();
     };
-    retryStatusListener = startMonitoring;
+    retryStartup = start;
     const applyFragment = () => {
       const target = parseNavigationTarget(window.location.hash);
       if (target) navigate(target);
@@ -94,25 +124,10 @@ function App() {
     window.addEventListener("hashchange", applyFragment);
     // Printers must be known before the listener's backfill arrives; status
     // events for unknown ids are deliberately ignored by the reconciliation store.
-    void loadSettings()
-      .then(async (settings) => {
-        await loadPrinters();
-        if (disposed) return;
-        setMonitorStore(createMonitorStore({
-          printers,
-          initialSection: settings.monitorSection,
-          initialDensity: settings.monitorDensity,
-          persistPreferences: (next) => updateSettings(next),
-        }));
-        reconcileNavigation();
-        startMonitoring();
-      })
-      .catch(() => {
-        if (!disposed) setStatusStartupError("Monitor settings could not be loaded.");
-      });
+    start();
     onCleanup(() => {
       disposed = true;
-      retryStatusListener = undefined;
+      retryStartup = undefined;
       unlisten?.();
       window.removeEventListener("hashchange", applyFragment);
     });
@@ -133,7 +148,7 @@ function App() {
           <div class={styles.errorBanner} role="alert">
             <p class={styles.errorMessage}>{message()}</p>
             <Show when={printerStoreRetryable()}>
-              <Button variant="ghost" onClick={() => void loadPrinters()}>
+              <Button variant="ghost" onClick={() => retryStartup?.()}>
                 Retry startup
               </Button>
             </Show>
@@ -148,9 +163,9 @@ function App() {
           <div class={styles.errorBanner} role="alert">
             <p class={styles.errorMessage}>{message()}</p>
             <Button variant="ghost" onClick={() => {
-              retryStatusListener?.();
+              retryStartup?.();
             }}>
-              Retry monitoring
+              Retry startup
             </Button>
             <Button variant="ghost" onClick={() => setStatusStartupError(null)}>
               Dismiss
@@ -193,6 +208,8 @@ function App() {
                 const id = await addPrinter(draft);
                 return id ? printers().find((p) => p.id === id) : undefined;
               }}
+              onImport={() => void importPrinters().then(reconcileNavigation)}
+              onExport={() => void exportPrinters()}
               onRemovePrinter={(id) => void removePrinter(id).then(reconcileNavigation)}
             />
           )}

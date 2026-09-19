@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
-import type { JSX } from "solid-js";
+import { createSignal, type JSX } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appState = vi.hoisted(() => ({
@@ -9,7 +9,11 @@ const appState = vi.hoisted(() => ({
   loadPrinters: vi.fn(),
   startStatusListener: vi.fn(),
   removePrinter: vi.fn(),
+  importPrinters: vi.fn(),
+  exportPrinters: vi.fn(),
 }));
+
+const [syncState, setSyncState] = createSignal("syncing");
 
 vi.mock("./settings/settings-store", () => ({
   loadSettings: appState.loadSettings,
@@ -19,6 +23,8 @@ vi.mock("./settings/settings-store", () => ({
 vi.mock("./printers/printer-store", () => ({
   addPrinter: vi.fn(),
   dismissPrinterStoreError: vi.fn(),
+  exportPrinters: appState.exportPrinters,
+  importPrinters: appState.importPrinters,
   loadPrinters: appState.loadPrinters,
   printers: () => appState.printers,
   printerStoreError: () => null,
@@ -26,7 +32,7 @@ vi.mock("./printers/printer-store", () => ({
   printerStoreStatus: () => "ready",
   removePrinter: appState.removePrinter,
   startStatusListener: appState.startStatusListener,
-  printerStatusSyncState: () => "syncing",
+  printerStatusSyncState: syncState,
 }));
 
 vi.mock("./printers/printer-catalog", () => ({
@@ -61,11 +67,15 @@ vi.mock("./screens/PrinterDashboard", () => ({
   PrinterDashboard: (props: {
     store: { hasPrinters: () => boolean; selectedPrinterId: () => string | null };
     syncState?: string;
+    onImport?: () => void;
+    onExport?: () => void;
   }) => (
     <div>
       <p>{props.store.hasPrinters() ? "Persisted Printers are visible" : "No persisted Printers"}</p>
-      <p>{props.syncState === "syncing" ? "Live status is still reconciling." : "Live status is current."}</p>
+      <p>Sync state: {props.syncState}</p>
       <output aria-label="Selected Printer">{props.store.selectedPrinterId() ?? "none"}</output>
+      <button onClick={props.onImport}>Import Printers</button>
+      <button onClick={props.onExport}>Export Printers</button>
     </div>
   ),
 }));
@@ -121,6 +131,9 @@ beforeEach(() => {
   });
   appState.startStatusListener.mockReset().mockResolvedValue(() => {});
   appState.removePrinter.mockReset();
+  appState.importPrinters.mockReset().mockResolvedValue({ status: "applied" });
+  appState.exportPrinters.mockReset().mockResolvedValue({ status: "exported" });
+  setSyncState("syncing");
   window.location.hash = "";
 });
 
@@ -151,7 +164,7 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByText("Persisted Printers are visible")).toBeInTheDocument());
     expect(callOrder).toEqual(["loadSettings", "loadPrinters", "listen", "backfill"]);
-    expect(screen.getByText("Live status is still reconciling.")).toBeInTheDocument();
+    expect(screen.getByText("Sync state: syncing")).toBeInTheDocument();
   });
 
   it("selects a valid Printer deep link after durable Printers load", async () => {
@@ -181,7 +194,87 @@ describe("App", () => {
     render(() => <App />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Live Printer status could not be started.");
-    expect(screen.getByRole("button", { name: "Retry monitoring" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry startup" })).toBeInTheDocument();
+  });
+
+  it("updates Monitor sync state after listener reconciliation", async () => {
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await screen.findByText("Sync state: syncing");
+    setSyncState("current");
+    await waitFor(() => expect(screen.getByText("Sync state: current")).toBeInTheDocument());
+    setSyncState("uncertain");
+    await waitFor(() => expect(screen.getByText("Sync state: uncertain")).toBeInTheDocument());
+  });
+
+  it("passes import/export callbacks and clears an imported-away deep-link selection", async () => {
+    window.location.hash = "#nav=v1/monitor/printer/prn-1";
+    appState.importPrinters.mockImplementation(async () => {
+      appState.printers = [];
+      return { status: "applied" };
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("prn-1"));
+    await screen.getByRole("button", { name: "Import Printers" }).click();
+    await waitFor(() => expect(appState.importPrinters).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
+    await screen.getByRole("button", { name: "Export Printers" }).click();
+    expect(appState.exportPrinters).toHaveBeenCalledOnce();
+  });
+
+  it("retries the full startup sequence after a settings failure", async () => {
+    const callOrder: string[] = [];
+    appState.loadSettings
+      .mockRejectedValueOnce(new Error("settings failed"))
+      .mockImplementation(async () => {
+        callOrder.push("loadSettings");
+        return SETTINGS;
+      });
+    appState.loadPrinters.mockImplementation(async () => {
+      callOrder.push("loadPrinters");
+      appState.printers = [PRINTER];
+    });
+    appState.startStatusListener.mockImplementation(async () => {
+      callOrder.push("listen");
+      return () => {};
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await screen.findByRole("alert");
+    await screen.getByRole("button", { name: "Retry startup" }).click();
+    await waitFor(() => expect(callOrder).toEqual(["loadSettings", "loadPrinters", "listen"]));
+  });
+
+  it("retries the full startup sequence after a Printer-load failure", async () => {
+    const callOrder: string[] = [];
+    appState.loadSettings.mockImplementation(async () => {
+      callOrder.push("loadSettings");
+      return SETTINGS;
+    });
+    appState.loadPrinters
+      .mockRejectedValueOnce(new Error("Printers failed"))
+      .mockImplementation(async () => {
+        callOrder.push("loadPrinters");
+        appState.printers = [PRINTER];
+      });
+    appState.startStatusListener.mockImplementation(async () => {
+      callOrder.push("listen");
+      return () => {};
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await screen.findByRole("alert");
+    await screen.getByRole("button", { name: "Retry startup" }).click();
+    await waitFor(() => expect(callOrder).toEqual(["loadSettings", "loadSettings", "loadPrinters", "listen"]));
   });
 
   it("disposes a listener that resolves after App unmounts", async () => {
