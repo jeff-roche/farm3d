@@ -1,0 +1,4 @@
+.panel { display: flex; flex-direction: column; gap: 0.75rem; }
+.field { display: flex; flex-direction: column; gap: 0.25rem; }
+.label { color: var(--f3d-color-text-muted); font-family: var(--f3d-type-label-font); font-size: var(--f3d-type-label-size); font-weight: var(--f3d-type-label-weight); letter-spacing: var(--f3d-type-label-tracking); text-transform: uppercase; }
+.muted { color: var(--f3d-color-text-disabled); }

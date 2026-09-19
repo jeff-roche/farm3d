@@ -1,136 +1,37 @@
-import { createSignal, Show } from "solid-js";
-import { fireEvent, render, screen } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { PrinterStatusPanel } from "./PrinterStatusPanel";
+import { render, screen } from "@solidjs/testing-library";
+import { describe, expect, it } from "vitest";
 import type { ResolvedPrinter } from "../printers/types";
+import { PrinterStatusPanel } from "./PrinterStatusPanel";
 
-const updatePrinter = vi.fn();
-const rebindPrinter = vi.fn();
-vi.mock("../printers/printer-store", () => ({
-  updatePrinter: (...args: unknown[]) => updatePrinter(...args),
-  rebindPrinter: (...args: unknown[]) => rebindPrinter(...args),
-}));
-
-const listCatalogVariants = vi.fn();
-vi.mock("../printers/printer-catalog", () => ({
-  listCatalogVariants: (...args: unknown[]) => listCatalogVariants(...args),
-}));
-
-afterEach(() => {
-  document.body.innerHTML = "";
-  vi.clearAllMocks();
-  vi.useRealTimers();
-});
-
-const PRINTER: ResolvedPrinter = {
-  id: "prn-1",
-  revision: 1,
-  name: "Centauri Carbon — Bay 1",
-  notes: "",
-  overrides: {},
-  catalogRef: {
-    vendor: "Elegoo", model: "Elegoo Centauri Carbon",
-    variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
+const printer: ResolvedPrinter = {
+  id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
+  catalogRef: { vendor: "Bambu Lab", model: "X1 Carbon", variant: "X1 Carbon 0.4", modelId: "x1", printerVariant: "0.4" },
+  catalogStatus: "ok", modelLabel: "X1 Carbon", variantLabel: "X1 Carbon 0.4", overriddenFields: [], inherited: {},
+  profileDrift: [], unknownOverrideKeys: [], createdAt: "", updatedAt: "",
+  profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 0, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
+  runtimeStatus: {
+    connectionState: "online", telemetry: { hostActivity: "printing", hostActivityName: "calibration cube", progress: 42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 60, bedTargetC: 60 },
+    operationalState: "printing", readiness: { state: "notReady", reason: "printerBusy" }, freshness: "fresh", cacheWarnings: [], lastObservedAt: "2026-09-18T12:00:00Z", updatedAt: "2026-09-18T12:00:00Z",
   },
-  catalogStatus: "ok",
-  modelLabel: "Elegoo Centauri Carbon",
-  variantLabel: "Elegoo Centauri Carbon 0.4 nozzle",
-  profile: {
-    bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
-    printableHeightMm: 256,
-    bedExcludeAreas: [],
-    defaultBedType: "4",
-    nozzleDiameterMm: [0.4],
-    nozzleType: "hardened_steel",
-    gcodeFlavor: "klipper",
-    hasAuxiliaryFan: true,
-    supportsAirFiltration: true,
-    supportsMultiFilament: true,
-    suggestedHostType: "elegoolink",
-  },
-  overriddenFields: [],
-  inherited: {},
-  profileDrift: [],
-  unknownOverrideKeys: [],
-  createdAt: "",
-  updatedAt: "",
 };
 
 describe("PrinterStatusPanel", () => {
-  it("renders the catalog model and variant", () => {
-    listCatalogVariants.mockResolvedValue([]);
-    render(() => <PrinterStatusPanel printer={PRINTER} />);
-    expect(
-      screen.getByText("Elegoo Centauri Carbon — Elegoo Centauri Carbon 0.4 nozzle"),
-    ).toBeInTheDocument();
+  it("renders generated operational state, telemetry, and reconciliation uncertainty", () => {
+    render(() => <PrinterStatusPanel printer={printer} syncState="uncertain" />);
+
+    expect(screen.getByText("printing", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Printer busy")).toBeInTheDocument();
+    expect(screen.getByText("online", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("calibration cube")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
+    expect(screen.getByText("210 °C / 215 °C")).toBeInTheDocument();
+    expect(screen.getByText("fresh", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Live status is still reconciling.")).toBeInTheDocument();
   });
 
-  it("debounces a notes edit before calling updatePrinter", async () => {
-    listCatalogVariants.mockResolvedValue([]);
-    vi.useFakeTimers();
-    render(() => <PrinterStatusPanel printer={PRINTER} />);
-
-    const notes = screen.getByLabelText("Notes") as HTMLInputElement;
-    await fireEvent.input(notes, { target: { value: "spare hotend on shelf" } });
-    expect(updatePrinter).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(300);
-    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { notes: "spare hotend on shelf" });
-  });
-
-  it("cancels a pending notes edit when the printer switches under a non-keyed Show", async () => {
-    // Mirrors PrinterDashboard.tsx's actual non-keyed
-    // `<Show when={selected()}>{(printer) => (...)}</Show>` pattern, and
-    // PrinterProfilePanel's identical regression test for the same bug
-    // class: a truthy->truthy change of `selected()` does not remount the
-    // child, so an in-flight debounced write must be cancelled on identity
-    // change rather than committed against the wrong printer.
-    listCatalogVariants.mockResolvedValue([]);
-    vi.useFakeTimers();
-    const printerB: ResolvedPrinter = { ...PRINTER, id: "prn-2", notes: "printer B's own notes" };
-    const [selected, setSelected] = createSignal<ResolvedPrinter>(PRINTER);
-
-    render(() => (
-      <Show when={selected()}>{(printer) => <PrinterStatusPanel printer={printer()} />}</Show>
-    ));
-
-    const notes = screen.getByLabelText("Notes") as HTMLInputElement;
-    await fireEvent.input(notes, { target: { value: "a note meant for printer A" } });
-    expect(updatePrinter).not.toHaveBeenCalled();
-
-    setSelected(printerB);
-    vi.advanceTimersByTime(300);
-
-    expect(updatePrinter).not.toHaveBeenCalledWith("prn-2", { notes: "a note meant for printer A" });
-    expect(updatePrinter).not.toHaveBeenCalledWith("prn-1", { notes: "a note meant for printer A" });
-  });
-
-  it("offers no rebind control when the model has only one variant", async () => {
-    listCatalogVariants.mockResolvedValue([
-      { variant: "Elegoo Centauri Carbon 0.4 nozzle", printerVariant: "0.4" },
-    ]);
-    render(() => <PrinterStatusPanel printer={PRINTER} />);
-    expect(await screen.findByLabelText("Notes")).toBeInTheDocument();
-    expect(screen.queryByText("Nozzle / variant")).not.toBeInTheDocument();
-  });
-
-  it("rebinds to a sibling variant instead of overriding it", async () => {
-    listCatalogVariants.mockResolvedValue([
-      { variant: "Elegoo Centauri Carbon 0.4 nozzle", printerVariant: "0.4" },
-      { variant: "Elegoo Centauri Carbon 0.6 nozzle", printerVariant: "0.6" },
-    ]);
-    render(() => <PrinterStatusPanel printer={PRINTER} />);
-
-    const trigger = await screen.findByRole("button", { name: /0\.4 mm/ });
-    await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
-    await fireEvent.click(await screen.findByText("0.6 mm"));
-
-    expect(rebindPrinter).toHaveBeenCalledWith("prn-1", {
-      vendor: "Elegoo",
-      model: "Elegoo Centauri Carbon",
-      modelId: "Elegoo-CC",
-      variant: "Elegoo Centauri Carbon 0.6 nozzle",
-      printerVariant: "0.6",
-    });
+  it("uses unavailable values rather than inventing telemetry", () => {
+    render(() => <PrinterStatusPanel printer={{ ...printer, runtimeStatus: undefined }} />);
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 });

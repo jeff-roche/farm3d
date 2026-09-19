@@ -8,17 +8,19 @@ export interface PrinterCardProps {
   printer: MonitorPrinterView;
   selected?: boolean;
   onSelect: (id: string) => void;
+  onSelectTrigger?: (trigger: HTMLButtonElement) => void;
 }
 
 export function PrinterCard(props: PrinterCardProps) {
-  const select = () => props.onSelect(props.printer.id);
-
   return (
     <Button
       class={styles.card}
       classList={{ [styles.selected]: props.selected }}
       aria-label={props.printer.accessibleSummary}
-      onClick={select}
+      onClick={(event) => {
+        props.onSelectTrigger?.(event.currentTarget);
+        props.onSelect(props.printer.id);
+      }}
     >
       <div class={styles.header}>
         <span class={styles.name}>{props.printer.name}</span>

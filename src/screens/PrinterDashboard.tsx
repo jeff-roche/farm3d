@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createSignal, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
@@ -6,6 +6,7 @@ import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterAddDialog } from "./PrinterAddDialog";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
+import { PrinterDetailDock } from "./PrinterDetailDock";
 import styles from "./PrinterDashboard.module.css";
 
 export interface PrinterDashboardProps {
@@ -17,15 +18,24 @@ export interface PrinterDashboardProps {
   onAddPrinter?: (draft: PrinterDraft) => Promise<ResolvedPrinter | undefined>;
   onImport?: () => void;
   onExport?: () => void;
+  onRemovePrinter?: (id: string) => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [addDialogOpen, setAddDialogOpen] = createSignal(false);
   const sections = new Map<string, HTMLElement>();
+  let workspace: HTMLDivElement | undefined;
+  let selectionTrigger: HTMLButtonElement | undefined;
   let focusTimer: number | undefined;
+  const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
   const selectPrinter = (id: string) => {
     props.store.setSelectedPrinterId(id);
     props.onSelectionChange?.(id);
+  };
+  const closeDock = () => {
+    props.store.setSelectedPrinterId(null);
+    props.onSelectionChange?.(null);
+    queueMicrotask(() => selectionTrigger?.focus());
   };
   const clearFilters = () => {
     props.store.setSearch("");
@@ -42,6 +52,16 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
     });
   };
   onCleanup(() => window.clearTimeout(focusTimer));
+  onMount(() => {
+    if (!workspace) return;
+    const rem = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
+    const minimumInlineWidth = 66 * rem; // 44rem workspace plus the 22rem dock.
+    const updateMode = (width: number) => setDockMode(width >= minimumInlineWidth ? "inline" : "overlay");
+    updateMode(workspace.clientWidth);
+    const observer = new ResizeObserver((entries) => updateMode(entries[0]?.contentRect.width ?? workspace!.clientWidth));
+    observer.observe(workspace);
+    onCleanup(() => observer.disconnect());
+  });
 
   return (
     <div class={styles.dashboard}>
@@ -57,7 +77,8 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
       <Show when={props.syncState === "uncertain"}>
         <p class={styles.syncNotice} role="status">Live status is still reconciling.</p>
       </Show>
-      <div class={styles.content}>
+      <div ref={workspace} class={styles.workspace}>
+        <div class={styles.content}>
         <Switch>
           <Match when={loadingWithNoPrinters()}>
             <EmptyState message="Loading persisted Printers…" />
@@ -101,6 +122,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                             printer={printer}
                             selected={props.store.selectedPrinterId() === printer.id}
                             onSelect={selectPrinter}
+                            onSelectTrigger={(trigger) => (selectionTrigger = trigger)}
                           />
                         )}
                       </For>
@@ -112,6 +134,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
                             printer={printer}
                             selected={props.store.selectedPrinterId() === printer.id}
                             onSelect={selectPrinter}
+                            onSelectTrigger={(trigger) => (selectionTrigger = trigger)}
                           />
                         )}
                       </For>
@@ -125,6 +148,14 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             <EmptyState message="This Farm has no Printers." onAdd={() => setAddDialogOpen(true)} />
           </Match>
         </Switch>
+        </div>
+        <PrinterDetailDock
+          printer={props.store.selectedPrinter()}
+          mode={dockMode()}
+          onClose={closeDock}
+          onRemove={(id) => props.onRemovePrinter?.(id)}
+          syncState={props.syncState}
+        />
       </div>
       <PrinterAddDialog
         open={addDialogOpen()}

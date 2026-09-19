@@ -8,17 +8,19 @@ export interface PrinterCompactRowProps {
   printer: MonitorPrinterView;
   selected?: boolean;
   onSelect: (id: string) => void;
+  onSelectTrigger?: (trigger: HTMLButtonElement) => void;
 }
 
 export function PrinterCompactRow(props: PrinterCompactRowProps) {
-  const select = () => props.onSelect(props.printer.id);
-
   return (
     <Button
       class={styles.row}
       classList={{ [styles.selected]: props.selected }}
       aria-label={props.printer.accessibleSummary}
-      onClick={select}
+      onClick={(event) => {
+        props.onSelectTrigger?.(event.currentTarget);
+        props.onSelect(props.printer.id);
+      }}
     >
       <span class={styles.name}>{props.printer.name}</span>
       <span class={styles.state}>{props.printer.operationalLabel}</span>

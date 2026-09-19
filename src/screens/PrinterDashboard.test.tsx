@@ -26,7 +26,10 @@ function store(printers: ResolvedPrinter[]) {
 }
 
 describe("PrinterDashboard", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   it("keeps loading separate from first-run and an empty Farm", () => {
     const empty = store([]);
@@ -63,6 +66,11 @@ describe("PrinterDashboard", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Live status is still reconciling.");
     await fireEvent.click(screen.getAllByRole("button", { name: /North Bay; Status unavailable/ })[0]);
     expect(onSelectionChange).toHaveBeenCalledWith("prn-1");
+    expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: /North Bay; Status unavailable/ })[0]).toHaveFocus();
   });
 
   it("returns View all to the complete section instead of leaving the roster action inert", async () => {
@@ -74,5 +82,24 @@ describe("PrinterDashboard", () => {
     await fireEvent.focus(screen.getByRole("button", { name: "9 Printers" }));
     await fireEvent.click(screen.getByRole("button", { name: "View all" }));
     await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it("keeps the dock inline only when the workspace leaves room for cards", async () => {
+    class WideWorkspaceObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 1440 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", WideWorkspaceObserver);
+    const monitor = store([printer()]);
+    monitor.setSelectedPrinterId("prn-1");
+
+    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "North Bay" })).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

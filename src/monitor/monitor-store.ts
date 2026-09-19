@@ -72,6 +72,7 @@ export interface MonitorStore {
   setSection(next: MonitorSection): void;
   setDensity(next: MonitorDensity): void;
   setSelectedPrinterId(next: string | null): void;
+  selectedPrinter(): ResolvedPrinter | undefined;
   printerNames(): readonly string[];
   visiblePrinters(): readonly MonitorPrinterView[];
   sections(): readonly MonitorSectionView[];
@@ -341,6 +342,7 @@ export function createMonitorStore(dependencies: MonitorStoreDependencies): Moni
       queuePreferenceWrite();
     },
     setSelectedPrinterId,
+    selectedPrinter: () => dependencies.printers().find((printer) => printer.id === selectedPrinterId()),
     printerNames: () => dependencies.printers().map((printer) => printer.name),
     visiblePrinters,
     sections,
