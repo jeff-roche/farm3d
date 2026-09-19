@@ -1,7 +1,7 @@
 # P1 Shell and Monitor verification
 
-**Date:** 2026-09-18  
-**Platform:** Linux  
+**Date:** 2026-09-18
+**Platform:** Linux
 **Validated source:** Task 11 working tree based on `536e9687aff178432da1376c05bd1384f00cf8a0` (Task 10 completion range: `74ed74a..536e968`).
 
 ## Automated evidence
