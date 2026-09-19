@@ -66,12 +66,13 @@ vi.mock("./screens/ModelLibrary", () => ({
 vi.mock("./screens/PrinterDashboard", () => ({
   PrinterDashboard: (props: {
     store: { hasPrinters: () => boolean; selectedPrinterId: () => string | null };
+    isFirstRun?: boolean;
     syncState?: string;
     onImport?: () => void;
     onExport?: () => void;
   }) => (
     <div>
-      <p>{props.store.hasPrinters() ? "Persisted Printers are visible" : "No persisted Printers"}</p>
+      <p>{props.store.hasPrinters() ? "Persisted Printers are visible" : props.isFirstRun ? "First run" : "Returning empty Farm"}</p>
       <p>Sync state: {props.syncState}</p>
       <output aria-label="Selected Printer">{props.store.selectedPrinterId() ?? "none"}</output>
       <button onClick={props.onImport}>Import Printers</button>
@@ -123,6 +124,7 @@ const SETTINGS = {
 
 beforeEach(() => {
   vi.resetModules();
+  window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
   appState.updateSettings.mockReset().mockResolvedValue(undefined);
@@ -165,6 +167,18 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Persisted Printers are visible")).toBeInTheDocument());
     expect(callOrder).toEqual(["loadSettings", "loadPrinters", "listen", "backfill"]);
     expect(screen.getByText("Sync state: syncing")).toBeInTheDocument();
+  });
+
+  it("shows first-run only on an unvisited empty Farm and distinguishes a returning empty Farm", async () => {
+    appState.loadPrinters.mockResolvedValue(undefined);
+    const { default: App } = await import("./App");
+
+    const firstVisit = render(() => <App />);
+    expect(await screen.findByText("First run")).toBeInTheDocument();
+    firstVisit.unmount();
+
+    render(() => <App />);
+    expect(await screen.findByText("Returning empty Farm")).toBeInTheDocument();
   });
 
   it("selects a valid Printer deep link after durable Printers load", async () => {

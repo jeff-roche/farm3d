@@ -104,24 +104,24 @@ describe("Monitor store", () => {
     expect(store.visiblePrinters().map((item) => item.id)).toEqual(["warning", "fatal"]);
   });
 
-  it("derives one presentation summary for current status, progress, freshness, and accessibility", () => {
+  it("derives one presentation summary for current status, fractional progress, freshness, and accessibility", () => {
     const store = monitor([printer({
       name: "North Bay",
       runtimeStatus: status({
-        telemetry: { hostActivity: "printing", hostActivityName: "Calibration cube", progress: 42 },
+        telemetry: { hostActivity: "printing", hostActivityName: "Calibration cube", progress: 0.42 },
         operationalState: "printing",
         readiness: { state: "notReady", reason: "printerBusy" },
-        freshness: "stale",
+        freshness: "fresh",
         lastObservedAt: "2026-09-18T11:57:00Z",
       }),
     })]);
 
     const [view] = store.visiblePrinters();
     expect(view.operationalLabel).toBe("Printing");
-    expect(view.statusSummary).toBe("Host print: Calibration cube");
-    expect(view.freshnessLabel).toMatch(/^Stale; last seen/);
+    expect(view.statusSummary).toBe("Host print: Calibration cube · 42%");
+    expect(view.freshnessLabel).toBeUndefined();
     expect(view.hasMissingReadings).toBe(true);
-    expect(view.accessibleSummary).toMatch(/^North Bay; Printing; Host print: Calibration cube; Stale; last seen/);
+    expect(view.accessibleSummary).toBe("North Bay; Printing; Host print: Calibration cube · 42%");
   });
 
   it("exposes every durable Printer name to the add flow without leaking durable records into the Dashboard", () => {
@@ -200,6 +200,29 @@ describe("Monitor store", () => {
       "Bay 1", "Bay 10", "Bay 2", "Bay 3", "Bay 4", "Bay 5", "Bay 6", "Bay 7",
     ]);
     expect(roster.remainingCount).toBe(2);
+  });
+
+  it("uses fresh telemetry observation time, not cache hydration time, for the last live event", () => {
+    const store = monitor([
+      printer({
+        id: "cached",
+        runtimeStatus: status({
+          freshness: "stale",
+          lastObservedAt: "2026-09-18T10:00:00Z",
+          updatedAt: "2026-09-18T12:00:00Z",
+        }),
+      }),
+      printer({
+        id: "live",
+        runtimeStatus: status({
+          freshness: "fresh",
+          lastObservedAt: "2026-09-18T11:59:00Z",
+          updatedAt: "2026-09-18T11:00:00Z",
+        }),
+      }),
+    ]);
+
+    expect(store.shell().lastLiveEventAt).toBe("2026-09-18T11:59:00Z");
   });
 
   it("serializes combined preference writes and retains the selected choices after a recoverable save failure", async () => {

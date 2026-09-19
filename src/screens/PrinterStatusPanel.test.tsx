@@ -10,7 +10,7 @@ const printer: ResolvedPrinter = {
   profileDrift: [], unknownOverrideKeys: [], createdAt: "", updatedAt: "",
   profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 0, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
   runtimeStatus: {
-    connectionState: "online", telemetry: { hostActivity: "printing", hostActivityName: "calibration cube", progress: 42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 60, bedTargetC: 60 },
+    connectionState: "online", telemetry: { hostActivity: "printing", hostActivityName: "calibration cube", progress: 0.42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 60, bedTargetC: 60 },
     operationalState: "printing", readiness: { state: "notReady", reason: "printerBusy" }, freshness: "fresh", cacheWarnings: [], lastObservedAt: "2026-09-18T12:00:00Z", updatedAt: "2026-09-18T12:00:00Z",
   },
 };

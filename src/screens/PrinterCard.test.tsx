@@ -9,7 +9,7 @@ function view(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
     catalogStatus: "ok", operationalState: "printing", readiness: { state: "notReady", reason: "printerBusy" },
     operationalLabel: "Printing", freshness: "fresh", severity: "warning", severityLabel: "Monitor cache warning",
     hostActivity: "printing", hostActivityName: "Calibration cube", statusSummary: "Host print: Calibration cube · 42%", hasMissingReadings: false,
-    readings: { progress: 42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 55, bedTargetC: 60 },
+    readings: { progress: 0.42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 55, bedTargetC: 60 },
     lastObservedAt: "2026-09-18T12:00:00Z", accessibleSummary: "North Bay; printing; Calibration cube",
     ...overrides,
   };

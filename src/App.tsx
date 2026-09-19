@@ -48,9 +48,20 @@ const EMPTY_SHELL: MonitorShellView = {
   adapterHealth: { severity: "info", label: "Waiting for adapter status" },
 };
 
+const FARM_VISITED_KEY = "farm3d:monitor-farm-visited";
+
+function isFirstFarmVisit(): boolean {
+  return window.localStorage.getItem(FARM_VISITED_KEY) !== "true";
+}
+
+function markFarmVisited(): void {
+  window.localStorage.setItem(FARM_VISITED_KEY, "true");
+}
+
 function App() {
   const [monitorStore, setMonitorStore] = createSignal<MonitorStore>();
   const [statusStartupError, setStatusStartupError] = createSignal<string | null>(null);
+  const [isFirstRun, setIsFirstRun] = createSignal(false);
   let retryStartup: (() => void) | undefined;
   const active = () => navigation.target().destination;
   const shellActive = () => (active() === "library" ? "library" : "monitor") satisfies ScreenId;
@@ -97,6 +108,8 @@ function App() {
           return;
         }
         if (disposed || generation !== startupGeneration) return;
+        setIsFirstRun(isFirstFarmVisit() && printers().length === 0);
+        markFarmVisited();
         setMonitorStore(createMonitorStore({
           printers,
           initialSection: settings.monitorSection,
@@ -197,7 +210,7 @@ function App() {
             <PrinterDashboard
               store={store()}
               loading={printerStoreStatus() === "loading"}
-              isFirstRun={printerStoreStatus() === "ready" && !store().hasPrinters()}
+              isFirstRun={isFirstRun()}
               syncState={printerStatusSyncState()}
               onSelectionChange={(id) => navigate({
                 version: 1,
@@ -206,11 +219,18 @@ function App() {
               })}
               onAddPrinter={async (draft) => {
                 const id = await addPrinter(draft);
+                if (id) setIsFirstRun(false);
                 return id ? printers().find((p) => p.id === id) : undefined;
               }}
-              onImport={() => void importPrinters().then(reconcileNavigation)}
+              onImport={() => void importPrinters().then(() => {
+                setIsFirstRun(false);
+                reconcileNavigation();
+              })}
               onExport={() => void exportPrinters()}
-              onRemovePrinter={(id) => void removePrinter(id).then(reconcileNavigation)}
+              onRemovePrinter={(id) => void removePrinter(id).then(() => {
+                setIsFirstRun(false);
+                reconcileNavigation();
+              })}
             />
           )}
         </Show>

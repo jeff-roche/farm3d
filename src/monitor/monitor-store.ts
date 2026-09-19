@@ -145,7 +145,7 @@ function statusSummary(status: PrinterStatus | undefined): string {
         ? readinessLabels[status.readiness.reason]
         : "Telemetry unavailable";
   return status.operationalState === "printing" && status.freshness === "fresh" && telemetry.progress !== undefined
-    ? `${detail} · ${Math.round(telemetry.progress)}%`
+    ? `${detail} · ${Math.round(telemetry.progress * 100)}%`
     : detail;
 }
 
@@ -309,7 +309,8 @@ function adapterHealth(printers: readonly MonitorPrinterView[]): MonitorShellVie
 
 function latestLiveEventAt(printers: readonly MonitorPrinterView[]): string | undefined {
   return printers
-    .map((printer) => printer.updatedAt)
+    .filter((printer) => printer.freshness === "fresh")
+    .map((printer) => printer.lastObservedAt)
     .filter((timestamp): timestamp is string => timestamp !== undefined && !Number.isNaN(Date.parse(timestamp)))
     .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
 }

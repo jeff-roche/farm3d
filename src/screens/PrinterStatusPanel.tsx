@@ -38,7 +38,7 @@ export function PrinterStatusPanel(props: PrinterStatusPanelProps) {
     ["Reason", status()?.readiness.reason ? readinessLabels[status()!.readiness.reason!] : "—"],
     ["Connection", status()?.connectionState ?? "Unavailable"],
     ["Host activity", readings()?.hostActivityName ?? readings()?.hostActivity ?? "—"],
-    ["Progress", readings()?.progress === undefined ? "—" : `${Math.round(readings()!.progress!)}%`],
+    ["Progress", readings()?.progress === undefined ? "—" : `${Math.round(readings()!.progress! * 100)}%`],
     ["Nozzle", formatTemperature(readings()?.nozzleTempC, readings()?.nozzleTargetC)],
     ["Bed", formatTemperature(readings()?.bedTempC, readings()?.bedTargetC)],
     ["Freshness", status()?.freshness ?? "Unavailable"],

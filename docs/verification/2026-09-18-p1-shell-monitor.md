@@ -28,3 +28,16 @@ The display was detected, but this non-interactive session could not inspect or 
 - Keyboard and reduced-motion traversal: rail, toolbar, Printer content, dock, status bar, focus visibility, and animation suppression.
 
 No real Moonraker host or Printer hardware was available. The restart/stale-to-live behavior was verified through the deterministic Rust Tauri tracer, but live hardware telemetry, connection loss, and restart against a real host remain **unavailable**.
+
+## Final P1 fix wave
+
+The final implementation fixes convert the validated fractional telemetry progress value to a display percentage, retain first-run presentation only for an unvisited empty Farm, and calculate the Shell's last live event from fresh telemetry's `lastObservedAt`. Hydrated stale cache data is therefore not presented as a live event that happened just now.
+
+| Command | Result |
+| --- | --- |
+| `npm test -- src/monitor/monitor-store.test.ts src/screens/PrinterStatusPanel.test.tsx src/screens/PrinterCompactRow.test.tsx src/screens/PrinterCard.test.tsx src/App.test.tsx` | Passed: 5 files, 29 tests. Includes fractional progress display, first-run versus returning-empty Farm, and stale-cache/live-observation regressions. |
+| `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
+| `just test` | Passed: 26 files, 201 tests. The runner emitted three existing jsdom `Window.scrollTo()` notices and exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 229 library tests (1 ignored), 28 export-contract tests (1 ignored), and all integration test binaries. Existing `ts-rs` transparent-serde warnings were emitted. |
+
+No manual desktop or hardware checks were performed for this fix wave; the limitations above remain unavailable, not passed.

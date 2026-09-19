@@ -36,7 +36,7 @@ describe("PrinterCompactRow", () => {
     render(() => <PrinterCompactRow printer={{
       ...printer, operationalState: "printing", freshness: "fresh",
       operationalLabel: "Printing", statusSummary: "Host print: Printing · 57%", freshnessLabel: undefined,
-      readings: { progress: 57 }, hostActivity: "printing",
+      readings: { progress: 0.57 }, hostActivity: "printing",
     }} onSelect={vi.fn()} />);
     expect(screen.getByText("Host print: Printing · 57%")).toBeInTheDocument();
 
@@ -44,7 +44,7 @@ describe("PrinterCompactRow", () => {
     render(() => <PrinterCompactRow printer={{
       ...printer, operationalState: "printing", freshness: "stale",
       operationalLabel: "Printing", statusSummary: "Host print: Printing", freshnessLabel: "Stale; last seen 3 minutes ago",
-      readings: { progress: 57 }, hostActivity: "printing",
+      readings: { progress: 0.57 }, hostActivity: "printing",
     }} onSelect={vi.fn()} />);
     expect(screen.queryByText("Host print: Printing · 57%")).not.toBeInTheDocument();
   });
