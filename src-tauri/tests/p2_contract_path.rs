@@ -2,167 +2,31 @@
 //! Connection replacement. See
 //! `.superpowers/sdd/2026-09-22-p2-printer-lifecycle-batch-setup/task-4-brief.md`.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use farm3d_lib::bootstrap::BootstrapState;
-use farm3d_lib::catalog::{BedShape, Catalog, CatalogModel, CatalogVariant};
-use farm3d_lib::connections::credentials::CredentialStore;
-use farm3d_lib::connections::status_repository::StatusRepository;
-use farm3d_lib::connections::supervisor::{ConnectionManager, STATUS_EVENT};
-use farm3d_lib::connections::{
-    ConnectionConfig, ConnectionError, ConnectionObservation, PrinterConnection, ProbeResult,
-    ReportedCapabilities, MOONRAKER_KIND,
+use common::{
+    a_catalog, a_ref_json, a_stored_printer, credentials_dir_snapshot, invoke,
+    pending_cleanup_count, FakeConnection,
 };
-use farm3d_lib::contracts::command::CommandError;
-use farm3d_lib::document_io::{DocumentIo, DocumentKind};
-use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
+use farm3d_lib::catalog::Catalog;
+use farm3d_lib::connections::credentials::CredentialStore;
+use farm3d_lib::connections::supervisor::{ConnectionManager, STATUS_EVENT};
+use farm3d_lib::connections::{ConnectionConfig, PrinterConnection, MOONRAKER_KIND};
+use farm3d_lib::persistence::Storage;
 use farm3d_lib::printers::operational::OperationalState;
 use farm3d_lib::printers::repository::PrinterRepository;
-use farm3d_lib::printers::{CatalogRef, StoredPrinter};
 use farm3d_lib::RuntimeServices;
-use serde_json::{json, Value};
-use tauri::ipc::{CallbackFn, InvokeBody};
-use tauri::test::{mock_builder, mock_context, noop_assets, INVOKE_KEY};
-use tauri::webview::InvokeRequest;
-use tauri::{Listener, Manager, WebviewWindowBuilder};
+use serde_json::json;
+use tauri::Listener;
 
-struct UnusedDocuments;
-
-impl DocumentIo for UnusedDocuments {
-    fn open_json(&self, _kind: DocumentKind) -> Result<Option<PathBuf>, CommandError> {
-        Ok(None)
-    }
-    fn save_json(&self, _kind: DocumentKind) -> Result<Option<PathBuf>, CommandError> {
-        Ok(None)
-    }
-    fn read(&self, _path: &Path) -> Result<Vec<u8>, CommandError> {
-        Err(CommandError::internal())
-    }
-    fn atomic_write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), CommandError> {
-        Err(CommandError::internal())
-    }
-}
-
-fn storage() -> (tempfile::TempDir, MetadataRootLease, Arc<Storage>) {
-    let temp = tempfile::tempdir().unwrap();
-    let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
-    let lease = MetadataRootLease::acquire(&paths).unwrap();
-    let storage = Arc::new(Storage::open(paths, &lease).unwrap());
+fn storage() -> (tempfile::TempDir, farm3d_lib::persistence::MetadataRootLease, Arc<Storage>) {
+    let (temp, lease, storage, _database) = common::storage();
     (temp, lease, storage)
-}
-
-fn pending_cleanup_count(storage: &Storage) -> i64 {
-    storage
-        .read(|connection| {
-            connection.query_row(
-                "SELECT COUNT(*) FROM pending_credential_cleanup",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-        })
-        .unwrap()
-}
-
-fn a_catalog() -> Catalog {
-    Catalog {
-        generated_at: "2026-09-22T00:00:00Z".to_string(),
-        source_tag: "v-test".to_string(),
-        notice: "test".to_string(),
-        models: vec![CatalogModel {
-            model_id: "TestVendor-TP".to_string(),
-            vendor: "TestVendor".to_string(),
-            model: "Test Printer".to_string(),
-            variants: vec![CatalogVariant {
-                variant: "Test Printer 0.4 nozzle".to_string(),
-                printer_variant: "0.4".to_string(),
-                bed_shape: BedShape::Rectangular {
-                    width_mm: 256.0,
-                    depth_mm: 256.0,
-                    origin_x_mm: 0.0,
-                    origin_y_mm: 0.0,
-                },
-                printable_height_mm: 256.0,
-                bed_exclude_areas: vec![],
-                default_bed_type: "4".to_string(),
-                nozzle_diameter_mm: vec![0.4],
-                nozzle_type: "hardened_steel".to_string(),
-                gcode_flavor: "klipper".to_string(),
-                has_auxiliary_fan: true,
-                supports_air_filtration: true,
-                supports_multi_filament: false,
-                suggested_host_type: None,
-            }],
-        }],
-    }
-}
-
-fn a_ref() -> CatalogRef {
-    CatalogRef {
-        vendor: "TestVendor".to_string(),
-        model: "Test Printer".to_string(),
-        variant: "Test Printer 0.4 nozzle".to_string(),
-        model_id: "TestVendor-TP".to_string(),
-        printer_variant: "0.4".to_string(),
-    }
-}
-
-fn a_ref_json() -> Value {
-    json!({
-        "vendor": "TestVendor",
-        "model": "Test Printer",
-        "variant": "Test Printer 0.4 nozzle",
-        "modelId": "TestVendor-TP",
-        "printerVariant": "0.4",
-    })
-}
-
-fn a_stored_printer(id: &str) -> StoredPrinter {
-    StoredPrinter {
-        id: id.to_string(),
-        name: "Test Printer".to_string(),
-        catalog_ref: a_ref(),
-        ..Default::default()
-    }
-}
-
-/// A `PrinterConnection` whose `probe()` outcome is fixed by host name
-/// (`ok.local` / `auth.local` / `slow.local`, everything else unreachable)
-/// and whose `subscribe()` pends forever rather than looping — real
-/// supervision start calls `subscribe`, not `probe`, so this keeps the
-/// supervisor's reconnect loop from spinning against the fake.
-struct FakeConnection {
-    host: String,
-}
-
-#[async_trait::async_trait]
-impl PrinterConnection for FakeConnection {
-    async fn probe(&self) -> Result<ProbeResult, ConnectionError> {
-        match self.host.as_str() {
-            "ok.local" => Ok(ProbeResult {
-                kind: MOONRAKER_KIND.to_string(),
-                host_software: "Moonraker".to_string(),
-                firmware: "Klipper".to_string(),
-                reported_name: "Fixture Printer".to_string(),
-                state: "ready".to_string(),
-                state_message: String::new(),
-                reported: ReportedCapabilities::default(),
-            }),
-            "auth.local" => Err(ConnectionError::Auth("bad credential".to_string())),
-            "slow.local" => Err(ConnectionError::Timeout),
-            other => Err(ConnectionError::Unreachable(other.to_string())),
-        }
-    }
-
-    async fn subscribe(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<ConnectionObservation>,
-    ) -> Result<(), ConnectionError> {
-        std::future::pending::<()>().await;
-        Ok(())
-    }
 }
 
 /// Records every host the manager's connection factory was asked to build a
@@ -196,30 +60,7 @@ fn recording_factory(
     (factory, rx)
 }
 
-fn invoke(
-    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
-    command: &str,
-    body: Value,
-) -> Result<Value, Value> {
-    tauri::test::get_ipc_response(
-        webview,
-        InvokeRequest {
-            cmd: command.to_string(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
-            body: InvokeBody::Json(body),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.to_string(),
-        },
-    )
-    .map(|response| response.deserialize().unwrap())
-}
-
-/// Like `p2_lifecycle.rs`'s `runtime()`, plus a credential store pointed at
-/// a directory this test controls (`RuntimeServices::for_test` otherwise
-/// mints its own, unreachable, temp directory) so "the credential store
-/// directory is unchanged" is actually checkable.
+/// [`common::runtime`] with this file's command set registered.
 fn runtime(
     storage: Arc<Storage>,
     catalog: Arc<Catalog>,
@@ -237,45 +78,22 @@ fn runtime(
     Arc<ConnectionManager<tauri::test::MockRuntime>>,
     Arc<RuntimeServices<tauri::test::MockRuntime>>,
 ) {
-    let app = mock_builder()
-        .invoke_handler(tauri::generate_handler![
+    common::runtime(
+        tauri::generate_handler![
             farm3d_lib::printers::commands::list_printers,
             farm3d_lib::printers::commands::create_printer,
             farm3d_lib::printers::commands::update_printer,
             farm3d_lib::connections::commands::set_printer_connection,
             farm3d_lib::connections::commands::test_printer_connection,
             farm3d_lib::printers::create::probe_connection,
-        ])
-        .build(mock_context(noop_assets()))
-        .unwrap();
-    let manager = Arc::new(ConnectionManager::with_clock_and_factory(
-        app.handle().clone(),
-        Arc::new(StatusRepository::new(Arc::clone(&storage))),
-        chrono::Utc::now,
-        factory,
-    ));
-    let documents: Arc<dyn DocumentIo> = Arc::new(UnusedDocuments);
-    let mut services = RuntimeServices::for_test(
-        Arc::clone(&storage),
+        ],
+        storage,
         catalog,
-        Arc::clone(&manager),
-        documents,
-    );
-    services.credentials = Arc::new(CredentialStore::file_backed(credentials_dir));
-    let services = Arc::new(services);
-    app.manage(BootstrapState::ready_with(Arc::clone(&services)));
-    let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .unwrap();
-    (app, webview, manager, services)
+        credentials_dir,
+        factory,
+    )
 }
 
-/// A snapshot of a credential store directory's presence/contents, cheap
-/// enough to compare before/after a call that must not touch it.
-fn credentials_dir_snapshot(dir: &Path) -> Option<Vec<u8>> {
-    let path = farm3d_lib::connections::credentials::credentials_file_path(dir);
-    std::fs::read(path).ok()
-}
 
 // --- 1. `probe_connection` has no side effects -----------------------------
 

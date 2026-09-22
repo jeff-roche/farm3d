@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 27] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 29] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -135,9 +135,19 @@ contracts![
         "ProbeConnectionRequest",
         "ProbeConnectionResult"
     ),
+    (
+        "create_printers_batch",
+        "CreatePrintersBatchRequest",
+        "CreatePrintersBatchResult"
+    ),
+    (
+        "cancel_printer_batch",
+        "CancelPrinterBatchRequest",
+        "CancelPrinterBatchResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 27] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 29] {
     &COMMAND_CONTRACTS
 }
 
@@ -213,7 +223,11 @@ export type DiscoverPrintersResult = CommandSuccess<DiscoveredPrinter[]>;
 export type PrinterStatusesRequest = NoArgsRequest;
 export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;
 export type ProbeConnectionRequest = ContractRequest & { submission: ConnectionSubmission };
-export type ProbeConnectionResult = CommandSuccess<ProbeResult>;"#.to_string()
+export type ProbeConnectionResult = CommandSuccess<ProbeResult>;
+export type CreatePrintersBatchRequest = ContractRequest & { input: CreatePrintersBatchInput };
+export type CreatePrintersBatchResult = CommandSuccess<CreatePrintersBatchOutput>;
+export type CancelPrinterBatchRequest = ContractRequest & { batchId: string };
+export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -247,6 +261,9 @@ export type ProbeConnectionResult = CommandSuccess<ProbeResult>;"#.to_string()
         visitor.visit::<crate::connections::commands::CredentialStoreInfo>();
         visitor.visit::<crate::connections::discovery::DiscoveredPrinter>();
         visitor.visit::<crate::connections::supervisor::PrinterStatusBackfill>();
+        visitor.visit::<crate::printers::batch::CreatePrintersBatchInput>();
+        visitor.visit::<crate::printers::batch::CreatePrintersBatchOutput>();
+        visitor.visit::<crate::printers::batch::CancelPrinterBatchData>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

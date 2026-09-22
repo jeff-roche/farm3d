@@ -28,6 +28,11 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::printers::batch::{
+    BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
+    BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
+    CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
+};
 use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
     OperationWarningCode, PrinterMutationResult, PrinterRevisionPrecondition, PrintersImportResult,
@@ -249,6 +254,19 @@ fn export_registry() -> Vec<Export> {
         export::<DeletePrinterResult>(),
         export::<PrintersExportResult>(),
         export::<PrintersImportResult>(),
+        export::<CreatePrintersBatchInput>(),
+        export::<BatchShared>(),
+        export::<BatchRowInput>(),
+        export::<BatchRowConnection>(),
+        export::<BatchCredentialSource>(),
+        export::<CreatePrintersBatchOutput>(),
+        export::<BatchRowResult>(),
+        export::<BatchRowOutcome>(),
+        export::<BatchRowError>(),
+        export::<BatchRowErrorCode>(),
+        export::<BatchRowWarning>(),
+        export::<BatchRowWarningCode>(),
+        export::<CancelPrinterBatchData>(),
         export::<SettingsExportResult>(),
         export::<SettingsImportResult>(),
         export::<EventSubject>(),
