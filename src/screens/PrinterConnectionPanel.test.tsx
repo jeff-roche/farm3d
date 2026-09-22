@@ -6,12 +6,14 @@ import type { PrinterProfile, ResolvedPrinter } from "../printers/types";
 const setConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const testConnection = vi.hoisted(() => vi.fn());
 const discoverPrinters = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const reportError = vi.hoisted(() => vi.fn());
 vi.mock("../printers/printer-store", () => ({
   setConnection,
   clearConnection: vi.fn(),
   testConnection,
   discoverPrinters,
   credentialStoreInfo: vi.fn().mockResolvedValue({ kind: "keychain" }),
+  reportError,
 }));
 
 // This suite doesn't run with vitest's `globals: true`, so
@@ -101,6 +103,16 @@ describe("PrinterConnectionPanel", () => {
       "prn-1",
       expect.objectContaining({ credential: "submitted-secret" }),
     );
+  });
+
+  it("routes a rejected save (Ruling R2) to the store's error banner", async () => {
+    setConnection.mockRejectedValueOnce(new Error("Probe failed: connection refused"));
+    render(() => <PrinterConnectionPanel printer={printer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(reportError).toHaveBeenCalledTimes(1));
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error));
   });
 
   it("renders a probe failure inline rather than throwing it away", async () => {

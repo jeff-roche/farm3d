@@ -26,6 +26,15 @@ type CommandMap = {
   credential_store_info: [Contracts.CredentialStoreInfoRequest, Contracts.CredentialStoreInfoResult];
   discover_printers: [Contracts.DiscoverPrintersRequest, Contracts.DiscoverPrintersResult];
   printer_statuses: [Contracts.PrinterStatusesRequest, Contracts.PrinterStatusesResult];
+  probe_connection: [Contracts.ProbeConnectionRequest, Contracts.ProbeConnectionResult];
+  create_printers_batch: [Contracts.CreatePrintersBatchRequest, Contracts.CreatePrintersBatchResult];
+  cancel_printer_batch: [Contracts.CancelPrinterBatchRequest, Contracts.CancelPrinterBatchResult];
+  printer_lifecycle_eligibility: [
+    Contracts.PrinterLifecycleEligibilityRequest,
+    Contracts.PrinterLifecycleEligibilityResult,
+  ];
+  archive_printer: [Contracts.ArchivePrinterRequest, Contracts.ArchivePrinterResult];
+  unarchive_printer: [Contracts.UnarchivePrinterRequest, Contracts.UnarchivePrinterResult];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;

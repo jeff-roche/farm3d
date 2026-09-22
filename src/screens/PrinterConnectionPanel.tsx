@@ -4,6 +4,7 @@ import {
   clearConnection,
   credentialStoreInfo,
   discoverPrinters,
+  reportError,
   setConnection,
   testConnection,
 } from "../printers/printer-store";
@@ -110,6 +111,12 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   async function onSave() {
     try {
       await setConnection(props.printer.id, submission());
+    } catch (e) {
+      // `setConnection` now rejects (Ruling R2) so a caller that renders the
+      // failure inline can offer "Save anyway" (`acceptUnverified`). This
+      // panel doesn't do that yet (Task 11), so it falls back to the same
+      // store error banner `setConnection` used to populate itself.
+      reportError(e);
     } finally {
       setApiKey("");
     }
