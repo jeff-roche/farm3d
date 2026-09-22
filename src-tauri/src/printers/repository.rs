@@ -358,6 +358,17 @@ impl PrinterRepository {
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
+    /// The Printers import write path (`import_printers`). Unlike
+    /// `create`/`update`/`transition`/`set_connection`, this doesn't call
+    /// `precheck_duplicate_host` before each insert — it relies solely on
+    /// the partial unique index (`printers_active_host_identity`) and
+    /// `insert`'s `map_write_error` backstop to turn a violation into
+    /// `StorageError::DuplicateHost`. That's safe only because the whole
+    /// table is deleted first (so `imported` never collides with a
+    /// pre-existing row) and because `import_printers` runs
+    /// `host_identity::archive_duplicates` over `imported` before calling
+    /// this, so no two active rows in `imported` share a host identity by
+    /// the time they reach `insert`.
     pub fn replace_all(
         &self,
         expected: &[(String, i64)],

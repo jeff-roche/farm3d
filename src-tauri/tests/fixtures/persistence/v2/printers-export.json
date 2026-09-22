@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "exportedAt": "2026-09-22T00:00:00.000Z",
+  "printers": [
+    {
+      "id": "prn-v2-active",
+      "revision": 3,
+      "name": "Bay 1 Printer",
+      "catalogRef": {
+        "vendor": "Example",
+        "model": "Printer",
+        "variant": "0.4",
+        "modelId": "Example-1",
+        "printerVariant": "0.4"
+      },
+      "notes": "Fixture for the schemaVersion 2 round trip.",
+      "overrides": {},
+      "lastKnownGood": null,
+      "connection": {
+        "kind": "moonraker",
+        "host": "printer-a.invalid",
+        "port": 7125,
+        "useTls": false
+      },
+      "location": "Bay 1",
+      "startSafety": "unattended",
+      "archivedAt": null
+    },
+    {
+      "id": "prn-v2-archived",
+      "revision": 1,
+      "name": "Retired Printer",
+      "catalogRef": {
+        "vendor": "Example",
+        "model": "Printer",
+        "variant": "0.4",
+        "modelId": "Example-1",
+        "printerVariant": "0.4"
+      },
+      "notes": "",
+      "overrides": {},
+      "lastKnownGood": null,
+      "connection": null,
+      "location": null,
+      "startSafety": "confirmBedClear",
+      "archivedAt": "2026-09-20T00:00:00.000Z"
+    }
+  ]
+}

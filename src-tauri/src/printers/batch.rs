@@ -425,6 +425,10 @@ fn operation_warning(warning_in: &OperationWarning) -> Option<BatchRowWarning> {
         // that it needs a credential, and the batch contract has no code
         // for it.
         OperationWarningCode::CredentialRequired => None,
+        // Import-only (`import_printers` via `host_identity::archive_duplicates`)
+        // — batch-created rows are never run through that pass, so this
+        // never occurs here.
+        OperationWarningCode::DuplicateHostArchived => None,
     }
 }
 

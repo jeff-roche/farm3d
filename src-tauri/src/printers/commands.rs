@@ -34,6 +34,10 @@ pub enum OperationWarningCode {
     CredentialCleanupPending,
     CredentialRequired,
     SupervisorReconciliationFailed,
+    /// D3, via import: a later Printer in the document shared an active
+    /// Printer's host identity and was imported archived instead. See
+    /// `printers::host_identity::archive_duplicates`.
+    DuplicateHostArchived,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -62,6 +66,12 @@ impl OperationWarning {
     pub fn supervisor(id: &str) -> Self {
         Self {
             code: OperationWarningCode::SupervisorReconciliationFailed,
+            entity_id: Some(id.to_string()),
+        }
+    }
+    pub fn duplicate_host_archived(id: &str) -> Self {
+        Self {
+            code: OperationWarningCode::DuplicateHostArchived,
             entity_id: Some(id.to_string()),
         }
     }
@@ -576,7 +586,7 @@ pub async fn export_printers<R: tauri::Runtime>(
         .map(export_printer)
         .collect::<Result<Vec<_>, _>>()?;
     let bytes = serde_json::to_vec_pretty(&ExportPrintersDocument {
-        schema_version: 1,
+        schema_version: 2,
         exported_at: &exported_at,
         printers: &exported,
     })
@@ -620,7 +630,7 @@ pub async fn import_printers<R: tauri::Runtime>(
             "The Printers document is too large.",
         ));
     }
-    let document = parse_printers_document(&bytes)?;
+    let mut document = parse_printers_document(&bytes)?;
     let mut ids = std::collections::HashSet::new();
     if document
         .printers
@@ -629,6 +639,14 @@ pub async fn import_printers<R: tauri::Runtime>(
     {
         return Err(CommandError::validation("Printer IDs must be unique."));
     }
+    // D3: a later active Printer in the document that shares an earlier
+    // one's host identity is imported archived instead of rejected — see
+    // "Export and import" in the P2 design spec ("handled exactly as in the
+    // migration rule"). Doing this before `replace_all` also means the
+    // write path's partial unique index backstop never has to fire for an
+    // import: no two active rows it writes ever share a host identity.
+    let duplicate_hosts =
+        crate::printers::host_identity::archive_duplicates(&mut document.printers);
     let repository = PrinterRepository::new(Arc::clone(&services.storage));
     let current = repository
         .list()
@@ -679,7 +697,10 @@ pub async fn import_printers<R: tauri::Runtime>(
     .map_err(CommandError::from_repository)?;
     services.documents.after_printers_commit();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<OperationWarning> = duplicate_hosts
+        .iter()
+        .map(|(_kept_id, archived_id)| OperationWarning::duplicate_host_archived(archived_id))
+        .collect();
     for printer in old_records {
         if !services.manager.stop_and_wait(&printer.id).await {
             warnings.push(OperationWarning::supervisor(&printer.id));
@@ -721,12 +742,9 @@ fn export_printer(printer: &super::StoredPrinter) -> Result<serde_json::Value, C
     object.remove("group");
     object.remove("createdAt");
     object.remove("updatedAt");
-    // P2's lifecycle columns (location/startSafety/archivedAt) aren't part
-    // of this schemaVersion-1 document shape yet — a later task's command
-    // surface change decides how/when to add them to export/import.
-    object.remove("location");
-    object.remove("startSafety");
-    object.remove("archivedAt");
+    // P2's lifecycle columns (location/startSafety/archivedAt) are part of
+    // the schemaVersion-2 document shape (see "Export and import" in the P2
+    // design spec) — kept as-is here, defaulted by serde when absent.
     object
         .entry("overrides")
         .or_insert_with(|| serde_json::json!({}));
@@ -781,11 +799,11 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 1 {
+    if version > 2 {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 {
-        return Err(CommandError::validation("schemaVersion must be 1."));
+    if version != 1 && version != 2 {
+        return Err(CommandError::validation("schemaVersion must be 1 or 2."));
     }
     let rows = root
         .get("printers")
@@ -805,6 +823,13 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         "overrides",
         "lastKnownGood",
         "connection",
+        // P2 (schemaVersion 2): optional for both schema versions and
+        // defaulted by serde (`StoredPrinter`'s struct-level `#[serde(default)]`)
+        // when absent, so a v1 document — which never carries them — still
+        // parses.
+        "location",
+        "startSafety",
+        "archivedAt",
     ];
     for row in rows {
         let object = row
@@ -826,10 +851,10 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
             ));
         }
     }
-    let document: PrintersDocument = serde_json::from_value(raw).map_err(|_| {
+    let mut document: PrintersDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Printers document has an invalid shape.")
     })?;
-    for printer in &document.printers {
+    for printer in &mut document.printers {
         if printer.id.is_empty()
             || printer.id.len() > 512
             || printer.id.chars().any(char::is_control)
@@ -856,6 +881,11 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
                 validate_credential_reference(reference)?;
             }
         }
+        // P2: the document's location must already be valid — reuses the
+        // same trim/length/control-character rule `create_printer` and
+        // `update_printer` enforce, so an import can't smuggle in a
+        // location those commands would have rejected.
+        printer.location = validate_location(printer.location.as_deref())?;
     }
     let mut ids = std::collections::HashSet::new();
     if document
@@ -910,7 +940,7 @@ mod import_export_tests {
 
     #[test]
     fn printer_import_rejects_future_schema_duplicate_ids_and_secret_fields() {
-        let future = br#"{"schemaVersion":2,"exportedAt":"x","printers":[]}"#;
+        let future = br#"{"schemaVersion":3,"exportedAt":"x","printers":[]}"#;
         assert_eq!(
             parse_printers_document(future).unwrap_err().code,
             ErrorCode::UnsupportedSchemaVersion
@@ -950,5 +980,74 @@ mod import_export_tests {
             parse_printers_document(&malformed).unwrap_err().code,
             ErrorCode::Validation
         );
+    }
+
+    /// Step 1 item 2: a schemaVersion-2 export document round-trips through
+    /// `parse_printers_document` (accepted, lifecycle fields populated) and
+    /// back through `export_printer` (the same fields reappear, unstripped).
+    #[test]
+    fn v2_fixture_round_trips_through_parse_and_export() {
+        let fixture =
+            include_str!("../../tests/fixtures/persistence/v2/printers-export.json").as_bytes();
+
+        let parsed = parse_printers_document(fixture).expect("v2 fixture parses");
+
+        assert_eq!(parsed.printers.len(), 2);
+        let active = &parsed.printers[0];
+        assert_eq!(active.id, "prn-v2-active");
+        assert_eq!(active.location.as_deref(), Some("Bay 1"));
+        assert_eq!(active.start_safety, super::super::StartSafety::Unattended);
+        assert_eq!(active.archived_at, None);
+        let archived = &parsed.printers[1];
+        assert_eq!(archived.id, "prn-v2-archived");
+        assert_eq!(archived.location, None);
+        assert_eq!(
+            archived.start_safety,
+            super::super::StartSafety::ConfirmBedClear
+        );
+        assert_eq!(
+            archived.archived_at.as_deref(),
+            Some("2026-09-20T00:00:00.000Z")
+        );
+
+        for printer in &parsed.printers {
+            let exported = export_printer(printer).unwrap();
+            assert_eq!(exported["location"], serde_json::json!(printer.location));
+            assert_eq!(
+                exported["startSafety"],
+                serde_json::to_value(printer.start_safety).unwrap()
+            );
+            assert_eq!(
+                exported["archivedAt"],
+                serde_json::json!(printer.archived_at)
+            );
+        }
+    }
+
+    /// Step 1 item 3: a v1 document (no location/startSafety/archivedAt
+    /// keys at all) still imports, defaulted to `null`/`confirmBedClear`/
+    /// not archived.
+    #[test]
+    fn v1_document_without_lifecycle_fields_still_parses_with_defaults() {
+        let parsed = parse_printers_document(&document("null", "{}")).unwrap();
+
+        let printer = &parsed.printers[0];
+        assert_eq!(printer.location, None);
+        assert_eq!(printer.start_safety, super::super::StartSafety::default());
+        assert_eq!(printer.archived_at, None);
+    }
+
+    /// Step 1 item 6: an invalid location in the document is rejected the
+    /// same way `create_printer`/`update_printer` would reject it.
+    #[test]
+    fn printer_import_rejects_an_invalid_location() {
+        let too_long = "x".repeat(129);
+        let raw = format!(
+            r#"{{"schemaVersion":2,"exportedAt":"x","printers":[{{"id":"legacy/Bay α","revision":1,"name":"Bay","catalogRef":{{"vendor":"Example","model":"Printer","variant":"0.4","modelId":"Example-1","printerVariant":"0.4"}},"notes":"","overrides":{{}},"lastKnownGood":null,"connection":null,"location":"{too_long}","startSafety":"confirmBedClear","archivedAt":null}}]}}"#
+        );
+
+        let error = parse_printers_document(raw.as_bytes()).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::Validation);
     }
 }
