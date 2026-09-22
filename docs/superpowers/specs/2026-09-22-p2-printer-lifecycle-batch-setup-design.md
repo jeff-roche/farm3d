@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft focused design for GitHub issue #12, awaiting approval. This document
+Approved focused design for GitHub issue #12. The user approved this design
+in conversation on 2026-09-22, including the decisions this document proposed
+beyond the four listed below. This document
 narrows the approved complete-v1 interaction design
 (`2026-09-16-complete-v1-ui-workflows-design.md`) to the work owned by P2 and
 resolves the decision gate recorded in the phase plan
@@ -555,9 +557,14 @@ toolbar and first-run state.
 
 **Monitor:**
 
-- `location` becomes a working Monitor Section. It is the default when any
-  non-archived Printer has a location and the user has not chosen a section.
-  Printers without a location go in a "No location" group.
+- `location` becomes a working Monitor Section. Printers without a location
+  go in a "No location" group.
+  - *Planning clarification:* the persisted `monitorSection` preference
+    defaults to `printerModel`, and the app cannot tell "never chosen" apart
+    from "chose Printer Model".
+  - So P2 does not switch the section to Location automatically. This
+    departs from the umbrella rule that Location is the default once
+    locations exist, and the P2 verification record notes it.
 - Search matches location.
 - An **Archived** filter shows only archived Printers. Every other filter
   excludes them.
