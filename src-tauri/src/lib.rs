@@ -16,8 +16,9 @@ use connections::commands::{
 };
 use connections::supervisor::ConnectionManager;
 use printers::commands::{
-    create_printer, delete_printer, export_printers, import_printers, list_printers,
-    rebind_printer, resolve_profile_drift, set_printer_override, update_printer,
+    archive_printer, create_printer, delete_printer, export_printers, import_printers,
+    list_printers, printer_lifecycle_eligibility, rebind_printer, resolve_profile_drift,
+    set_printer_override, unarchive_printer, update_printer,
 };
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
 use std::sync::Arc;
@@ -68,7 +69,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 23] = [
+pub const COMMAND_NAMES: [&str; 26] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -80,6 +81,9 @@ pub const COMMAND_NAMES: [&str; 23] = [
     "set_printer_override",
     "rebind_printer",
     "resolve_profile_drift",
+    "printer_lifecycle_eligibility",
+    "archive_printer",
+    "unarchive_printer",
     "export_printers",
     "import_printers",
     "list_catalog_models",
@@ -94,7 +98,10 @@ pub const COMMAND_NAMES: [&str; 23] = [
     "printer_statuses",
 ];
 
-fn restore_persisted_connections<R: tauri::Runtime>(
+/// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
+/// exercise a simulated app restart over the same storage — mirrors what
+/// `build_runtime_services` does at real startup.
+pub fn restore_persisted_connections<R: tauri::Runtime>(
     manager: &Arc<ConnectionManager<R>>,
     storage: Arc<persistence::Storage>,
     store: &connections::credentials::CredentialStore,
@@ -357,6 +364,9 @@ pub fn run() {
             set_printer_override,
             rebind_printer,
             resolve_profile_drift,
+            printer_lifecycle_eligibility,
+            archive_printer,
+            unarchive_printer,
             export_printers,
             import_printers,
             list_catalog_models,

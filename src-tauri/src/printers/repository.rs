@@ -5,6 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::persistence::{RepositoryError, Storage, StorageError};
 
 use super::host_identity::canonical_host_identity;
+use super::lifecycle::{evaluate, LifecycleAction};
 use super::{StartSafety, StoredPrinter};
 use crate::connections::ConnectionConfig;
 
@@ -58,6 +59,30 @@ impl PrinterRepository {
                 )
                 .optional()
         })
+    }
+
+    /// `printer_lifecycle_eligibility`'s read path: loads the Printer and
+    /// evaluates its lifecycle eligibility inside the same read transaction,
+    /// so a caller never observes a state in between.
+    pub fn lifecycle_eligibility(
+        &self,
+        id: &str,
+    ) -> Result<Option<super::lifecycle::LifecycleEligibility>, StorageError> {
+        self.storage
+            .read_transaction(|transaction| {
+                let printer = transaction
+                    .query_row(
+                        &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+                        [id],
+                        decode,
+                    )
+                    .optional()?;
+                Ok(match printer {
+                    None => Ok(None),
+                    Some(printer) => evaluate(&printer, transaction).map(Some),
+                })
+            })
+            .and_then(|inner| inner)
     }
 
     /// The active (non-archived) Printer, if any, currently holding `identity`
@@ -131,6 +156,7 @@ impl PrinterRepository {
                 field_path: "expectedRevision",
             });
         }
+        let mut blocked: Option<Vec<super::lifecycle::LifecycleBlocker>> = None;
         let result = self.storage.write(|transaction| {
             let printer = transaction
                 .query_row(
@@ -143,6 +169,11 @@ impl PrinterRepository {
             if printer.revision != expected_revision {
                 return Err(StorageError::OperationFailed);
             }
+            let eligibility = evaluate(&printer, transaction)?;
+            if !eligibility.can_delete {
+                blocked = Some(blockers_for(eligibility, LifecycleAction::Delete));
+                return Err(StorageError::OperationFailed);
+            }
             transaction.execute("DELETE FROM printers WHERE id = ?1", [id])?;
             if let Some(reference) = printer
                 .connection
@@ -153,6 +184,91 @@ impl PrinterRepository {
             }
             Ok(printer)
         });
+        if let Some(blockers) = blocked {
+            return Err(RepositoryError::LifecycleBlocked(blockers));
+        }
+        result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
+    }
+
+    /// D6: moves a Printer into the archived state. Excluded from
+    /// supervision and the Monitor's default view once archived, but keeps
+    /// its Connection and data. Blocked when the Printer is already
+    /// archived.
+    pub fn archive(&self, id: &str, expected_revision: i64) -> Result<StoredPrinter, RepositoryError> {
+        self.transition(id, expected_revision, LifecycleAction::Archive, |printer| {
+            printer.archived_at = Some(crate::printers::now_rfc3339());
+        })
+    }
+
+    /// D6: moves an archived Printer back to active. Goes through the same
+    /// duplicate-host-identity precheck as any other write (`update`'s), so
+    /// a host another active Printer has since claimed surfaces as
+    /// `RepositoryError::DuplicateHost`, not a silent takeover. Blocked when
+    /// the Printer isn't archived.
+    pub fn unarchive(
+        &self,
+        id: &str,
+        expected_revision: i64,
+    ) -> Result<StoredPrinter, RepositoryError> {
+        self.transition(
+            id,
+            expected_revision,
+            LifecycleAction::Unarchive,
+            |printer| {
+                printer.archived_at = None;
+            },
+        )
+    }
+
+    /// Shared machinery for `archive`/`unarchive`: optimistic-concurrency
+    /// load, a `lifecycle::evaluate` gate for `action` inside the same
+    /// transaction as the write, then `mutate` + the usual duplicate-host
+    /// precheck and replace.
+    fn transition(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        action: LifecycleAction,
+        mutate: impl FnOnce(&mut StoredPrinter),
+    ) -> Result<StoredPrinter, RepositoryError> {
+        if expected_revision <= 0 {
+            return Err(RepositoryError::Validation {
+                field_path: "expectedRevision",
+            });
+        }
+        let mut blocked: Option<Vec<super::lifecycle::LifecycleBlocker>> = None;
+        let result = self.storage.write(|transaction| {
+            let mut printer = transaction
+                .query_row(
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+                    [id],
+                    decode,
+                )
+                .optional()?
+                .ok_or(StorageError::OperationFailed)?;
+            if printer.revision != expected_revision {
+                return Err(StorageError::OperationFailed);
+            }
+            let eligibility = evaluate(&printer, transaction)?;
+            let eligible = match action {
+                LifecycleAction::Archive => eligibility.can_archive,
+                LifecycleAction::Unarchive => eligibility.can_unarchive,
+                LifecycleAction::Delete => eligibility.can_delete,
+            };
+            if !eligible {
+                blocked = Some(blockers_for(eligibility, action));
+                return Err(StorageError::OperationFailed);
+            }
+            mutate(&mut printer);
+            printer.revision += 1;
+            printer.updated_at = crate::printers::now_rfc3339();
+            precheck_duplicate_host(transaction, &printer)?;
+            replace(transaction, &printer)?;
+            Ok(printer)
+        });
+        if let Some(blockers) = blocked {
+            return Err(RepositoryError::LifecycleBlocked(blockers));
+        }
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
@@ -301,6 +417,20 @@ fn duplicate_host_or_storage(error: StorageError) -> RepositoryError {
         },
         other => RepositoryError::Storage(other),
     }
+}
+
+/// The blockers relevant to `action` alone — a caller attempting one action
+/// (e.g. delete) shouldn't be told about blockers for a different one (e.g.
+/// unarchive) that happens to also be blocked right now.
+fn blockers_for(
+    eligibility: super::lifecycle::LifecycleEligibility,
+    action: LifecycleAction,
+) -> Vec<super::lifecycle::LifecycleBlocker> {
+    eligibility
+        .blockers
+        .into_iter()
+        .filter(|blocker| blocker.action == action)
+        .collect()
 }
 
 /// D3: no two non-archived Printers may share a host identity. Checked

@@ -182,6 +182,94 @@ pub fn update_printer<R: tauri::Runtime>(
 }
 
 #[tauri::command]
+pub fn printer_lifecycle_eligibility<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    id: String,
+) -> Result<CommandSuccess<crate::printers::lifecycle::LifecycleEligibility>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let eligibility = PrinterRepository::new(Arc::clone(&services.storage))
+        .lifecycle_eligibility(&id)
+        .map_err(|error| CommandError::from_repository(error.into()))?
+        .ok_or_else(|| CommandError::not_found(&id))?;
+    Ok(CommandSuccess::new(eligibility))
+}
+
+/// D6: moves a Printer into the archived state. Order matters: the
+/// repository write commits first, then the supervisor is stopped under the
+/// reconciliation guard — never the other way around, or the supervisor
+/// could reconnect against a Connection the archive just excluded from
+/// supervision.
+#[tauri::command]
+pub async fn archive_printer<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
+    id: String,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let archived = PrinterRepository::new(Arc::clone(&services.storage))
+        .archive(&id, expected_revision)
+        .map_err(CommandError::from_repository)?;
+    let mut warnings = Vec::new();
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    if let crate::printers::setup::SupervisionOutcome::Archived(graceful) =
+        crate::printers::setup::supervise_printer(
+            &services.manager,
+            services.credentials.as_ref(),
+            &services.catalog,
+            &archived,
+        )
+        .await
+    {
+        if !graceful {
+            warnings.push(OperationWarning::supervisor(&id));
+        }
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
+        warnings,
+    }))
+}
+
+/// D6: moves an archived Printer back to active and resumes supervision.
+#[tauri::command]
+pub async fn unarchive_printer<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
+    id: String,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let unarchived = PrinterRepository::new(Arc::clone(&services.storage))
+        .unarchive(&id, expected_revision)
+        .map_err(CommandError::from_repository)?;
+    let mut warnings = Vec::new();
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    if crate::printers::setup::supervise_printer(
+        &services.manager,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &unarchived,
+    )
+    .await
+        == crate::printers::setup::SupervisionOutcome::CredentialRequired
+    {
+        warnings.push(OperationWarning::credential_required(&id));
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &unarchived),
+        warnings,
+    }))
+}
+
+#[tauri::command]
 pub async fn delete_printer<R: tauri::Runtime>(
     _app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,

@@ -69,7 +69,10 @@ pub enum SupervisionOutcome {
     Started,
     Reconciled,
     CredentialRequired,
-    Archived,
+    /// Carries whether the stop was graceful, so a caller (e.g.
+    /// `archive_printer`) can surface `OperationWarning::supervisor` when it
+    /// wasn't.
+    Archived(bool),
 }
 
 /// The one path every call site uses to bring a Printer's live supervision
@@ -85,8 +88,8 @@ pub async fn supervise_printer<R: tauri::Runtime>(
     printer: &StoredPrinter,
 ) -> SupervisionOutcome {
     if printer.archived_at.is_some() {
-        let _ = manager.stop(&printer.id).await; // stop also publishes removed
-        return SupervisionOutcome::Archived;
+        let graceful = manager.stop(&printer.id).await; // stop also publishes removed
+        return SupervisionOutcome::Archived(graceful);
     }
     let (facts, _) = derive_setup_facts(printer, catalog);
     let Some(config) = printer
@@ -288,7 +291,7 @@ mod tests {
 
         let outcome = supervise_printer(&manager, &credentials, &catalog, &printer).await;
 
-        assert_eq!(outcome, SupervisionOutcome::Archived);
+        assert_eq!(outcome, SupervisionOutcome::Archived(true));
         assert!(manager.statuses().is_empty());
     }
 

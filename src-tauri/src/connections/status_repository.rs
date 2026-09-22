@@ -457,9 +457,13 @@ mod tests {
             .get("prn-1")
             .expect("printer lookup")
             .expect("test printer");
+        // D6: delete is guarded — a Printer must be archived first.
+        let archived = PrinterRepository::new(Arc::clone(&storage))
+            .archive("prn-1", printer.revision)
+            .expect("archive printer");
 
         PrinterRepository::new(storage)
-            .delete("prn-1", printer.revision)
+            .delete("prn-1", archived.revision)
             .expect("delete printer");
 
         assert_eq!(repository.get("prn-1").expect("cached snapshot"), None);

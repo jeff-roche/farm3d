@@ -721,6 +721,9 @@ impl CommandError {
             RepositoryError::DuplicateHost {
                 conflicting_printer_id,
             } => Self::duplicate_host(&conflicting_printer_id),
+            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
+                serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
+            ),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

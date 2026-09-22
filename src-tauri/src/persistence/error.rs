@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::printers::lifecycle::LifecycleBlocker;
+
 #[derive(Debug)]
 pub enum StorageError {
     PathCollision,
@@ -95,6 +97,10 @@ pub enum RepositoryError {
     DuplicateHost {
         conflicting_printer_id: String,
     },
+    /// D7: `archive`/`unarchive`/`delete` is blocked by the Printer's
+    /// current lifecycle state (or, in a later phase, other work that still
+    /// depends on it). See `crate::printers::lifecycle::evaluate`.
+    LifecycleBlocked(Vec<LifecycleBlocker>),
     Storage(StorageError),
 }
 

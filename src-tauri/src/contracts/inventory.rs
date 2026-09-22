@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 23] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 26] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -58,6 +58,21 @@ contracts![
         "resolve_profile_drift",
         "ResolveProfileDriftRequest",
         "ResolveProfileDriftResult"
+    ),
+    (
+        "printer_lifecycle_eligibility",
+        "PrinterLifecycleEligibilityRequest",
+        "PrinterLifecycleEligibilityResult"
+    ),
+    (
+        "archive_printer",
+        "ArchivePrinterRequest",
+        "ArchivePrinterResult"
+    ),
+    (
+        "unarchive_printer",
+        "UnarchivePrinterRequest",
+        "UnarchivePrinterResult"
     ),
     (
         "export_printers",
@@ -117,7 +132,7 @@ contracts![
     ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 23] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 26] {
     &COMMAND_CONTRACTS
 }
 
@@ -162,6 +177,12 @@ export type RebindPrinterRequest = ContractRequest & { id: string; expectedRevis
 export type RebindPrinterResult = CommandSuccess<PrinterMutationResult>;
 export type ResolveProfileDriftRequest = ContractRequest & { id: string; expectedRevision: number; action: "accept" | "pin" };
 export type ResolveProfileDriftResult = CommandSuccess<PrinterMutationResult>;
+export type PrinterLifecycleEligibilityRequest = ContractRequest & { id: string };
+export type PrinterLifecycleEligibilityResult = CommandSuccess<LifecycleEligibility>;
+export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type ArchivePrinterResult = CommandSuccess<PrinterMutationResult>;
+export type UnarchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type UnarchivePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type ExportPrintersRequest = NoArgsRequest;
 export type ExportPrintersResult = CommandSuccess<PrintersExportOutcome>;
 export type ImportPrintersRequest = ContractRequest & { expectedRevisions: PrinterRevisionPrecondition[] };
@@ -206,6 +227,7 @@ export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_
         visitor.visit::<crate::catalog::PrinterProfile>();
         visitor.visit::<crate::catalog::resolve::ResolvedPrinter>();
         visitor.visit::<crate::printers::commands::PrinterMutationResult>();
+        visitor.visit::<crate::printers::lifecycle::LifecycleEligibility>();
         visitor.visit::<crate::printers::commands::DeletePrinterResult>();
         visitor.visit::<crate::printers::commands::ExportResult>();
         visitor.visit::<crate::printers::commands::PrintersImportResult>();

@@ -36,6 +36,9 @@ use farm3d_lib::printers::operational::{
     HostActivity, OperationalInput, OperationalResult, OperationalState, PrinterReadiness,
     ReadinessReason, ReadinessState, TelemetryFreshness,
 };
+use farm3d_lib::printers::lifecycle::{
+    LifecycleAction, LifecycleBlocker, LifecycleBlockerCode, LifecycleEligibility,
+};
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
@@ -228,6 +231,10 @@ fn export_registry() -> Vec<Export> {
         export::<PrinterPatch>(),
         export::<StartSafety>(),
         export::<SetupGap>(),
+        export::<LifecycleAction>(),
+        export::<LifecycleBlockerCode>(),
+        export::<LifecycleBlocker>(),
+        export::<LifecycleEligibility>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),

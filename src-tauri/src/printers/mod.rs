@@ -9,6 +9,7 @@ use ts_rs::TS;
 
 pub mod commands;
 pub mod host_identity;
+pub mod lifecycle;
 pub mod operational;
 pub mod repository;
 pub mod setup;
