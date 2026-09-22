@@ -141,13 +141,8 @@ pub fn create_printer<R: tauri::Runtime>(
     let stored = PrinterRepository::new(Arc::clone(&services.storage))
         .create(stored)
         .map_err(CommandError::from_repository)?;
-    services.manager.reconcile_printer(
-        &stored.id,
-        crate::connections::supervisor::PrinterSetupFacts {
-            has_usable_connection: false,
-            profile_resolved: true,
-        },
-    );
+    let (facts, _) = crate::printers::setup::derive_setup_facts(&stored, catalog);
+    services.manager.reconcile_printer(&stored.id, facts);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &stored,
     )))
@@ -576,69 +571,21 @@ pub async fn import_printers<R: tauri::Runtime>(
             warnings.push(OperationWarning::supervisor(&printer.id));
         }
     }
-    let needs_store = stored.iter().any(|printer| {
-        printer
-            .connection
-            .as_ref()
-            .and_then(|connection| connection.credential_ref.as_ref())
-            .is_some()
-    });
-    let credential_store = needs_store.then(|| Arc::clone(&services.credentials));
     for printer in &stored {
-        let profile_resolved =
-            crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &printer.catalog_ref)
-                .0
-                .is_some();
-        let Some(config) = printer.connection.clone() else {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
-            continue;
-        };
-        if config.kind != crate::connections::MOONRAKER_KIND {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
+        let (_, gaps) = crate::printers::setup::derive_setup_facts(printer, &services.catalog);
+        if gaps.contains(&crate::printers::setup::SetupGap::UnsupportedAdapter) {
             warnings.push(OperationWarning::supervisor(&printer.id));
-            continue;
         }
-        let credential = match config.credential_ref.as_deref() {
-            None => None,
-            Some(reference) => credential_store
-                .as_ref()
-                .and_then(|store| store.get(reference).ok())
-                .flatten(),
-        };
-        if config.credential_ref.is_some() && credential.is_none() {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
+        if crate::printers::setup::supervise_printer(
+            &services.manager,
+            services.credentials.as_ref(),
+            &services.catalog,
+            printer,
+        )
+        .await
+            == crate::printers::setup::SupervisionOutcome::CredentialRequired
+        {
             warnings.push(OperationWarning::credential_required(&printer.id));
-        } else {
-            services
-                .manager
-                .start(
-                    printer.id.clone(),
-                    config,
-                    credential.map(zeroize::Zeroizing::new),
-                    crate::connections::supervisor::PrinterSetupFacts {
-                        has_usable_connection: true,
-                        profile_resolved,
-                    },
-                )
-                .await;
         }
     }
     let resolved = stored

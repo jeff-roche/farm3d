@@ -11,6 +11,7 @@ pub mod commands;
 pub mod host_identity;
 pub mod operational;
 pub mod repository;
+pub mod setup;
 
 const PRINTERS_FILE_NAME: &str = "printers.json";
 const PRINTERS_SCHEMA_VERSION: u32 = 1;
