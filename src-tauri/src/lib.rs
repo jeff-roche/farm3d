@@ -20,6 +20,7 @@ use printers::commands::{
     list_printers, printer_lifecycle_eligibility, rebind_printer, resolve_profile_drift,
     set_printer_override, unarchive_printer, update_printer,
 };
+use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
 use std::sync::Arc;
 use tauri::path::BaseDirectory;
@@ -69,7 +70,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 26] = [
+pub const COMMAND_NAMES: [&str; 27] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -96,6 +97,7 @@ pub const COMMAND_NAMES: [&str; 26] = [
     "credential_store_info",
     "discover_printers",
     "printer_statuses",
+    "probe_connection",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -379,6 +381,7 @@ pub fn run() {
             credential_store_info,
             discover_printers,
             printer_statuses,
+            probe_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

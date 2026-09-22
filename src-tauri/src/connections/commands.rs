@@ -5,12 +5,12 @@ use super::credentials::{
     credential_ref_for, CredentialBackend, CredentialStore, CredentialStoreKind,
 };
 use super::discovery::{discover, DiscoveredPrinter};
-use super::moonraker::MoonrakerConnection;
-use super::{ConnectionConfig, PrinterConnection, ProbeResult, MOONRAKER_KIND};
+use super::{ConnectionConfig, ProbeResult, MOONRAKER_KIND};
 use crate::catalog::resolve::resolve_printer;
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
 use crate::persistence::Storage;
 use crate::printers::commands::{OperationWarning, PrinterMutationResult};
+use crate::printers::create::probe_submission;
 use crate::printers::repository::PrinterRepository;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -25,7 +25,12 @@ use zeroize::Zeroize;
 const DISCOVERY_WINDOW: Duration = Duration::from_secs(3);
 const DISCOVERY_HARD_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn credential_coordinator() -> &'static Mutex<()> {
+/// `pub(crate)` so `printers::create::create_printer_with` can coordinate
+/// its own provisional-credential write under the same process-wide lock
+/// `coordinate_connection_change` uses — the two must never interleave, or
+/// a provisional row's precedence bookkeeping (`enqueue_credential_cleanup`)
+/// could race.
+pub(crate) fn credential_coordinator() -> &'static Mutex<()> {
     static COORDINATOR: OnceLock<Mutex<()>> = OnceLock::new();
     COORDINATOR.get_or_init(|| Mutex::new(()))
 }
@@ -226,19 +231,6 @@ fn credential_store_needed(
     secret.is_some() || credential_to_clear.is_some() || config.credential_ref.is_some()
 }
 
-fn adapter(
-    config: &ConnectionConfig,
-    api_key: Option<zeroize::Zeroizing<String>>,
-) -> Result<Box<dyn PrinterConnection>, String> {
-    match config.kind.as_str() {
-        MOONRAKER_KIND => Ok(Box::new(MoonrakerConnection::with_zeroizing_secret(
-            config.clone(),
-            api_key,
-        ))),
-        other => Err(format!("This build cannot speak `{other}` connections")),
-    }
-}
-
 /// The OLD credential (if any) that must be deleted from the store because
 /// the newly split config no longer references one — e.g. the user
 /// explicitly cleared their API key (`split_submission` turns `Some("")`
@@ -286,6 +278,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     expected_revision: i64,
     id: String,
     mut submission: ConnectionSubmission,
+    accept_unverified: Option<bool>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     if expected_revision <= 0 {
@@ -342,6 +335,44 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         Some("") => CredentialSubmission::Clear,
         Some(secret) => CredentialSubmission::Replace(secret),
     };
+    // D8: replacing an already-present Connection is probed BEFORE it is
+    // persisted, unless the caller opts out with `acceptUnverified`. First-
+    // time sets and clears never reach here because `differs` is only
+    // evaluated against an existing Connection.
+    if let Some(existing_connection) = existing.connection.clone() {
+        let new_secret_submitted = matches!(change, CredentialSubmission::Replace(_));
+        let differs = existing_connection.kind != config.kind
+            || existing_connection.host != config.host
+            || existing_connection.port != config.port
+            || existing_connection.use_tls != config.use_tls
+            || new_secret_submitted;
+        if differs && accept_unverified != Some(true) {
+            let probe_secret = match change {
+                CredentialSubmission::Replace(secret) => {
+                    Some(zeroize::Zeroizing::new(secret.to_string()))
+                }
+                CredentialSubmission::Clear => None,
+                CredentialSubmission::Preserve => match previous_credential_ref.as_deref() {
+                    Some(reference) => Some(zeroize::Zeroizing::new(
+                        services
+                            .credentials
+                            .get(reference)
+                            .map_err(|_| {
+                                CommandError::credential_unavailable(
+                                    match services.credentials.kind() {
+                                        CredentialStoreKind::Keychain => "keychain",
+                                        CredentialStoreKind::File => "fallbackFile",
+                                    },
+                                )
+                            })?
+                            .ok_or_else(|| CommandError::credential_required(&id))?,
+                    )),
+                    None => None,
+                },
+            };
+            probe_submission(&services.manager, &config, probe_secret).await?;
+        }
+    }
     let no_store =
         CredentialStore::file_backed(std::env::temp_dir().join("farm3d-unused-credential-store"));
     let committed = coordinate_connection_change(
@@ -512,55 +543,9 @@ pub async fn test_printer_connection<R: tauri::Runtime>(
             None => None,
         },
     };
-    let adapter_kind = config.kind.clone();
-    let connection =
-        adapter(&config, api_key).map_err(|_| CommandError::unsupported_adapter(&adapter_kind))?;
-    connection
-        .probe()
+    probe_submission(&services.manager, &config, api_key)
         .await
         .map(CommandSuccess::new)
-        .map_err(|error| {
-            use crate::connections::ConnectionError;
-            let (code, message, recovery, retryable) = match error {
-                ConnectionError::Unreachable(_) => (
-                    crate::contracts::command::ErrorCode::PrinterUnreachable,
-                    "The Printer could not be reached.",
-                    vec![
-                        crate::contracts::command::RecoveryCode::CheckConnection,
-                        crate::contracts::command::RecoveryCode::Retry,
-                    ],
-                    true,
-                ),
-                ConnectionError::Auth(_) => (
-                    crate::contracts::command::ErrorCode::AuthenticationFailed,
-                    "The Printer rejected the credential.",
-                    vec![
-                        crate::contracts::command::RecoveryCode::CheckCredentials,
-                        crate::contracts::command::RecoveryCode::ReenterCredential,
-                    ],
-                    false,
-                ),
-                ConnectionError::Protocol(_) => (
-                    crate::contracts::command::ErrorCode::ProtocolError,
-                    "The Printer returned an unexpected response.",
-                    vec![
-                        crate::contracts::command::RecoveryCode::CheckConnection,
-                        crate::contracts::command::RecoveryCode::Retry,
-                    ],
-                    true,
-                ),
-                ConnectionError::Timeout => (
-                    crate::contracts::command::ErrorCode::Timeout,
-                    "The Printer did not respond in time.",
-                    vec![
-                        crate::contracts::command::RecoveryCode::CheckConnection,
-                        crate::contracts::command::RecoveryCode::Retry,
-                    ],
-                    true,
-                ),
-            };
-            CommandError::safe_network(code, message, recovery, retryable, &id, &adapter_kind)
-        })
 }
 
 #[tauri::command]

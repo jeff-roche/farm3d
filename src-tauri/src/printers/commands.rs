@@ -9,6 +9,7 @@ use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVe
 use crate::document_io::DocumentKind;
 use crate::persistence::SnapshotKind;
 
+use super::create::{validate_location, validate_name, CreatePrinterOptions};
 use super::repository::PrinterRepository;
 use super::{CatalogRef, PrinterPatch};
 
@@ -110,42 +111,51 @@ pub fn list_printers<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn create_printer<R: tauri::Runtime>(
+pub async fn create_printer<R: tauri::Runtime>(
     _app: AppHandle<R>,
-    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     name: String,
     catalog_ref: CatalogRef,
+    location: Option<String>,
+    start_safety: Option<super::StartSafety>,
+    default_bed_type: Option<String>,
+    connection: Option<crate::connections::commands::ConnectionSubmission>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let catalog = &services.catalog;
-    let (variant, _) = crate::catalog::resolve::resolve_catalog_ref(catalog, &catalog_ref);
-    let variant = variant.ok_or_else(|| {
-        CommandError::validation_at("catalogRef", "The Printer Profile could not be resolved.")
-    })?;
-    let stored = super::StoredPrinter {
-        id: PrinterRepository::generate_id(),
-        name,
-        catalog_ref,
-        notes: String::new(),
-        overrides: super::PrinterProfileOverrides::default(),
-        last_known_good: Some(super::LastKnownGood {
-            profile: crate::catalog::PrinterProfile::from(variant),
-            catalog_version: catalog.source_tag.clone(),
-            resolved_at: crate::printers::now_rfc3339(),
-        }),
-        connection: None,
-        ..Default::default()
-    };
-    let stored = PrinterRepository::new(Arc::clone(&services.storage))
-        .create(stored)
-        .map_err(CommandError::from_repository)?;
-    let (facts, _) = crate::printers::setup::derive_setup_facts(&stored, catalog);
-    services.manager.reconcile_printer(&stored.id, facts);
-    Ok(mutation(crate::catalog::resolve::resolve_printer(
-        catalog, &stored,
-    )))
+    let connection = connection.map(|submission| {
+        let secret = submission
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| zeroize::Zeroizing::new(value.to_string()));
+        let config = crate::connections::ConnectionConfig {
+            kind: submission.kind,
+            host: submission.host,
+            port: submission.port,
+            use_tls: submission.use_tls,
+            credential_ref: None,
+        };
+        (config, secret)
+    });
+    let outcome = super::create::create_printer_with(
+        &services,
+        CreatePrinterOptions {
+            name,
+            catalog_ref,
+            location,
+            start_safety: start_safety.unwrap_or_default(),
+            default_bed_type,
+            connection,
+        },
+    )
+    .await?;
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
+        warnings: outcome.warnings,
+    }))
 }
 
 #[tauri::command]
@@ -158,20 +168,36 @@ pub fn update_printer<R: tauri::Runtime>(
     patch: PrinterPatch,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
-    if patch.name.is_none() && patch.notes.is_none() {
+    if patch.name.is_none()
+        && patch.notes.is_none()
+        && patch.location.is_none()
+        && patch.start_safety.is_none()
+    {
         return Err(CommandError::validation_at(
             "patch",
             "At least one field is required.",
         ));
     }
+    let name = patch.name.as_deref().map(validate_name).transpose()?;
+    let location = patch
+        .location
+        .map(|value| validate_location(value.as_deref()))
+        .transpose()?;
+    let start_safety = patch.start_safety;
     let services = bootstrap.ready()?;
     let updated = PrinterRepository::new(Arc::clone(&services.storage))
         .update(&id, expected_revision, |printer| {
-            if let Some(name) = patch.name {
+            if let Some(name) = name {
                 printer.name = name;
             }
             if let Some(notes) = patch.notes {
                 printer.notes = notes;
+            }
+            if let Some(location) = location {
+                printer.location = location;
+            }
+            if let Some(start_safety) = start_safety {
+                printer.start_safety = start_safety;
             }
         })
         .map_err(CommandError::from_repository)?;

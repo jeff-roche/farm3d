@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 26] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 27] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -130,9 +130,14 @@ contracts![
         "PrinterStatusesRequest",
         "PrinterStatusesResult"
     ),
+    (
+        "probe_connection",
+        "ProbeConnectionRequest",
+        "ProbeConnectionResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 26] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 27] {
     &COMMAND_CONTRACTS
 }
 
@@ -165,7 +170,7 @@ export type ImportSettingsRequest = ContractRequest & { expectedRevision: number
 export type ImportSettingsResult = CommandSuccess<SettingsImportOutcome>;
 export type ListPrintersRequest = NoArgsRequest;
 export type ListPrintersResult = CommandSuccess<PrinterRecord[]>;
-export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef };
+export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission };
 export type CreatePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type UpdatePrinterRequest = ContractRequest & { id: string; expectedRevision: number; patch: PrinterPatch };
 export type UpdatePrinterResult = CommandSuccess<PrinterMutationResult>;
@@ -195,7 +200,7 @@ export type PreviewProfileRequest = ContractRequest & { catalogRef: CatalogRef }
 export type PreviewProfileResult = CommandSuccess<PrinterProfile>;
 export type CatalogInfoRequest = NoArgsRequest;
 export type CatalogInfoResult = CommandSuccess<CatalogInfo>;
-export type SetPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number; submission: ConnectionSubmission };
+export type SetPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number; submission: ConnectionSubmission; acceptUnverified?: boolean };
 export type SetPrinterConnectionResult = CommandSuccess<PrinterMutationResult>;
 export type ClearPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number };
 export type ClearPrinterConnectionResult = CommandSuccess<PrinterMutationResult>;
@@ -206,7 +211,9 @@ export type CredentialStoreInfoResult = CommandSuccess<CredentialStoreInfo>;
 export type DiscoverPrintersRequest = NoArgsRequest;
 export type DiscoverPrintersResult = CommandSuccess<DiscoveredPrinter[]>;
 export type PrinterStatusesRequest = NoArgsRequest;
-export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_string()
+export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;
+export type ProbeConnectionRequest = ContractRequest & { submission: ConnectionSubmission };
+export type ProbeConnectionResult = CommandSuccess<ProbeResult>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -224,6 +231,7 @@ export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_
         visitor.visit::<crate::printers::commands::PrinterRevisionPrecondition>();
         visitor.visit::<crate::printers::PrinterPatch>();
         visitor.visit::<crate::printers::CatalogRef>();
+        visitor.visit::<crate::printers::StartSafety>();
         visitor.visit::<crate::catalog::PrinterProfile>();
         visitor.visit::<crate::catalog::resolve::ResolvedPrinter>();
         visitor.visit::<crate::printers::commands::PrinterMutationResult>();

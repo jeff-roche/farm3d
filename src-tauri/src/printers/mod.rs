@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 pub mod commands;
+pub mod create;
 pub mod host_identity;
 pub mod lifecycle;
 pub mod operational;
@@ -219,6 +220,27 @@ pub struct PrinterPatch {
     pub name: Option<String>,
     #[ts(optional)]
     pub notes: Option<String>,
+    /// `undefined` (field absent) = leave unchanged; `null` = clear;
+    /// a string = set. The `double_option` deserializer distinguishes
+    /// "absent" from "present and null", which a plain `Option<String>`
+    /// cannot.
+    #[serde(default, deserialize_with = "double_option")]
+    #[ts(optional, type = "string | null")]
+    pub location: Option<Option<String>>,
+    #[ts(optional)]
+    pub start_safety: Option<StartSafety>,
+}
+
+/// See `PrinterPatch::location`'s doc comment for why this exists: without
+/// it, serde's plain `Option<String>` cannot tell "the field was omitted"
+/// (`None`) apart from "the field was present and `null`" (also `None`),
+/// which collapses "leave unchanged" and "clear" into the same wire shape.
+fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 fn app_config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {

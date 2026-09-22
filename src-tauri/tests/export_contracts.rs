@@ -855,7 +855,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));

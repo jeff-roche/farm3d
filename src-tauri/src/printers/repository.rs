@@ -113,6 +113,39 @@ impl PrinterRepository {
             .map_err(duplicate_host_or_storage)
     }
 
+    /// `create`'s sibling for the credential-provisioning path
+    /// (`create_printer_with`): inserts the Printer and, in the SAME
+    /// transaction, deletes `provisional_reference`'s
+    /// `pending_credential_cleanup` row — mirroring how `set_connection`
+    /// removes a provisional row on a successful commit. On failure the
+    /// provisional row is left in place (its secret is orphaned, and the
+    /// caller retries cleanup for it) rather than deleted here, since the
+    /// insert itself rolled back.
+    pub fn create_in(
+        &self,
+        mut printer: StoredPrinter,
+        provisional_reference: Option<&str>,
+    ) -> Result<StoredPrinter, RepositoryError> {
+        validate_id(&printer.id).map_err(|_| RepositoryError::Validation { field_path: "id" })?;
+        let now = crate::printers::now_rfc3339();
+        printer.revision = 1;
+        printer.created_at = now.clone();
+        printer.updated_at = now;
+        self.storage
+            .write(|transaction| {
+                precheck_duplicate_host(transaction, &printer)?;
+                insert(transaction, &printer)?;
+                if let Some(reference) = provisional_reference {
+                    transaction.execute(
+                        "DELETE FROM pending_credential_cleanup WHERE credential_ref=?1",
+                        [reference],
+                    )?;
+                }
+                Ok(printer.clone())
+            })
+            .map_err(duplicate_host_or_storage)
+    }
+
     pub fn update(
         &self,
         id: &str,
