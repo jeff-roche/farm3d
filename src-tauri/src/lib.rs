@@ -236,9 +236,9 @@ pub fn startup_command_error(
     match error {
         persistence::StorageError::UnsupportedLocking => Err(()),
         persistence::StorageError::MigrationFailed => Ok(CommandError::migration_failed()),
-        persistence::StorageError::UnsupportedSchemaVersion => {
-            Ok(CommandError::unsupported_schema(2))
-        }
+        persistence::StorageError::UnsupportedSchemaVersion => Ok(
+            CommandError::unsupported_schema(persistence::CURRENT_SCHEMA_VERSION),
+        ),
         persistence::StorageError::CorruptData {
             source_name,
             source_sha256,
@@ -250,6 +250,9 @@ pub fn startup_command_error(
         | persistence::StorageError::PersistenceUnavailable
         | persistence::StorageError::Filesystem
         | persistence::StorageError::OperationFailed => Ok(CommandError::persistence_unavailable()),
+        // Startup only ever reads through storage (restoring persisted
+        // Connections); this write-path variant cannot occur here.
+        persistence::StorageError::DuplicateHost(_) => Ok(CommandError::internal()),
     }
 }
 

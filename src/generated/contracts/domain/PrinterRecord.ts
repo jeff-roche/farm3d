@@ -4,5 +4,6 @@ import type { CatalogRef } from "./CatalogRef";
 import type { ConnectionConfig } from "./ConnectionConfig";
 import type { LastKnownGood } from "./LastKnownGood";
 import type { ProfileResolution } from "./ProfileResolution";
+import type { StartSafety } from "./StartSafety";
 
-export type PrinterRecord = { id: string, revision: number, name: string, catalogRef: CatalogRef, notes: string, overrides: { [key in string]: JsonValue }, lastKnownGood?: LastKnownGood, connection?: ConnectionConfig, profileResolution: ProfileResolution, createdAt: string, updatedAt: string, };
+export type PrinterRecord = { id: string, revision: number, name: string, catalogRef: CatalogRef, notes: string, overrides: { [key in string]: JsonValue }, lastKnownGood?: LastKnownGood, connection?: ConnectionConfig, location?: string, startSafety: StartSafety, archivedAt?: string, profileResolution: ProfileResolution, createdAt: string, updatedAt: string, };

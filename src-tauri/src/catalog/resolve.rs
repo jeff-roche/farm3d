@@ -1,6 +1,8 @@
 use crate::catalog::{BedShape, Catalog, CatalogVariant, PrinterProfile};
 use crate::contracts::command::JsonValue;
-use crate::printers::{CatalogRef, LastKnownGood, PrinterProfileOverrides, StoredPrinter};
+use crate::printers::{
+    CatalogRef, LastKnownGood, PrinterProfileOverrides, StartSafety, StoredPrinter,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use ts_rs::TS;
@@ -60,6 +62,13 @@ pub struct ResolvedPrinter {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub connection: Option<crate::connections::ConnectionConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub location: Option<String>,
+    pub start_safety: StartSafety,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub archived_at: Option<String>,
     pub profile_resolution: ProfileResolution,
     pub created_at: String,
     pub updated_at: String,
@@ -237,6 +246,9 @@ pub fn resolve_printer(catalog: &Catalog, stored: &StoredPrinter) -> ResolvedPri
         overrides,
         last_known_good: stored.last_known_good.clone(),
         connection: stored.connection.clone(),
+        location: stored.location.clone(),
+        start_safety: stored.start_safety,
+        archived_at: stored.archived_at.clone(),
         profile_resolution: ProfileResolution {
             catalog_status: status,
             model_label,

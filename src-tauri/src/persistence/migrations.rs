@@ -1,26 +1,40 @@
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use sha2::{Digest, Sha256};
 
 use super::error::StorageError;
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+
+/// A migration-specific Rust step, run in the same exclusive transaction
+/// right after its SQL. Only 0003 uses this: `host_identity` backfill needs
+/// `canonical_host_identity`, which is Rust-owned (D2), not SQL.
+type MigrationPostStep = fn(&Transaction<'_>) -> Result<(), StorageError>;
 
 struct Migration {
     version: i64,
     name: &'static str,
     sql: &'static str,
+    post: Option<MigrationPostStep>,
 }
 
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         name: "0001_foundation",
         sql: include_str!("../../migrations/0001_foundation.sql"),
+        post: None,
     },
     Migration {
         version: 2,
         name: "0002_p1_monitor",
         sql: include_str!("../../migrations/0002_p1_monitor.sql"),
+        post: None,
+    },
+    Migration {
+        version: 3,
+        name: "0003_p2_printer_lifecycle",
+        sql: include_str!("../../migrations/0003_p2_printer_lifecycle.sql"),
+        post: Some(backfill_host_identity),
     },
 ];
 
@@ -43,23 +57,7 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StorageError> {
         .iter()
         .filter(|migration| migration.version > user_version)
     {
-        transaction
-            .execute_batch(migration.sql)
-            .map_err(|_| StorageError::MigrationFailed)?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations(version, name, checksum, applied_at)
-                 VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-                (
-                    migration.version,
-                    migration.name,
-                    migration_checksum(migration),
-                ),
-            )
-            .map_err(|_| StorageError::MigrationFailed)?;
-        transaction
-            .execute_batch(&format!("PRAGMA user_version = {}", migration.version))
-            .map_err(|_| StorageError::MigrationFailed)?;
+        apply_migration_step(&transaction, migration)?;
     }
     validate_applied_migrations(&transaction, CURRENT_SCHEMA_VERSION)?;
     if has_foreign_key_violation(&transaction).map_err(|_| StorageError::MigrationFailed)? {
@@ -68,6 +66,184 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StorageError> {
     transaction
         .commit()
         .map_err(|_| StorageError::MigrationFailed)
+}
+
+/// Runs one migration's SQL, its optional Rust post-step, and records it in
+/// the ledger — the unit shared by `apply` and the `apply_through*` test
+/// helpers below.
+fn apply_migration_step(
+    transaction: &Transaction<'_>,
+    migration: &Migration,
+) -> Result<(), StorageError> {
+    transaction
+        .execute_batch(migration.sql)
+        .map_err(|_| StorageError::MigrationFailed)?;
+    if let Some(post) = migration.post {
+        post(transaction).map_err(|_| StorageError::MigrationFailed)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations(version, name, checksum, applied_at)
+             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            (
+                migration.version,
+                migration.name,
+                migration_checksum(migration),
+            ),
+        )
+        .map_err(|_| StorageError::MigrationFailed)?;
+    transaction
+        .execute_batch(&format!("PRAGMA user_version = {}", migration.version))
+        .map_err(|_| StorageError::MigrationFailed)
+}
+
+/// Applies migrations up to (and including) `max_version`, adding whichever
+/// of them are still missing from `connection`'s ledger. Lets integration
+/// tests build a fixture database pinned at an older schema version (e.g. a
+/// v2 database, to exercise the v2→v3 upgrade) without hand-maintaining a
+/// second copy of the migration SQL.
+pub fn apply_through(connection: &mut Connection, max_version: i64) -> Result<(), StorageError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Exclusive)
+        .map_err(|error| match StorageError::from(error) {
+            StorageError::PersistenceUnavailable => StorageError::PersistenceUnavailable,
+            _ => StorageError::MigrationFailed,
+        })?;
+    let user_version: i64 = transaction
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|_| StorageError::MigrationFailed)?;
+    for migration in MIGRATIONS
+        .iter()
+        .filter(|migration| migration.version > user_version && migration.version <= max_version)
+    {
+        apply_migration_step(&transaction, migration)?;
+    }
+    transaction
+        .commit()
+        .map_err(|_| StorageError::MigrationFailed)
+}
+
+/// Like [`apply_through`], but injects a failure after every migration step
+/// up to `max_version` has run — SQL, post-step, and ledger row all
+/// executed — and just before the transaction would commit. Lets a test
+/// confirm that a crash at that boundary rolls back the whole upgrade,
+/// leaving the database exactly as it was.
+pub fn apply_through_failing_before_commit(
+    connection: &mut Connection,
+    max_version: i64,
+) -> Result<(), StorageError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Exclusive)
+        .map_err(|error| match StorageError::from(error) {
+            StorageError::PersistenceUnavailable => StorageError::PersistenceUnavailable,
+            _ => StorageError::MigrationFailed,
+        })?;
+    let user_version: i64 = transaction
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|_| StorageError::MigrationFailed)?;
+    for migration in MIGRATIONS
+        .iter()
+        .filter(|migration| migration.version > user_version && migration.version <= max_version)
+    {
+        apply_migration_step(&transaction, migration)?;
+    }
+    Err(StorageError::MigrationFailed)
+}
+
+/// D2/D3 backfill for the 0003 migration: computes `host_identity` for every
+/// Printer with a Connection, archiving every Printer but the oldest in each
+/// duplicate-identity group first so the partial unique index this migration
+/// creates never sees a conflict. See "Migration 0003" in the P2 design
+/// spec.
+fn backfill_host_identity(transaction: &Transaction<'_>) -> Result<(), StorageError> {
+    struct Row {
+        id: String,
+        host: Option<String>,
+        port: Option<i64>,
+    }
+
+    let mut statement = transaction.prepare(
+        "SELECT id, json_extract(connection_json, '$.host'), json_extract(connection_json, '$.port')
+         FROM printers WHERE connection_json IS NOT NULL
+         ORDER BY created_at, CAST(id AS BLOB)",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Row {
+                id: row.get(0)?,
+                host: row.get(1)?,
+                port: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let identities: Vec<(String, Option<String>)> = rows
+        .iter()
+        .map(|row| {
+            let identity = match (&row.host, row.port) {
+                (Some(host), Some(port)) => u16::try_from(port).ok().and_then(|port| {
+                    crate::printers::host_identity::canonical_host_identity(host, port)
+                }),
+                _ => None,
+            };
+            (row.id.clone(), identity)
+        })
+        .collect();
+
+    // Group by identity, preserving the created_at/id ordering already
+    // established by the query above — the first id seen per identity is
+    // the one that keeps it.
+    let mut groups: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    for (id, identity) in &identities {
+        if let Some(identity) = identity {
+            groups
+                .entry(identity.as_str())
+                .or_default()
+                .push(id.as_str());
+        }
+    }
+
+    let now = crate::printers::now_rfc3339();
+    for ids in groups.values().filter(|ids| ids.len() > 1) {
+        let kept = ids[0];
+        for archived_id in &ids[1..] {
+            transaction.execute(
+                "UPDATE printers SET archived_at = ?2 WHERE id = ?1",
+                rusqlite::params![archived_id, now],
+            )?;
+            let details = serde_json::json!({
+                "keptPrinterId": kept,
+                "archivedPrinterId": archived_id,
+            })
+            .to_string();
+            let message = format!(
+                "Printer {archived_id} was archived during the P2 upgrade because it shares a host with Printer {kept}."
+            );
+            transaction.execute(
+                "INSERT INTO migration_warnings(id, code, source_name, source_sha256, message, details_json, created_at)
+                 VALUES (?1, 'DUPLICATE_HOST_ARCHIVED', ?2, NULL, ?3, ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    archived_id,
+                    message,
+                    details,
+                    now,
+                ],
+            )?;
+        }
+    }
+
+    for (id, identity) in &identities {
+        if let Some(identity) = identity {
+            transaction.execute(
+                "UPDATE printers SET host_identity = ?2 WHERE id = ?1",
+                rusqlite::params![id, identity],
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,0 +1,8 @@
+[
+  { "host": "Printer.Local.", "port": 7125, "expected": "printer.local:7125" },
+  { "host": "  192.168.1.20 ", "port": 80, "expected": "192.168.1.20:80" },
+  { "host": "[FE80::0001]", "port": 7125, "expected": "[fe80::1]:7125" },
+  { "host": "fe80::1", "port": 7125, "expected": "[fe80::1]:7125" },
+  { "host": "", "port": 7125, "expected": null },
+  { "host": "voron-a", "port": 7125, "expected": "voron-a:7125" }
+]

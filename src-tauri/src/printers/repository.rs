@@ -4,8 +4,15 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
 
-use super::StoredPrinter;
+use super::host_identity::canonical_host_identity;
+use super::{StartSafety, StoredPrinter};
 use crate::connections::ConnectionConfig;
+
+/// Shared column list for every `SELECT ... FROM printers` — keeps the four
+/// P2 columns (`location`, `start_safety`, `archived_at`, `host_identity`)
+/// in lockstep with `decode` across `list`/`get`/`update`/`delete`/
+/// `set_connection` instead of four separately hand-maintained strings.
+const PRINTER_COLUMNS: &str = "id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, location, start_safety, archived_at, host_identity, created_at, updated_at";
 
 pub struct PrinterRepository {
     storage: Arc<Storage>,
@@ -33,9 +40,9 @@ impl PrinterRepository {
 
     pub fn list(&self) -> Result<Vec<StoredPrinter>, StorageError> {
         self.storage.read(|connection| {
-            let mut statement = connection.prepare(
-                "SELECT id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at FROM printers ORDER BY CAST(id AS BLOB)",
-            )?;
+            let mut statement = connection.prepare(&format!(
+                "SELECT {PRINTER_COLUMNS} FROM printers ORDER BY CAST(id AS BLOB)"
+            ))?;
             let rows = statement.query_map([], decode)?.collect();
             rows
         })
@@ -45,12 +52,25 @@ impl PrinterRepository {
         self.storage.read(|connection| {
             connection
                 .query_row(
-                    "SELECT id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at FROM printers WHERE id = ?1",
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
                     [id],
                     decode,
                 )
                 .optional()
         })
+    }
+
+    /// The active (non-archived) Printer, if any, currently holding `identity`
+    /// — the repository-side half of D3's duplicate-host enforcement.
+    /// `excluding` is the printer being written, so it never conflicts with
+    /// its own not-yet-committed row.
+    pub fn find_active_by_host_identity(
+        &self,
+        identity: &str,
+        excluding: Option<&str>,
+    ) -> Result<Option<String>, StorageError> {
+        self.storage
+            .read(|connection| active_printer_with_identity(connection, identity, excluding))
     }
 
     pub fn create(&self, mut printer: StoredPrinter) -> Result<StoredPrinter, RepositoryError> {
@@ -61,10 +81,11 @@ impl PrinterRepository {
         printer.updated_at = now;
         self.storage
             .write(|transaction| {
+                precheck_duplicate_host(transaction, &printer)?;
                 insert(transaction, &printer)?;
                 Ok(printer.clone())
             })
-            .map_err(RepositoryError::Storage)
+            .map_err(duplicate_host_or_storage)
     }
 
     pub fn update(
@@ -81,7 +102,7 @@ impl PrinterRepository {
         let result = self.storage.write(|transaction| {
             let mut printer = transaction
                 .query_row(
-                    "SELECT id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at FROM printers WHERE id = ?1",
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
                     [id],
                     decode,
                 )
@@ -93,6 +114,7 @@ impl PrinterRepository {
             mutate(&mut printer);
             printer.revision += 1;
             printer.updated_at = crate::printers::now_rfc3339();
+            precheck_duplicate_host(transaction, &printer)?;
             replace(transaction, &printer)?;
             Ok(printer)
         });
@@ -112,7 +134,7 @@ impl PrinterRepository {
         let result = self.storage.write(|transaction| {
             let printer = transaction
                 .query_row(
-                    "SELECT id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at FROM printers WHERE id = ?1",
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
                     [id],
                     decode,
                 )
@@ -122,13 +144,12 @@ impl PrinterRepository {
                 return Err(StorageError::OperationFailed);
             }
             transaction.execute("DELETE FROM printers WHERE id = ?1", [id])?;
-            if let Some(reference) = printer.connection.as_ref().and_then(|connection| connection.credential_ref.as_deref()) {
-                enqueue_credential_cleanup(
-                    transaction,
-                    reference,
-                    Some(id),
-                    "printer_deleted",
-                )?;
+            if let Some(reference) = printer
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.credential_ref.as_deref())
+            {
+                enqueue_credential_cleanup(transaction, reference, Some(id), "printer_deleted")?;
             }
             Ok(printer)
         });
@@ -149,28 +170,38 @@ impl PrinterRepository {
             });
         }
         let result = self.storage.write(|transaction| {
-            let mut printer = transaction.query_row(
-                "SELECT id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at FROM printers WHERE id = ?1",
-                [id], decode,
-            ).optional()?.ok_or(StorageError::OperationFailed)?;
-            if printer.revision != expected_revision || expected_revision <= 0 { return Err(StorageError::OperationFailed); }
-            let old_reference = printer.connection.as_ref().and_then(|value| value.credential_ref.clone());
-            let new_reference = connection.as_ref().and_then(|value| value.credential_ref.clone());
+            let mut printer = transaction
+                .query_row(
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+                    [id],
+                    decode,
+                )
+                .optional()?
+                .ok_or(StorageError::OperationFailed)?;
+            if printer.revision != expected_revision || expected_revision <= 0 {
+                return Err(StorageError::OperationFailed);
+            }
+            let old_reference = printer
+                .connection
+                .as_ref()
+                .and_then(|value| value.credential_ref.clone());
+            let new_reference = connection
+                .as_ref()
+                .and_then(|value| value.credential_ref.clone());
             printer.connection = connection;
             printer.revision += 1;
             printer.updated_at = crate::printers::now_rfc3339();
+            precheck_duplicate_host(transaction, &printer)?;
             replace(transaction, &printer)?;
             if let Some(reference) = provisional_reference {
-                transaction.execute("DELETE FROM pending_credential_cleanup WHERE credential_ref=?1", [reference])?;
+                transaction.execute(
+                    "DELETE FROM pending_credential_cleanup WHERE credential_ref=?1",
+                    [reference],
+                )?;
             }
             if old_reference != new_reference {
                 if let Some(reference) = old_reference {
-                    enqueue_credential_cleanup(
-                        transaction,
-                        &reference,
-                        Some(id),
-                        removed_reason,
-                    )?;
+                    enqueue_credential_cleanup(transaction, &reference, Some(id), removed_reason)?;
                 }
             }
             Ok(printer)
@@ -239,6 +270,11 @@ fn classify_entity_write(
     id: &str,
     expected_revision: i64,
 ) -> RepositoryError {
+    if let StorageError::DuplicateHost(conflicting_printer_id) = error {
+        return RepositoryError::DuplicateHost {
+            conflicting_printer_id,
+        };
+    }
     if !matches!(error, StorageError::OperationFailed) {
         return RepositoryError::Storage(error);
     }
@@ -253,6 +289,103 @@ fn classify_entity_write(
         },
         Err(storage) => RepositoryError::Storage(storage),
     }
+}
+
+/// `create`'s error path has no expected revision to classify a conflict
+/// against, so it only needs to single out `DuplicateHost` before falling
+/// back to a plain storage error.
+fn duplicate_host_or_storage(error: StorageError) -> RepositoryError {
+    match error {
+        StorageError::DuplicateHost(conflicting_printer_id) => RepositoryError::DuplicateHost {
+            conflicting_printer_id,
+        },
+        other => RepositoryError::Storage(other),
+    }
+}
+
+/// D3: no two non-archived Printers may share a host identity. Checked
+/// inside the write transaction before every insert/replace; the partial
+/// unique index created by migration 0003 is the backstop (see
+/// `is_host_identity_violation`/`map_write_error`) for anything that skips
+/// this precheck.
+fn precheck_duplicate_host(
+    transaction: &rusqlite::Transaction<'_>,
+    printer: &StoredPrinter,
+) -> Result<(), StorageError> {
+    if printer.archived_at.is_some() {
+        return Ok(());
+    }
+    let Some(identity) = connection_host_identity(printer) else {
+        return Ok(());
+    };
+    if let Some(conflicting_id) =
+        active_printer_with_identity(transaction, &identity, Some(&printer.id))?
+    {
+        return Err(StorageError::DuplicateHost(conflicting_id));
+    }
+    Ok(())
+}
+
+fn connection_host_identity(printer: &StoredPrinter) -> Option<String> {
+    printer
+        .connection
+        .as_ref()
+        .and_then(|connection| canonical_host_identity(&connection.host, connection.port))
+}
+
+fn active_printer_with_identity(
+    connection: &rusqlite::Connection,
+    identity: &str,
+    excluding: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT id FROM printers
+             WHERE host_identity = ?1 AND archived_at IS NULL AND (?2 IS NULL OR id != ?2)
+             LIMIT 1",
+            params![identity, excluding],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+}
+
+/// Whether `error` is the partial unique index (`printers_active_host_identity`,
+/// migration 0003) rejecting a write — SQLite's own message for it names the
+/// column, not the (partial) index, so matching on `host_identity` is what
+/// distinguishes it from any other constraint failure (e.g. the `id` primary
+/// key, or the `location`/`start_safety` CHECK constraints).
+fn is_host_identity_violation(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, Some(message))
+            if code.code == rusqlite::ErrorCode::ConstraintViolation
+                && message.contains("host_identity")
+    )
+}
+
+/// Backstop for `precheck_duplicate_host`: if a write still hits the
+/// partial unique index (e.g. a caller that skips the precheck, such as
+/// `replace_all`'s import path), look up who holds the identity in the same
+/// transaction rather than surface a bare constraint error. Per ruling R1,
+/// this reuses `StorageError::DuplicateHost` rather than adding a separate
+/// constraint-error variant.
+fn map_write_error(
+    transaction: &rusqlite::Transaction<'_>,
+    error: rusqlite::Error,
+    identity: Option<&str>,
+    excluding_id: &str,
+) -> StorageError {
+    if is_host_identity_violation(&error) {
+        if let Some(identity) = identity {
+            let conflicting_id =
+                active_printer_with_identity(transaction, identity, Some(excluding_id))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+            return StorageError::DuplicateHost(conflicting_id);
+        }
+    }
+    StorageError::from(error)
 }
 
 fn cleanup_precedence(reason: &str) -> Option<u8> {
@@ -313,10 +446,15 @@ fn validate_id(id: &str) -> Result<(), StorageError> {
     }
 }
 
+/// Column order matches `PRINTER_COLUMNS`. `host_identity` (index 15) is
+/// selected for consistency with `insert`/`replace` but never decoded onto
+/// `StoredPrinter` — it's derived from `connection` on every write, never a
+/// field callers set directly.
 fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredPrinter> {
     let overrides: String = row.get(9)?;
     let last_known_good: Option<String> = row.get(10)?;
     let connection: Option<String> = row.get(11)?;
+    let start_safety: String = row.get(13)?;
     Ok(StoredPrinter {
         id: row.get(0)?,
         revision: row.get(1)?,
@@ -356,51 +494,134 @@ fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredPrinter> {
                     Box::new(error),
                 )
             })?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        location: row.get(12)?,
+        start_safety: decode_start_safety(&start_safety).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                13,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        archived_at: row.get(14)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
     })
 }
 
-fn values(
-    printer: &StoredPrinter,
-) -> Result<(String, Option<String>, Option<String>), StorageError> {
-    Ok((
-        serde_json::to_string(&printer.overrides).map_err(|_| StorageError::OperationFailed)?,
-        printer
+/// `start_safety` round-trips through `StoredPrinter`/`StartSafety`'s own
+/// serde camelCase mapping rather than a hand-maintained string match, so
+/// the DB text and the wire representation can never drift apart.
+fn decode_start_safety(text: &str) -> Result<StartSafety, serde_json::Error> {
+    serde_json::from_value(serde_json::Value::String(text.to_string()))
+}
+
+fn encode_start_safety(value: StartSafety) -> String {
+    match serde_json::to_value(value).expect("StartSafety always serializes") {
+        serde_json::Value::String(text) => text,
+        other => unreachable!("StartSafety serializes to a string, got {other:?}"),
+    }
+}
+
+struct PrinterColumnValues {
+    overrides: String,
+    last_known_good: Option<String>,
+    connection: Option<String>,
+    host_identity: Option<String>,
+    start_safety: String,
+}
+
+fn values(printer: &StoredPrinter) -> Result<PrinterColumnValues, StorageError> {
+    Ok(PrinterColumnValues {
+        overrides: serde_json::to_string(&printer.overrides)
+            .map_err(|_| StorageError::OperationFailed)?,
+        last_known_good: printer
             .last_known_good
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
             .map_err(|_| StorageError::OperationFailed)?,
-        printer
+        connection: printer
             .connection
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
             .map_err(|_| StorageError::OperationFailed)?,
-    ))
+        host_identity: connection_host_identity(printer),
+        start_safety: encode_start_safety(printer.start_safety),
+    })
 }
 
 fn insert(
     transaction: &rusqlite::Transaction<'_>,
     printer: &StoredPrinter,
 ) -> Result<(), StorageError> {
-    let (overrides, last_known_good, connection) = values(printer)?;
-    transaction.execute(
-        "INSERT INTO printers(id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-        params![printer.id, printer.revision, printer.name, printer.catalog_ref.vendor, printer.catalog_ref.model, printer.catalog_ref.variant, printer.catalog_ref.model_id, printer.catalog_ref.printer_variant, printer.notes, overrides, last_known_good, connection, printer.created_at, printer.updated_at],
-    )?;
-    Ok(())
+    let columns = values(printer)?;
+    let result = transaction.execute(
+        "INSERT INTO printers(id, revision, name, catalog_vendor, catalog_model, catalog_variant, catalog_model_id, catalog_printer_variant, notes, overrides_json, last_known_good_json, connection_json, location, start_safety, archived_at, host_identity, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        params![
+            printer.id,
+            printer.revision,
+            printer.name,
+            printer.catalog_ref.vendor,
+            printer.catalog_ref.model,
+            printer.catalog_ref.variant,
+            printer.catalog_ref.model_id,
+            printer.catalog_ref.printer_variant,
+            printer.notes,
+            columns.overrides,
+            columns.last_known_good,
+            columns.connection,
+            printer.location,
+            columns.start_safety,
+            printer.archived_at,
+            columns.host_identity,
+            printer.created_at,
+            printer.updated_at,
+        ],
+    );
+    result.map(|_| ()).map_err(|error| {
+        map_write_error(
+            transaction,
+            error,
+            columns.host_identity.as_deref(),
+            &printer.id,
+        )
+    })
 }
 
 fn replace(
     transaction: &rusqlite::Transaction<'_>,
     printer: &StoredPrinter,
 ) -> Result<(), StorageError> {
-    let (overrides, last_known_good, connection) = values(printer)?;
-    transaction.execute(
-        "UPDATE printers SET revision=?2, name=?3, catalog_vendor=?4, catalog_model=?5, catalog_variant=?6, catalog_model_id=?7, catalog_printer_variant=?8, notes=?9, overrides_json=?10, last_known_good_json=?11, connection_json=?12, updated_at=?13 WHERE id=?1",
-        params![printer.id, printer.revision, printer.name, printer.catalog_ref.vendor, printer.catalog_ref.model, printer.catalog_ref.variant, printer.catalog_ref.model_id, printer.catalog_ref.printer_variant, printer.notes, overrides, last_known_good, connection, printer.updated_at],
-    )?;
-    Ok(())
+    let columns = values(printer)?;
+    let result = transaction.execute(
+        "UPDATE printers SET revision=?2, name=?3, catalog_vendor=?4, catalog_model=?5, catalog_variant=?6, catalog_model_id=?7, catalog_printer_variant=?8, notes=?9, overrides_json=?10, last_known_good_json=?11, connection_json=?12, location=?13, start_safety=?14, archived_at=?15, host_identity=?16, updated_at=?17 WHERE id=?1",
+        params![
+            printer.id,
+            printer.revision,
+            printer.name,
+            printer.catalog_ref.vendor,
+            printer.catalog_ref.model,
+            printer.catalog_ref.variant,
+            printer.catalog_ref.model_id,
+            printer.catalog_ref.printer_variant,
+            printer.notes,
+            columns.overrides,
+            columns.last_known_good,
+            columns.connection,
+            printer.location,
+            columns.start_safety,
+            printer.archived_at,
+            columns.host_identity,
+            printer.updated_at,
+        ],
+    );
+    result.map(|_| ()).map_err(|error| {
+        map_write_error(
+            transaction,
+            error,
+            columns.host_identity.as_deref(),
+            &printer.id,
+        )
+    })
 }

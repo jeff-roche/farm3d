@@ -8,7 +8,15 @@ pub mod validation;
 pub use database::{FailurePoint, MetadataRootLease, Storage, StoragePaths};
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
+pub use migrations::CURRENT_SCHEMA_VERSION;
 pub use snapshot::{SnapshotKind, ValidationSummary};
+
+/// Migration internals integration tests need to build a fixture database
+/// pinned at an older schema version (e.g. a v2 database, to exercise the
+/// v2→v3 upgrade) without duplicating the migration SQL.
+pub mod test_support {
+    pub use super::migrations::{apply_through, apply_through_failing_before_commit};
+}
 
 #[cfg(test)]
 mod tests {
@@ -186,7 +194,7 @@ mod tests {
             })
             .expect("schema state");
 
-        assert_eq!(state, (2_i64, 0_i64));
+        assert_eq!(state, (3_i64, 0_i64));
     }
 
     #[test]
@@ -236,7 +244,7 @@ mod tests {
             })
             .expect("migrated state");
 
-        assert_eq!(state.0, 2_i64);
+        assert_eq!(state.0, 3_i64);
         assert_eq!(
             state.1,
             (
@@ -266,7 +274,7 @@ mod tests {
             })
             .expect("migration count");
 
-        assert_eq!(migration_count, 2_i64);
+        assert_eq!(migration_count, 3_i64);
     }
 
     #[test]
@@ -484,7 +492,7 @@ mod tests {
         drop(Storage::open(paths.clone(), &lease).expect("first open"));
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
-            .execute_batch("PRAGMA user_version = 3")
+            .execute_batch("PRAGMA user_version = 4")
             .expect("future version");
         drop(connection);
 
@@ -1161,6 +1169,7 @@ mod tests {
             (
                 vec![
                     ("index", "migration_warnings_dedup"),
+                    ("index", "printers_active_host_identity"),
                     ("table", "legacy_imports"),
                     ("table", "migration_warnings"),
                     ("table", "pending_credential_cleanup"),
@@ -1316,6 +1325,17 @@ mod tests {
             ("printers", "connection_json", "TEXT", 0, None, 0),
             ("printers", "created_at", "TEXT", 1, None, 0),
             ("printers", "updated_at", "TEXT", 1, None, 0),
+            ("printers", "location", "TEXT", 0, None, 0),
+            (
+                "printers",
+                "start_safety",
+                "TEXT",
+                1,
+                Some("'confirmBedClear'"),
+                0,
+            ),
+            ("printers", "archived_at", "TEXT", 0, None, 0),
+            ("printers", "host_identity", "TEXT", 0, None, 0),
             ("schema_migrations", "version", "INTEGER", 0, None, 1),
             ("schema_migrations", "name", "TEXT", 1, None, 0),
             ("schema_migrations", "checksum", "TEXT", 1, None, 0),
@@ -1363,7 +1383,10 @@ mod tests {
     }
 
     #[test]
-    fn printers_schema_has_no_group_or_later_domain_columns() {
+    fn printers_schema_has_no_batch_or_later_domain_columns() {
+        // Pins the printers columns to exactly the P1 baseline plus P2's
+        // lifecycle/host-identity columns (0003) — a guard against a later
+        // phase's columns (e.g. batch setup) landing early.
         let (_temp, _paths, _lease, storage) = open_storage();
 
         let columns = storage
@@ -1393,6 +1416,10 @@ mod tests {
                 "connection_json",
                 "created_at",
                 "updated_at",
+                "location",
+                "start_safety",
+                "archived_at",
+                "host_identity",
             ]
         );
     }
@@ -1646,7 +1673,7 @@ mod tests {
             .expect("snapshot");
         let connection = rusqlite::Connection::open(snapshot.path()).expect("snapshot database");
         connection
-            .execute_batch("PRAGMA user_version = 3")
+            .execute_batch("PRAGMA user_version = 4")
             .expect("future schema");
         drop(connection);
 

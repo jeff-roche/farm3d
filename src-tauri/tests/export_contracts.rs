@@ -37,7 +37,7 @@ use farm3d_lib::printers::operational::{
     ReadinessReason, ReadinessState, TelemetryFreshness,
 };
 use farm3d_lib::printers::LastKnownGood;
-use farm3d_lib::printers::{CatalogRef, PrinterPatch};
+use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
@@ -225,6 +225,7 @@ fn export_registry() -> Vec<Export> {
         export::<LastKnownGood>(),
         export::<ResolvedPrinter>(),
         export::<PrinterPatch>(),
+        export::<StartSafety>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),

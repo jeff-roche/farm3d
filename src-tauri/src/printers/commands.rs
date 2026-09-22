@@ -660,6 +660,12 @@ fn export_printer(printer: &super::StoredPrinter) -> Result<serde_json::Value, C
     object.remove("group");
     object.remove("createdAt");
     object.remove("updatedAt");
+    // P2's lifecycle columns (location/startSafety/archivedAt) aren't part
+    // of this schemaVersion-1 document shape yet — a later task's command
+    // surface change decides how/when to add them to export/import.
+    object.remove("location");
+    object.remove("startSafety");
+    object.remove("archivedAt");
     object
         .entry("overrides")
         .or_insert_with(|| serde_json::json!({}));

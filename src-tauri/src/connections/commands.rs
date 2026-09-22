@@ -56,7 +56,7 @@ pub struct ConnectionCommit {
 fn storage_command_error(error: crate::persistence::StorageError) -> CommandError {
     match error {
         crate::persistence::StorageError::UnsupportedSchemaVersion => {
-            CommandError::unsupported_schema(2)
+            CommandError::unsupported_schema(crate::persistence::CURRENT_SCHEMA_VERSION)
         }
         crate::persistence::StorageError::MigrationFailed => CommandError::migration_failed(),
         crate::persistence::StorageError::CorruptData { .. } => CommandError::database_corrupt(),
@@ -69,6 +69,11 @@ fn storage_command_error(error: crate::persistence::StorageError) -> CommandErro
         | crate::persistence::StorageError::OperationFailed => {
             CommandError::persistence_unavailable()
         }
+        // Reached only on a write path (insert/replace); every call site
+        // here reads through `PrinterRepository::get`, which never produces
+        // it. Writes go through `RepositoryError` -> `CommandError::from_repository`
+        // instead, which maps this to `ErrorCode::DuplicateHost` properly.
+        crate::persistence::StorageError::DuplicateHost(_) => CommandError::internal(),
     }
 }
 

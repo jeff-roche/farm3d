@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 pub mod commands;
+pub mod host_identity;
 pub mod operational;
 pub mod repository;
 
@@ -39,10 +40,32 @@ pub struct StoredPrinter {
     /// never here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<crate::connections::ConnectionConfig>,
+    /// A free-text bay/room label (P2 D-series). Never derived — set by the
+    /// user during single or batch setup.
+    #[serde(default)]
+    pub location: Option<String>,
+    /// Whether a start requires bed-clear confirmation. P2 stores and
+    /// surfaces this; enforcement is a later phase (see D5).
+    #[serde(default)]
+    pub start_safety: StartSafety,
+    /// Set once, by `archive_printer` (D6). An archived Printer keeps its
+    /// Connection and data but is excluded from supervision and the
+    /// Monitor's default view.
+    #[serde(default)]
+    pub archived_at: Option<String>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/StartSafety.ts")]
+pub enum StartSafety {
+    #[default]
+    ConfirmBedClear,
+    Unattended,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
@@ -276,6 +299,7 @@ pub fn create_printer_legacy<R: tauri::Runtime>(
         connection: None,
         created_at: String::new(),
         updated_at: String::new(),
+        ..Default::default()
     };
 
     let resolved = resolve_printer(&catalog, &stored);
@@ -590,6 +614,7 @@ mod tests {
             connection: None,
             created_at: String::new(),
             updated_at: String::new(),
+            ..Default::default()
         }
     }
 
