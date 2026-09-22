@@ -8,6 +8,7 @@ use farm3d_lib::document_io::{DocumentIo, DocumentKind};
 use farm3d_lib::persistence::{FailurePoint, MetadataRootLease, Storage, StoragePaths};
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::{CatalogRef, StoredPrinter};
+use farm3d_lib::settings::commands::{MonitorDensity, MonitorSection};
 use farm3d_lib::settings::repository::SettingsRepository;
 use farm3d_lib::RuntimeServices;
 use serde_json::{json, Value};
@@ -104,7 +105,12 @@ fn settings_runtime(
     let catalog_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
-    let manager = Arc::new(ConnectionManager::new(app.handle().clone()));
+    let manager = Arc::new(ConnectionManager::new(
+        app.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
+    ));
     app.manage(BootstrapState::ready_with(Arc::new(
         RuntimeServices::for_test(storage, catalog, manager, documents),
     )));
@@ -186,7 +192,12 @@ fn printers_runtime(
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
-    let manager = Arc::new(ConnectionManager::new(app.handle().clone()));
+    let manager = Arc::new(ConnectionManager::new(
+        app.handle().clone(),
+        Arc::new(
+            farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&storage)),
+        ),
+    ));
     app.manage(BootstrapState::ready_with(Arc::new(
         RuntimeServices::for_test(storage, catalog, Arc::clone(&manager), documents),
     )));
@@ -254,7 +265,12 @@ fn settings_import_maps_read_snapshot_validation_and_stale_failures_without_writ
                 let storage = Arc::clone(&storage);
                 *documents.after_snapshot.lock().unwrap() = Some(Box::new(move || {
                     SettingsRepository::new(storage)
-                        .save(1, "farm3d-light")
+                        .save(
+                            1,
+                            "farm3d-light",
+                            MonitorSection::PrinterModel,
+                            MonitorDensity::Comfortable,
+                        )
                         .unwrap();
                 }));
             }
@@ -447,7 +463,11 @@ fn printers_export_io_failure_is_structured_and_post_commit_supervisor_failure_i
     assert_eq!(PrinterRepository::new(storage).list().unwrap().len(), 1);
     assert_eq!(
         manager.statuses()["future-adapter"].connection_state,
-        farm3d_lib::connections::ConnectionState::Error
+        farm3d_lib::connections::ConnectionState::Offline
+    );
+    assert_eq!(
+        manager.statuses()["future-adapter"].operational_state,
+        farm3d_lib::printers::operational::OperationalState::SetupIncomplete
     );
 }
 

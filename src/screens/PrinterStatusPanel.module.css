@@ -1,24 +1,7 @@
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.label {
-  font-family: var(--f3d-type-label-font);
-  font-size: var(--f3d-type-label-size);
-  font-weight: var(--f3d-type-label-weight);
-  letter-spacing: var(--f3d-type-label-tracking);
-  color: var(--f3d-color-text-muted);
-  text-transform: uppercase;
-}
-
-.muted {
-  color: var(--f3d-color-text-disabled);
-}
+.panel { display: flex; flex-direction: column; gap: 0.75rem; }
+.summary, .sync { margin: 0; color: var(--f3d-color-text-muted); font-family: var(--f3d-type-body-small-font); font-size: var(--f3d-type-body-small-size); }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin: 0; }
+.field { min-width: 0; }
+.field dt { color: var(--f3d-color-text-muted); font-family: var(--f3d-type-label-font); font-size: var(--f3d-type-label-size); font-weight: var(--f3d-type-label-weight); letter-spacing: var(--f3d-type-label-tracking); }
+.field dd { margin: 0.25rem 0 0; overflow-wrap: anywhere; color: var(--f3d-color-text); font-family: var(--f3d-type-body-small-font); font-size: var(--f3d-type-body-small-size); }
+.sync:empty { display: none; }

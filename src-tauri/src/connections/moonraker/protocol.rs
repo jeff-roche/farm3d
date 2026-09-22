@@ -2,9 +2,9 @@
 //! sockets, no async, no Tauri. Everything here is a function of its input,
 //! which is what makes the merge semantics below testable without a printer.
 
-use crate::connections::{
-    ConnectionState, PrinterStatus, ProbeResult, ReportedCapabilities,
-};
+use crate::connections::status_repository::PrinterTelemetry;
+use crate::connections::{ProbeResult, ReportedCapabilities};
+use crate::printers::operational::HostActivity;
 use serde_json::{json, Value};
 
 /// One decoded inbound frame. Anything farm3d does not act on decodes to
@@ -14,8 +14,15 @@ use serde_json::{json, Value};
 /// disconnects constantly.
 #[derive(Debug)]
 pub enum Frame {
-    Response { id: u64, result: Value },
-    Error { id: u64, message: String, code: Option<i64> },
+    Response {
+        id: u64,
+        result: Value,
+    },
+    Error {
+        id: u64,
+        message: String,
+        code: Option<i64>,
+    },
     StatusUpdate(Value),
     KlippyReady,
     KlippyDown,
@@ -82,7 +89,10 @@ pub fn parse_frame(raw: &str) -> Frame {
         };
     }
     match value.get("result") {
-        Some(result) => Frame::Response { id, result: result.clone() },
+        Some(result) => Frame::Response {
+            id,
+            result: result.clone(),
+        },
         None => Frame::Ignored,
     }
 }
@@ -100,14 +110,20 @@ pub struct StatusSnapshot {
 
 impl StatusSnapshot {
     pub fn merge(&mut self, update: &Value) {
-        let Some(update) = update.as_object() else { return };
+        let Some(update) = update.as_object() else {
+            return;
+        };
         for (object_name, attributes) in update {
-            let Some(attributes) = attributes.as_object() else { continue };
+            let Some(attributes) = attributes.as_object() else {
+                continue;
+            };
             let entry = self
                 .objects
                 .entry(object_name.clone())
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            let Some(entry) = entry.as_object_mut() else { continue };
+            let Some(entry) = entry.as_object_mut() else {
+                continue;
+            };
             for (attribute, value) in attributes {
                 entry.insert(attribute.clone(), value.clone());
             }
@@ -119,7 +135,13 @@ impl StatusSnapshot {
     }
 
     fn string(&self, object: &str, attribute: &str) -> Option<String> {
-        Some(self.objects.get(object)?.get(attribute)?.as_str()?.to_string())
+        Some(
+            self.objects
+                .get(object)?
+                .get(attribute)?
+                .as_str()?
+                .to_string(),
+        )
     }
 
     /// Reads one axis extent. The arrays are `[x, y, z, e]` where the 4th
@@ -127,8 +149,16 @@ impl StatusSnapshot {
     /// never by length.
     fn axis_span(&self, index: usize) -> Option<f64> {
         let toolhead = self.objects.get("toolhead")?;
-        let min = toolhead.get("axis_minimum")?.as_array()?.get(index)?.as_f64()?;
-        let max = toolhead.get("axis_maximum")?.as_array()?.get(index)?.as_f64()?;
+        let min = toolhead
+            .get("axis_minimum")?
+            .as_array()?
+            .get(index)?
+            .as_f64()?;
+        let max = toolhead
+            .get("axis_maximum")?
+            .as_array()?
+            .get(index)?
+            .as_f64()?;
         Some(max - min)
     }
 
@@ -140,22 +170,42 @@ impl StatusSnapshot {
         }
     }
 
-    pub fn to_status(&self, connection_state: ConnectionState) -> PrinterStatus {
-        let mut status = PrinterStatus::new(connection_state);
-        status.nozzle_temp_c = self.number("extruder", "temperature");
-        status.nozzle_target_c = self.number("extruder", "target");
-        status.bed_temp_c = self.number("heater_bed", "temperature");
-        status.bed_target_c = self.number("heater_bed", "target");
-        status.job_state = self.string("print_stats", "state");
-        status.job_name = self.string("print_stats", "filename");
-        status.print_duration_s = self.number("print_stats", "print_duration");
-        status.progress = self.number("display_status", "progress");
-        status
+    pub fn to_telemetry(&self) -> PrinterTelemetry {
+        let host_activity_name = self.string("print_stats", "state");
+        PrinterTelemetry {
+            host_activity: host_activity_name
+                .as_deref()
+                .map(normalize_host_activity)
+                .unwrap_or(HostActivity::Unknown),
+            host_activity_name,
+            job_name: self.string("print_stats", "filename"),
+            progress: self.number("display_status", "progress"),
+            nozzle_temp_c: self.number("extruder", "temperature"),
+            nozzle_target_c: self.number("extruder", "target"),
+            bed_temp_c: self.number("heater_bed", "temperature"),
+            bed_target_c: self.number("heater_bed", "target"),
+            print_duration_s: self.number("print_stats", "print_duration"),
+        }
+    }
+}
+
+/// Converts Moonraker activity strings before they cross the adapter boundary.
+pub fn normalize_host_activity(value: &str) -> HostActivity {
+    match value {
+        "standby" | "ready" | "idle" => HostActivity::Idle,
+        "printing" => HostActivity::Printing,
+        "paused" => HostActivity::Paused,
+        "busy" => HostActivity::Busy,
+        _ => HostActivity::Unknown,
     }
 }
 
 fn str_field(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn probe_result_from(
@@ -197,12 +247,20 @@ mod tests {
         let mut snapshot = snapshot_with_both_heaters();
         snapshot.merge(&serde_json::json!({"extruder": {"temperature": 201.4}}));
 
-        let status = snapshot.to_status(ConnectionState::Online);
-        assert_eq!(status.nozzle_temp_c, Some(201.4));
-        assert_eq!(status.bed_temp_c, Some(60.1), "bed temperature was blanked by a nozzle-only update");
-        assert_eq!(status.nozzle_target_c, Some(210.0), "nozzle target was blanked by a temperature-only update");
-        assert_eq!(status.job_name, Some("benchy.gcode".to_string()));
-        assert_eq!(status.progress, Some(0.25));
+        let telemetry = snapshot.to_telemetry();
+        assert_eq!(telemetry.nozzle_temp_c, Some(201.4));
+        assert_eq!(
+            telemetry.bed_temp_c,
+            Some(60.1),
+            "bed temperature was blanked by a nozzle-only update"
+        );
+        assert_eq!(
+            telemetry.nozzle_target_c,
+            Some(210.0),
+            "nozzle target was blanked by a temperature-only update"
+        );
+        assert_eq!(telemetry.job_name, Some("benchy.gcode".to_string()));
+        assert_eq!(telemetry.progress, Some(0.25));
     }
 
     #[test]
@@ -212,16 +270,29 @@ mod tests {
         // next Klipper release.
         let mut snapshot = snapshot_with_both_heaters();
         snapshot.merge(&serde_json::json!({"fan": {"speed": 1.0}, "mcu": {"last_stats": {}}}));
-        assert_eq!(snapshot.to_status(ConnectionState::Online).bed_temp_c, Some(60.1));
+        assert_eq!(snapshot.to_telemetry().bed_temp_c, Some(60.1));
     }
 
     #[test]
     fn an_empty_snapshot_reports_no_readings_rather_than_zeroes() {
-        let status = StatusSnapshot::default().to_status(ConnectionState::Connecting);
-        assert_eq!(status.nozzle_temp_c, None);
-        assert_eq!(status.bed_temp_c, None);
-        assert_eq!(status.job_state, None);
-        assert_eq!(status.connection_state, ConnectionState::Connecting);
+        let telemetry = StatusSnapshot::default().to_telemetry();
+        assert_eq!(telemetry.nozzle_temp_c, None);
+        assert_eq!(telemetry.bed_temp_c, None);
+        assert_eq!(telemetry.host_activity, HostActivity::Unknown);
+    }
+
+    #[test]
+    fn normalizes_moonraker_activity_inside_the_adapter_boundary() {
+        use crate::printers::operational::HostActivity;
+
+        assert_eq!(normalize_host_activity("standby"), HostActivity::Idle);
+        assert_eq!(normalize_host_activity("printing"), HostActivity::Printing);
+        assert_eq!(normalize_host_activity("paused"), HostActivity::Paused);
+        assert_eq!(normalize_host_activity("busy"), HostActivity::Busy);
+        assert_eq!(
+            normalize_host_activity("moonraker-future-state"),
+            HostActivity::Unknown
+        );
     }
 
     #[test]
@@ -266,7 +337,9 @@ mod tests {
             }
             other => panic!("expected a Response, got {other:?}"),
         }
-        match parse_frame(r#"{"jsonrpc":"2.0","error":{"code":401,"message":"Unauthorized"},"id":2}"#) {
+        match parse_frame(
+            r#"{"jsonrpc":"2.0","error":{"code":401,"message":"Unauthorized"},"id":2}"#,
+        ) {
             Frame::Error { id, message, code } => {
                 assert_eq!(id, 2);
                 assert_eq!(code, Some(401));
@@ -278,7 +351,10 @@ mod tests {
 
     #[test]
     fn unrecognized_frames_are_ignored_not_errors() {
-        assert!(matches!(parse_frame(r#"{"jsonrpc":"2.0","method":"notify_gcode_response","params":["ok"]}"#), Frame::Ignored));
+        assert!(matches!(
+            parse_frame(r#"{"jsonrpc":"2.0","method":"notify_gcode_response","params":["ok"]}"#),
+            Frame::Ignored
+        ));
         assert!(matches!(parse_frame("this is not json"), Frame::Ignored));
     }
 
@@ -303,12 +379,16 @@ mod tests {
         assert_eq!(parsed["jsonrpc"], "2.0");
         assert_eq!(parsed["method"], "printer.info");
         assert_eq!(parsed["id"], 7);
-        assert!(parsed.get("params").is_none(), "a params-less call must omit params entirely");
+        assert!(
+            parsed.get("params").is_none(),
+            "a params-less call must omit params entirely"
+        );
     }
 
     #[test]
     fn probe_reads_the_build_volume_from_axis_limits() {
-        let server_info = serde_json::json!({"klippy_state": "ready", "moonraker_version": "v0.9.3"});
+        let server_info =
+            serde_json::json!({"klippy_state": "ready", "moonraker_version": "v0.9.3"});
         let printer_info = serde_json::json!({
             "hostname": "voron", "software_version": "v0.12.0-85-gd785b396",
             "state": "ready", "state_message": "Printer is ready"

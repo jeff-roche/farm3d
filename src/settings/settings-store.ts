@@ -1,12 +1,24 @@
 import { command, desktopAvailable } from "../ipc/client";
 import type { SettingsRecord } from "../generated/contracts/domain/SettingsRecord";
+import type { MonitorDensity } from "../generated/contracts/domain/MonitorDensity";
+import type { MonitorSection } from "../generated/contracts/domain/MonitorSection";
 import type { SettingsExportOutcome } from "../generated/contracts/command/SettingsExportOutcome";
 import type { SettingsImportOutcome } from "../generated/contracts/command/SettingsImportOutcome";
 import type { ThemeMode } from "../design-system/theme-engine";
 
-export type Settings = Omit<SettingsRecord, "themeMode"> & { themeMode: ThemeMode };
+export type Settings = Omit<SettingsRecord, "themeMode" | "monitorSection" | "monitorDensity"> & {
+  themeMode: ThemeMode;
+  monitorSection: MonitorSection;
+  monitorDensity: MonitorDensity;
+};
 
-const DEFAULT_SETTINGS: Settings = { revision: 1, themeMode: "system", updatedAt: "" };
+const DEFAULT_SETTINGS: Settings = {
+  revision: 1,
+  themeMode: "system",
+  monitorSection: "printerModel",
+  monitorDensity: "comfortable",
+  updatedAt: "",
+};
 
 let cached: Settings | null = null;
 
@@ -49,6 +61,8 @@ export async function updateSettings(partial: Partial<Settings>): Promise<void> 
   cached = await command("save_settings", {
     expectedRevision: next.revision,
     themeMode: next.themeMode,
+    monitorSection: next.monitorSection,
+    monitorDensity: next.monitorDensity,
   });
 }
 

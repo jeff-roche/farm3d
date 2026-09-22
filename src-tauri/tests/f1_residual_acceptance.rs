@@ -361,12 +361,9 @@ fn submitted_secret_sentinel_is_confined_to_the_injected_credential_store() {
             kind: "printer".to_string(),
             id: printer.id,
         },
-        payload: farm3d_lib::contracts::domain::PrinterStatus {
-            connection_state: "error".to_string(),
-            updated_at: "2026-09-17T00:00:00Z".to_string(),
-            error: Some("The credential store is temporarily unavailable.".to_string()),
-            telemetry: None,
-        },
+        payload: farm3d_lib::connections::PrinterStatus::errored(
+            "The credential store is temporarily unavailable.",
+        ),
     })
     .unwrap();
     for (label, bytes) in [("response", response), ("error", error), ("event", event)] {

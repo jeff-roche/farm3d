@@ -3,6 +3,7 @@ use std::sync::Arc;
 use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::{CatalogRef, PrinterProfileOverrides, StoredPrinter};
+use farm3d_lib::settings::commands::{MonitorDensity, MonitorSection};
 use farm3d_lib::settings::repository::SettingsRepository;
 
 fn storage() -> (tempfile::TempDir, MetadataRootLease, Arc<Storage>) {
@@ -38,9 +39,23 @@ fn repositories_persist_revisions_and_detect_stale_updates() {
 
     let initial = settings.ensure_default().unwrap();
     assert_eq!(initial.revision, 1);
-    let saved = settings.save(initial.revision, "farm3d-dark").unwrap();
+    let saved = settings
+        .save(
+            initial.revision,
+            "farm3d-dark",
+            MonitorSection::PrinterModel,
+            MonitorDensity::Comfortable,
+        )
+        .unwrap();
     assert_eq!(saved.revision, 2);
-    assert!(settings.save(1, "system").is_err());
+    assert!(settings
+        .save(
+            1,
+            "system",
+            MonitorSection::PrinterModel,
+            MonitorDensity::Comfortable,
+        )
+        .is_err());
 
     let created = printers.create(printer("prn-a")).unwrap();
     assert_eq!(created.revision, 1);

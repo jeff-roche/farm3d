@@ -5,7 +5,9 @@
   align-items: center;
   gap: 0.25rem;
   width: 3rem;
+  min-height: 0;
   padding: 0.5rem 0;
+  flex-shrink: 0;
   background-color: var(--f3d-color-surface);
   border-right: 1px solid var(--f3d-color-border);
 }

@@ -1,4 +1,5 @@
-import { createStore } from "solid-js/store";
+import { createSignal } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
@@ -43,12 +44,18 @@ const [state, setState] = createStore<PrinterStoreState>({
   error: null,
   retryable: false,
 });
+let statusStore: ReturnType<typeof createPrinterStatusStore> | undefined;
+const [statusStoreRevision, setStatusStoreRevision] = createSignal(0);
 
 /** Reactive getter — read inside JSX/createMemo for Solid to track it. */
 export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
+export const printerStatusSyncState = () => {
+  statusStoreRevision();
+  return statusStore?.syncState() ?? "syncing";
+};
 
 /**
  * Mutations report failures into `state.error` (surfaced by App's banner)
@@ -151,6 +158,7 @@ export async function loadPrinters(): Promise<void> {
   try {
     const loaded = (await command("list_printers")).map(resolvePrinterRecord);
     setState({ printers: loaded, status: "ready", error: null, retryable: false });
+    statusStore?.prune();
   } catch (e) {
     setState({
       status: "error",
@@ -177,6 +185,7 @@ function spliceResolved(resolved: ResolvedPrinter): void {
 
 function removeById(id: string): void {
   setState("printers", (list) => list.filter((p) => p.id !== id));
+  statusStore?.prune();
 }
 
 export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
@@ -351,7 +360,13 @@ export async function importPrinters(): Promise<PrintersImportOutcome | undefine
         .sort((left, right) => compareUtf8(left.id, right.id)),
     });
     if (result.status === "applied") {
-      setState("printers", result.printers.map(resolvePrinterRecord));
+      const runtimeStatuses = new Map(state.printers.map((printer) => [printer.id, printer.runtimeStatus]));
+      setState("printers", result.printers.map((record) => {
+        const resolved = resolvePrinterRecord(record);
+        const runtimeStatus = runtimeStatuses.get(resolved.id);
+        return runtimeStatus === undefined ? resolved : { ...resolved, runtimeStatus };
+      }));
+      statusStore?.prune();
     }
     return result;
   } catch (e) {
@@ -366,20 +381,41 @@ export function applyStatus(id: string, status: PrinterStatus): void {
   setState("printers", (p) => p.id === id, "runtimeStatus", status);
 }
 
+export function removeStatus(id: string): void {
+  setState("printers", (printer) => printer.id === id, produce((printer) => {
+    delete printer.runtimeStatus;
+  }));
+}
+
 /** Subscribes to the supervisor's status events, then backfills whatever it
  *  already knows — a printer that came online before this listener attached
  *  would otherwise show nothing until its next change. Returns an unlisten fn. */
 export async function startStatusListener(): Promise<() => void> {
   if (!desktopAvailable()) return () => {};
-  const { listen } = await import("@tauri-apps/api/event");
-  const statusStore = createPrinterStatusStore({
-    printerIds: () => state.printers.map((printer) => printer.id),
-    listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => handler(event.payload)),
-    backfill: () => command("printer_statuses"),
-    onStatus: applyStatus,
-  });
-  await statusStore.start();
-  return () => statusStore.dispose();
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    const store = createPrinterStatusStore({
+      printerIds: () => state.printers.map((printer) => printer.id),
+      listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => handler(event.payload)),
+      backfill: () => command("printer_statuses"),
+      onStatus: applyStatus,
+      onStatusRemoved: removeStatus,
+    });
+    statusStore?.dispose();
+    statusStore = store;
+    await store.start();
+    setStatusStoreRevision((revision) => revision + 1);
+    return () => {
+      store.dispose();
+      if (statusStore === store) statusStore = undefined;
+      setStatusStoreRevision((revision) => revision + 1);
+    };
+  } catch {
+    statusStore?.dispose();
+    statusStore = undefined;
+    setStatusStoreRevision((revision) => revision + 1);
+    throw new Error("Printer status monitoring could not start.");
+  }
 }
 
 export async function setConnection(id: string, submission: ConnectionSubmission): Promise<void> {

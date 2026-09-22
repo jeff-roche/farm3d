@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::command::JsonValue;
 use super::ContractVersion;
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
@@ -50,37 +49,7 @@ pub struct ConnectionSubmission {
     pub credential: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/PrinterStatus.ts")]
-pub struct PrinterStatus {
-    pub connection_state: String,
-    pub updated_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub telemetry: Option<JsonValue>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/PrinterStatusRow.ts")]
-pub struct PrinterStatusRow {
-    pub printer_id: String,
-    pub status: PrinterStatus,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(
-    rename_all = "camelCase",
-    export_to = "domain/PrinterStatusBackfill.ts"
-)]
-pub struct PrinterStatusBackfill {
-    pub stream_id: String,
-    #[ts(type = "number")]
-    pub snapshot_sequence: u64,
-    pub statuses: Vec<PrinterStatusRow>,
-}
+/// Compatibility aliases for the canonical runtime status family.
+pub type PrinterStatus = crate::connections::PrinterStatus;
+pub type PrinterStatusRow = crate::connections::supervisor::PrinterStatusRow;
+pub type PrinterStatusBackfill = crate::connections::supervisor::PrinterStatusBackfill;

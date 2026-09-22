@@ -46,8 +46,10 @@ F1 does **not** define schemas for Models, Projects, Model Source Revisions,
 Slice Revisions, Spools, Material Slots, Queue Entries, Jobs, Attention Events,
 Incidents, or immutable history. It does not add full-Farm backup/restore UI,
 diagnostics export, reset, OS deep-link registration, or new adapter protocols.
-Those remain with their owning phases. Raw host `jobState` and `jobName` remain
-telemetry and do not become Job records.
+Those remain with their owning phases. P1 supersedes the earlier raw host
+`jobState` treatment: adapters normalize it to canonical telemetry
+`hostActivity` (while retaining an optional `hostActivityName`) and `jobName`
+remains telemetry rather than becoming a Job record.
 
 ## Storage layout and injection
 
@@ -1048,7 +1050,11 @@ inventing an empty object.
 The only F1 frontend event name is `farm3d-event-v1`. Printer status uses:
 
 ```ts
-type PrinterStatusChanged = EventEnvelope<"printer.status.changed", PrinterStatus>;
+type PrinterStatusEvent = EventEnvelope<
+  "printer.status.changed" | "printer.status.removed",
+  { type: "changed"; status: PrinterStatus }
+  | { type: "removed" }
+>;
 
 type EventEnvelope<T extends string, P> = {
   contractVersion: 1;
@@ -1065,8 +1071,26 @@ type PrinterStatusBackfill = {
   streamId: string;
   snapshotSequence: number;
   statuses: Array<{ printerId: string; status: PrinterStatus }>;
+  // Current recoverable cache failures. See the lifetime rules below.
+  cacheWarnings: Array<{ printerId?: string; operation: "hydrate" | "save" | "delete" }>;
 };
 ```
+
+Cache warnings are recoverable telemetry-cache metadata; they never change a
+Printer's connection or operational state. A process-wide `hydrate` warning has
+no `printerId`, is created only when startup cache hydration fails, appears only
+in `PrinterStatusBackfill.cacheWarnings`, and remains until that backend process
+ends. It is not added to a `PrinterStatus` and does not produce a status event.
+
+A warning with a `printerId` (`save` or `delete`) is present in the backfill
+aggregate and on that current Printer's `PrinterStatus`, including the `status`
+in its next `printer.status.changed` event. Equivalent warnings are deduplicated
+and clear after a successful equivalent cache operation. Deleting a Printer
+clears all of its per-Printer warnings before publishing its
+`printer.status.removed` tombstone; later backfills and status events contain no
+warning for a deleted Printer. Clients must read the global hydrate warning from
+backfill only and must discard per-Printer warning data when the corresponding
+durable Printer is absent.
 
 One backend process creates one stream UUID and starts its safe-integer sequence
 at `0`. Under the same status-map mutex, publication updates the status, adds

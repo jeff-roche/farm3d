@@ -125,7 +125,7 @@ fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() 
         ("load_settings", json!({})),
         (
             "save_settings",
-            json!({"expectedRevision":1,"themeMode":"system"}),
+            json!({"expectedRevision":1,"themeMode":"system","monitorSection":"printerModel","monitorDensity":"comfortable"}),
         ),
         ("export_settings", json!({})),
         ("import_settings", json!({"expectedRevision":1})),

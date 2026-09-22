@@ -15,6 +15,8 @@ import { Chip } from "./Chip";
 import { Logo } from "./Logo";
 import { NumberField } from "./NumberField";
 import { Field } from "./Field";
+import { SeverityMarker } from "./SeverityMarker";
+import { PrinterRoster } from "./PrinterRoster";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -362,5 +364,79 @@ describe("Field", () => {
       </Field>
     ));
     expect(screen.getByText("inherited: 256")).toBeInTheDocument();
+  });
+});
+
+describe("SeverityMarker", () => {
+  it("renders an icon, visible label, and severity state", () => {
+    const { container } = render(() => <SeverityMarker severity="fatal" label="Connection error" />);
+
+    expect(screen.getByText("Connection error")).toBeVisible();
+    expect(screen.getByRole("status", { name: "Connection error" })).toHaveAttribute(
+      "data-severity",
+      "fatal",
+    );
+    expect(container.querySelector("svg[aria-hidden='true']")).toBeInTheDocument();
+  });
+});
+
+const rosterPrinters = Array.from({ length: 10 }, (_, index) => ({
+  id: `printer-${index + 1}`,
+  name: `Printer ${index + 1}`,
+  stateLabel: index === 0 ? "Offline" : "Ready",
+}));
+
+describe("PrinterRoster", () => {
+  it("opens on keyboard focus and returns focus after Escape", async () => {
+    render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
+
+    const trigger = screen.getByLabelText("10 offline Printers");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    trigger.focus();
+    await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    const viewAll = screen.getByRole("button", { name: "View all" });
+    viewAll.focus();
+    expect(viewAll).toHaveFocus();
+
+    await fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens on pointer hover and bounds rows with a View all action", async () => {
+    const onViewAll = vi.fn();
+    render(() => (
+      <PrinterRoster
+        label="Printers"
+        count={10}
+        printers={rosterPrinters}
+        onViewAll={onViewAll}
+      />
+    ));
+
+    const trigger = screen.getByLabelText("10 Printers");
+    await fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+
+    await waitFor(() => expect(screen.getByText("Printer 8")).toBeVisible());
+    expect(screen.queryByText("Printer 9")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View all" })).toBeVisible();
+
+    await fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    expect(onViewAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits View all when the total is eight or fewer", async () => {
+    render(() => <PrinterRoster label="Printers" count={8} printers={rosterPrinters} />);
+
+    await fireEvent.click(screen.getByLabelText("8 Printers"));
+    await waitFor(() => expect(screen.getByText("Printer 8")).toBeVisible());
+    expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
   });
 });

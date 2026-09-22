@@ -10,9 +10,13 @@ use farm3d_lib::catalog::{BedShape, PointMm, PrinterProfile};
 use farm3d_lib::connections::commands::{ConnectionSubmission, CredentialStoreInfo};
 use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
-use farm3d_lib::connections::supervisor::{PrinterStatusBackfill, PrinterStatusRow};
+use farm3d_lib::connections::supervisor::{
+    PrinterSetupFacts, PrinterStatusBackfill, PrinterStatusEvent, PrinterStatusEventPayload,
+    PrinterStatusEventType, PrinterStatusRow,
+};
 use farm3d_lib::connections::{
-    ConnectionConfig, ConnectionState, PrinterStatus, ProbeResult, ReportedCapabilities,
+    status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
+    ProbeResult, ReportedCapabilities, StatusCacheWarning, StatusCacheWarningOperation,
 };
 use farm3d_lib::contracts::command::{
     CommandError, CommandSuccess, CorrelationId, ErrorCode, JsonNumber, JsonValue, RecoveryCode,
@@ -28,10 +32,15 @@ use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
     OperationWarningCode, PrinterMutationResult, PrinterRevisionPrecondition, PrintersImportResult,
 };
+use farm3d_lib::printers::operational::{
+    HostActivity, OperationalInput, OperationalResult, OperationalState, PrinterReadiness,
+    ReadinessReason, ReadinessState, TelemetryFreshness,
+};
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch};
 use farm3d_lib::settings::commands::{
-    ExportResult as SettingsExportResult, SettingsImportResult, SettingsRecord,
+    ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
+    SettingsRecord,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -182,11 +191,28 @@ fn export_registry() -> Vec<Export> {
         export::<CommandContracts>(),
         export::<NoArgsRequest>(),
         export::<SettingsRecord>(),
+        export::<MonitorSection>(),
+        export::<MonitorDensity>(),
         export::<PrinterRevisionPrecondition>(),
         export::<ConnectionConfig>(),
         export::<ConnectionSubmission>(),
         export::<ConnectionState>(),
+        export::<HostActivity>(),
+        export::<OperationalState>(),
+        export::<ReadinessState>(),
+        export::<ReadinessReason>(),
+        export::<PrinterReadiness>(),
+        export::<TelemetryFreshness>(),
+        export::<OperationalInput>(),
+        export::<OperationalResult>(),
         export::<PrinterStatus>(),
+        export::<PrinterTelemetry>(),
+        export::<PrinterSetupFacts>(),
+        export::<PrinterStatusEventType>(),
+        export::<PrinterStatusEventPayload>(),
+        export::<PrinterStatusEvent>(),
+        export::<StatusCacheWarningOperation>(),
+        export::<StatusCacheWarning>(),
         export::<PrinterStatusRow>(),
         export::<PrinterStatusBackfill>(),
         export::<BedShape>(),
@@ -566,6 +592,44 @@ fn contract_version_serializes_as_one_and_rejects_other_versions() {
     );
     assert!(serde_json::from_str::<ContractVersion>("1").is_ok());
     assert!(serde_json::from_str::<ContractVersion>("2").is_err());
+}
+
+#[test]
+fn operational_policy_contracts_export_and_serialize_camel_case_values() {
+    let temporary = TempDir::new().expect("temporary export directory should be created");
+    write_exports(temporary.path());
+
+    for contract in [
+        "domain/HostActivity.ts",
+        "domain/OperationalInput.ts",
+        "domain/OperationalResult.ts",
+        "domain/OperationalState.ts",
+        "domain/PrinterReadiness.ts",
+        "domain/ReadinessReason.ts",
+        "domain/ReadinessState.ts",
+        "domain/TelemetryFreshness.ts",
+    ] {
+        assert!(
+            temporary.path().join(contract).exists(),
+            "missing operational policy contract {contract}"
+        );
+    }
+
+    assert_eq!(
+        serde_json::json!({
+            "operational": [OperationalState::SetupIncomplete, OperationalState::Ready],
+            "readiness": PrinterReadiness {
+                state: ReadinessState::NotReady,
+                reason: Some(ReadinessReason::StaleTelemetry),
+            },
+            "freshness": TelemetryFreshness::Stale,
+        }),
+        serde_json::json!({
+            "operational": ["setupIncomplete", "ready"],
+            "readiness": { "state": "notReady", "reason": "staleTelemetry" },
+            "freshness": "stale",
+        })
+    );
 }
 
 #[test]

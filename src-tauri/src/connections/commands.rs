@@ -349,15 +349,16 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         change,
     )?;
     let updated = committed.printer;
+    let profile_resolved =
+        crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &updated.catalog_ref)
+            .0
+            .is_some();
     let committed_config = updated
         .connection
         .clone()
         .expect("a successful Connection commit stores its submitted config");
     let _reconciliation = services.manager.reconciliation_guard().await;
     let mut warnings = Vec::new();
-    if !services.manager.stop_and_wait(&id).await {
-        warnings.push(OperationWarning::supervisor(&id));
-    }
     let (api_key, credential_ready) = match (
         credential_store.as_ref(),
         committed_config.credential_ref.as_deref(),
@@ -365,9 +366,13 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         (Some(store), Some(reference)) => match store.get(reference) {
             Ok(Some(value)) => (Some(value), true),
             Ok(None) | Err(_) => {
-                services
-                    .manager
-                    .report_error(&id, "A credential is required for this Connection.");
+                services.manager.reconcile_printer(
+                    &id,
+                    crate::connections::supervisor::PrinterSetupFacts {
+                        has_usable_connection: false,
+                        profile_resolved,
+                    },
+                );
                 warnings.push(OperationWarning::credential_required(&id));
                 (None, false)
             }
@@ -375,11 +380,18 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
         _ => (None, true),
     };
     if credential_ready {
-        services.manager.start(
-            id.clone(),
-            committed_config,
-            api_key.map(zeroize::Zeroizing::new),
-        );
+        services
+            .manager
+            .start(
+                id.clone(),
+                committed_config,
+                api_key.map(zeroize::Zeroizing::new),
+                crate::connections::supervisor::PrinterSetupFacts {
+                    has_usable_connection: true,
+                    profile_resolved,
+                },
+            )
+            .await;
     }
     if committed.cleanup_pending {
         warnings.push(OperationWarning::cleanup());
@@ -435,7 +447,15 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
     .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    if !services.manager.stop_and_wait(&id).await {
+    let profile_resolved =
+        crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &updated.catalog_ref)
+            .0
+            .is_some();
+    if !services
+        .manager
+        .clear_connection(&id, profile_resolved)
+        .await
+    {
         warnings.push(OperationWarning::supervisor(&id));
     }
     if let Some(reference) = old.as_deref() {
