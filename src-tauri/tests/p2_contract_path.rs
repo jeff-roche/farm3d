@@ -243,6 +243,7 @@ fn runtime(
             farm3d_lib::printers::commands::create_printer,
             farm3d_lib::printers::commands::update_printer,
             farm3d_lib::connections::commands::set_printer_connection,
+            farm3d_lib::connections::commands::test_printer_connection,
             farm3d_lib::printers::create::probe_connection,
         ])
         .build(mock_context(noop_assets()))
@@ -370,6 +371,53 @@ fn probe_connection_to_auth_local_is_authentication_failed_and_never_leaks_the_s
     .unwrap_err();
 
     assert_eq!(error["code"], "AUTHENTICATION_FAILED");
+    assert!(!error.to_string().contains("s3cret-FIXTURE"));
+    // `probe_connection` has no Printer id to attach.
+    assert!(error["details"].get("entityId").is_none());
+}
+
+// --- Regression guard: `test_printer_connection` still attaches `entityId` -
+
+/// `probe_submission` is shared by `probe_connection` (no Printer id) and
+/// `test_printer_connection`/`set_printer_connection`'s replace check
+/// (both have one). Before this test existed, extracting `probe_error`
+/// silently dropped the `entityId` detail from `test_printer_connection`'s
+/// network errors — the same "behaviour identical" ruling `probe_error`'s
+/// doc comment describes. Pins it down so it can't regress again.
+#[test]
+fn test_printer_connection_still_attaches_entity_id_on_a_network_error() {
+    let (_temp, _lease, storage) = storage();
+    let credentials_dir = tempfile::tempdir().unwrap();
+    let (factory, _calls) = recording_factory(Arc::clone(&storage));
+    let (_app, webview, _manager, _services) = runtime(
+        Arc::clone(&storage),
+        Arc::new(a_catalog()),
+        credentials_dir.path().to_path_buf(),
+        factory,
+    );
+    let printer = PrinterRepository::new(Arc::clone(&storage))
+        .create(a_stored_printer("printer-a"))
+        .unwrap();
+
+    let error = invoke(
+        &webview,
+        "test_printer_connection",
+        json!({
+            "contractVersion": 1,
+            "id": printer.id,
+            "submission": {
+                "kind": "moonraker",
+                "host": "auth.local",
+                "port": 7125,
+                "useTls": false,
+                "credential": "s3cret-FIXTURE",
+            }
+        }),
+    )
+    .unwrap_err();
+
+    assert_eq!(error["code"], "AUTHENTICATION_FAILED");
+    assert_eq!(error["details"]["entityId"], json!(printer.id));
     assert!(!error.to_string().contains("s3cret-FIXTURE"));
 }
 
@@ -541,7 +589,7 @@ fn create_printer_with_a_duplicate_active_host_persists_nothing() {
     let (_temp, _lease, storage) = storage();
     let credentials_dir = tempfile::tempdir().unwrap();
     let (factory, _calls) = recording_factory(Arc::clone(&storage));
-    let (_app, webview, _manager, services) = runtime(
+    let (_app, webview, _manager, _services) = runtime(
         Arc::clone(&storage),
         Arc::new(a_catalog()),
         credentials_dir.path().to_path_buf(),
@@ -560,6 +608,7 @@ fn create_printer_with_a_duplicate_active_host_persists_nothing() {
         .create(existing)
         .unwrap();
     let before = PrinterRepository::new(Arc::clone(&storage)).list().unwrap();
+    let before_credentials = credentials_dir_snapshot(credentials_dir.path());
 
     let error = invoke(
         &webview,
@@ -585,10 +634,93 @@ fn create_printer_with_a_duplicate_active_host_persists_nothing() {
         before
     );
     assert_eq!(pending_cleanup_count(&storage), 0);
+    // A real check, not a lookup of the raw secret text as a reference (which
+    // is always `None` regardless of whether anything was actually stored):
+    // the credential store's own backing file must be byte-identical to
+    // before the rejected create, i.e. nothing was ever written to it.
     assert_eq!(
-        services.credentials.get("s3cret-FIXTURE").unwrap(),
-        None,
+        credentials_dir_snapshot(credentials_dir.path()),
+        before_credentials,
         "no credential must have been stored for the rejected create"
+    );
+}
+
+/// The orphan-cleanup path `create_printer_with` takes when `create_in`
+/// itself rejects the insert (the transactional `precheck_duplicate_host`
+/// defense-in-depth, not the early `find_active_by_host_identity` check the
+/// test above exercises): the provisional row and its secret survive the
+/// rolled-back insert, and `retry_pending_credential_cleanup` — called right
+/// after, per the brief's Step 4 — reclaims both. Exercised directly against
+/// `PrinterRepository`/`CredentialStore` rather than through the command,
+/// since `create_printer_with`'s own early pre-check makes this particular
+/// failure unreachable through a single, non-racing command invocation.
+#[test]
+fn create_in_failure_leaves_a_reclaimable_provisional_row_and_secret() {
+    use farm3d_lib::persistence::RepositoryError;
+
+    let (_temp, _lease, storage) = storage();
+    let credentials_dir = tempfile::tempdir().unwrap();
+    let credentials = CredentialStore::file_backed(credentials_dir.path().to_path_buf());
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+
+    let mut existing = a_stored_printer("printer-existing");
+    existing.connection = Some(ConnectionConfig {
+        kind: MOONRAKER_KIND.to_string(),
+        host: "conflict.local".to_string(),
+        port: 7125,
+        use_tls: false,
+        credential_ref: None,
+    });
+    repository.create(existing).unwrap();
+
+    // Mirrors create_printer_with's Step 4, items 1-3, directly: mint a
+    // reference, enqueue it as provisional, write the secret.
+    let reference = "farm3d/credential/6ba7b810-9dad-4f83-a131-2a6f44cbbf89".to_string();
+    repository
+        .enqueue_credential_cleanup(&reference, None, "provisional")
+        .unwrap();
+    credentials.set(&reference, "s3cret-FIXTURE").unwrap();
+
+    let mut conflicting = a_stored_printer("printer-conflicting");
+    conflicting.connection = Some(ConnectionConfig {
+        kind: MOONRAKER_KIND.to_string(),
+        host: "conflict.local".to_string(),
+        port: 7125,
+        use_tls: false,
+        credential_ref: Some(reference.clone()),
+    });
+
+    let result = repository.create_in(conflicting, Some(&reference));
+
+    assert!(
+        matches!(result, Err(RepositoryError::DuplicateHost { .. })),
+        "the conflicting insert must roll back: {result:?}"
+    );
+    assert_eq!(
+        pending_cleanup_count(&storage),
+        1,
+        "the provisional row must survive the rolled-back insert"
+    );
+    assert_eq!(
+        credentials.get(&reference).unwrap().as_deref(),
+        Some("s3cret-FIXTURE"),
+        "the secret must still be in the store, unreferenced by any Printer"
+    );
+
+    // create_printer_with's error path: retry cleanup right away rather than
+    // waiting for the next startup.
+    farm3d_lib::connections::commands::retry_pending_credential_cleanup(&storage, &credentials)
+        .unwrap();
+
+    assert_eq!(
+        pending_cleanup_count(&storage),
+        0,
+        "the reclaimed provisional row must be gone"
+    );
+    assert_eq!(
+        credentials.get(&reference).unwrap(),
+        None,
+        "the orphaned secret must be gone from the store"
     );
 }
 

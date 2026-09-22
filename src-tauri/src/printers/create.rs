@@ -85,12 +85,16 @@ pub fn validate_location(value: Option<&str>) -> Result<Option<String>, CommandE
 }
 
 /// The `ConnectionError -> CommandError` mapping, extracted verbatim from
-/// `test_printer_connection` so `probe_connection` and the
-/// probe-before-replace check in `set_printer_connection` share it.
+/// `test_printer_connection` so `probe_connection`, `test_printer_connection`,
+/// and the probe-before-replace check in `set_printer_connection` share it.
 ///
-/// `entity` is `None` for `probe_connection`, which has no Printer id to
-/// attach — every other detail (code/message/recovery/retryable, and
-/// `adapterKind` on a protocol error) is unchanged either way.
+/// `entity` is `Some(id)` for the two call sites that probe an EXISTING
+/// Printer (`test_printer_connection`, `set_printer_connection`'s replace
+/// check) — matching `test_printer_connection`'s pre-extraction behaviour of
+/// attaching an `entityId` detail — and `None` only for `probe_connection`,
+/// which has no Printer id to attach. Every other detail
+/// (code/message/recovery/retryable, and `adapterKind` on a protocol error)
+/// is unchanged either way.
 pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&str>) -> CommandError {
     let (code, message, recovery, retryable) = match error {
         ConnectionError::Unreachable(_) => (
@@ -146,10 +150,16 @@ pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&s
 /// factory and probes it — never storage, never the credential store, never
 /// supervision. Shared by `probe_connection`, `test_printer_connection`, and
 /// `set_printer_connection`'s probe-before-replace check.
+///
+/// `entity` is threaded straight through to `probe_error` — `Some(id)` when
+/// the caller has a Printer id to attach to a network-error detail (both
+/// existing-Printer call sites), `None` for `probe_connection`, which never
+/// has one.
 pub async fn probe_submission<R: tauri::Runtime>(
     manager: &ConnectionManager<R>,
     config: &ConnectionConfig,
     secret: Option<Zeroizing<String>>,
+    entity: Option<&str>,
 ) -> Result<ProbeResult, CommandError> {
     let adapter_kind = config.kind.clone();
     let connection = manager
@@ -158,7 +168,7 @@ pub async fn probe_submission<R: tauri::Runtime>(
     connection
         .probe()
         .await
-        .map_err(|error| probe_error(error, &adapter_kind, None))
+        .map_err(|error| probe_error(error, &adapter_kind, entity))
 }
 
 /// `probe_connection`: probes a submitted Connection with no Printer id,
@@ -196,7 +206,7 @@ pub async fn probe_connection<R: tauri::Runtime>(
         use_tls: submission.use_tls,
         credential_ref: None,
     };
-    probe_submission(&services.manager, &config, secret)
+    probe_submission(&services.manager, &config, secret, None)
         .await
         .map(CommandSuccess::new)
 }

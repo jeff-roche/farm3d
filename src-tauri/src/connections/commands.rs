@@ -370,7 +370,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
                     None => None,
                 },
             };
-            probe_submission(&services.manager, &config, probe_secret).await?;
+            probe_submission(&services.manager, &config, probe_secret, Some(&id)).await?;
         }
     }
     let no_store =
@@ -543,7 +543,7 @@ pub async fn test_printer_connection<R: tauri::Runtime>(
             None => None,
         },
     };
-    probe_submission(&services.manager, &config, api_key)
+    probe_submission(&services.manager, &config, api_key, Some(&id))
         .await
         .map(CommandSuccess::new)
 }
