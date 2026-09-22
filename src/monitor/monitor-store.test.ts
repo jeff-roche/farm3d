@@ -50,6 +50,8 @@ function printer(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
     inherited: {},
     profileDrift: [],
     unknownOverrideKeys: [],
+    startSafety: "confirmBedClear",
+    setupGaps: [],
     createdAt: "",
     updatedAt: "",
     ...overrides,

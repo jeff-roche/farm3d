@@ -49,6 +49,8 @@ const PRINTER: ResolvedPrinter = {
   inherited: {},
   profileDrift: [],
   unknownOverrideKeys: [],
+  startSafety: "confirmBedClear",
+  setupGaps: [],
   createdAt: "",
   updatedAt: "",
 };

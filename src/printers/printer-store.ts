@@ -141,6 +141,8 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         inherited: {},
         profileDrift: [],
         unknownOverrideKeys: [],
+        startSafety: "confirmBedClear",
+        setupGaps: [],
         createdAt: "",
         updatedAt: "",
       };
@@ -218,6 +220,8 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
         inherited: {},
         profileDrift: [],
         unknownOverrideKeys: [],
+        startSafety: "confirmBedClear",
+        setupGaps: [],
         createdAt: "",
         updatedAt: "",
       },
@@ -237,7 +241,15 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
 
 export async function updatePrinter(id: string, patch: PrinterPatch): Promise<void> {
   if (!desktopAvailable()) {
-    setState("printers", (p) => p.id === id, (p) => ({ ...p, ...patch }));
+    // PrinterPatch.location is `string | null` (null clears it), but
+    // ResolvedPrinter.location is `string | undefined` — map null to
+    // undefined so the optimistic merge below stays assignable.
+    const { location, ...rest } = patch;
+    setState("printers", (p) => p.id === id, (p) => ({
+      ...p,
+      ...rest,
+      ...(location !== undefined ? { location: location ?? undefined } : {}),
+    }));
     return;
   }
   try {

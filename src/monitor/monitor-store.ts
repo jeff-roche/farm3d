@@ -127,6 +127,7 @@ const readinessLabels = {
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
   unknownState: "Unknown state",
+  archived: "Archived",
 } as const;
 
 function operationalLabel(status: PrinterStatus | undefined): string {
