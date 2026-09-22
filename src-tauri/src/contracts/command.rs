@@ -787,5 +787,41 @@ mod tests {
         assert_eq!(unavailable.code, ErrorCode::PersistenceUnavailable);
         assert!(unavailable.retryable);
         assert_eq!(unavailable.recovery, vec![RecoveryCode::Retry]);
+
+        let duplicate_host = CommandError::from_repository(RepositoryError::DuplicateHost {
+            conflicting_printer_id: "printer-a".to_string(),
+        });
+        assert_eq!(duplicate_host.code, ErrorCode::DuplicateHost);
+        assert!(!duplicate_host.retryable);
+        assert_eq!(duplicate_host.recovery, vec![RecoveryCode::EditFields]);
+        assert_eq!(
+            duplicate_host.details.unwrap().get("conflictingPrinterId"),
+            Some(&JsonValue::String("printer-a".to_string()))
+        );
+
+        // The partial unique index backstop (StorageError::DuplicateHost)
+        // must map identically to the repository precheck's own variant.
+        let backstop = CommandError::from_repository(RepositoryError::Storage(
+            StorageError::DuplicateHost("printer-b".to_string()),
+        ));
+        assert_eq!(backstop.code, ErrorCode::DuplicateHost);
+        assert_eq!(
+            backstop.details.unwrap().get("conflictingPrinterId"),
+            Some(&JsonValue::String("printer-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn lifecycle_blocked_carries_its_blockers_and_is_never_retryable() {
+        let error = CommandError::lifecycle_blocked(serde_json::json!(["setup-incomplete"]));
+        assert_eq!(error.code, ErrorCode::LifecycleBlocked);
+        assert!(!error.retryable);
+        assert!(error.recovery.is_empty());
+        assert_eq!(
+            error.details.unwrap().get("blockers"),
+            Some(&JsonValue::Array(vec![JsonValue::String(
+                "setup-incomplete".to_string()
+            )]))
+        );
     }
 }
