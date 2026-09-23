@@ -193,14 +193,27 @@ fn create_printer_without_a_layout_gets_the_default_main_slot() {
     assert!(slots[0].get("occupantSpoolId").is_none());
 }
 
-// --- 2. Layout and initial load ----------------------------------------------
+// --- 2. Layout and initial loads ----------------------------------------------
 
+/// Fix round 1, Critical 1: a create with SEVERAL initial loads must occupy
+/// every targeted slot, not just the first — a bare `apply_move` per load
+/// shares one `operationId`, so the second+ calls would find the first
+/// load's row under that id and silently replay (no-op) instead of
+/// applying. This exercises 3 loads and asserts every target slot ends up
+/// occupied and every resulting movement row shares one `operationId`
+/// (`spools::movement::apply_moves`, Fix round 1).
+///
+/// Fix round 1, Important 1: `apply_moves` bumps the Printer's own revision
+/// once per load, so the create response must return the POST-load
+/// revision (not the just-inserted 1) — asserted here both directly and by
+/// using it for a follow-up `set_material_slot_layout` call, which must
+/// succeed rather than CONFLICT.
 #[test]
-fn create_printer_with_a_layout_and_an_initial_load_occupies_that_slot() {
+fn create_printer_with_a_layout_and_several_initial_loads_occupies_every_target_slot() {
     let (_temp, _lease, storage) = storage();
     let (_app, webview, _services) =
         runtime(Arc::clone(&storage), Arc::new(InjectedDocuments::default()));
-    let spool_row = a_storage_spool(&storage);
+    let spools: Vec<StoredSpool> = (0..3).map(|_| a_storage_spool(&storage)).collect();
 
     let layout = json!([
         slot_spec("1", Some("AMS 1")),
@@ -216,7 +229,9 @@ fn create_printer_with_a_layout_and_an_initial_load_occupies_that_slot() {
             json!({
                 "slotLayout": layout,
                 "initialLoads": [
-                    { "slotIndex": 2, "spoolId": spool_row.id, "expectedSpoolRevision": spool_row.revision },
+                    { "slotIndex": 0, "spoolId": spools[0].id, "expectedSpoolRevision": spools[0].revision },
+                    { "slotIndex": 1, "spoolId": spools[1].id, "expectedSpoolRevision": spools[1].revision },
+                    { "slotIndex": 2, "spoolId": spools[2].id, "expectedSpoolRevision": spools[2].revision },
                 ],
             }),
         ),
@@ -230,24 +245,69 @@ fn create_printer_with_a_layout_and_an_initial_load_occupies_that_slot() {
         assert_eq!(slot["name"], json!((index + 1).to_string()));
         assert_eq!(slot["feederLabel"], json!("AMS 1"));
     }
-    assert_eq!(slots[2]["occupantSpoolId"], json!(spool_row.id));
-    for (index, slot) in slots.iter().enumerate() {
-        if index != 2 {
-            assert!(slot.get("occupantSpoolId").is_none());
-        }
+    for (index, spool_row) in spools.iter().enumerate() {
+        assert_eq!(
+            slots[index]["occupantSpoolId"],
+            json!(spool_row.id),
+            "slot {index} must be occupied by initial load {index}"
+        );
     }
-
-    let after = spool(&storage, &spool_row.id);
-    assert_eq!(after.slot_id.as_deref(), Some(slots[2]["id"].as_str().unwrap()));
-    let history = storage
-        .write(|tx| movement::history(tx, &spool_row.id))
-        .unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(
-        history[0].reason,
-        farm3d_lib::spools::movement::MovementReason::Load
+    assert!(
+        slots[3].get("occupantSpoolId").is_none(),
+        "the fourth slot got no initial load"
     );
-    assert_eq!(history[0].operation_id, history[0].operation_id); // sanity: one shared id (see below)
+
+    let printer_id = printer["id"].as_str().unwrap().to_string();
+    let returned_revision = printer["revision"].as_i64().unwrap();
+    assert_eq!(
+        returned_revision, 4,
+        "revision 1 at insert, +1 per of the 3 loads"
+    );
+    assert_eq!(printer_revision(&storage, &printer_id), returned_revision);
+
+    let mut movement_ids = std::collections::HashSet::new();
+    for (index, spool_row) in spools.iter().enumerate() {
+        let after = spool(&storage, &spool_row.id);
+        assert_eq!(
+            after.slot_id.as_deref(),
+            Some(slots[index]["id"].as_str().unwrap()),
+            "spool {index} must be loaded into its target slot"
+        );
+        let history = storage
+            .write(|tx| movement::history(tx, &spool_row.id))
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].reason,
+            farm3d_lib::spools::movement::MovementReason::Load
+        );
+        movement_ids.insert(history[0].operation_id.clone());
+    }
+    assert_eq!(
+        movement_ids.len(),
+        1,
+        "every initial load must share one operationId: {movement_ids:?}"
+    );
+
+    // The returned (post-load) revision must be directly usable for a
+    // follow-up write, not stale.
+    let follow_up = invoke(
+        &webview,
+        "set_material_slot_layout",
+        json!({
+            "contractVersion": 1,
+            "printerId": printer_id,
+            "expectedRevision": returned_revision,
+            "slots": slots
+                .iter()
+                .map(|slot| json!({ "id": slot["id"], "name": slot["name"] }))
+                .collect::<Vec<_>>(),
+        }),
+    );
+    assert!(
+        follow_up.is_ok(),
+        "the create response's revision must be current, not stale: {follow_up:?}"
+    );
 }
 
 #[test]
@@ -627,6 +687,125 @@ fn set_material_slot_layout_reorders_renames_adds_and_removes_an_empty_slot() {
         }),
     ));
     assert_eq!(error["code"], json!("VALIDATION"));
+
+    // Fix round 1, Important 4: a repeated `id` across entries must be
+    // rejected, not silently collapsed into a gapped layout.
+    let error = error_of(invoke(
+        &webview,
+        "set_material_slot_layout",
+        json!({
+            "contractVersion": 1,
+            "printerId": printer_id,
+            "expectedRevision": revision,
+            "slots": [
+                { "id": a_id, "name": "One" },
+                { "id": a_id, "name": "Two" },
+            ],
+        }),
+    ));
+    assert_eq!(error["code"], json!("VALIDATION"));
+}
+
+/// Fix round 1, Important 2: renaming two live slots A/B -> B/A by name,
+/// keeping the same ids, must not trip `material_slots_live_name` mid-pass
+/// — swapping names is a normal, valid edit, not a transient collision.
+#[test]
+fn set_material_slot_layout_swaps_two_live_names() {
+    let (_temp, _lease, storage) = storage();
+    let (_app, webview, _services) =
+        runtime(Arc::clone(&storage), Arc::new(InjectedDocuments::default()));
+
+    let created = invoke(
+        &webview,
+        "create_printer",
+        create_printer_body(
+            "Swappable",
+            json!({ "slotLayout": [slot_spec("A", None), slot_spec("B", None)] }),
+        ),
+    )
+    .unwrap();
+    let printer = &created["data"]["printer"];
+    let printer_id = printer["id"].as_str().unwrap().to_string();
+    let revision = printer["revision"].as_i64().unwrap();
+    let slots = material_slots(printer);
+    let (a_id, b_id) = (
+        slots[0]["id"].as_str().unwrap().to_string(),
+        slots[1]["id"].as_str().unwrap().to_string(),
+    );
+
+    let response = invoke(
+        &webview,
+        "set_material_slot_layout",
+        json!({
+            "contractVersion": 1,
+            "printerId": printer_id,
+            "expectedRevision": revision,
+            "slots": [
+                { "id": a_id, "name": "B" },
+                { "id": b_id, "name": "A" },
+            ],
+        }),
+    )
+    .unwrap();
+    let slots = material_slots(&response["data"]["printer"]);
+    assert_eq!(slots[0]["id"], json!(a_id));
+    assert_eq!(slots[0]["name"], json!("B"));
+    assert_eq!(slots[1]["id"], json!(b_id));
+    assert_eq!(slots[1]["name"], json!("A"));
+}
+
+/// Fix round 1, Important 2: a kept slot giving up a name in the same call
+/// that a brand-new slot takes that same name must not collide either — the
+/// freed name must already be clear by the time pass 2 assigns it.
+#[test]
+fn set_material_slot_layout_lets_a_new_slot_take_a_name_a_kept_slot_gives_up() {
+    let (_temp, _lease, storage) = storage();
+    let (_app, webview, _services) =
+        runtime(Arc::clone(&storage), Arc::new(InjectedDocuments::default()));
+
+    let created = invoke(
+        &webview,
+        "create_printer",
+        create_printer_body(
+            "Handoff",
+            json!({ "slotLayout": [slot_spec("A", None), slot_spec("B", None)] }),
+        ),
+    )
+    .unwrap();
+    let printer = &created["data"]["printer"];
+    let printer_id = printer["id"].as_str().unwrap().to_string();
+    let revision = printer["revision"].as_i64().unwrap();
+    let slots = material_slots(printer);
+    let (a_id, b_id) = (
+        slots[0]["id"].as_str().unwrap().to_string(),
+        slots[1]["id"].as_str().unwrap().to_string(),
+    );
+
+    // A gives up its name ("A" -> "Renamed"); a new slot takes "A".
+    let response = invoke(
+        &webview,
+        "set_material_slot_layout",
+        json!({
+            "contractVersion": 1,
+            "printerId": printer_id,
+            "expectedRevision": revision,
+            "slots": [
+                { "id": a_id, "name": "Renamed" },
+                { "id": b_id, "name": "B" },
+                { "name": "A" },
+            ],
+        }),
+    )
+    .unwrap();
+    let slots = material_slots(&response["data"]["printer"]);
+    assert_eq!(slots.len(), 3);
+    assert_eq!(slots[0]["id"], json!(a_id));
+    assert_eq!(slots[0]["name"], json!("Renamed"));
+    assert_eq!(slots[1]["id"], json!(b_id));
+    assert_eq!(slots[1]["name"], json!("B"));
+    assert_eq!(slots[2]["name"], json!("A"));
+    assert_ne!(slots[2]["id"], json!(a_id));
+    assert_ne!(slots[2]["id"], json!(b_id));
 }
 
 // --- 5. Export and import -----------------------------------------------------
@@ -807,4 +986,195 @@ fn importing_v3_recreates_the_layout_with_new_ids() {
         assert!(slot_id.starts_with("slt-"));
         assert_ne!(slot_id, old_slot_id, "import must mint fresh slot ids");
     }
+}
+
+/// Fix round 1, Important 5: `replace_all` deletes and reinserts every
+/// Printer, and `spools.slot_id` has no `ON DELETE` action (unlike
+/// `spool_movements`'s slot columns, which cascade) — so an import must be
+/// rejected up front while any Spool is still loaded, rather than let the
+/// delete hit that foreign key and surface as an opaque
+/// `PERSISTENCE_UNAVAILABLE`.
+#[test]
+fn importing_printers_is_rejected_while_any_spool_is_loaded() {
+    let (_temp, _lease, storage) = storage();
+    let documents = Arc::new(InjectedDocuments::default());
+    let (_app, webview, _services) = runtime(Arc::clone(&storage), Arc::clone(&documents));
+
+    let created = invoke(
+        &webview,
+        "create_printer",
+        create_printer_body("Seed", json!({})),
+    )
+    .unwrap();
+    let printer = &created["data"]["printer"];
+    let id = printer["id"].as_str().unwrap().to_string();
+    let slot_id = material_slots(printer)[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let occupant = a_storage_spool(&storage);
+    storage
+        .write_repo(|tx| {
+            movement::apply_move(
+                tx,
+                "op-load",
+                &occupant.id,
+                occupant.revision,
+                &MoveDestination::Slot {
+                    slot_id: slot_id.clone(),
+                    expected_occupant_spool_id: None,
+                    displaced_storage_label: None,
+                },
+                None,
+            )
+        })
+        .unwrap();
+    // The load above bumped the Printer's own revision.
+    let revision = printer_revision(&storage, &id);
+
+    let document = printers_document_versioned(
+        3,
+        json!([imported_printer(
+            &id,
+            revision,
+            json!({ "materialSlots": [slot_spec("Only", None)] })
+        )]),
+    );
+    *documents.open.lock().unwrap() = Some(PathBuf::from("/tmp/import-blocked.json"));
+    *documents.bytes.lock().unwrap() = Some(document);
+
+    let error = error_of(invoke(
+        &webview,
+        "import_printers",
+        json!({
+            "contractVersion": 1,
+            "expectedRevisions": [{"id": id, "revision": revision}],
+        }),
+    ));
+    assert_eq!(error["code"], json!("VALIDATION"));
+    assert_eq!(error["details"]["fieldPath"], json!("printers"));
+
+    // Nothing changed: the Printer, its slot, and the loaded Spool are all
+    // untouched — the whole import rolled back inside the transaction.
+    assert_eq!(printer_revision(&storage, &id), revision);
+    let current = invoke(&webview, "list_printers", json!({"contractVersion": 1})).unwrap();
+    assert_eq!(material_slots(&current["data"][0]).len(), 1);
+    assert_eq!(
+        spool(&storage, &occupant.id).slot_id.as_deref(),
+        Some(slot_id.as_str())
+    );
+}
+
+/// Fix round 1, Important 5: with no Spool loaded, the import still goes
+/// through, and the replaced Printer's OLD Material Slot row and its
+/// `spool_movements` history are both actually gone afterward (the
+/// migration's `ON DELETE CASCADE`) — accepted, not merely un-erroring.
+#[test]
+fn importing_with_no_spool_loaded_cascades_away_the_replaced_printers_old_slot_history() {
+    let (_temp, _lease, storage) = storage();
+    let documents = Arc::new(InjectedDocuments::default());
+    let (_app, webview, _services) = runtime(Arc::clone(&storage), Arc::clone(&documents));
+
+    let created = invoke(
+        &webview,
+        "create_printer",
+        create_printer_body("Seed", json!({ "slotLayout": [slot_spec("Old", None)] })),
+    )
+    .unwrap();
+    let printer = &created["data"]["printer"];
+    let id = printer["id"].as_str().unwrap().to_string();
+    let old_slot_id = material_slots(printer)[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Give the old slot movement history, then unload it — no Spool is
+    // loaded anywhere by the time the import runs.
+    let spool_row = a_storage_spool(&storage);
+    storage
+        .write_repo(|tx| {
+            movement::apply_move(
+                tx,
+                "op-load",
+                &spool_row.id,
+                spool_row.revision,
+                &MoveDestination::Slot {
+                    slot_id: old_slot_id.clone(),
+                    expected_occupant_spool_id: None,
+                    displaced_storage_label: None,
+                },
+                None,
+            )
+        })
+        .unwrap();
+    let after_load = spool(&storage, &spool_row.id);
+    storage
+        .write_repo(|tx| {
+            movement::apply_move(
+                tx,
+                "op-unload",
+                &spool_row.id,
+                after_load.revision,
+                &MoveDestination::Storage {
+                    storage_label: None,
+                },
+                None,
+            )
+        })
+        .unwrap();
+    let revision = printer_revision(&storage, &id);
+    let movements_before: i64 = storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM spool_movements WHERE from_slot_id = ?1 OR to_slot_id = ?1",
+                [old_slot_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(movements_before, 2);
+
+    let document = printers_document_versioned(
+        3,
+        json!([imported_printer(
+            &id,
+            revision,
+            json!({ "materialSlots": [slot_spec("New", None)] })
+        )]),
+    );
+    *documents.open.lock().unwrap() = Some(PathBuf::from("/tmp/import-cascade.json"));
+    *documents.bytes.lock().unwrap() = Some(document);
+
+    let response = invoke(
+        &webview,
+        "import_printers",
+        json!({
+            "contractVersion": 1,
+            "expectedRevisions": [{"id": id, "revision": revision}],
+        }),
+    )
+    .unwrap();
+    assert_eq!(response["data"]["status"], json!("applied"));
+
+    let old_slot_exists: i64 = storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM material_slots WHERE id = ?1",
+                [old_slot_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(old_slot_exists, 0, "the old slot row must be gone, not soft-removed");
+    let movements_after: i64 = storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM spool_movements WHERE from_slot_id = ?1 OR to_slot_id = ?1",
+                [old_slot_id.as_str()],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(movements_after, 0, "the old slot's movement history must cascade away too");
 }

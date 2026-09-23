@@ -11,7 +11,7 @@ use std::thread;
 
 use farm3d_lib::persistence::{FailurePoint, RepositoryError, Storage, StorageError};
 use farm3d_lib::spools::ledger::AmountEntry;
-use farm3d_lib::spools::movement::{self, MoveDestination, MoveOutcome, MovementReason};
+use farm3d_lib::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest, MovementReason};
 use farm3d_lib::spools::repository::{self, StoredSpool};
 use farm3d_lib::spools::{AmountConfidence, FilamentDiameter, MaterialFamily, SpoolFields};
 
@@ -114,6 +114,14 @@ fn apply(
     storage.write_repo(|tx| {
         movement::apply_move(tx, operation_id, &spool.id, spool.revision, dest, None)
     })
+}
+
+fn apply_batch(
+    storage: &Storage,
+    operation_id: &str,
+    moves: &[MoveRequest],
+) -> Result<MoveOutcome, RepositoryError> {
+    storage.write_repo(|tx| movement::apply_moves(tx, operation_id, moves))
 }
 
 /// 1. Load: a storage Spool loads into an empty `Main`; one `Load` row; the
@@ -383,6 +391,65 @@ fn replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing() {
         .write(|tx| movement::find_operation(tx, "op-missing"))
         .unwrap()
         .is_none());
+}
+
+/// Fix round 1, Critical 1: `apply_moves` applies several moves under one
+/// `operationId`, checking the replay ONCE for the whole batch — a plain
+/// `apply_move` per load would find the first load's row on the second call
+/// and silently replay it instead of applying the second move.
+#[test]
+fn apply_moves_applies_a_batch_under_one_operation_id_and_replays_the_whole_batch_together() {
+    let (_temp, _lease, storage, _db) = storage();
+    seed_printer_with_slot(&storage, "prn-x", "slt-x");
+    seed_printer_with_slot(&storage, "prn-y", "slt-y");
+    let a = new_spool(&storage);
+    let b = new_spool(&storage);
+
+    let moves = vec![
+        MoveRequest {
+            spool_id: a.id.clone(),
+            expected_spool_revision: a.revision,
+            destination: to_slot("slt-x", None, None),
+            reason_override: None,
+        },
+        MoveRequest {
+            spool_id: b.id.clone(),
+            expected_spool_revision: b.revision,
+            destination: to_slot("slt-y", None, None),
+            reason_override: None,
+        },
+    ];
+
+    let outcome = apply_batch(&storage, "op-batch", &moves).unwrap();
+
+    assert!(!outcome.replayed);
+    assert_eq!(outcome.movements.len(), 2);
+    assert!(outcome
+        .movements
+        .iter()
+        .all(|row| row.operation_id == "op-batch"));
+    assert_eq!(spool(&storage, &a.id).slot_id.as_deref(), Some("slt-x"));
+    assert_eq!(spool(&storage, &b.id).slot_id.as_deref(), Some("slt-y"));
+    assert_eq!(printer_revision(&storage, "prn-x"), 2);
+    assert_eq!(printer_revision(&storage, "prn-y"), 2);
+    assert_eq!(movement_count(&storage), 2);
+
+    // Replaying the same batch (the same `operationId`) writes nothing and
+    // returns the same combined outcome.
+    let rows_before = movement_count(&storage);
+    let x_before = printer_revision(&storage, "prn-x");
+    let y_before = printer_revision(&storage, "prn-y");
+    let replay = apply_batch(&storage, "op-batch", &moves).unwrap();
+
+    assert!(replay.replayed);
+    assert_eq!(replay.spool_ids, outcome.spool_ids);
+    assert_eq!(replay.printer_ids, outcome.printer_ids);
+    assert_eq!(replay.movements, outcome.movements);
+    assert_eq!(movement_count(&storage), rows_before);
+    assert_eq!(printer_revision(&storage, "prn-x"), x_before);
+    assert_eq!(printer_revision(&storage, "prn-y"), y_before);
+    assert_eq!(spool(&storage, &a.id).slot_id.as_deref(), Some("slt-x"));
+    assert_eq!(spool(&storage, &b.id).slot_id.as_deref(), Some("slt-y"));
 }
 
 fn assert_validation(result: Result<MoveOutcome, RepositoryError>, expected_field: &str) {

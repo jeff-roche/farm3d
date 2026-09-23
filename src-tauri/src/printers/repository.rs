@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
-use crate::spools::movement::{self, MoveDestination};
+use crate::spools::movement::{self, MoveDestination, MoveRequest};
 
 use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
@@ -179,11 +179,17 @@ impl PrinterRepository {
     /// `create_in`'s sibling for P3's `create_printer`/batch create (Task
     /// 5, D4/D12): inserts the Printer, its Material Slot layout
     /// (`slots::insert_layout`), and every initial load
-    /// (`movement::apply_move`, sharing one generated `operationId`) in the
-    /// SAME transaction — so a rejected initial load (an unloadable slot, a
-    /// stale `expectedSpoolRevision`) rolls back the whole create, Printer
-    /// row included. Returns the Printer with `material_slots` already
-    /// populated (each occupied by its initial load, if any).
+    /// (`movement::apply_moves`, sharing one generated `operationId` and one
+    /// replay check — a plain `apply_move` per load would silently drop
+    /// every load after the first, since the second call would find the
+    /// first load's row under that `operationId` and replay it instead) in
+    /// the SAME transaction — so a rejected initial load (an unloadable
+    /// slot, a stale `expectedSpoolRevision`) rolls back the whole create,
+    /// Printer row included. `apply_moves` bumps the Printer's own revision
+    /// once per occupied slot, so the row is re-read after the loads rather
+    /// than left at the just-inserted revision 1. Returns the Printer with
+    /// `material_slots` already populated (each occupied by its initial
+    /// load, if any).
     pub fn create_with_layout(
         &self,
         mut printer: StoredPrinter,
@@ -206,25 +212,34 @@ impl PrinterRepository {
                 )?;
             }
             let created_slots = slots::insert_layout(transaction, &printer.id, slot_layout)?;
-            let operation_id = format!("op-{}", uuid::Uuid::new_v4());
-            for load in initial_loads {
-                let slot = created_slots.get(load.slot_index).ok_or(
-                    RepositoryError::Validation {
-                        field_path: "initialLoads",
-                    },
+            if !initial_loads.is_empty() {
+                let operation_id = format!("op-{}", uuid::Uuid::new_v4());
+                let mut moves = Vec::with_capacity(initial_loads.len());
+                for load in initial_loads {
+                    let slot = created_slots.get(load.slot_index).ok_or(
+                        RepositoryError::Validation {
+                            field_path: "initialLoads",
+                        },
+                    )?;
+                    moves.push(MoveRequest {
+                        spool_id: load.spool_id.clone(),
+                        expected_spool_revision: load.expected_spool_revision,
+                        destination: MoveDestination::Slot {
+                            slot_id: slot.id.clone(),
+                            expected_occupant_spool_id: None,
+                            displaced_storage_label: None,
+                        },
+                        reason_override: None,
+                    });
+                }
+                movement::apply_moves(transaction, &operation_id, &moves)?;
+                let (revision, updated_at): (i64, String) = transaction.query_row(
+                    "SELECT revision, updated_at FROM printers WHERE id = ?1",
+                    [&printer.id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
-                movement::apply_move(
-                    transaction,
-                    &operation_id,
-                    &load.spool_id,
-                    load.expected_spool_revision,
-                    &MoveDestination::Slot {
-                        slot_id: slot.id.clone(),
-                        expected_occupant_spool_id: None,
-                        displaced_storage_label: None,
-                    },
-                    None,
-                )?;
+                printer.revision = revision;
+                printer.updated_at = updated_at;
             }
             printer.material_slots = slots::live_slots(transaction, &printer.id)?;
             Ok(printer.clone())
@@ -510,10 +525,25 @@ impl PrinterRepository {
     /// its (possibly reused) id — schemaVersion 3's own `materialSlots`, or
     /// `slots::default_layout()` for a 1/2 document or a v3 Printer that
     /// omitted it (Task 5, D12: "importing v3 recreates the layout with new
-    /// ids"). The `DELETE FROM printers` below cascades away every OLD
-    /// Material Slot row (the migration's `ON DELETE CASCADE`), so every
-    /// imported Printer's layout is inserted fresh via `slots::insert_layout`
-    /// — never copied from whatever it had before the import.
+    /// ids").
+    ///
+    /// Every Spool must be unloaded (`slot_id IS NULL`) before an import can
+    /// run — checked below and rejected as `RepositoryError::Validation`
+    /// before the delete. `spools.slot_id` has no `ON DELETE` action (unlike
+    /// `spool_movements.from_slot_id`/`to_slot_id`, which cascade), so
+    /// without this check the `DELETE FROM printers` below would fail its
+    /// own foreign-key check the moment a loaded Spool's Material Slot was
+    /// deleted out from under it, surfacing as an opaque
+    /// `PERSISTENCE_UNAVAILABLE` instead of a real validation error.
+    ///
+    /// With no Spool loaded, the `DELETE FROM printers` cascades away every
+    /// REPLACED Printer's Material Slot rows AND its `spool_movements`
+    /// history (the migration's `ON DELETE CASCADE` on both
+    /// `material_slots.printer_id` and `spool_movements.from_slot_id`/
+    /// `to_slot_id`) — that history loss is accepted, not a side effect to
+    /// work around, since every imported Printer's layout is inserted fresh
+    /// via `slots::insert_layout` with brand-new slot ids regardless (never
+    /// copied from whatever it had before the import).
     pub fn replace_all(
         &self,
         expected: &[(String, i64)],
@@ -533,6 +563,16 @@ impl PrinterRepository {
                 return Err(RepositoryError::SetConflict {
                     expected_count: expected.len(),
                     current_count: current.len(),
+                });
+            }
+            let loaded_spools: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM spools WHERE slot_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            if loaded_spools > 0 {
+                return Err(RepositoryError::Validation {
+                    field_path: "printers",
                 });
             }
             let revisions: std::collections::HashMap<_, _> = current.into_iter().collect();

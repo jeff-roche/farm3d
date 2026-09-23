@@ -104,14 +104,23 @@ pub struct MoveOutcome {
     pub replayed: bool,
 }
 
-/// D6 steps 1-6. Idempotent by `operation_id`: a second call with the same
-/// id returns the recorded outcome with `replayed = true` and writes
-/// nothing, before any revision or occupancy check.
-///
-/// The reason is derived from the move (storage->slot and slot->slot are
-/// `Load`, slot->storage is `Unload`, storage->storage is `Relocate`)
-/// unless `reason_override` replaces it (archive dispositions and
-/// `markEmpty`). A displaced Spool's row is always `Displaced`.
+/// One move of [`apply_moves`]'s batch — the same arguments [`apply_move`]
+/// takes for a single move, packaged so several can share one
+/// `operation_id`/replay check.
+#[derive(Clone, Debug)]
+pub struct MoveRequest {
+    pub spool_id: String,
+    pub expected_spool_revision: i64,
+    pub destination: MoveDestination,
+    pub reason_override: Option<MovementReason>,
+}
+
+/// D6 steps 1-6 for a single move. Idempotent by `operation_id`: a second
+/// call with the same id returns the recorded outcome with `replayed =
+/// true` and writes nothing, before any revision or occupancy check. A
+/// thin wrapper over [`apply_moves`] — see that function for callers that
+/// need several moves (e.g. several initial loads) to share one
+/// `operation_id` and one replay check.
 pub fn apply_move(
     tx: &Transaction<'_>,
     operation_id: &str,
@@ -120,15 +129,77 @@ pub fn apply_move(
     dest: &MoveDestination,
     reason_override: Option<MovementReason>,
 ) -> Result<MoveOutcome, RepositoryError> {
+    apply_moves(
+        tx,
+        operation_id,
+        &[MoveRequest {
+            spool_id: spool_id.to_string(),
+            expected_spool_revision,
+            destination: dest.clone(),
+            reason_override,
+        }],
+    )
+}
+
+/// D6 steps 1-6 for a batch of moves sharing one `operation_id`. The
+/// replay check (step 1) runs ONCE for the whole batch — a second call
+/// with the same `operation_id` (whether the same batch or a single
+/// [`apply_move`]) returns the recorded combined outcome with `replayed =
+/// true` and writes nothing. Moves apply in order, each under its own
+/// revision/occupancy checks; if any move fails, the whole batch's writes
+/// roll back with it (the caller's transaction). The returned outcome
+/// combines every row written under `operation_id` — `spool_ids`/
+/// `printer_ids` deduped, `movements` in write order — via the same
+/// [`find_operation`] query a single move's outcome uses.
+///
+/// `printers/repository.rs`'s `create_with_layout` uses this for
+/// `initialLoads` (D12); Task 6's archive dispositions reuse it for
+/// several Spools unloaded under one operation.
+pub fn apply_moves(
+    tx: &Transaction<'_>,
+    operation_id: &str,
+    moves: &[MoveRequest],
+) -> Result<MoveOutcome, RepositoryError> {
     if operation_id.trim().is_empty() {
         return Err(RepositoryError::Validation {
             field_path: "operationId",
         });
     }
-    // Step 1: replay.
+    // Step 1: replay, checked once for the whole batch.
     if let Some(outcome) = find_operation(tx, operation_id)? {
         return Ok(outcome);
     }
+    for request in moves {
+        apply_one_move(
+            tx,
+            operation_id,
+            &request.spool_id,
+            request.expected_spool_revision,
+            &request.destination,
+            request.reason_override,
+        )?;
+    }
+    let mut outcome = find_operation(tx, operation_id)?.unwrap_or(MoveOutcome {
+        spool_ids: Vec::new(),
+        printer_ids: Vec::new(),
+        movements: Vec::new(),
+        replayed: false,
+    });
+    outcome.replayed = false;
+    Ok(outcome)
+}
+
+/// One move's steps 2-6, without the replay check (that's [`apply_moves`]'s
+/// job, once per batch) or the final combined-outcome query (also the
+/// caller's, once per batch — this function only writes the rows).
+fn apply_one_move(
+    tx: &Transaction<'_>,
+    operation_id: &str,
+    spool_id: &str,
+    expected_spool_revision: i64,
+    dest: &MoveDestination,
+    reason_override: Option<MovementReason>,
+) -> Result<(), RepositoryError> {
     // Step 2 (and half of step 6): the returned row still holds the
     // Spool's pre-move location.
     let spool = check_and_bump_revision(tx, spool_id, expected_spool_revision)?;
@@ -254,10 +325,7 @@ pub fn apply_move(
         )?;
     }
 
-    let mut outcome = find_operation(tx, operation_id)?
-        .ok_or(RepositoryError::Storage(StorageError::OperationFailed))?;
-    outcome.replayed = false;
-    Ok(outcome)
+    Ok(())
 }
 
 /// D6 step 1's lookup: the outcome recorded under `operation_id`, marked

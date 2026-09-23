@@ -78,18 +78,27 @@ struct NormalizedSlot {
 }
 
 /// D4: 1-16 slots; each name 1-32 chars trimmed, unique per Printer
-/// case-insensitively; `feederLabel` optional, 1-32 chars trimmed. Every
-/// failure is a plain `VALIDATION` on the `"slots"` field — D4 doesn't call
-/// for a more specific path, and (unlike `initialLoads[i].spoolId`, whose
-/// index the caller already knows) there's no established per-entry field
-/// path convention to match here.
+/// case-insensitively; `feederLabel` optional, 1-32 chars trimmed; no `id`
+/// repeated across entries (a repeat would silently collapse two intended
+/// slots into one gapped layout in [`set_layout`]'s pass 2). Every failure
+/// is a plain `VALIDATION` on the `"slots"` field — D4 doesn't call for a
+/// more specific path, and (unlike `initialLoads[i].spoolId`, whose index
+/// the caller already knows) there's no established per-entry field path
+/// convention to match here.
 fn normalize_and_validate(layout: &[SlotSpec]) -> Result<Vec<NormalizedSlot>, RepositoryError> {
     if layout.is_empty() || layout.len() > 16 {
         return Err(RepositoryError::Validation { field_path: "slots" });
     }
     let mut normalized = Vec::with_capacity(layout.len());
     let mut seen_names: Vec<String> = Vec::with_capacity(layout.len());
+    let mut seen_ids: Vec<&str> = Vec::with_capacity(layout.len());
     for spec in layout {
+        if let Some(id) = spec.id.as_deref() {
+            if seen_ids.contains(&id) {
+                return Err(RepositoryError::Validation { field_path: "slots" });
+            }
+            seen_ids.push(id);
+        }
         let name = spec.name.trim().to_string();
         let len = name.chars().count();
         if len < 1 || len > 32 {
@@ -150,14 +159,20 @@ pub fn insert_layout(
 }
 
 /// D12/global-constraints-clarification-2: replaces `printer_id`'s layout
-/// with `layout`, in two passes so the reorder never collides with the
-/// live-position unique index:
+/// with `layout`, in two passes so the reorder/rename never collides with
+/// the live-position or live-name unique index (e.g. swapping two slots'
+/// names, A/B -> B/A, or a new slot taking a name a kept slot gives up):
 ///
 /// 1. Every currently-live slot moves to `position + 100` (the migration's
-///    CHECK allows 0-115 for exactly this).
-/// 2. Every entry of `layout` gets its final position (its array index): an
-///    entry with an existing `id` is renamed/repositioned in place; an
-///    entry without one is a new slot.
+///    CHECK allows 0-115 for exactly this) AND gets a temporary name
+///    (`"tmp-" || position`, guaranteed unique per Printer since the
+///    positions it's built from were already unique) — freeing every
+///    current name before pass 2 assigns any final one, so no in-place
+///    rename or newly-inserted slot can collide with a name a still-live
+///    row happens to hold at that instant.
+/// 2. Every entry of `layout` gets its final position (its array index) and
+///    real name: an entry with an existing `id` is renamed/repositioned in
+///    place; an entry without one is a new slot.
 ///
 /// A live slot missing from `layout` is soft-removed (`removed_at` set, row
 /// kept — its history stays readable). Soft-removing an occupied slot fails
@@ -198,10 +213,16 @@ pub fn set_layout(
     }
 
     let now = now_rfc3339();
-    // Pass 1: every live slot out of the live 0-15 range so pass 2 never
-    // collides with `material_slots_live_position`.
+    // Pass 1: every live slot out of the live 0-15 position range AND off
+    // its current name, so pass 2 never collides with
+    // `material_slots_live_position` or `material_slots_live_name`. The
+    // `position + 100` on the right-hand side of both assignments reads
+    // the OLD (pre-update) position, per SQLite's UPDATE semantics — so
+    // both columns derive from the same pre-update value, and since the
+    // old positions were already unique per Printer (the live-position
+    // index), "tmp-" || that value is too.
     tx.execute(
-        "UPDATE material_slots SET position = position + 100
+        "UPDATE material_slots SET position = position + 100, name = 'tmp-' || (position + 100)
          WHERE printer_id = ?1 AND removed_at IS NULL",
         params![printer_id],
     )?;

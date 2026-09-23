@@ -107,6 +107,19 @@ pub fn load_spool(tx: &Transaction<'_>, id: &str) -> Result<Option<StoredSpool>,
     .map_err(StorageError::from)
 }
 
+/// D12's `initialLoads` eligibility rule: `spool_id` names an active Spool
+/// currently in storage (not already loaded into any slot). A missing
+/// Spool is not eligible. `printers::create::create_printer_with` checks
+/// every initial load against this before opening the create transaction —
+/// `movement::apply_moves` alone wouldn't reject "steal a Spool from
+/// wherever it currently is", since a slot->slot move is an ordinary, valid
+/// move in general.
+pub fn is_loadable_from_storage(tx: &Transaction<'_>, spool_id: &str) -> Result<bool, StorageError> {
+    Ok(load_spool(tx, spool_id)?.is_some_and(|spool| {
+        spool.lifecycle == SpoolLifecycle::Active && spool.slot_id.is_none()
+    }))
+}
+
 /// D9's derived, wire-shaped Spool list, ordered by `spoolNumber`. Joins
 /// `material_slots` for the occupied slot's `printerId` (a Spool's
 /// `location`) and sums `spool_reservations` in `{active, unresolved}` for

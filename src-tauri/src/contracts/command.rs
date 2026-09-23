@@ -740,6 +740,12 @@ impl CommandError {
     pub fn from_repository(error: crate::persistence::RepositoryError) -> Self {
         use crate::persistence::{RepositoryError, StorageError};
         match error {
+            RepositoryError::Validation {
+                field_path: "printers",
+            } => Self::validation_at(
+                "printers",
+                "Unload every Spool before importing Printers.",
+            ),
             RepositoryError::Validation { field_path } => {
                 Self::validation_at(field_path, "The submitted value is invalid.")
             }

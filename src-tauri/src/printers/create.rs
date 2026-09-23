@@ -239,6 +239,40 @@ pub async fn create_printer_with<R: tauri::Runtime>(
 ) -> Result<CreateOutcome, CommandError> {
     let name = validate_name(&options.name)?;
     let location = validate_location(options.location.as_deref())?;
+
+    // D12: each initial load must be an active Spool currently in storage
+    // (see `spools::repository::is_loadable_from_storage`'s doc comment).
+    // Checked here, above the credential-coordinator lock and before any
+    // credential-store write, so a rejection never leaves a provisional
+    // credential row to clean up — unlike a check placed after the lock is
+    // taken, whose `Err` return would skip straight past
+    // `retry_pending_credential_cleanup` (see the `drop(_guard)` /
+    // `create_result` handling below).
+    for (index, load) in options.initial_loads.iter().enumerate() {
+        if load.slot_index >= options.slot_layout.len() {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].slotIndex"),
+                "slotIndex must reference an entry of slotLayout.",
+            ));
+        }
+        let eligible = services
+            .storage
+            .read_transaction(|tx| {
+                Ok(crate::spools::repository::is_loadable_from_storage(
+                    tx,
+                    &load.spool_id,
+                ))
+            })
+            .and_then(|inner| inner)
+            .map_err(|error| CommandError::from_repository(error.into()))?;
+        if !eligible {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].spoolId"),
+                "The Spool must be active and currently in storage.",
+            ));
+        }
+    }
+
     let (variant, _) = resolve_catalog_ref(&services.catalog, &options.catalog_ref);
     let variant = variant.ok_or_else(|| {
         CommandError::validation_at("catalogRef", "The Printer Profile could not be resolved.")
@@ -334,35 +368,6 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         created_at: String::new(),
         updated_at: String::new(),
     };
-
-    // D12: each initial load must be an active Spool currently in storage —
-    // `movement::apply_move` alone wouldn't reject "steal a Spool from
-    // wherever it currently is", since a slot->slot move is an ordinary,
-    // valid move in general. Checked before the create transaction opens,
-    // so a rejection here creates no Printer row at all (not even a
-    // rolled-back one to distinguish from "never started").
-    for (index, load) in options.initial_loads.iter().enumerate() {
-        if load.slot_index >= options.slot_layout.len() {
-            return Err(CommandError::validation_at(
-                format!("initialLoads[{index}].slotIndex"),
-                "slotIndex must reference an entry of slotLayout.",
-            ));
-        }
-        let spool = services
-            .storage
-            .read_transaction(|tx| Ok(crate::spools::repository::load_spool(tx, &load.spool_id)))
-            .and_then(|inner| inner)
-            .map_err(|error| CommandError::from_repository(error.into()))?;
-        let eligible = spool.is_some_and(|spool| {
-            spool.lifecycle == crate::spools::SpoolLifecycle::Active && spool.slot_id.is_none()
-        });
-        if !eligible {
-            return Err(CommandError::validation_at(
-                format!("initialLoads[{index}].spoolId"),
-                "The Spool must be active and currently in storage.",
-            ));
-        }
-    }
 
     let create_result = repository.create_with_layout(
         printer,
