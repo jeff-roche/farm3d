@@ -2,11 +2,12 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** `a5796d0` (`fix: keep failed P2 saves and deletes
-visible instead of reporting success`), the last code commit on
-`feature/p2-printer-lifecycle`, after the final whole-branch review fix
-wave (see "Final review fix wave" below). The original verification pass
-ran against `97b27d9`; every command below was re-run against `a5796d0`.
+**Validated source:** `95803f9` (`feat: explain Printers archived for
+sharing a host`), the last code commit on `feature/p2-printer-lifecycle`,
+after the final whole-branch review fix wave and the PR follow-ups (see
+"Final review fix wave" and "PR follow-ups" below). The original
+verification pass ran against `97b27d9`; every command below was re-run
+against `95803f9`.
 Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
@@ -14,8 +15,8 @@ Covers Tasks 1–12 (P2 in full).
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 32 files, 321 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 11 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 5 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
+| `just test` | Passed: 32 files, 325 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) — the frontend's generated contracts already match the Rust side. |
 
 ### The tracer (spec acceptance criterion 16)
@@ -315,6 +316,32 @@ smaller accuracy fixes. All were fixed in `67fd705` (backend) and
     `PERSISTENCE_UNAVAILABLE` (data/migration failures), or `VALIDATION`
     (everything else). It no longer uses `PROTOCOL_ERROR` for these, and
     the original message is kept.
+
+## PR follow-ups
+
+Two follow-ups left open by the final review were done on the PR, each
+with a covering test first seen failing:
+
+1. **Import supervised its in-memory copy of the Printers.** If an archive
+   or delete committed between the import's `replace_all` and its
+   supervision pass, the import restarted supervision for that Printer until
+   the next restart. `import_printers` now uses `supervise_persisted`, the
+   same as the other lifecycle commands. Test:
+   `f1_import_export.rs::printers_import_does_not_supervise_a_printer_archived_after_its_commit`
+   archives the row from the `after_printers_commit` hook.
+2. **Nothing in the UI explained `DUPLICATE_HOST_ARCHIVED`.** The new
+   `list_duplicate_host_archives` command reads the v3 migration's ledger
+   rows as (archived, kept) Printer id pairs. The Monitor shows a
+   dismissible notice naming the affected Printers after startup for
+   upgrades, and after an import that archived any. An upgrade notice lists
+   only Printers that are still archived. Its dismissal is remembered by
+   ledger id in `localStorage`. Tests:
+   `p2_migration.rs::duplicate_host_migration_archives_are_listed_for_the_ui`,
+   the three archive-notice tests in `printer-store.test.ts`, and
+   `App.test.tsx` ("reads duplicate-host archives…").
+
+The command inventory is now 30 (`f1_contract_path.rs`,
+`f1_residual_acceptance.rs`).
 
 ## Files changed in this task
 
