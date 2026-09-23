@@ -1,6 +1,6 @@
 # The printer catalog is derived factual data from OrcaSlicer profiles
 
-farm3d ships a printer catalog (`src-tauri/resources/printer-catalog.json`)
+farm3d ships a printer catalog (`public/catalog/printer-catalog.json`)
 generated from OrcaSlicer's `resources/profiles` at a pinned git tag
 (`OrcaSlicer/OrcaSlicer`, AGPL-3.0-or-later — see the correction to ADR-0003).
 The generator (`src-tauri/src/bin/gen-catalog.rs`) allowlists exactly the

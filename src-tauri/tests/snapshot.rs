@@ -3,9 +3,9 @@ use std::path::Path;
 
 fn load_snapshot_raw() -> String {
     std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json"),
     )
-    .expect("resources/printer-catalog.json should be committed")
+    .expect("public/catalog/printer-catalog.json should be committed")
 }
 
 #[test]
