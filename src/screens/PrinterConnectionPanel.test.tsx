@@ -219,3 +219,78 @@ describe("PrinterConnectionPanel", () => {
     expect(screen.getAllByText("Kind")).toHaveLength(1);
   });
 });
+
+describe("PrinterConnectionPanel — Remove credentials", () => {
+  const withCredential = {
+    id: "prn-1",
+    name: "Bay 1",
+    profile: PROFILE,
+    connection: {
+      kind: "moonraker",
+      host: "voron.local",
+      port: 7125,
+      useTls: false,
+      credentialRef: "farm3d/credential/prn-1",
+    },
+  } as unknown as ResolvedPrinter;
+
+  it("is offered only when a credential is stored", () => {
+    const withoutCredential = {
+      ...withCredential,
+      connection: { ...withCredential.connection, credentialRef: undefined },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={withoutCredential} />);
+
+    expect(screen.queryByRole("button", { name: "Remove credentials" })).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation and does nothing when cancelled", async () => {
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent('deletes the stored API key for "Bay 1"');
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(setConnection).not.toHaveBeenCalled();
+  });
+
+  it("clears the stored credential on the saved Connection, ignoring unsaved edits", async () => {
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "unsaved.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    await screen.findByRole("dialog");
+    const confirm = screen
+      .getAllByRole("button", { name: "Remove credentials" })
+      .find((button) => button.closest("[role=dialog]"))!;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(setConnection).toHaveBeenCalledWith("prn-1", {
+      kind: "moonraker",
+      host: "voron.local",
+      port: 7125,
+      useTls: false,
+      credential: "",
+    });
+  });
+
+  it("keeps the dialog open and shows the error when removal fails", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1, code: "CREDENTIAL_UNAVAILABLE", message: "The credential store is unavailable.",
+      recovery: [], retryable: true,
+    });
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Remove credentials" }).find((button) => dialog.contains(button))!,
+    );
+
+    expect(await screen.findByText("The credential store is unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});

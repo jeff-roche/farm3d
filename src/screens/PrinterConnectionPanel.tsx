@@ -15,6 +15,7 @@ import {
   testConnection,
 } from "../printers/printer-store";
 import type { ConnectionSubmission, ResolvedPrinter } from "../printers/types";
+import { RemoveCredentialsDialog } from "./RemoveCredentialsDialog";
 import styles from "./PrinterConnectionPanel.module.css";
 
 export { buildMismatches };
@@ -49,6 +50,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   });
 
   const [store] = createResource(credentialStoreInfo);
+  const [removingCredentials, setRemovingCredentials] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   // The exact submission a failed Save was attempted with, so "Save anyway"
   // (D8's `acceptUnverified`) resubmits it unchanged -- `draft().credential`
@@ -143,12 +145,23 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
         <Button variant="primary" onClick={() => void onSave()}>
           Save
         </Button>
+        <Show when={existing()?.credentialRef}>
+          <Button variant="secondary" onClick={() => setRemovingCredentials(true)}>
+            Remove credentials
+          </Button>
+        </Show>
         <Show when={existing()}>
           <Button variant="danger" onClick={() => void clearConnection(props.printer.id)}>
             Disconnect
           </Button>
         </Show>
       </div>
+
+      <RemoveCredentialsDialog
+        open={removingCredentials()}
+        onOpenChange={setRemovingCredentials}
+        printer={props.printer}
+      />
     </div>
   );
 }
