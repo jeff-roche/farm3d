@@ -716,8 +716,9 @@ action is needed.
   example, the inotify `max_user_watches` limit), that directory falls back
   to a `notify::PollWatcher` at 10 s intervals.
 - **Surfacing the watch mode.** `ModelRecord.link.watchMode` reports
-  `watching`, `polling`, or `notWatched` (runtime only, not persisted). The
-  UI shows "Changes are checked every 10 seconds" for `polling`.
+  `watching`, `polling`, or `notWatched` (runtime only, not persisted). For
+  `polling`, the UI shows "Changes are checked every N seconds", with N
+  from the active poll interval.
 - **Network filesystems.** Event delivery is not assumed. Triggers 1 and 3
   still apply.
 
