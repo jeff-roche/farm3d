@@ -233,6 +233,22 @@ pub fn printer_lifecycle_eligibility<R: tauri::Runtime>(
     Ok(CommandSuccess::new(eligibility))
 }
 
+/// Lists the Printers the v3 migration archived for sharing a host with an
+/// older Printer, so the UI can explain them (see `DuplicateHostArchive`).
+#[tauri::command]
+pub fn list_duplicate_host_archives<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<Vec<crate::printers::host_identity::DuplicateHostArchive>>, CommandError>
+{
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    crate::printers::host_identity::duplicate_host_archives(&services.storage)
+        .map(CommandSuccess::new)
+        .map_err(|error| CommandError::from_repository(error.into()))
+}
+
 /// D6: moves a Printer into the archived state. Order matters: the
 /// repository write commits first, then the supervisor is stopped under the
 /// reconciliation guard — never the other way around, or the supervisor

@@ -37,12 +37,13 @@ use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
     OperationWarningCode, PrinterMutationResult, PrinterRevisionPrecondition, PrintersImportResult,
 };
+use farm3d_lib::printers::host_identity::DuplicateHostArchive;
+use farm3d_lib::printers::lifecycle::{
+    LifecycleAction, LifecycleBlocker, LifecycleBlockerCode, LifecycleEligibility,
+};
 use farm3d_lib::printers::operational::{
     HostActivity, OperationalInput, OperationalResult, OperationalState, PrinterReadiness,
     ReadinessReason, ReadinessState, TelemetryFreshness,
-};
-use farm3d_lib::printers::lifecycle::{
-    LifecycleAction, LifecycleBlocker, LifecycleBlockerCode, LifecycleEligibility,
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
@@ -267,6 +268,7 @@ fn export_registry() -> Vec<Export> {
         export::<BatchRowWarning>(),
         export::<BatchRowWarningCode>(),
         export::<CancelPrinterBatchData>(),
+        export::<DuplicateHostArchive>(),
         export::<SettingsExportResult>(),
         export::<SettingsImportResult>(),
         export::<EventSubject>(),

@@ -86,6 +86,51 @@ pub fn archive_duplicates(
     archived_pairs
 }
 
+/// A Printer the v3 migration archived because it shared a host identity
+/// with an older one (spec "Pre-existing duplicate hosts"). Read back from
+/// the `migration_warnings` ledger so the UI can explain why it's archived.
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/DuplicateHostArchive.ts")]
+pub struct DuplicateHostArchive {
+    /// The ledger row's id — stable, so the UI can remember a dismissal.
+    pub warning_id: String,
+    pub archived_printer_id: String,
+    pub kept_printer_id: String,
+}
+
+/// Lists the migration's `DUPLICATE_HOST_ARCHIVED` ledger rows, oldest
+/// first. A row whose details don't name both Printers is skipped rather
+/// than failing the read — the ledger is advisory.
+pub fn duplicate_host_archives(
+    storage: &std::sync::Arc<crate::persistence::Storage>,
+) -> Result<Vec<DuplicateHostArchive>, crate::persistence::StorageError> {
+    let rows = storage.read(|connection| {
+        let mut statement = connection.prepare(
+            "SELECT id, details_json FROM migration_warnings
+             WHERE code = 'DUPLICATE_HOST_ARCHIVED'
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(warning_id, details)| {
+            let details: serde_json::Value = serde_json::from_str(&details).ok()?;
+            Some(DuplicateHostArchive {
+                warning_id,
+                archived_printer_id: details["archivedPrinterId"].as_str()?.to_string(),
+                kept_printer_id: details["keptPrinterId"].as_str()?.to_string(),
+            })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{archive_duplicates, canonical_host_identity};

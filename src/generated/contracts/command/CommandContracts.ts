@@ -6,6 +6,7 @@ import type { CatalogVariantSummary } from "../domain/CatalogVariantSummary";
 import type { ConnectionSubmission } from "../domain/ConnectionSubmission";
 import type { CredentialStoreInfo } from "../domain/CredentialStoreInfo";
 import type { DiscoveredPrinter } from "../domain/DiscoveredPrinter";
+import type { DuplicateHostArchive } from "../domain/DuplicateHostArchive";
 import type { LifecycleEligibility } from "../domain/LifecycleEligibility";
 import type { MonitorDensity } from "../domain/MonitorDensity";
 import type { MonitorSection } from "../domain/MonitorSection";
@@ -89,3 +90,5 @@ export type CreatePrintersBatchRequest = ContractRequest & { input: CreatePrinte
 export type CreatePrintersBatchResult = CommandSuccess<CreatePrintersBatchOutput>;
 export type CancelPrinterBatchRequest = ContractRequest & { batchId: string };
 export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;
+export type ListDuplicateHostArchivesRequest = NoArgsRequest;
+export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchive[]>;

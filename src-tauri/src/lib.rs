@@ -15,12 +15,12 @@ use connections::commands::{
     set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
     archive_printer, create_printer, delete_printer, export_printers, import_printers,
-    list_printers, printer_lifecycle_eligibility, rebind_printer, resolve_profile_drift,
-    set_printer_override, unarchive_printer, update_printer,
+    list_duplicate_host_archives, list_printers, printer_lifecycle_eligibility, rebind_printer,
+    resolve_profile_drift, set_printer_override, unarchive_printer, update_printer,
 };
-use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
 use std::sync::Arc;
@@ -71,7 +71,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 29] = [
+pub const COMMAND_NAMES: [&str; 30] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -101,6 +101,7 @@ pub const COMMAND_NAMES: [&str; 29] = [
     "probe_connection",
     "create_printers_batch",
     "cancel_printer_batch",
+    "list_duplicate_host_archives",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -387,6 +388,7 @@ pub fn run() {
             probe_connection,
             create_printers_batch,
             cancel_printer_batch,
+            list_duplicate_host_archives,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

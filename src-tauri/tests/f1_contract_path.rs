@@ -1,6 +1,6 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_lifecycle_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 29);
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 30);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -33,6 +33,7 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_lifecycle_additions() {
             "probe_connection",
             "create_printers_batch",
             "cancel_printer_batch",
+            "list_duplicate_host_archives",
         ]
     );
 }
@@ -55,7 +56,7 @@ fn generated_contracts_and_sqlite_never_contain_the_fixture_secret() {
 }
 
 #[test]
-fn all_twenty_nine_handlers_return_the_captured_nonretryable_bootstrap_error() {
+fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
     use farm3d_lib::bootstrap::BootstrapState;
     use farm3d_lib::contracts::command::CommandError;
     use farm3d_lib::RuntimeServices;
@@ -116,6 +117,7 @@ fn all_twenty_nine_handlers_return_the_captured_nonretryable_bootstrap_error() {
             farm3d_lib::printers::create::probe_connection,
             farm3d_lib::printers::batch::create_printers_batch,
             farm3d_lib::printers::batch::cancel_printer_batch,
+            farm3d_lib::printers::commands::list_duplicate_host_archives,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -201,8 +203,9 @@ fn all_twenty_nine_handlers_return_the_captured_nonretryable_bootstrap_error() {
             }}),
         ),
         ("cancel_printer_batch", json!({"batchId": "b"})),
+        ("list_duplicate_host_archives", json!({})),
     ];
-    assert_eq!(cases.len(), 29);
+    assert_eq!(cases.len(), 30);
     for (command, mut body) in cases {
         body["contractVersion"] = json!(1);
         let error = invoke(&webview, command, body).unwrap_err();

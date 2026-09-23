@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 29] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 30] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -145,9 +145,14 @@ contracts![
         "CancelPrinterBatchRequest",
         "CancelPrinterBatchResult"
     ),
+    (
+        "list_duplicate_host_archives",
+        "ListDuplicateHostArchivesRequest",
+        "ListDuplicateHostArchivesResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 29] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 30] {
     &COMMAND_CONTRACTS
 }
 
@@ -227,7 +232,9 @@ export type ProbeConnectionResult = CommandSuccess<ProbeResult>;
 export type CreatePrintersBatchRequest = ContractRequest & { input: CreatePrintersBatchInput };
 export type CreatePrintersBatchResult = CommandSuccess<CreatePrintersBatchOutput>;
 export type CancelPrinterBatchRequest = ContractRequest & { batchId: string };
-export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;"#.to_string()
+export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;
+export type ListDuplicateHostArchivesRequest = NoArgsRequest;
+export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchive[]>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -264,6 +271,7 @@ export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;"#
         visitor.visit::<crate::printers::batch::CreatePrintersBatchInput>();
         visitor.visit::<crate::printers::batch::CreatePrintersBatchOutput>();
         visitor.visit::<crate::printers::batch::CancelPrinterBatchData>();
+        visitor.visit::<crate::printers::host_identity::DuplicateHostArchive>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

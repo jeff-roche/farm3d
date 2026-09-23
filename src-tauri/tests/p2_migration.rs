@@ -173,6 +173,49 @@ fn upgrading_v2_archives_every_duplicate_host_printer_but_the_oldest() {
     assert_eq!(warning_count, 1);
 }
 
+/// The UI reads the migration's duplicate-host archives back through the
+/// repository as (archived, kept) Printer id pairs.
+#[test]
+fn duplicate_host_migration_archives_are_listed_for_the_ui() {
+    let temp = tempfile::tempdir().expect("temporary root");
+    let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data"))
+        .expect("storage paths");
+    let lease = MetadataRootLease::acquire(&paths).expect("metadata lease");
+    {
+        let connection = v2_database(&paths);
+        insert_v2_printer(
+            &connection,
+            "prn-old",
+            "2026-01-01T00:00:00.000Z",
+            "Voron.local",
+            7125,
+        );
+        insert_v2_printer(
+            &connection,
+            "prn-new",
+            "2026-01-02T00:00:00.000Z",
+            "voron.local.",
+            7125,
+        );
+        insert_v2_printer(
+            &connection,
+            "prn-solo",
+            "2026-01-03T00:00:00.000Z",
+            "solo.local",
+            7125,
+        );
+    }
+
+    let storage = std::sync::Arc::new(Storage::open(paths, &lease).expect("v3 storage"));
+    let archives = farm3d_lib::printers::host_identity::duplicate_host_archives(&storage)
+        .expect("archives read");
+
+    assert_eq!(archives.len(), 1);
+    assert_eq!(archives[0].archived_printer_id, "prn-new");
+    assert_eq!(archives[0].kept_printer_id, "prn-old");
+    assert!(!archives[0].warning_id.is_empty());
+}
+
 /// 3. After the v2→v3 upgrade, the partial unique index rejects a third
 ///    active Printer on the same host identity.
 #[test]
