@@ -493,6 +493,22 @@ fn slot_removed_at(storage: &Storage, slot_id: &str) -> Option<String> {
         .unwrap()
 }
 
+/// Fix round 2: queries `material_slots` directly (not `live_slots`, which
+/// excludes removed rows) — a removed slot's real name must survive
+/// `set_layout`'s pass 1, not be left holding its `"tmp-<position>"`
+/// placeholder.
+fn slot_name(storage: &Storage, slot_id: &str) -> String {
+    storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT name FROM material_slots WHERE id = ?1",
+                [slot_id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap()
+}
+
 #[test]
 fn set_material_slot_layout_reorders_renames_adds_and_removes_an_empty_slot() {
     let (_temp, _lease, storage) = storage();
@@ -604,6 +620,11 @@ fn set_material_slot_layout_reorders_renames_adds_and_removes_an_empty_slot() {
 
     // The removed slot keeps its row, and its history is still readable.
     assert!(slot_removed_at(&storage, &b_id).is_some());
+    // Fix round 2: it also keeps its REAL name ("B") — pass 1's
+    // `tmp-<position>` rename must never touch an already-removed row, so
+    // e.g. the Spool history UI never shows a past movement's slot as
+    // "tmp-100".
+    assert_eq!(slot_name(&storage, &b_id), "B");
     let history = storage
         .write(|tx| movement::history(tx, &spool_row.id))
         .unwrap();

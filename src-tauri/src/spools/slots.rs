@@ -159,25 +159,30 @@ pub fn insert_layout(
 }
 
 /// D12/global-constraints-clarification-2: replaces `printer_id`'s layout
-/// with `layout`, in two passes so the reorder/rename never collides with
-/// the live-position or live-name unique index (e.g. swapping two slots'
-/// names, A/B -> B/A, or a new slot taking a name a kept slot gives up):
+/// with `layout`. Slots missing from `layout` are soft-removed FIRST
+/// (`removed_at` set, row and its real name both kept — D12: removed slots
+/// keep their history, name included, readable until the Printer itself is
+/// deleted; the Spool history UI shows a past movement's slot name from
+/// this row). Soft-removing an occupied slot fails the whole call with
+/// [`RepositoryError::SlotOccupied`] before any write.
 ///
-/// 1. Every currently-live slot moves to `position + 100` (the migration's
+/// What's left live is then reordered/renamed in two passes so neither
+/// collides with the live-position or live-name unique index (e.g.
+/// swapping two slots' names, A/B -> B/A, or a new slot taking a name a
+/// kept slot gives up):
+///
+/// 1. Every REMAINING live slot moves to `position + 100` (the migration's
 ///    CHECK allows 0-115 for exactly this) AND gets a temporary name
 ///    (`"tmp-" || position`, guaranteed unique per Printer since the
 ///    positions it's built from were already unique) — freeing every
 ///    current name before pass 2 assigns any final one, so no in-place
 ///    rename or newly-inserted slot can collide with a name a still-live
-///    row happens to hold at that instant.
+///    row happens to hold at that instant. Already-removed rows fall
+///    outside `WHERE removed_at IS NULL`, so this never touches (and never
+///    overwrites the real name of) a slot this call just dropped.
 /// 2. Every entry of `layout` gets its final position (its array index) and
 ///    real name: an entry with an existing `id` is renamed/repositioned in
 ///    place; an entry without one is a new slot.
-///
-/// A live slot missing from `layout` is soft-removed (`removed_at` set, row
-/// kept — its history stays readable). Soft-removing an occupied slot fails
-/// the whole call with [`RepositoryError::SlotOccupied`] before either pass
-/// runs.
 pub fn set_layout(
     tx: &Transaction<'_>,
     printer_id: &str,
@@ -213,12 +218,23 @@ pub fn set_layout(
     }
 
     let now = now_rfc3339();
-    // Pass 1: every live slot out of the live 0-15 position range AND off
-    // its current name, so pass 2 never collides with
-    // `material_slots_live_position` or `material_slots_live_name`. The
-    // `position + 100` on the right-hand side of both assignments reads
-    // the OLD (pre-update) position, per SQLite's UPDATE semantics — so
-    // both columns derive from the same pre-update value, and since the
+    // Soft-remove dropped slots FIRST — before pass 1 below, so their real
+    // names are never overwritten by the temporary rename. Once
+    // `removed_at` is set, `WHERE removed_at IS NULL` excludes them from
+    // both the live-position and live-name unique indexes, freeing their
+    // old position/name for pass 2 to reuse immediately.
+    for slot in &removed {
+        tx.execute(
+            "UPDATE material_slots SET removed_at = ?2 WHERE id = ?1",
+            params![slot.id, now],
+        )?;
+    }
+    // Pass 1: every slot STILL live (i.e. kept) out of the live 0-15
+    // position range AND off its current name, so pass 2 never collides
+    // with `material_slots_live_position` or `material_slots_live_name`.
+    // The `position + 100` on the right-hand side of both assignments
+    // reads the OLD (pre-update) position, per SQLite's UPDATE semantics —
+    // so both columns derive from the same pre-update value, and since the
     // old positions were already unique per Printer (the live-position
     // index), "tmp-" || that value is too.
     tx.execute(
@@ -226,12 +242,6 @@ pub fn set_layout(
          WHERE printer_id = ?1 AND removed_at IS NULL",
         params![printer_id],
     )?;
-    for slot in &removed {
-        tx.execute(
-            "UPDATE material_slots SET removed_at = ?2 WHERE id = ?1",
-            params![slot.id, now],
-        )?;
-    }
     // Pass 2: final positions (array order), renaming kept slots and
     // inserting new ones.
     for (position, slot) in normalized.iter().enumerate() {
