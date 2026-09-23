@@ -226,38 +226,66 @@ pub struct SpoolFields {
 }
 
 impl SpoolFields {
-    /// Normalizes `colorHex`'s case in place (`"#aabbcc"` -> `"#AABBCC"`)
-    /// before validation/storage, matching the migration's uppercase-only
-    /// `GLOB` CHECK. Case is the only thing normalized here — format is
-    /// [`validate_fields`]'s job.
+    /// Normalizes every free-text field in place, before validation and
+    /// before storage:
+    ///
+    /// - `manufacturer`/`colorName` (required) are trimmed. A whitespace-only
+    ///   value becomes an empty string, which [`validate_fields`]'s length
+    ///   check then rejects — normalization never turns a required field
+    ///   into something that silently passes.
+    /// - `product`/`materialOther`/`notes` (optional) are trimmed, and a
+    ///   blank result becomes `None` rather than `Some("")`.
+    /// - `colorHex` is trimmed, blank becomes `None`, and its case is
+    ///   uppercased (`"#aabbcc"` -> `"#AABBCC"`) to match the migration's
+    ///   uppercase-only `GLOB` CHECK. Format is still [`validate_fields`]'s
+    ///   job.
     pub fn normalize(&mut self) {
-        if let Some(hex) = &mut self.color_hex {
-            *hex = hex.to_ascii_uppercase();
-        }
+        self.manufacturer = self.manufacturer.trim().to_string();
+        self.color_name = self.color_name.trim().to_string();
+        self.product = normalize_optional_text(self.product.take());
+        self.material_other = normalize_optional_text(self.material_other.take());
+        self.notes = normalize_optional_text(self.notes.take());
+        self.color_hex = normalize_optional_text(self.color_hex.take())
+            .map(|hex| hex.to_ascii_uppercase());
     }
 }
 
-fn validate_trimmed_len(
+/// Trims an optional free-text value and turns a blank result into `None`,
+/// so `Some("")`/`Some("   ")` never reaches [`validate_fields`] as if it
+/// were a present value. Shared by every optional field
+/// [`SpoolFields::normalize`] touches.
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    let trimmed = value?.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn validate_len(
     value: &str,
     min: usize,
     max: usize,
     field_path: &'static str,
 ) -> Result<(), RepositoryError> {
     let len = value.chars().count();
-    if value.trim() != value || len < min || len > max {
+    if len < min || len > max {
         return Err(RepositoryError::Validation { field_path });
     }
     Ok(())
 }
 
-/// D2: `materialOther` must be present, 1-32 chars, and trimmed when the
-/// family is `Other`; forbidden for every other family.
+/// D2: `materialOther` must be present and 1-32 chars when the family is
+/// `Other`; forbidden for every other family. Assumes the caller has
+/// already normalized (trimmed, blank-to-`None`) `materialOther` — see
+/// [`SpoolFields::normalize`].
 fn validate_material_other(
     family: MaterialFamily,
     material_other: &Option<String>,
 ) -> Result<(), RepositoryError> {
     match (family, material_other) {
-        (MaterialFamily::Other, Some(other)) => validate_trimmed_len(other, 1, 32, "materialOther"),
+        (MaterialFamily::Other, Some(other)) => validate_len(other, 1, 32, "materialOther"),
         (MaterialFamily::Other, None) => Err(RepositoryError::Validation {
             field_path: "materialOther",
         }),
@@ -268,9 +296,9 @@ fn validate_material_other(
     }
 }
 
-/// D2: `#RRGGBB`, uppercase only. The caller normalizes case first (see
-/// [`SpoolFields::normalize`]) — this only checks the format the migration's
-/// `GLOB` CHECK also enforces.
+/// D2: `#RRGGBB`, uppercase only. Assumes the caller has already normalized
+/// `colorHex`'s case (see [`SpoolFields::normalize`]) — this only checks the
+/// format the migration's `GLOB` CHECK also enforces.
 fn validate_color_hex(color_hex: &str) -> Result<(), RepositoryError> {
     let is_valid = color_hex.len() == 7
         && color_hex.as_bytes()[0] == b'#'
@@ -287,24 +315,34 @@ fn validate_color_hex(color_hex: &str) -> Result<(), RepositoryError> {
 }
 
 /// D1/D2: every range and presence rule a `SpoolFields` must satisfy before
-/// `create_spool`/`update_spool` (Task 2/7) write it. Assumes the caller has
-/// already normalized `colorHex`'s case (see [`SpoolFields::normalize`]).
+/// `create_spool`/`update_spool` (Task 2/7) write it.
+///
+/// Validates a [`SpoolFields::normalize`]d copy of `fields`, not `fields`
+/// itself — so a caller that hasn't normalized yet gets tolerant validation
+/// (leading/trailing whitespace and blank-optional inputs are accepted
+/// here exactly as `normalize` would leave them) rather than a rejection
+/// that normalization would have silently fixed anyway. Callers that go on
+/// to persist `fields` still need to call `fields.normalize()` themselves
+/// first, so the stored row matches what was validated.
 pub fn validate_fields(fields: &SpoolFields) -> Result<(), RepositoryError> {
-    validate_trimmed_len(&fields.manufacturer, 1, 64, "manufacturer")?;
-    if let Some(product) = &fields.product {
-        validate_trimmed_len(product, 1, 64, "product")?;
+    let mut normalized = fields.clone();
+    normalized.normalize();
+
+    validate_len(&normalized.manufacturer, 1, 64, "manufacturer")?;
+    if let Some(product) = &normalized.product {
+        validate_len(product, 1, 64, "product")?;
     }
-    validate_material_other(fields.material_family, &fields.material_other)?;
-    validate_trimmed_len(&fields.color_name, 1, 32, "colorName")?;
-    if let Some(color_hex) = &fields.color_hex {
+    validate_material_other(normalized.material_family, &normalized.material_other)?;
+    validate_len(&normalized.color_name, 1, 32, "colorName")?;
+    if let Some(color_hex) = &normalized.color_hex {
         validate_color_hex(color_hex)?;
     }
-    if !weight::NOMINAL_MG_RANGE.contains(&fields.nominal_mg) {
+    if !weight::NOMINAL_MG_RANGE.contains(&normalized.nominal_mg) {
         return Err(RepositoryError::Validation {
             field_path: "nominalMg",
         });
     }
-    if !weight::LOW_THRESHOLD_MG_RANGE.contains(&fields.low_threshold_mg) {
+    if !weight::LOW_THRESHOLD_MG_RANGE.contains(&normalized.low_threshold_mg) {
         return Err(RepositoryError::Validation {
             field_path: "lowThresholdMg",
         });
@@ -361,9 +399,16 @@ mod tests {
     }
 
     #[test]
-    fn manufacturer_must_already_be_trimmed() {
+    fn validate_fields_tolerates_untrimmed_manufacturer() {
         let mut fields = valid_fields();
-        fields.manufacturer = " Polymaker".to_string();
+        fields.manufacturer = "  Polymaker  ".to_string();
+        assert!(validate_fields(&fields).is_ok());
+    }
+
+    #[test]
+    fn whitespace_only_manufacturer_fails_as_empty() {
+        let mut fields = valid_fields();
+        fields.manufacturer = "   ".to_string();
         assert!(matches!(
             validate_fields(&fields),
             Err(RepositoryError::Validation {
@@ -373,18 +418,26 @@ mod tests {
     }
 
     #[test]
-    fn product_is_optional_but_bounded_and_trimmed_when_present() {
+    fn normalize_trims_manufacturer_and_color_name() {
+        let mut fields = valid_fields();
+        fields.manufacturer = "  Polymaker  ".to_string();
+        fields.color_name = "  Black  ".to_string();
+        fields.normalize();
+        assert_eq!(fields.manufacturer, "Polymaker");
+        assert_eq!(fields.color_name, "Black");
+    }
+
+    #[test]
+    fn product_is_optional_and_bounded_when_present() {
         let mut fields = valid_fields();
         fields.product = None;
         assert!(validate_fields(&fields).is_ok());
 
+        // A blank product normalizes to None rather than failing length.
         fields.product = Some(String::new());
-        assert!(matches!(
-            validate_fields(&fields),
-            Err(RepositoryError::Validation {
-                field_path: "product"
-            })
-        ));
+        assert!(validate_fields(&fields).is_ok());
+        fields.product = Some("   ".to_string());
+        assert!(validate_fields(&fields).is_ok());
 
         fields.product = Some("x".repeat(65));
         assert!(matches!(
@@ -394,17 +447,27 @@ mod tests {
             })
         ));
 
-        fields.product = Some("PolyTerra ".to_string());
-        assert!(matches!(
-            validate_fields(&fields),
-            Err(RepositoryError::Validation {
-                field_path: "product"
-            })
-        ));
+        // Untrimmed input is tolerated, not rejected.
+        fields.product = Some(" PolyTerra ".to_string());
+        assert!(validate_fields(&fields).is_ok());
     }
 
     #[test]
-    fn other_requires_material_other_one_to_thirty_two_chars_trimmed() {
+    fn normalize_blanks_optional_free_text_fields_to_none() {
+        let mut fields = valid_fields();
+        fields.product = Some("   ".to_string());
+        fields.material_other = Some(String::new());
+        fields.notes = Some("\t".to_string());
+        fields.color_hex = Some("  ".to_string());
+        fields.normalize();
+        assert_eq!(fields.product, None);
+        assert_eq!(fields.material_other, None);
+        assert_eq!(fields.notes, None);
+        assert_eq!(fields.color_hex, None);
+    }
+
+    #[test]
+    fn other_requires_material_other_one_to_thirty_two_chars() {
         let mut fields = valid_fields();
         fields.material_family = MaterialFamily::Other;
         fields.material_other = None;
@@ -415,6 +478,8 @@ mod tests {
             })
         ));
 
+        // A blank materialOther normalizes to None, which OTHER still
+        // requires be present.
         fields.material_other = Some(String::new());
         assert!(matches!(
             validate_fields(&fields),
@@ -431,15 +496,8 @@ mod tests {
             })
         ));
 
-        fields.material_other = Some(" PVDF".to_string());
-        assert!(matches!(
-            validate_fields(&fields),
-            Err(RepositoryError::Validation {
-                field_path: "materialOther"
-            })
-        ));
-
-        fields.material_other = Some("PVDF".to_string());
+        // Untrimmed input is tolerated, not rejected.
+        fields.material_other = Some(" PVDF ".to_string());
         assert!(validate_fields(&fields).is_ok());
     }
 
@@ -457,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn color_name_must_be_one_to_thirty_two_chars_and_trimmed() {
+    fn color_name_must_be_one_to_thirty_two_chars() {
         let mut fields = valid_fields();
         fields.color_name = String::new();
         assert!(matches!(
@@ -475,22 +533,27 @@ mod tests {
             })
         ));
 
-        fields.color_name = " Black".to_string();
+        // Whitespace-only still fails as empty.
+        fields.color_name = "   ".to_string();
         assert!(matches!(
             validate_fields(&fields),
             Err(RepositoryError::Validation {
                 field_path: "colorName"
             })
         ));
+
+        // Untrimmed input is tolerated, not rejected.
+        fields.color_name = " Black ".to_string();
+        assert!(validate_fields(&fields).is_ok());
     }
 
     #[test]
-    fn color_hex_is_optional_but_must_be_hash_rrggbb_uppercase() {
+    fn color_hex_is_optional_but_must_be_hash_rrggbb() {
         let mut fields = valid_fields();
         fields.color_hex = None;
         assert!(validate_fields(&fields).is_ok());
 
-        for invalid in ["000000", "#00000", "#0000000", "#GGGGGG", "#aabbcc"] {
+        for invalid in ["000000", "#00000", "#0000000", "#GGGGGG"] {
             fields.color_hex = Some(invalid.to_string());
             assert!(
                 matches!(
@@ -503,12 +566,21 @@ mod tests {
             );
         }
 
+        // A blank colorHex normalizes to None rather than failing format.
+        fields.color_hex = Some("   ".to_string());
+        assert!(validate_fields(&fields).is_ok());
+
+        // Case is tolerated here — normalization uppercases it before the
+        // format check runs.
+        fields.color_hex = Some("#aabbcc".to_string());
+        assert!(validate_fields(&fields).is_ok());
+
         fields.color_hex = Some("#AABBCC".to_string());
         assert!(validate_fields(&fields).is_ok());
     }
 
     #[test]
-    fn normalize_uppercases_color_hex_case_only() {
+    fn normalize_uppercases_color_hex() {
         let mut fields = valid_fields();
         fields.color_hex = Some("#aabbcc".to_string());
         fields.normalize();
