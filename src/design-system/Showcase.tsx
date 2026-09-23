@@ -393,11 +393,23 @@ export function Showcase() {
       </Panel>
 
       <Panel title="ColorSwatch">
-        <div class={styles.row}>
-          <ColorSwatch hex="#1c1c1c" name="Black" />
-          <ColorSwatch hex="#2f7a3c" name="Farm Green" />
-          <ColorSwatch hex={null} name="Unknown" />
-          <ColorSwatch hex="#2f7a3c" name="Farm Green" size="sm" />
+        <div class={styles.column}>
+          <div class={styles.row}>
+            <ColorSwatch hex="#1c1c1c" name="Black" />
+            Black
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex="#2f7a3c" name="Farm Green" />
+            Farm Green
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex={null} name="Unknown" />
+            Unknown
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex="#2f7a3c" name="Farm Green" size="sm" />
+            Farm Green (sm)
+          </div>
         </div>
       </Panel>
     </div>

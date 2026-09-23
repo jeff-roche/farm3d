@@ -36,7 +36,12 @@ export function Timeline(props: TimelineProps) {
       <For each={props.items}>
         {(item) => (
           <li class={styles.item}>
-            <span class={[styles.marker, styles[item.marker ?? "default"]].join(" ")} aria-hidden="true" />
+            <span
+              class={[styles.marker, item.marker === "muted" ? styles.muted : undefined]
+                .filter(Boolean)
+                .join(" ")}
+              aria-hidden="true"
+            />
             <div class={styles.body}>
               <time class={styles.time} datetime={item.at}>
                 {formatTimestamp(item.at)}

@@ -63,6 +63,13 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
   };
 
   const handleKeyDown: JSX.EventHandler<HTMLTableElement, KeyboardEvent> = (event) => {
+    // Row navigation only — a header's sort button lives in `<thead>` and
+    // handles its own Enter/Space via native button activation; without
+    // this guard, arrow keys and Enter on a focused header would also move
+    // row selection / re-fire onActivate.
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("thead")) return;
+
     const ids = rowIds();
     if (ids.length === 0) return;
 

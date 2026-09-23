@@ -24,7 +24,10 @@ const columns: DataTableColumn<Row>[] = [
   { id: "amount", header: "Amount", cell: (row) => String(row.amount), sortValue: (row) => row.amount, align: "end" },
 ];
 
-function SelectableTable(props: { onActivate?: (id: string) => void }) {
+function SelectableTable(props: {
+  onActivate?: (id: string) => void;
+  onSortChange?: (sort: { columnId: string; direction: "asc" | "desc" }) => void;
+}) {
   const [selectedId, setSelectedId] = createSignal<string | null>("a");
   return (
     <DataTable
@@ -35,6 +38,7 @@ function SelectableTable(props: { onActivate?: (id: string) => void }) {
       selectedId={selectedId()}
       onSelect={setSelectedId}
       onActivate={props.onActivate}
+      onSortChange={props.onSortChange}
     />
   );
 }
@@ -73,6 +77,28 @@ describe("DataTable", () => {
     await fireEvent.keyDown(grid, { key: "ArrowDown" });
     await fireEvent.keyDown(grid, { key: "Enter" });
     expect(onActivate).toHaveBeenCalledWith("b");
+  });
+
+  it("scopes keyboard handling to rows: header Enter sorts without activating, header ArrowDown leaves selection alone", async () => {
+    const onActivate = vi.fn();
+    const onSortChange = vi.fn();
+    render(() => <SelectableTable onActivate={onActivate} onSortChange={onSortChange} />);
+
+    const nameHeaderButton = screen.getByText("Name");
+    nameHeaderButton.focus();
+
+    // A real browser fires both `keydown` and, as the focused <button>'s
+    // native default action, a `click` when Enter is pressed. jsdom's
+    // `fireEvent.keyDown` doesn't synthesize that click for us, so this
+    // fires both to reproduce what a keyboard user actually triggers.
+    await fireEvent.keyDown(nameHeaderButton, { key: "Enter" });
+    await fireEvent.click(nameHeaderButton);
+    expect(onSortChange).toHaveBeenCalledWith({ columnId: "name", direction: "asc" });
+    expect(onActivate).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(nameHeaderButton, { key: "ArrowDown" });
+    expect(screen.getByRole("row", { name: /Alpha/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("false");
   });
 
   it("is itself tabbable when nothing is selected, and selects+focuses the first row on ArrowDown", async () => {
