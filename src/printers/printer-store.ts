@@ -25,6 +25,7 @@ import type {
   PrinterStatus,
   ProbeResult,
   ResolvedPrinter,
+  SlotSpec,
 } from "./types";
 import { resolvePrinterRecord } from "./types";
 
@@ -208,6 +209,46 @@ function defaultWebMaterialSlots(seedId: string): MaterialSlot[] {
   return [{ id: `slt-web-${seedId}`, position: 0, name: "Main" }];
 }
 
+/** D4/D12 web fixture: the one seed Printer wired with more than the
+ *  default single slot, so `spools/web-fixtures.ts` has a multi-slot
+ *  Printer to load a Spool onto. Exported so that module (and its tests)
+ *  reference the same ids rather than duplicating them. */
+export const WEB_FIXTURE_EQUIPPED_PRINTER_ID = "prn-web-cc-1";
+const WEB_FIXTURE_EQUIPPED_SLOTS: MaterialSlot[] = [
+  { id: "slt-web-cc1-1", position: 0, name: "Slot 1", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-2", position: 1, name: "Slot 2", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-3", position: 2, name: "Slot 3", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-4", position: 3, name: "Slot 4", feederLabel: "AMS 1" },
+];
+export const WEB_FIXTURE_EQUIPPED_SLOT_ID = WEB_FIXTURE_EQUIPPED_SLOTS[0].id;
+
+function webMaterialSlotsFor(seedId: string): MaterialSlot[] {
+  return seedId === WEB_FIXTURE_EQUIPPED_PRINTER_ID ? WEB_FIXTURE_EQUIPPED_SLOTS : defaultWebMaterialSlots(seedId);
+}
+
+/** D12's `slotLayout`/`initialLoads` in web mode: a best-effort mirror of
+ *  what `create_printer` does in one transaction on the desktop. It marks
+ *  the loaded slots' `occupantSpoolId` locally, but (unlike the real
+ *  command) cannot also update the loaded Spools' own `location` --
+ *  `spool-store.ts` owns that state and there's no create-time seam into it
+ *  from here. Not exercised by web-fixtures.ts, which loads its one Spool
+ *  by placing it directly rather than through `createPrinter`. */
+function webMaterialSlotsFromOptions(id: string, options: CreatePrinterOptions): MaterialSlot[] {
+  const base: MaterialSlot[] = options.slotLayout && options.slotLayout.length > 0
+    ? options.slotLayout.map((slot, index) => ({
+        id: slot.id ?? `slt-web-${id}-${index}`,
+        position: index,
+        name: slot.name,
+        ...(slot.feederLabel !== undefined ? { feederLabel: slot.feederLabel } : {}),
+      }))
+    : defaultWebMaterialSlots(id);
+  if (!options.initialLoads || options.initialLoads.length === 0) return base;
+  return base.map((slot, index) => {
+    const load = options.initialLoads!.find((entry) => entry.slotIndex === index);
+    return load ? { ...slot, occupantSpoolId: load.spoolId } : slot;
+  });
+}
+
 /** A spec whose vendor/model/variant no longer resolves (a stale seed
  *  after the bundled catalog changes) is skipped rather than crashing the
  *  whole dev environment over it. */
@@ -232,7 +273,7 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         profileDrift: [],
         unknownOverrideKeys: [],
         startSafety: "confirmBedClear",
-        materialSlots: defaultWebMaterialSlots(spec.id),
+        materialSlots: webMaterialSlotsFor(spec.id),
         setupGaps: [],
         createdAt: "",
         updatedAt: "",
@@ -268,7 +309,11 @@ export async function loadPrinters(): Promise<void> {
  *  printer. Solid's store merges an object at a path (absent keys are left
  *  alone) so this already held, but it held by accident of that merge; carried
  *  forward explicitly here, and pinned by a test, so it stays true. */
-function spliceResolved(resolved: ResolvedPrinter): void {
+/** Exported for `spools/spool-store.ts` (kept a separate store from this
+ *  one, per the P3 design) to hand back the `PrinterRecord`s a Spool
+ *  mutation or move returns, and to patch a Printer's occupancy after a web
+ *  fixture move. */
+export function spliceResolved(resolved: ResolvedPrinter): void {
   setState(
     "printers",
     (p) => p.id === resolved.id,
@@ -308,7 +353,7 @@ export async function createPrinter(options: CreatePrinterOptions): Promise<Reso
       unknownOverrideKeys: [],
       location: options.location,
       startSafety: options.startSafety ?? "confirmBedClear",
-      materialSlots: defaultWebMaterialSlots(id),
+      materialSlots: webMaterialSlotsFromOptions(id, options),
       setupGaps: options.connection ? [] : ["missingConnection"],
       createdAt: "",
       updatedAt: "",
@@ -356,6 +401,46 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
     spliceResolved(resolved);
   } catch (e) {
     reportError(e);
+  }
+}
+
+/** D12: sets a Printer's Material Slot layout (array order is the new
+ *  order; an entry without an `id` creates a slot; a live slot missing from
+ *  the array is soft-removed). Used by the Setup tab's editor, the wizard's
+ *  Equip step, and batch Shared -- none of which exist yet (Task 11); added
+ *  now alongside `createPrinter`'s own `slotLayout`/`initialLoads` so this
+ *  store's Material Slot surface is complete for them to build on. */
+export async function setSlotLayout(printerId: string, slots: SlotSpec[]): Promise<ResolvedPrinter | undefined> {
+  if (!desktopAvailable()) {
+    const current = state.printers.find((p) => p.id === printerId);
+    if (!current) return undefined;
+    const existingById = new Map(current.materialSlots.map((slot) => [slot.id, slot]));
+    const materialSlots: MaterialSlot[] = slots.map((slot, index) => {
+      const existing = slot.id !== undefined ? existingById.get(slot.id) : undefined;
+      return {
+        id: existing?.id ?? `slt-web-${printerId}-${crypto.randomUUID()}`,
+        position: index,
+        name: slot.name,
+        ...(slot.feederLabel !== undefined ? { feederLabel: slot.feederLabel } : {}),
+        ...(existing?.occupantSpoolId !== undefined ? { occupantSpoolId: existing.occupantSpoolId } : {}),
+      };
+    });
+    const updated: ResolvedPrinter = { ...current, materialSlots };
+    spliceResolved(updated);
+    return updated;
+  }
+  try {
+    const { printer } = await command("set_material_slot_layout", {
+      printerId,
+      expectedRevision: state.printers.find((p) => p.id === printerId)?.revision ?? 1,
+      slots,
+    });
+    const resolved = resolvePrinterRecord(printer);
+    spliceResolved(resolved);
+    return resolved;
+  } catch (e) {
+    reportError(e);
+    return undefined;
   }
 }
 
@@ -522,7 +607,17 @@ export async function startStatusListener(): Promise<() => void> {
     const { listen } = await import("@tauri-apps/api/event");
     const store = createPrinterStatusStore({
       printerIds: () => state.printers.map((printer) => printer.id),
-      listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => handler(event.payload)),
+      // "farm3d-event-v1" is shared with the inventory stream (D11): a Spool
+      // or Material Slot event has its own, unrelated `streamId`/`sequence`,
+      // and must never reach this store's reconciliation, which otherwise
+      // treats an unrecognized `streamId` as its own stream restarting.
+      // `printer-status-store`'s own `receive` already discards any type
+      // that isn't `printer.status.*` before touching that state, but this
+      // filters it one step earlier too, so the two streams stay visibly
+      // separate at this seam as well.
+      listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => {
+        if (event.payload.type.startsWith("printer.status.")) handler(event.payload);
+      }),
       backfill: () => command("printer_statuses"),
       onStatus: applyStatus,
       onStatusRemoved: removeStatus,

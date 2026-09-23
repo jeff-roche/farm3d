@@ -361,6 +361,43 @@ describe("printer-store", () => {
       expect(unlisten).toHaveBeenCalledOnce();
     });
 
+    it("ignores an inventory event sharing the channel rather than treating its streamId as this stream restarting", async () => {
+      // D11: Spool/Material Slot events ride the same "farm3d-event-v1"
+      // channel on their own inventory streamId/sequence. Forwarding one to
+      // printer-status-store's reconciliation would look like an unknown
+      // stream appearing and force a needless resync/backfill.
+      let handler!: (event: { payload: unknown }) => void;
+      eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
+        handler = cb;
+        return Promise.resolve(vi.fn());
+      });
+      tauriMock.invoke.mockImplementation((command: string) => Promise.resolve({
+        contractVersion: 1,
+        data: command === "list_printers" ? [structuredClone(A_PRINTER_RECORD)] : { streamId: "stream-a", snapshotSequence: 0, statuses: [] },
+      }));
+      const { loadPrinters, printerStatusSyncState, startStatusListener } = await import("./printer-store");
+      await loadPrinters();
+      await startStatusListener();
+      expect(printerStatusSyncState()).toBe("current");
+      tauriMock.invoke.mockClear();
+
+      handler({
+        payload: {
+          contractVersion: 1,
+          streamId: "stream-inventory",
+          sequence: 3,
+          eventId: "inv-1",
+          occurredAt: "2026-09-23T00:00:00Z",
+          type: "spool.changed",
+          subject: { kind: "spool", id: "spl-1" },
+          payload: { type: "spoolChanged" },
+        },
+      });
+
+      expect(printerStatusSyncState()).toBe("current");
+      expect(tauriMock.invoke).not.toHaveBeenCalledWith("printer_statuses", expect.anything());
+    });
+
     it("rejects listener startup errors with a user-safe message", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       eventMock.listen.mockRejectedValue(new Error("socket token leaked"));
@@ -404,6 +441,43 @@ describe("printer-store", () => {
       });
       expect(created).toEqual(A_RESOLVED_PRINTER);
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
+    });
+
+    it("createPrinter forwards slotLayout and initialLoads to the command untouched", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
+      const { loadPrinters, createPrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
+
+      const options = {
+        name: "Centauri Carbon — Bay 1",
+        catalogRef: A_RESOLVED_PRINTER.catalogRef,
+        slotLayout: [{ name: "Slot 1" }, { name: "Slot 2", feederLabel: "AMS 1" }],
+        initialLoads: [{ slotIndex: 0, spoolId: "spl-1", expectedSpoolRevision: 1 }],
+      };
+      await createPrinter(options);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", { contractVersion: 1, ...options });
+    });
+
+    it("setSlotLayout sends the layout and splices in the result", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [structuredClone(A_PRINTER_RECORD)] });
+      const { loadPrinters, setSlotLayout, printers } = await import("./printer-store");
+      await loadPrinters();
+      const relaidOut = {
+        ...structuredClone(A_PRINTER_RECORD),
+        materialSlots: [{ id: "slt-new", position: 0, name: "Slot A" }],
+      };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: relaidOut, warnings: [] } });
+
+      const slots = [{ name: "Slot A" }];
+      const result = await setSlotLayout("prn-1", slots);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("set_material_slot_layout", {
+        contractVersion: 1, printerId: "prn-1", expectedRevision: 1, slots,
+      });
+      expect(result?.materialSlots).toEqual([{ id: "slt-new", position: 0, name: "Slot A" }]);
+      expect(printers()[0].materialSlots).toEqual([{ id: "slt-new", position: 0, name: "Slot A" }]);
     });
 
     it("createPrintersBatch merges every returned printer into the store and returns the output unchanged", async () => {
@@ -602,6 +676,56 @@ describe("printer-store", () => {
       await loadPrinters();
       expect(printers().length).toBeGreaterThan(0);
       expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("equips one web fixture Printer (a Centauri Carbon) with a 4-slot layout", async () => {
+      // spool-store.ts's web fixture needs a multi-slot Printer to load a
+      // Spool onto; every other web fixture Printer keeps the single
+      // default "Main" slot.
+      const { loadPrinters, printers, WEB_FIXTURE_EQUIPPED_PRINTER_ID } = await import("./printer-store");
+      await loadPrinters();
+
+      const equipped = printers().find((p) => p.id === WEB_FIXTURE_EQUIPPED_PRINTER_ID)!;
+      expect(equipped.materialSlots).toHaveLength(4);
+      expect(equipped.materialSlots.map((slot) => slot.position)).toEqual([0, 1, 2, 3]);
+      expect(new Set(equipped.materialSlots.map((slot) => slot.id)).size).toBe(4);
+
+      const others = printers().filter((p) => p.id !== WEB_FIXTURE_EQUIPPED_PRINTER_ID);
+      expect(others.length).toBeGreaterThan(0);
+      for (const printer of others) expect(printer.materialSlots).toHaveLength(1);
+    });
+
+    it("createPrinter honors a custom slotLayout and initialLoads locally", async () => {
+      const { loadPrinters, createPrinter } = await import("./printer-store");
+      await loadPrinters();
+
+      const created = await createPrinter({
+        name: "Bay 9",
+        catalogRef: { vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle", modelId: "MK4", printerVariant: "0.4" },
+        slotLayout: [{ name: "Slot 1" }, { name: "Slot 2" }],
+        initialLoads: [{ slotIndex: 1, spoolId: "spl-loaded", expectedSpoolRevision: 1 }],
+      });
+
+      expect(created?.materialSlots.map((slot) => slot.name)).toEqual(["Slot 1", "Slot 2"]);
+      expect(created?.materialSlots[0].occupantSpoolId).toBeUndefined();
+      expect(created?.materialSlots[1].occupantSpoolId).toBe("spl-loaded");
+    });
+
+    it("setSlotLayout updates a web Printer's layout locally, keeping existing slot ids and occupants", async () => {
+      const { loadPrinters, printers, setSlotLayout } = await import("./printer-store");
+      await loadPrinters();
+      const printer = printers()[0];
+      const originalSlotId = printer.materialSlots[0].id;
+
+      const updated = await setSlotLayout(printer.id, [
+        { id: originalSlotId, name: "Renamed" },
+        { name: "New slot" },
+      ]);
+
+      expect(updated?.materialSlots[0]).toEqual({ id: originalSlotId, position: 0, name: "Renamed" });
+      expect(updated?.materialSlots[1].name).toBe("New slot");
+      expect(updated?.materialSlots[1].id).not.toBe(originalSlotId);
+      expect(printers().find((p) => p.id === printer.id)?.materialSlots).toEqual(updated?.materialSlots);
     });
 
     it("overrideField and revertField are no-ops -- no per-field override machinery to resolve against in web mode", async () => {
