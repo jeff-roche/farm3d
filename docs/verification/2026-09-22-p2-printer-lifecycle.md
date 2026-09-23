@@ -2,13 +2,16 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** `807447c` (`style: show the archive notice as a
-warning, not an error`), the last code commit on
-`feature/p2-printer-lifecycle`. It follows the final whole-branch review
-fix wave, the PR follow-ups, and the browser verification pass (see "Final
-review fix wave", "PR follow-ups", and "Visual and keyboard verification"
-below). The original verification pass ran against `97b27d9`; every
-command below was re-run against `807447c`.
+**Validated source:** `c8f30f4` (`fix: tidy the batch dialog Rows step
+layout`), the last code commit on `feature/p2-printer-lifecycle`. It follows
+the final whole-branch review fix wave, the PR follow-ups, and the browser
+verification pass (see "Final review fix wave", "PR follow-ups", and
+"Visual and keyboard verification" below). The original verification pass
+ran against `97b27d9`.
+
+The frontend commands (`just build`, `just test`) were re-run against
+`c8f30f4`. The Rust suite and contract drift check were re-run against
+`807447c`; no Rust or generated-contract file has changed since.
 Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
@@ -16,7 +19,7 @@ Covers Tasks 1–12 (P2 in full).
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 32 files, 332 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
+| `just test` | Passed: 32 files, 333 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
 | `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) — the frontend's generated contracts already match the Rust side. |
 
@@ -153,12 +156,28 @@ Still **unavailable**:
   host. No hardware was available, so these paths are covered only by the
   injected connection factory in the Rust tests.
 
-Cosmetic observations, not fixed:
+A follow-up pass fixed the remaining layout issues:
 
-- On the Rows step, the "Quantity per location" label wraps onto two lines
-  at 1024 px, and the CSV import is a native, unstyled file input.
-- The dock's "Status" and "Setup" tab labels have almost no gap between
-  them (P1 styling).
+6. **Design-system components lost their own padding and fonts**
+   (`d9ed395`). This was the dock's cramped "Status"/"Setup" tabs, and it
+   affected every component that `composes` `focusRing`/`resetButton` from
+   `shared.module.css`. In the production bundle that file is emitted
+   after most components. In dev, Vite copies it into each composing
+   stylesheet. Either way, its `padding: 0` and `font: inherit` overrode
+   the component's own rules at equal specificity. The shared baselines
+   now use `:where()` for zero specificity, so component rules win
+   whatever the stylesheet order. A before/after pixel diff of the
+   Showcase shows two changes. The Tabs now render as designed (padded,
+   label font, accent underline), and the Removable chip's close button
+   gained its intended padding. Confirmed in both the dev server and a
+   `vite build` + `vite preview` bundle.
+7. **Batch dialog Rows step layout** (`c8f30f4`):
+   - "Quantity per location" stays on one line, and the generate fields
+     now align by their labels rather than their bottoms.
+   - The paste and import buttons are sized to their content.
+   - The unstyled native file input is hidden behind an "Import CSV
+     file…" design-system button that opens the picker. Test:
+     `PrinterBatchDialog.test.tsx`.
 
 ## Deviations and findings
 
