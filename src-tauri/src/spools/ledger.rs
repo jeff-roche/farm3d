@@ -98,21 +98,19 @@ pub struct AmountEvent {
 
 /// The D3/D7 snapshot values a ledger row carries alongside `kind`/`afterMg`
 /// (append's other parameters): [`resolve_entry`] fills `gross_mg`/
-/// `tare_mg`/`tare_id` for a `Scale` entry and leaves them `None` for a
-/// `Net` one; a future D8 `consume` call (Task 4) is expected to fill
-/// `reservation_id`/`note` instead and leave the D3 fields `None`.
+/// `tare_mg` for a `Scale` entry and leaves them `None` for a `Net` one; a
+/// future D8 `consume` call (Task 4) is expected to fill `reservation_id`/
+/// `note` instead and leave the D3 fields `None`.
 ///
-/// `tare_id` is never itself written to `spool_amount_events` — a ledger
-/// row only ever stores the *value* it measured against (`tare_mg`, a
-/// snapshot untouched by later tare edits, per D3). [`append`] uses
-/// `tare_id` solely to refresh `spools.tare_id`, the Spool's own default
-/// tare (D3: "Scale entry uses it unless the user picks another" — an
-/// explicit `tareId` becomes the new default going forward).
+/// Per D3, a measurement only ever snapshots the *value* it measured
+/// against (`tare_mg`) — it never changes the Spool's own default tare
+/// (`spools.tare_id`, set only through `SpoolFields.tareId` at create or
+/// `update_spool_fields`). [`append`] correspondingly never writes
+/// `spools.tare_id`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LedgerSnapshot {
     pub gross_mg: Option<i64>,
     pub tare_mg: Option<i64>,
-    pub tare_id: Option<String>,
     pub reservation_id: Option<String>,
     pub note: Option<String>,
 }
@@ -135,12 +133,12 @@ pub fn resolve_entry(
             tare_id,
             tare_mg,
         } => {
-            let (resolved_tare_mg, resolved_tare_id) = match (tare_id, tare_mg) {
+            let resolved_tare_mg = match (tare_id, tare_mg) {
                 (Some(id), None) => {
                     let tare = tares::get(tx, id)?.ok_or(RepositoryError::Validation {
                         field_path: "entry.tareId",
                     })?;
-                    (tare.weight_mg, Some(tare.id))
+                    tare.weight_mg
                 }
                 (None, Some(mg)) => {
                     if !weight::TARE_MG_RANGE.contains(mg) {
@@ -148,7 +146,7 @@ pub fn resolve_entry(
                             field_path: "entry.tareMg",
                         });
                     }
-                    (*mg, None)
+                    *mg
                 }
                 // Exactly one of `tareId`/`tareMg` must be given (D3): both
                 // or neither is ambiguous about which tare weight to use.
@@ -171,7 +169,6 @@ pub fn resolve_entry(
                 LedgerSnapshot {
                     gross_mg: Some(*gross_mg),
                     tare_mg: Some(resolved_tare_mg),
-                    tare_id: resolved_tare_id,
                     ..Default::default()
                 },
             ))
@@ -191,9 +188,11 @@ fn validate_current_mg(net_mg: i64) -> Result<(), RepositoryError> {
 
 /// D7: appends one immutable row to `spool_amount_events` for `spool_id`
 /// and, in the same transaction, updates the `spools.current_mg`/
-/// `confidence` cache (plus `updated_at`, `last_measured_at` when
-/// `confidence` is `measured`, and `tare_id` when `snapshot.tare_id` is
-/// `Some`) so the cache always equals this row (D7's invariant).
+/// `confidence` cache (plus `updated_at`, and `last_measured_at` when
+/// `confidence` is `measured`) so the cache always equals this row (D7's
+/// invariant). Never touches `spools.tare_id` — per D3, the Spool's default
+/// tare changes only through `SpoolFields.tareId`, never as a side effect
+/// of recording an amount.
 ///
 /// `before_mg` and `sequence` are derived from `spool_amount_events`
 /// itself (the prior row's `after_mg`, or `None`/`1` when there is none)
@@ -251,10 +250,9 @@ pub fn append(
             current_mg = ?2,
             confidence = ?3,
             updated_at = ?4,
-            last_measured_at = CASE WHEN ?3 = 'measured' THEN ?4 ELSE last_measured_at END,
-            tare_id = COALESCE(?5, tare_id)
+            last_measured_at = CASE WHEN ?3 = 'measured' THEN ?4 ELSE last_measured_at END
          WHERE id = ?1",
-        params![spool_id, after_mg, confidence_text, now, snapshot.tare_id],
+        params![spool_id, after_mg, confidence_text, now],
     )?;
     if updated == 0 {
         return Err(RepositoryError::NotFound {
@@ -431,6 +429,5 @@ mod tests {
         assert_eq!(confidence, AmountConfidence::Measured);
         assert_eq!(snapshot.gross_mg, Some(752_300));
         assert_eq!(snapshot.tare_mg, Some(140_000));
-        assert_eq!(snapshot.tare_id, None);
     }
 }

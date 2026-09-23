@@ -68,17 +68,25 @@ fn insert_spool_writes_one_initial_event_and_allocates_sequential_spool_numbers(
 ///    `grossMg = 752_300` and `tareMg = 140_000`. Updating the tare to
 ///    150 g leaves that event's `tareMg` unchanged. Deleting the tare sets
 ///    the Spool's `tareId = None`.
+///
+/// Controller ruling (D3): a Scale entry's `tareId` snapshots the value it
+/// measured against but never changes the Spool's own default tare — that
+/// comes only from `SpoolFields.tareId` (at create, or `update_spool_fields`
+/// later). So the Spool here is created with `tareId` already set to
+/// "Cardboard", and a later scale entry against a *different* tare is
+/// checked to leave that default untouched.
 #[test]
-fn scale_entry_computes_net_snapshots_and_becomes_the_spools_default_tare() {
+fn scale_entry_snapshots_gross_and_tare_without_ever_changing_the_spools_default_tare() {
     let (_temp, _lease, storage, _db) = storage();
-    let tare = storage
+    let cardboard = storage
         .write_repo(|tx| tares::create(tx, "Cardboard", 140_000))
         .unwrap();
 
-    let fields = valid_fields();
+    let mut fields = valid_fields();
+    fields.tare_id = Some(cardboard.id.clone());
     let entry = AmountEntry::Scale {
         gross_mg: 752_300,
-        tare_id: Some(tare.id.clone()),
+        tare_id: Some(cardboard.id.clone()),
         tare_mg: None,
     };
     let spool = storage
@@ -87,7 +95,7 @@ fn scale_entry_computes_net_snapshots_and_becomes_the_spools_default_tare() {
 
     assert_eq!(spool.current_mg, 612_300);
     assert!(matches!(spool.confidence, AmountConfidence::Measured));
-    assert_eq!(spool.tare_id.as_deref(), Some(tare.id.as_str()));
+    assert_eq!(spool.tare_id.as_deref(), Some(cardboard.id.as_str()));
 
     let history = storage.write(|tx| ledger::history(tx, &spool.id)).unwrap();
     assert_eq!(history.len(), 1);
@@ -96,16 +104,51 @@ fn scale_entry_computes_net_snapshots_and_becomes_the_spools_default_tare() {
 
     // Updating the tare's weight leaves the already-recorded snapshot
     // unchanged (D3: each measurement snapshots the values it used).
-    let updated_tare = storage
-        .write_repo(|tx| tares::update(tx, &tare.id, tare.revision, "Cardboard", 150_000))
+    let updated_cardboard = storage
+        .write_repo(|tx| {
+            tares::update(tx, &cardboard.id, cardboard.revision, "Cardboard", 150_000)
+        })
         .unwrap();
     let history_after_tare_edit = storage.write(|tx| ledger::history(tx, &spool.id)).unwrap();
     assert_eq!(history_after_tare_edit[0].tare_mg, Some(140_000));
 
-    // Deleting the tare clears the Spool's default tare (ON DELETE SET
-    // NULL), but the ledger snapshot above is untouched.
+    // A later scale entry against a *different* tare must never change the
+    // Spool's own default tare.
+    let other_tare = storage
+        .write_repo(|tx| tares::create(tx, "Spool Core", 50_000))
+        .unwrap();
     storage
-        .write_repo(|tx| tares::delete(tx, &updated_tare.id, updated_tare.revision))
+        .write_repo(|tx| {
+            let other_entry = AmountEntry::Scale {
+                gross_mg: 600_000,
+                tare_id: Some(other_tare.id.clone()),
+                tare_mg: None,
+            };
+            let (after_mg, confidence, snapshot) = ledger::resolve_entry(tx, &other_entry)?;
+            ledger::append(
+                tx,
+                &spool.id,
+                AmountEventKind::Measurement,
+                after_mg,
+                confidence,
+                snapshot,
+            )
+        })
+        .unwrap();
+    let after_other_tare_entry = storage
+        .write(|tx| repository::load_spool(tx, &spool.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after_other_tare_entry.tare_id.as_deref(),
+        Some(cardboard.id.as_str()),
+        "a scale entry's tareId must never change the Spool's default tare"
+    );
+
+    // Deleting the Spool's default tare clears it (ON DELETE SET NULL),
+    // but every ledger snapshot above is untouched.
+    storage
+        .write_repo(|tx| tares::delete(tx, &updated_cardboard.id, updated_cardboard.revision))
         .unwrap();
     let reloaded = storage
         .write(|tx| repository::load_spool(tx, &spool.id))

@@ -189,21 +189,7 @@ impl Storage {
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::PersistenceUnavailable)?;
-        let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        match operation(&transaction) {
-            Ok(result) => {
-                transaction.commit()?;
-                Ok(result)
-            }
-            Err(operation_error) => match transaction.rollback() {
-                Ok(()) => Err(operation_error),
-                Err(rollback_error) => Err(rollback_error.into()),
-            },
-        }
+        self.write_with(operation)
     }
 
     /// [`write`](Self::write)'s sibling for P3's `spools::repository`/
@@ -224,6 +210,23 @@ impl Storage {
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> Result<T, super::RepositoryError>,
     ) -> Result<T, super::RepositoryError> {
+        self.write_with(operation)
+    }
+
+    /// The transaction body shared by [`write`](Self::write)/
+    /// [`write_repo`](Self::write_repo): begins an IMMEDIATE write
+    /// transaction, commits on `Ok`, rolls back on `Err`. Private and
+    /// generic over the operation's error type `E` — `write`/`write_repo`
+    /// themselves stay concretely typed (`StorageError`/`RepositoryError`
+    /// respectively), so each of *their* call sites still pins `E` from a
+    /// fixed public signature, not from this helper. That's what avoids
+    /// the type-inference ambiguity a directly-generic `write<T, E>` caused
+    /// at `write`'s many existing `StorageError` call sites (several close
+    /// over a bare `Ok(())` with no other local context to pin `E`).
+    fn write_with<T, E>(&self, operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<rusqlite::Error> + From<StorageError>,
+    {
         let mut writer = self
             .writer
             .lock()

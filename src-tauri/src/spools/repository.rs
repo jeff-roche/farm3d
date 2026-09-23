@@ -160,9 +160,10 @@ pub fn insert_spool(
     )?;
     let id = generate_id();
     let now = now_rfc3339();
-    // D3: an explicit Scale-entry `tareId` becomes the Spool's new default
-    // tare; otherwise the caller's own `fields.tareId` choice stands.
-    let tare_id = snapshot.tare_id.clone().or_else(|| fields.tare_id.clone());
+    // D3: the Spool's default tare comes only from `fields.tareId` — a
+    // Scale entry's `tareId` (already resolved into `snapshot` above) never
+    // sets or changes it.
+    let tare_id = fields.tare_id.clone();
     let last_measured_at =
         matches!(confidence, AmountConfidence::Measured).then(|| now.clone());
 
