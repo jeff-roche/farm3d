@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
 use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
-use crate::spools::movement::{self, MoveDestination, MoveRequest};
+use crate::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest};
 
 use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
@@ -339,6 +339,20 @@ impl PrinterRepository {
         operation_id: &str,
         dispositions: &[SpoolDispositionInput],
     ) -> Result<StoredPrinter, RepositoryError> {
+        self.archive_with_outcome(id, expected_revision, operation_id, dispositions)
+            .map(|(printer, _)| printer)
+    }
+
+    /// [`archive`](Self::archive), also returning the dispositions' movement
+    /// outcome, so `archive_printer` can publish inventory events for every
+    /// Spool and Printer the relocation touched (D11).
+    pub fn archive_with_outcome(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+        dispositions: &[SpoolDispositionInput],
+    ) -> Result<(StoredPrinter, MoveOutcome), RepositoryError> {
         if expected_revision <= 0 {
             return Err(RepositoryError::Validation {
                 field_path: "expectedRevision",
@@ -358,7 +372,7 @@ impl PrinterRepository {
                     current_revision: printer.revision,
                 });
             }
-            apply_dispositions(transaction, id, operation_id, dispositions)?;
+            let outcome = apply_dispositions(transaction, id, operation_id, dispositions)?;
             // The dispositions bumped this row's revision once per slot
             // they emptied, so re-read it rather than reuse `printer`.
             let mut printer = load_for_write(transaction, id)?;
@@ -374,7 +388,7 @@ impl PrinterRepository {
             printer.updated_at = crate::printers::now_rfc3339();
             replace(transaction, &printer)?;
             printer.material_slots = slots::live_slots(transaction, id)?;
-            Ok(printer)
+            Ok((printer, outcome))
         })
     }
 
@@ -660,6 +674,18 @@ fn duplicate_host_or_storage(error: StorageError) -> RepositoryError {
         },
         other => RepositoryError::Storage(other),
     }
+}
+
+/// The Printer `id` with its live Material Slots, read inside the caller's
+/// transaction, or `NotFound`. The inventory commands use it to return
+/// every Printer whose occupancy their write changed.
+pub fn load_in(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+) -> Result<StoredPrinter, RepositoryError> {
+    let mut printer = load_for_write(transaction, id)?;
+    printer.material_slots = slots::live_slots(transaction, id)?;
+    Ok(printer)
 }
 
 /// The Printer row `id` inside a `write_repo` transaction, or `NotFound`.

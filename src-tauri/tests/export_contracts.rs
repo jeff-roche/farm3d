@@ -48,11 +48,22 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::spools::commands::{
+    InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
+};
 use farm3d_lib::spools::dispositions::{SpoolDisposition, SpoolDispositionInput};
+use farm3d_lib::spools::events::{InventoryEvent, InventoryEventPayload, InventoryEventType};
+use farm3d_lib::spools::ledger::{AmountEntry, AmountEvent, AmountEventKind};
+use farm3d_lib::spools::lifecycle::SpoolLifecycleAction;
+use farm3d_lib::spools::movement::{
+    MoveDestination, MovementReason, SpoolLocationSnapshot, SpoolMovement,
+};
+use farm3d_lib::spools::reservations::{Reservation, ReservationHolder, ReservationState};
 use farm3d_lib::spools::slots::SlotSpec;
+use farm3d_lib::spools::tares::Tare;
 use farm3d_lib::spools::{
     AmountConfidence, Availability, FilamentDiameter, MaterialFamily, MaterialSlot, SpoolFacets,
-    SpoolLifecycle, SpoolLocation, SpoolRecord,
+    SpoolFields, SpoolLifecycle, SpoolLocation, SpoolRecord,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
@@ -259,6 +270,27 @@ fn export_registry() -> Vec<Export> {
         export::<SpoolFacets>(),
         export::<SpoolDisposition>(),
         export::<SpoolDispositionInput>(),
+        export::<SpoolFields>(),
+        export::<SpoolLifecycleAction>(),
+        export::<AmountEntry>(),
+        export::<AmountEventKind>(),
+        export::<AmountEvent>(),
+        export::<Tare>(),
+        export::<MoveDestination>(),
+        export::<MovementReason>(),
+        export::<SpoolLocationSnapshot>(),
+        export::<SpoolMovement>(),
+        export::<ReservationHolder>(),
+        export::<ReservationState>(),
+        export::<Reservation>(),
+        export::<InventorySnapshot>(),
+        export::<SpoolHistory>(),
+        export::<SpoolMutationResult>(),
+        export::<MoveSpoolResult>(),
+        export::<TareMutationResult>(),
+        export::<InventoryEventType>(),
+        export::<InventoryEventPayload>(),
+        export::<InventoryEvent>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),

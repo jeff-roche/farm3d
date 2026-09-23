@@ -11,6 +11,7 @@
 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
@@ -20,7 +21,8 @@ use super::{decode_enum, encode_enum, repository, AmountConfidence, Availability
 
 /// D8: `holder_kind`/`holder_id` are opaque to P3. P7 uses
 /// `("job", <jobId>)`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[ts(export_to = "domain/ReservationHolder.ts")]
 pub struct ReservationHolder {
     pub kind: String,
     pub id: String,
@@ -28,8 +30,9 @@ pub struct ReservationHolder {
 
 /// D8's reservation lifecycle. Stored as the lowercase string the
 /// migration's `state` CHECK lists verbatim.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ReservationState.ts")]
 pub enum ReservationState {
     Active,
     Unresolved,
@@ -37,16 +40,22 @@ pub enum ReservationState {
     Consumed,
 }
 
-/// One `spool_reservations` row (D8).
-#[derive(Clone, Debug, PartialEq)]
+/// One `spool_reservations` row (D8). Read-only on the wire: `spool_history`
+/// lists them, and no command creates one (D8).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/Reservation.ts")]
 pub struct Reservation {
     pub id: String,
     pub spool_id: String,
     pub holder: ReservationHolder,
+    #[ts(type = "number")]
     pub amount_mg: i64,
     pub state: ReservationState,
     pub operation_id: String,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub settled_at: Option<String>,
 }
 
@@ -314,6 +323,20 @@ pub fn open_reservations(
         "SELECT {RESERVATION_COLUMNS} FROM spool_reservations
          WHERE spool_id = ?1 AND state IN ('active', 'unresolved')
          ORDER BY created_at"
+    ))?;
+    let rows = statement
+        .query_map([spool_id], decode_reservation)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Every reservation on `spool_id` in any state, oldest first, for
+/// `spool_history`.
+pub fn history(tx: &Transaction<'_>, spool_id: &str) -> Result<Vec<Reservation>, StorageError> {
+    let mut statement = tx.prepare(&format!(
+        "SELECT {RESERVATION_COLUMNS} FROM spool_reservations
+         WHERE spool_id = ?1
+         ORDER BY created_at, id"
     ))?;
     let rows = statement
         .query_map([spool_id], decode_reservation)?

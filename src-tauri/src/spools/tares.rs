@@ -134,11 +134,15 @@ pub fn update(
     Ok(tare)
 }
 
+/// Deletes tare `id` after the revision check. Returns the deleted tare
+/// and the ids of the Spools whose default tare it was. Those Spools lose
+/// their `tareId`, so each gets a revision bump in this transaction, like
+/// any other field change.
 pub fn delete(
     tx: &Transaction<'_>,
     id: &str,
     expected_revision: i64,
-) -> Result<(), RepositoryError> {
+) -> Result<(Tare, Vec<String>), RepositoryError> {
     if expected_revision <= 0 {
         return Err(RepositoryError::Validation {
             field_path: "expectedRevision",
@@ -154,11 +158,26 @@ pub fn delete(
             current_revision: tare.revision,
         });
     }
+    let cleared_spool_ids = {
+        let mut statement =
+            tx.prepare("SELECT id FROM spools WHERE tare_id = ?1 ORDER BY spool_number")?;
+        let ids = statement
+            .query_map([id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
     // `spools.tare_id REFERENCES spool_tares(id) ON DELETE SET NULL`
-    // (migration 0004) does the rest: every Spool that referenced this
-    // tare gets `tareId = null` as part of this same statement/transaction.
+    // (migration 0004) clears `tareId` on every Spool that referenced this
+    // tare as part of this same statement/transaction.
     tx.execute("DELETE FROM spool_tares WHERE id = ?1", [id])?;
-    Ok(())
+    let now = now_rfc3339();
+    for spool_id in &cleared_spool_ids {
+        tx.execute(
+            "UPDATE spools SET revision = revision + 1, updated_at = ?2 WHERE id = ?1",
+            params![spool_id, now],
+        )?;
+    }
+    Ok((tare, cleared_spool_ids))
 }
 
 /// D3: "Names are unique, compared case-insensitively" — 1-64 chars

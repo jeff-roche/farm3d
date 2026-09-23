@@ -43,6 +43,16 @@ type CommandMap = {
     Contracts.ListDuplicateHostArchivesRequest,
     Contracts.ListDuplicateHostArchivesResult,
   ];
+  list_spools: [Contracts.ListSpoolsRequest, Contracts.ListSpoolsResult];
+  spool_history: [Contracts.SpoolHistoryRequest, Contracts.SpoolHistoryResult];
+  create_spool: [Contracts.CreateSpoolRequest, Contracts.CreateSpoolResult];
+  update_spool: [Contracts.UpdateSpoolRequest, Contracts.UpdateSpoolResult];
+  record_spool_amount: [Contracts.RecordSpoolAmountRequest, Contracts.RecordSpoolAmountResult];
+  move_spool: [Contracts.MoveSpoolRequest, Contracts.MoveSpoolResult];
+  set_spool_lifecycle: [Contracts.SetSpoolLifecycleRequest, Contracts.SetSpoolLifecycleResult];
+  create_tare: [Contracts.CreateTareRequest, Contracts.CreateTareResult];
+  update_tare: [Contracts.UpdateTareRequest, Contracts.UpdateTareResult];
+  delete_tare: [Contracts.DeleteTareRequest, Contracts.DeleteTareResult];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;
@@ -102,4 +112,16 @@ export async function command<K extends keyof CommandMap>(
 
 export function desktopAvailable(): boolean {
   return isTauri();
+}
+
+/**
+ * D8's demo aid: seeds a reservation on a Spool so the `reserved` facet can
+ * be checked by hand. The command exists only in debug desktop builds and is
+ * deliberately outside `CommandMap` (P3 exposes no reservation command).
+ */
+export async function debugSeedReservation(spoolId: string, amountMg: number): Promise<void> {
+  if (!import.meta.env.DEV) {
+    throw new Error("debugSeedReservation is available only in development builds.");
+  }
+  await invoke("debug_seed_reservation", { contractVersion: 1, spoolId, amountMg });
 }

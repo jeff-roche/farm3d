@@ -123,7 +123,7 @@ pub fn list_printers<R: tauri::Runtime>(
 
 #[tauri::command]
 pub async fn create_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     name: String,
@@ -153,6 +153,11 @@ pub async fn create_printer<R: tauri::Runtime>(
         };
         (config, secret)
     });
+    let loaded_spool_ids: Vec<String> = initial_loads
+        .iter()
+        .flatten()
+        .map(|load| load.spool_id.clone())
+        .collect();
     let outcome = super::create::create_printer_with(
         &services,
         CreatePrinterOptions {
@@ -167,6 +172,15 @@ pub async fn create_printer<R: tauri::Runtime>(
         },
     )
     .await?;
+    // D11: initial loads moved Spools into the new Printer's slots.
+    if !loaded_spool_ids.is_empty() {
+        crate::spools::events::publish_ids(
+            &app,
+            &services,
+            &loaded_spool_ids,
+            std::slice::from_ref(&outcome.printer.id),
+        );
+    }
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
@@ -174,11 +188,11 @@ pub async fn create_printer<R: tauri::Runtime>(
 }
 
 /// D4/D12: sets a Printer's Material Slot layout (reorder/rename/add/remove
-/// an empty slot). Registration (ruling R2: this task fully registers it,
-/// since its own tests invoke it over IPC) — Task 9/11 are its UI callers.
+/// an empty slot), then emits `printer.slots.changed` (D11). No Spool
+/// moves: removing an occupied slot is `SLOT_OCCUPIED`.
 #[tauri::command]
 pub fn set_material_slot_layout<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     printer_id: String,
@@ -190,6 +204,12 @@ pub fn set_material_slot_layout<R: tauri::Runtime>(
     let updated = PrinterRepository::new(Arc::clone(&services.storage))
         .set_material_slot_layout(&printer_id, expected_revision, &slots)
         .map_err(CommandError::from_repository)?;
+    crate::spools::events::publish(
+        &app,
+        &services,
+        &[],
+        &[crate::spools::events::PrinterSlots::from(&updated)],
+    );
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -285,7 +305,7 @@ pub fn list_duplicate_host_archives<R: tauri::Runtime>(
 /// excluded from supervision.
 #[tauri::command]
 pub async fn archive_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     expected_revision: i64,
@@ -295,8 +315,8 @@ pub async fn archive_printer<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let archived = PrinterRepository::new(Arc::clone(&services.storage))
-        .archive(&id, expected_revision, &operation_id, &spool_dispositions)
+    let (archived, relocation) = PrinterRepository::new(Arc::clone(&services.storage))
+        .archive_with_outcome(&id, expected_revision, &operation_id, &spool_dispositions)
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
@@ -314,6 +334,16 @@ pub async fn archive_printer<R: tauri::Runtime>(
             warnings.push(OperationWarning::supervisor(&id));
         }
         _ => {}
+    }
+    // D11, after the P2 order above: the Spools the dispositions relocated,
+    // and every Printer whose slots changed.
+    if !relocation.replayed {
+        crate::spools::events::publish_ids(
+            &app,
+            &services,
+            &relocation.spool_ids,
+            &relocation.printer_ids,
+        );
     }
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),

@@ -66,4 +66,25 @@ describe("IPC client", () => {
       details: { supportedVersion: 1, receivedVersion: 2 },
     });
   });
+
+  it("seeds a debug reservation only in development builds", async () => {
+    invoke.mockResolvedValue({ contractVersion: 1, data: {} });
+    const { debugSeedReservation } = await import("./client");
+
+    await debugSeedReservation("spl-1", 200_000);
+    expect(invoke).toHaveBeenCalledWith("debug_seed_reservation", {
+      contractVersion: 1,
+      spoolId: "spl-1",
+      amountMg: 200_000,
+    });
+
+    invoke.mockReset();
+    vi.stubEnv("DEV", false);
+    try {
+      await expect(debugSeedReservation("spl-1", 200_000)).rejects.toThrow("development");
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

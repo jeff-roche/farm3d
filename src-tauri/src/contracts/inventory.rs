@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 31] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 41] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -155,9 +155,19 @@ contracts![
         "ListDuplicateHostArchivesRequest",
         "ListDuplicateHostArchivesResult"
     ),
+    ("list_spools", "ListSpoolsRequest", "ListSpoolsResult"),
+    ("spool_history", "SpoolHistoryRequest", "SpoolHistoryResult"),
+    ("create_spool", "CreateSpoolRequest", "CreateSpoolResult"),
+    ("update_spool", "UpdateSpoolRequest", "UpdateSpoolResult"),
+    ("record_spool_amount", "RecordSpoolAmountRequest", "RecordSpoolAmountResult"),
+    ("move_spool", "MoveSpoolRequest", "MoveSpoolResult"),
+    ("set_spool_lifecycle", "SetSpoolLifecycleRequest", "SetSpoolLifecycleResult"),
+    ("create_tare", "CreateTareRequest", "CreateTareResult"),
+    ("update_tare", "UpdateTareRequest", "UpdateTareResult"),
+    ("delete_tare", "DeleteTareRequest", "DeleteTareResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 31] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 41] {
     &COMMAND_CONTRACTS
 }
 
@@ -241,7 +251,27 @@ export type CreatePrintersBatchResult = CommandSuccess<CreatePrintersBatchOutput
 export type CancelPrinterBatchRequest = ContractRequest & { batchId: string };
 export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;
 export type ListDuplicateHostArchivesRequest = NoArgsRequest;
-export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchive[]>;"#.to_string()
+export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchive[]>;
+export type ListSpoolsRequest = NoArgsRequest;
+export type ListSpoolsResult = CommandSuccess<InventorySnapshot>;
+export type SpoolHistoryRequest = ContractRequest & { spoolId: string };
+export type SpoolHistoryResult = CommandSuccess<SpoolHistory>;
+export type CreateSpoolRequest = ContractRequest & { fields: SpoolFields; initialAmount: AmountEntry; storageLabel?: string };
+export type CreateSpoolResult = CommandSuccess<SpoolMutationResult>;
+export type UpdateSpoolRequest = ContractRequest & { id: string; expectedRevision: number; patch: SpoolFields };
+export type UpdateSpoolResult = CommandSuccess<SpoolMutationResult>;
+export type RecordSpoolAmountRequest = ContractRequest & { id: string; expectedRevision: number; entry: AmountEntry; note?: string };
+export type RecordSpoolAmountResult = CommandSuccess<SpoolMutationResult>;
+export type MoveSpoolRequest = ContractRequest & { operationId: string; spoolId: string; expectedSpoolRevision: number; destination: MoveDestination };
+export type MoveSpoolResult = CommandSuccess<MoveSpoolData>;
+export type SetSpoolLifecycleRequest = ContractRequest & { id: string; expectedRevision: number; action: SpoolLifecycleAction; storageLabel?: string };
+export type SetSpoolLifecycleResult = CommandSuccess<SpoolMutationResult>;
+export type CreateTareRequest = ContractRequest & { name: string; weightMg: number };
+export type CreateTareResult = CommandSuccess<TareMutationResult>;
+export type UpdateTareRequest = ContractRequest & { id: string; expectedRevision: number; name: string; weightMg: number };
+export type UpdateTareResult = CommandSuccess<TareMutationResult>;
+export type DeleteTareRequest = ContractRequest & { id: string; expectedRevision: number };
+export type DeleteTareResult = CommandSuccess<TareMutationResult>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -287,6 +317,15 @@ export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchiv
         visitor.visit::<crate::printers::batch::CreatePrintersBatchOutput>();
         visitor.visit::<crate::printers::batch::CancelPrinterBatchData>();
         visitor.visit::<crate::printers::host_identity::DuplicateHostArchive>();
+        visitor.visit::<crate::spools::commands::InventorySnapshot>();
+        visitor.visit::<crate::spools::commands::SpoolHistory>();
+        visitor.visit::<crate::spools::SpoolFields>();
+        visitor.visit::<crate::spools::ledger::AmountEntry>();
+        visitor.visit::<crate::spools::commands::SpoolMutationResult>();
+        visitor.visit::<crate::spools::movement::MoveDestination>();
+        visitor.visit::<crate::spools::commands::MoveSpoolResult>();
+        visitor.visit::<crate::spools::lifecycle::SpoolLifecycleAction>();
+        visitor.visit::<crate::spools::commands::TareMutationResult>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

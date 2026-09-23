@@ -25,6 +25,10 @@ use printers::commands::{
 };
 use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
+use spools::commands::{
+    create_spool, create_tare, delete_tare, list_spools, move_spool, record_spool_amount,
+    set_spool_lifecycle, spool_history, update_spool, update_tare,
+};
 use std::sync::Arc;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
@@ -35,7 +39,16 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub manager: Arc<ConnectionManager<R>>,
     pub documents: Arc<dyn document_io::DocumentIo>,
     pub credentials: Arc<connections::credentials::CredentialStore>,
+    /// D11: the inventory event stream's id and sequence.
+    pub inventory_stream: spools::events::InventoryStream,
+    /// D11's availability signal: one `InventoryChange` per committed
+    /// inventory write. P7's evaluator subscribes; P3 has only tests.
+    pub inventory_changes: tokio::sync::broadcast::Sender<spools::events::InventoryChange>,
     _lease: Option<RuntimeServicesLease>,
+}
+
+fn inventory_changes() -> tokio::sync::broadcast::Sender<spools::events::InventoryChange> {
+    tokio::sync::broadcast::channel(spools::events::INVENTORY_CHANGE_CAPACITY).0
 }
 
 pub struct RuntimeServicesLease {
@@ -68,12 +81,14 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
                 std::env::temp_dir()
                     .join(format!("farm3d-test-credentials-{}", uuid::Uuid::new_v4())),
             )),
+            inventory_stream: spools::events::InventoryStream::default(),
+            inventory_changes: inventory_changes(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 31] = [
+pub const COMMAND_NAMES: [&str; 41] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -105,6 +120,16 @@ pub const COMMAND_NAMES: [&str; 31] = [
     "create_printers_batch",
     "cancel_printer_batch",
     "list_duplicate_host_archives",
+    "list_spools",
+    "spool_history",
+    "create_spool",
+    "update_spool",
+    "record_spool_amount",
+    "move_spool",
+    "set_spool_lifecycle",
+    "create_tare",
+    "update_tare",
+    "delete_tare",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -249,6 +274,8 @@ fn build_runtime_services<R: tauri::Runtime>(
         manager,
         documents: Arc::new(document_io::NativeDocumentIo::new(app.clone())),
         credentials: credential_store,
+        inventory_stream: spools::events::InventoryStream::default(),
+        inventory_changes: inventory_changes(),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     })
 }
@@ -393,6 +420,18 @@ pub fn run() {
             create_printers_batch,
             cancel_printer_batch,
             list_duplicate_host_archives,
+            list_spools,
+            spool_history,
+            create_spool,
+            update_spool,
+            record_spool_amount,
+            move_spool,
+            set_spool_lifecycle,
+            create_tare,
+            update_tare,
+            delete_tare,
+            #[cfg(debug_assertions)]
+            spools::commands::debug_seed_reservation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

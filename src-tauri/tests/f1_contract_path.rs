@@ -1,6 +1,6 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 31);
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 41);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -35,6 +35,16 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_additions() {
             "create_printers_batch",
             "cancel_printer_batch",
             "list_duplicate_host_archives",
+            "list_spools",
+            "spool_history",
+            "create_spool",
+            "update_spool",
+            "record_spool_amount",
+            "move_spool",
+            "set_spool_lifecycle",
+            "create_tare",
+            "update_tare",
+            "delete_tare",
         ]
     );
 }
@@ -57,7 +67,7 @@ fn generated_contracts_and_sqlite_never_contain_the_fixture_secret() {
 }
 
 #[test]
-fn all_thirty_one_handlers_return_the_captured_nonretryable_bootstrap_error() {
+fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() {
     use farm3d_lib::bootstrap::BootstrapState;
     use farm3d_lib::contracts::command::CommandError;
     use farm3d_lib::RuntimeServices;
@@ -120,6 +130,16 @@ fn all_thirty_one_handlers_return_the_captured_nonretryable_bootstrap_error() {
             farm3d_lib::printers::batch::create_printers_batch,
             farm3d_lib::printers::batch::cancel_printer_batch,
             farm3d_lib::printers::commands::list_duplicate_host_archives,
+            farm3d_lib::spools::commands::list_spools,
+            farm3d_lib::spools::commands::spool_history,
+            farm3d_lib::spools::commands::create_spool,
+            farm3d_lib::spools::commands::update_spool,
+            farm3d_lib::spools::commands::record_spool_amount,
+            farm3d_lib::spools::commands::move_spool,
+            farm3d_lib::spools::commands::set_spool_lifecycle,
+            farm3d_lib::spools::commands::create_tare,
+            farm3d_lib::spools::commands::update_tare,
+            farm3d_lib::spools::commands::delete_tare,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -213,8 +233,53 @@ fn all_thirty_one_handlers_return_the_captured_nonretryable_bootstrap_error() {
         ),
         ("cancel_printer_batch", json!({"batchId": "b"})),
         ("list_duplicate_host_archives", json!({})),
+        ("list_spools", json!({})),
+        ("spool_history", json!({"spoolId": "s"})),
+        (
+            "create_spool",
+            json!({
+                "fields": {
+                    "manufacturer": "m",
+                    "materialFamily": "PLA",
+                    "colorName": "c",
+                    "diameter": "1.75",
+                    "nominalMg": 1_000_000,
+                    "lowThresholdMg": 0,
+                },
+                "initialAmount": {"kind": "net", "netMg": 1, "confidence": "estimated"},
+            }),
+        ),
+        (
+            "update_spool",
+            json!({"id": "s", "expectedRevision": 1, "patch": {
+                "manufacturer": "m",
+                "materialFamily": "PLA",
+                "colorName": "c",
+                "diameter": "1.75",
+                "nominalMg": 1_000_000,
+                "lowThresholdMg": 0,
+            }}),
+        ),
+        (
+            "record_spool_amount",
+            json!({"id": "s", "expectedRevision": 1, "entry": {"kind": "net", "netMg": 1, "confidence": "estimated"}}),
+        ),
+        (
+            "move_spool",
+            json!({"operationId": "op", "spoolId": "s", "expectedSpoolRevision": 1, "destination": {"kind": "storage"}}),
+        ),
+        (
+            "set_spool_lifecycle",
+            json!({"id": "s", "expectedRevision": 1, "action": "archive"}),
+        ),
+        ("create_tare", json!({"name": "t", "weightMg": 1})),
+        (
+            "update_tare",
+            json!({"id": "t", "expectedRevision": 1, "name": "t", "weightMg": 1}),
+        ),
+        ("delete_tare", json!({"id": "t", "expectedRevision": 1})),
     ];
-    assert_eq!(cases.len(), 31);
+    assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {
         body["contractVersion"] = json!(1);
         let error = invoke(&webview, command, body).unwrap_err();

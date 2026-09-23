@@ -6,7 +6,7 @@
 //! several of these — plus `ledger`/`tares` calls — into one atomic write
 //! via `Storage::write`.
 
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
@@ -143,11 +143,21 @@ pub fn loaded_on_printer(
     query_records(tx, "ms.printer_id = ?1", [printer_id])
 }
 
-/// The one derivation query behind [`list_spools`] and
-/// [`loaded_on_printer`]: `filter` is a `WHERE` clause over `s` (spools)
-/// and `ms` (the occupied slot, if any).
+/// One Spool as [`list_spools`] derives it, or `None` if there is no such
+/// Spool. Takes `&Connection` so the inventory commands can use it both
+/// inside their write transaction and from a post-commit read.
+pub fn load_record(
+    connection: &Connection,
+    id: &str,
+) -> Result<Option<SpoolRecord>, StorageError> {
+    Ok(query_records(connection, "s.id = ?1", [id])?.pop())
+}
+
+/// The one derivation query behind [`list_spools`], [`loaded_on_printer`],
+/// and [`load_record`]: `filter` is a `WHERE` clause over `s` (spools) and
+/// `ms` (the occupied slot, if any).
 fn query_records<P: rusqlite::Params>(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     filter: &str,
     params: P,
 ) -> Result<Vec<SpoolRecord>, StorageError> {
