@@ -277,11 +277,12 @@ pub fn list_duplicate_host_archives<R: tauri::Runtime>(
         .map_err(|error| CommandError::from_repository(error.into()))
 }
 
-/// D6: moves a Printer into the archived state. Order matters: the
-/// repository write commits first, then the supervisor is stopped under the
-/// reconciliation guard — never the other way around, or the supervisor
-/// could reconnect against a Connection the archive just excluded from
-/// supervision.
+/// D6/P3 D10: moves a Printer into the archived state, relocating each
+/// loaded Spool per `spool_dispositions` in the same transaction. Order
+/// matters: the repository write commits first, then the supervisor is
+/// stopped under the reconciliation guard — never the other way around, or
+/// the supervisor could reconnect against a Connection the archive just
+/// excluded from supervision.
 #[tauri::command]
 pub async fn archive_printer<R: tauri::Runtime>(
     _app: AppHandle<R>,
@@ -289,11 +290,13 @@ pub async fn archive_printer<R: tauri::Runtime>(
     contract_version: IncomingContractVersion,
     expected_revision: i64,
     id: String,
+    operation_id: String,
+    spool_dispositions: Vec<crate::spools::dispositions::SpoolDispositionInput>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
     let archived = PrinterRepository::new(Arc::clone(&services.storage))
-        .archive(&id, expected_revision)
+        .archive(&id, expected_revision, &operation_id, &spool_dispositions)
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;

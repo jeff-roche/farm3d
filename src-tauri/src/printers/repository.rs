@@ -4,6 +4,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
+use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
 use crate::spools::movement::{self, MoveDestination, MoveRequest};
 
 use super::host_identity::canonical_host_identity;
@@ -324,50 +325,68 @@ impl PrinterRepository {
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
-    /// D6: moves a Printer into the archived state. Excluded from
-    /// supervision and the Monitor's default view once archived, but keeps
-    /// its Connection and data. Blocked when the Printer is already
-    /// archived.
+    /// D6/P3 D10: moves a Printer into the archived state, relocating its
+    /// loaded Spools first. One transaction: the revision check, every
+    /// disposition (`spools::dispositions::apply_dispositions`, one
+    /// movement operation under `operation_id`), the eligibility re-check,
+    /// and `archived_at`. Any failure rolls all of it back. Blocked when the
+    /// Printer is already archived, or still holds a Spool that
+    /// `dispositions` doesn't relocate (`SPOOLS_LOADED`).
     pub fn archive(
         &self,
         id: &str,
         expected_revision: i64,
+        operation_id: &str,
+        dispositions: &[SpoolDispositionInput],
     ) -> Result<StoredPrinter, RepositoryError> {
-        self.transition(id, expected_revision, LifecycleAction::Archive, |printer| {
+        if expected_revision <= 0 {
+            return Err(RepositoryError::Validation {
+                field_path: "expectedRevision",
+            });
+        }
+        if operation_id.trim().is_empty() {
+            return Err(RepositoryError::Validation {
+                field_path: "operationId",
+            });
+        }
+        self.storage.write_repo(|transaction| {
+            let printer = load_for_write(transaction, id)?;
+            if printer.revision != expected_revision {
+                return Err(RepositoryError::Conflict {
+                    entity_id: id.to_string(),
+                    expected_revision,
+                    current_revision: printer.revision,
+                });
+            }
+            apply_dispositions(transaction, id, operation_id, dispositions)?;
+            // The dispositions bumped this row's revision once per slot
+            // they emptied, so re-read it rather than reuse `printer`.
+            let mut printer = load_for_write(transaction, id)?;
+            let eligibility = evaluate(&printer, transaction)?;
+            if !eligibility.can_archive {
+                return Err(RepositoryError::LifecycleBlocked(blockers_for(
+                    eligibility,
+                    LifecycleAction::Archive,
+                )));
+            }
             printer.archived_at = Some(crate::printers::now_rfc3339());
+            printer.revision += 1;
+            printer.updated_at = crate::printers::now_rfc3339();
+            replace(transaction, &printer)?;
+            printer.material_slots = slots::live_slots(transaction, id)?;
+            Ok(printer)
         })
     }
 
-    /// D6: moves an archived Printer back to active. Goes through the same
-    /// duplicate-host-identity precheck as any other write (`update`'s), so
-    /// a host another active Printer has since claimed surfaces as
-    /// `RepositoryError::DuplicateHost`, not a silent takeover. Blocked when
-    /// the Printer isn't archived.
+    /// D6: moves an archived Printer back to active, with the empty slots
+    /// it was archived with. Goes through the same duplicate-host-identity
+    /// precheck as any other write (`update`'s), so a host another active
+    /// Printer has since claimed surfaces as `RepositoryError::DuplicateHost`,
+    /// not a silent takeover. Blocked when the Printer isn't archived.
     pub fn unarchive(
         &self,
         id: &str,
         expected_revision: i64,
-    ) -> Result<StoredPrinter, RepositoryError> {
-        self.transition(
-            id,
-            expected_revision,
-            LifecycleAction::Unarchive,
-            |printer| {
-                printer.archived_at = None;
-            },
-        )
-    }
-
-    /// Shared machinery for `archive`/`unarchive`: optimistic-concurrency
-    /// load, a `lifecycle::evaluate` gate for `action` inside the same
-    /// transaction as the write, then `mutate` + the usual duplicate-host
-    /// precheck and replace.
-    fn transition(
-        &self,
-        id: &str,
-        expected_revision: i64,
-        action: LifecycleAction,
-        mutate: impl FnOnce(&mut StoredPrinter),
     ) -> Result<StoredPrinter, RepositoryError> {
         if expected_revision <= 0 {
             return Err(RepositoryError::Validation {
@@ -388,16 +407,11 @@ impl PrinterRepository {
                 return Err(StorageError::OperationFailed);
             }
             let eligibility = evaluate(&printer, transaction)?;
-            let eligible = match action {
-                LifecycleAction::Archive => eligibility.can_archive,
-                LifecycleAction::Unarchive => eligibility.can_unarchive,
-                LifecycleAction::Delete => eligibility.can_delete,
-            };
-            if !eligible {
-                blocked = Some(blockers_for(eligibility, action));
+            if !eligibility.can_unarchive {
+                blocked = Some(blockers_for(eligibility, LifecycleAction::Unarchive));
                 return Err(StorageError::OperationFailed);
             }
-            mutate(&mut printer);
+            printer.archived_at = None;
             printer.revision += 1;
             printer.updated_at = crate::printers::now_rfc3339();
             precheck_duplicate_host(transaction, &printer)?;
@@ -646,6 +660,23 @@ fn duplicate_host_or_storage(error: StorageError) -> RepositoryError {
         },
         other => RepositoryError::Storage(other),
     }
+}
+
+/// The Printer row `id` inside a `write_repo` transaction, or `NotFound`.
+fn load_for_write(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+) -> Result<StoredPrinter, RepositoryError> {
+    transaction
+        .query_row(
+            &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+            [id],
+            decode,
+        )
+        .optional()?
+        .ok_or_else(|| RepositoryError::NotFound {
+            entity_id: id.to_string(),
+        })
 }
 
 /// The blockers relevant to `action` alone — a caller attempting one action

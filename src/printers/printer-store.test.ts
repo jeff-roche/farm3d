@@ -441,10 +441,33 @@ describe("printer-store", () => {
       const archivedRecord = { ...structuredClone(A_PRINTER_RECORD), archivedAt: "2026-09-22T00:00:00.000Z" };
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: archivedRecord, warnings: [] } });
 
+      const dispositions = [
+        { spoolId: "spl-1", expectedSpoolRevision: 2, disposition: { kind: "storage" as const, storageLabel: "Shelf" } },
+      ];
+      await archivePrinter("prn-1", dispositions);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("archive_printer", {
+        contractVersion: 1,
+        id: "prn-1",
+        expectedRevision: 1,
+        operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        spoolDispositions: dispositions,
+      });
+      expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+    });
+
+    it("archivePrinter sends no dispositions and a fresh operationId by default", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
+
+      await archivePrinter("prn-1");
       await archivePrinter("prn-1");
 
-      expect(tauriMock.invoke).toHaveBeenCalledWith("archive_printer", { contractVersion: 1, id: "prn-1", expectedRevision: 1 });
-      expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+      const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer");
+      expect(calls.map(([, args]) => args.spoolDispositions)).toEqual([[], []]);
+      expect(calls[0][1].operationId).not.toBe(calls[1][1].operationId);
     });
 
     it("unarchivePrinter rejects on error (e.g. DUPLICATE_HOST) instead of routing to the banner", async () => {

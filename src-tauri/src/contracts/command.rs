@@ -625,17 +625,25 @@ impl CommandError {
         error
     }
 
-    /// D7: an action (e.g. delete) is blocked by other work that still
-    /// depends on this Printer.
-    pub fn lifecycle_blocked(blockers: serde_json::Value) -> Self {
+    /// D7: an action (a Printer's archive/delete, or a Spool's archive/
+    /// mark empty) is blocked. The message lists every blocker's own
+    /// message, so it reads right whichever entity was blocked.
+    pub fn lifecycle_blocked(blockers: &[crate::printers::lifecycle::LifecycleBlocker]) -> Self {
+        let reasons = blockers
+            .iter()
+            .map(|blocker| blocker.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         let mut error = Self::typed(
             ErrorCode::LifecycleBlocked,
-            "This Printer cannot be changed while other work depends on it.",
+            format!("This action is blocked: {reasons}"),
             vec![],
             false,
         );
-        let blockers =
-            JsonValue::from_serde_value(blockers).unwrap_or_else(|_| JsonValue::Array(Vec::new()));
+        let blockers = serde_json::to_value(blockers)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
         error.details = Some(BTreeMap::from([("blockers".to_string(), blockers)]));
         error
     }
@@ -769,9 +777,7 @@ impl CommandError {
             RepositoryError::SlotOccupied { slot_id, spool_id } => {
                 Self::slot_occupied(&slot_id, &spool_id)
             }
-            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
-                serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
-            ),
+            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(&blockers),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
@@ -885,15 +891,20 @@ mod tests {
 
     #[test]
     fn lifecycle_blocked_carries_its_blockers_and_is_never_retryable() {
-        let error = CommandError::lifecycle_blocked(serde_json::json!(["setup-incomplete"]));
+        use crate::printers::lifecycle::{LifecycleAction, LifecycleBlocker, LifecycleBlockerCode};
+        let error = CommandError::lifecycle_blocked(&[LifecycleBlocker {
+            action: LifecycleAction::MarkEmpty,
+            code: LifecycleBlockerCode::SpoolReserved,
+            message: "This Spool is reserved.".to_string(),
+        }]);
         assert_eq!(error.code, ErrorCode::LifecycleBlocked);
+        assert_eq!(error.message, "This action is blocked: This Spool is reserved.");
         assert!(!error.retryable);
         assert!(error.recovery.is_empty());
-        assert_eq!(
-            error.details.unwrap().get("blockers"),
-            Some(&JsonValue::Array(vec![JsonValue::String(
-                "setup-incomplete".to_string()
-            )]))
-        );
+        let blockers = error.details.unwrap().remove("blockers").unwrap();
+        let JsonValue::Array(blockers) = blockers else {
+            panic!("blockers must be an array");
+        };
+        assert_eq!(blockers.len(), 1);
     }
 }

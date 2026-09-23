@@ -707,7 +707,7 @@ fn printers_import_does_not_supervise_a_printer_archived_after_its_commit() {
         let repository = PrinterRepository::new(storage_after_commit);
         let committed = repository.get("raced-printer").unwrap().unwrap();
         repository
-            .archive(&committed.id, committed.revision)
+            .archive(&committed.id, committed.revision, "op-archive", &[])
             .unwrap();
     }));
     let (_app, webview, manager) = printers_runtime(Arc::clone(&storage), documents);

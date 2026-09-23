@@ -227,7 +227,7 @@ fn the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart() {
     let archived = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": bay_a_1_id, "expectedRevision": bay_a_1_revision}),
+        json!({"contractVersion": 1, "id": bay_a_1_id, "expectedRevision": bay_a_1_revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
     assert!(archived["data"]["printer"]["archivedAt"].is_string());

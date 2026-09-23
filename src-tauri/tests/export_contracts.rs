@@ -48,8 +48,12 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::spools::dispositions::{SpoolDisposition, SpoolDispositionInput};
 use farm3d_lib::spools::slots::SlotSpec;
-use farm3d_lib::spools::MaterialSlot;
+use farm3d_lib::spools::{
+    AmountConfidence, Availability, FilamentDiameter, MaterialFamily, MaterialSlot, SpoolFacets,
+    SpoolLifecycle, SpoolLocation, SpoolRecord,
+};
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
@@ -245,6 +249,16 @@ fn export_registry() -> Vec<Export> {
         export::<LifecycleBlockerCode>(),
         export::<LifecycleBlocker>(),
         export::<LifecycleEligibility>(),
+        export::<SpoolRecord>(),
+        export::<MaterialFamily>(),
+        export::<FilamentDiameter>(),
+        export::<AmountConfidence>(),
+        export::<SpoolLifecycle>(),
+        export::<SpoolLocation>(),
+        export::<Availability>(),
+        export::<SpoolFacets>(),
+        export::<SpoolDisposition>(),
+        export::<SpoolDispositionInput>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),

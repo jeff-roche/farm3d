@@ -127,6 +127,30 @@ pub fn is_loadable_from_storage(tx: &Transaction<'_>, spool_id: &str) -> Result<
 /// `location`/`availability`/`facets` (global constraint: the frontend
 /// never re-derives them).
 pub fn list_spools(tx: &Transaction<'_>) -> Result<Vec<SpoolRecord>, StorageError> {
+    query_records(tx, "1 = 1", params![])
+}
+
+/// D10: the Spools currently loaded in any of `printer_id`'s slots, as
+/// [`list_spools`] derives them, ordered by `spoolNumber`. Counts a slot
+/// whether or not it has been soft-removed — a removed slot can never hold
+/// a Spool (`SLOT_OCCUPIED`), so in practice these are the live slots'
+/// occupants. Feeds `LifecycleEligibility.loadedSpools` and the
+/// `SPOOLS_LOADED` blocker.
+pub fn loaded_on_printer(
+    tx: &Transaction<'_>,
+    printer_id: &str,
+) -> Result<Vec<SpoolRecord>, StorageError> {
+    query_records(tx, "ms.printer_id = ?1", [printer_id])
+}
+
+/// The one derivation query behind [`list_spools`] and
+/// [`loaded_on_printer`]: `filter` is a `WHERE` clause over `s` (spools)
+/// and `ms` (the occupied slot, if any).
+fn query_records<P: rusqlite::Params>(
+    tx: &Transaction<'_>,
+    filter: &str,
+    params: P,
+) -> Result<Vec<SpoolRecord>, StorageError> {
     let query = format!(
         "SELECT {columns}, ms.printer_id, COALESCE(r.reserved_mg, 0)
          FROM spools s
@@ -137,12 +161,13 @@ pub fn list_spools(tx: &Transaction<'_>) -> Result<Vec<SpoolRecord>, StorageErro
              WHERE state IN ('active', 'unresolved')
              GROUP BY spool_id
          ) r ON r.spool_id = s.id
+         WHERE {filter}
          ORDER BY s.spool_number",
         columns = prefixed_columns("s")
     );
     let mut statement = tx.prepare(&query)?;
     let rows = statement
-        .query_map([], decode_record)?
+        .query_map(params, decode_record)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

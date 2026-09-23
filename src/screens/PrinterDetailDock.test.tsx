@@ -46,6 +46,7 @@ const ACTIVE_ELIGIBILITY = {
     { action: "delete" as const, code: "NOT_ARCHIVED" as const, message: "Archive this Printer before deleting it." },
     { action: "unarchive" as const, code: "NOT_ARCHIVED" as const, message: "This Printer is not archived." },
   ],
+  loadedSpools: [],
 };
 
 const ARCHIVED_ELIGIBILITY = {
@@ -55,6 +56,7 @@ const ARCHIVED_ELIGIBILITY = {
   blockers: [
     { action: "archive" as const, code: "ALREADY_ARCHIVED" as const, message: "This Printer is already archived." },
   ],
+  loadedSpools: [],
 };
 
 function makePrinter(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {

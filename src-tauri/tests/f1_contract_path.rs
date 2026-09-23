@@ -172,7 +172,10 @@ fn all_thirty_one_handlers_return_the_captured_nonretryable_bootstrap_error() {
             json!({"id":"p","expectedRevision":1,"action":"accept"}),
         ),
         ("printer_lifecycle_eligibility", json!({"id":"p"})),
-        ("archive_printer", json!({"id":"p","expectedRevision":1})),
+        (
+            "archive_printer",
+            json!({"id":"p","expectedRevision":1,"operationId":"op","spoolDispositions":[]}),
+        ),
         ("unarchive_printer", json!({"id":"p","expectedRevision":1})),
         ("export_printers", json!({})),
         ("import_printers", json!({"expectedRevisions":[]})),

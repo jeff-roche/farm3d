@@ -206,7 +206,7 @@ export type ResolveProfileDriftRequest = ContractRequest & { id: string; expecte
 export type ResolveProfileDriftResult = CommandSuccess<PrinterMutationResult>;
 export type PrinterLifecycleEligibilityRequest = ContractRequest & { id: string };
 export type PrinterLifecycleEligibilityResult = CommandSuccess<LifecycleEligibility>;
-export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number; operationId: string; spoolDispositions: SpoolDispositionInput[] };
 export type ArchivePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type UnarchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
 export type UnarchivePrinterResult = CommandSuccess<PrinterMutationResult>;
@@ -271,6 +271,7 @@ export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchiv
         visitor.visit::<crate::spools::slots::SlotSpec>();
         visitor.visit::<crate::printers::commands::PrinterMutationResult>();
         visitor.visit::<crate::printers::lifecycle::LifecycleEligibility>();
+        visitor.visit::<crate::spools::dispositions::SpoolDispositionInput>();
         visitor.visit::<crate::printers::commands::DeletePrinterResult>();
         visitor.visit::<crate::printers::commands::ExportResult>();
         visitor.visit::<crate::printers::commands::PrintersImportResult>();

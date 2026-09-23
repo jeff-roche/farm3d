@@ -17,6 +17,7 @@ import type { PrinterStatusBackfill } from "../domain/PrinterStatusBackfill";
 import type { ProbeResult } from "../domain/ProbeResult";
 import type { SettingsRecord } from "../domain/SettingsRecord";
 import type { SlotSpec } from "../domain/SlotSpec";
+import type { SpoolDispositionInput } from "../domain/SpoolDispositionInput";
 import type { StartSafety } from "../domain/StartSafety";
 import type { CancelPrinterBatchData } from "./CancelPrinterBatchData";
 import type { CommandSuccess } from "./CommandSuccess";
@@ -59,7 +60,7 @@ export type ResolveProfileDriftRequest = ContractRequest & { id: string; expecte
 export type ResolveProfileDriftResult = CommandSuccess<PrinterMutationResult>;
 export type PrinterLifecycleEligibilityRequest = ContractRequest & { id: string };
 export type PrinterLifecycleEligibilityResult = CommandSuccess<LifecycleEligibility>;
-export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number; operationId: string; spoolDispositions: SpoolDispositionInput[] };
 export type ArchivePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type UnarchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
 export type UnarchivePrinterResult = CommandSuccess<PrinterMutationResult>;

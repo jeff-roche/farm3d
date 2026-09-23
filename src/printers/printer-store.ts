@@ -5,6 +5,7 @@ import type { CreatePrintersBatchInput } from "../generated/contracts/command/Cr
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
 import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
+import type { SpoolDispositionInput } from "../generated/contracts/domain/SpoolDispositionInput";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
 import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
@@ -726,7 +727,10 @@ export async function cancelBatch(batchId: string): Promise<void> {
   }
 }
 
-export async function archivePrinter(id: string): Promise<void> {
+/** `dispositions` says where each loaded Spool goes (spec D10); it must
+ *  cover every Spool in `lifecycleEligibility(id).loadedSpools`, and is
+ *  empty for a Printer with nothing loaded. */
+export async function archivePrinter(id: string, dispositions: SpoolDispositionInput[] = []): Promise<void> {
   if (!desktopAvailable()) {
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
@@ -735,6 +739,8 @@ export async function archivePrinter(id: string): Promise<void> {
     const { printer } = await command("archive_printer", {
       id,
       expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+      operationId: crypto.randomUUID(),
+      spoolDispositions: dispositions,
     });
     spliceResolved(resolvePrinterRecord(printer));
   } catch (e) {
@@ -777,6 +783,7 @@ export async function lifecycleEligibility(id: string): Promise<LifecycleEligibi
           blockers: [
             { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
           ],
+          loadedSpools: [],
         }
       : {
           canArchive: true,
@@ -786,6 +793,7 @@ export async function lifecycleEligibility(id: string): Promise<LifecycleEligibi
             { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
             { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
           ],
+          loadedSpools: [],
         };
   }
   return command("printer_lifecycle_eligibility", { id });
