@@ -2,12 +2,12 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** see the commits on `feature/p2-printer-lifecycle` from
-`9639e24` (`feat: add P2 printer store actions and batch intake`) through
-this verification wave, most recently the tracer test
-(`src-tauri/tests/p2_tracer.rs`), the `CONTEXT.md`/known-unknowns updates,
-and a batch-dialog footer fix found during this task (see "Deviations and
-findings" below).
+**Validated source:** `97b27d9` (`fix: keep the batch dialog's footer
+reachable at compact viewports`), the last code commit on
+`feature/p2-printer-lifecycle` before this doc, itself committed as
+`docs: record P2 verification evidence` alongside the tracer test
+(`src-tauri/tests/p2_tracer.rs`) and the `CONTEXT.md`/known-unknowns
+updates. Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
 
