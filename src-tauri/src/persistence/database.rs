@@ -206,6 +206,41 @@ impl Storage {
         }
     }
 
+    /// [`write`](Self::write)'s sibling for P3's `spools::repository`/
+    /// `ledger`/`tares` — free functions that take the caller's
+    /// `&Transaction` and return `RepositoryError` directly (see those
+    /// modules' doc comments) rather than the plain `StorageError` every
+    /// pre-P3 repository collapses onto before translating it further up.
+    /// Letting a caller compose several such calls into one atomic commit
+    /// and get the precise `RepositoryError` straight out — instead of a
+    /// lossy round trip through `StorageError` — is exactly why those
+    /// functions take `&Transaction` rather than each opening their own.
+    /// A dedicated method (rather than making [`write`](Self::write)
+    /// generic over the error type) avoids reintroducing type-inference
+    /// ambiguity at `write`'s many existing `StorageError` call sites,
+    /// several of which return a bare `Ok(())`/`Ok(value)` with no other
+    /// local context to pin the error type.
+    pub fn write_repo<T>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, super::RepositoryError>,
+    ) -> Result<T, super::RepositoryError> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::PersistenceUnavailable)?;
+        let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match operation(&transaction) {
+            Ok(result) => {
+                transaction.commit()?;
+                Ok(result)
+            }
+            Err(operation_error) => match transaction.rollback() {
+                Ok(()) => Err(operation_error),
+                Err(rollback_error) => Err(rollback_error.into()),
+            },
+        }
+    }
+
     pub(super) fn open_reader(&self) -> Result<Connection, StorageError> {
         let connection = Connection::open_with_flags(
             &self.paths.database,

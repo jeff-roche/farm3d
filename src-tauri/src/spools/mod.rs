@@ -9,12 +9,36 @@
 //! gram<->milligram conversion and range constants `validate_fields` checks
 //! against.
 
+pub mod ledger;
+pub mod repository;
+pub mod tares;
 pub mod weight;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::persistence::RepositoryError;
+
+/// Encodes a `#[serde(rename_all = "camelCase")]` C-like enum (e.g.
+/// [`AmountConfidence`], [`SpoolLifecycle`], [`MaterialFamily`],
+/// [`FilamentDiameter`], `ledger::AmountEventKind`) to the bare string its
+/// serde impl already produces — the same string the migration's CHECK
+/// constraints and `GLOB`s expect — instead of a hand-maintained match arm
+/// per variant that could drift from the serde attribute. Shared by
+/// `repository`, `ledger`, and `tares` so every enum<->TEXT column round
+/// trips through one definition.
+pub(crate) fn encode_enum<T: Serialize>(value: T) -> String {
+    match serde_json::to_value(value).expect("domain enum always serializes to a string") {
+        serde_json::Value::String(text) => text,
+        other => unreachable!("domain enum must serialize to a string, got {other:?}"),
+    }
+}
+
+/// The decode half of [`encode_enum`].
+pub(crate) fn decode_enum<T: DeserializeOwned>(text: &str) -> Result<T, serde_json::Error> {
+    serde_json::from_value(serde_json::Value::String(text.to_string()))
+}
 
 /// D2's closed material-family enum. Confirmed against OrcaSlicer's
 /// `filament_type` option at the pinned catalog tag `v2.4.2`: that option's
