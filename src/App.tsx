@@ -190,8 +190,8 @@ function App() {
       </Show>
       <Show when={printerArchiveNotice()}>
         {(message) => (
-          <div class={styles.errorBanner} role="status">
-            <p class={styles.errorMessage}>{message()}</p>
+          <div class={styles.noticeBanner} role="status">
+            <p class={styles.noticeMessage}>{message()}</p>
             <Button variant="ghost" onClick={dismissPrinterArchiveNotice}>
               Dismiss
             </Button>
