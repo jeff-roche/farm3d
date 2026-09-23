@@ -689,3 +689,44 @@ fn printers_import_archives_a_later_duplicate_host_and_warns() {
     assert!(second.archived_at.is_some());
     assert_eq!(repository.list().unwrap().len(), 2);
 }
+
+/// An archive that commits between the import's `replace_all` and its
+/// supervision pass must win: import supervises the persisted row, not its
+/// in-memory copy, so the archived Printer gets no live status.
+#[test]
+fn printers_import_does_not_supervise_a_printer_archived_after_its_commit() {
+    let (_temp, _lease, storage) = storage();
+    let documents = Arc::new(InjectedDocuments::default());
+    *documents.open.lock().unwrap() = Some(PathBuf::from("selected.json"));
+    *documents.bytes.lock().unwrap() = Some(printers_document(json!([imported_printer(
+        "raced-printer",
+        "moonraker"
+    )])));
+    let storage_after_commit = Arc::clone(&storage);
+    *documents.after_printers_commit.lock().unwrap() = Some(Box::new(move || {
+        let repository = PrinterRepository::new(storage_after_commit);
+        let committed = repository.get("raced-printer").unwrap().unwrap();
+        repository
+            .archive(&committed.id, committed.revision)
+            .unwrap();
+    }));
+    let (_app, webview, manager) = printers_runtime(Arc::clone(&storage), documents);
+
+    let imported = invoke(
+        &webview,
+        "import_printers",
+        json!({"contractVersion":1,"expectedRevisions":[]}),
+    )
+    .unwrap();
+
+    assert_eq!(imported["data"]["status"], "applied");
+    assert!(
+        !manager.statuses().contains_key("raced-printer"),
+        "a Printer archived after the import committed must not be supervised"
+    );
+    assert!(!manager
+        .status_backfill()
+        .statuses
+        .iter()
+        .any(|row| row.printer_id == "raced-printer"));
+}

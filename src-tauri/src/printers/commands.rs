@@ -714,16 +714,25 @@ pub async fn import_printers<R: tauri::Runtime>(
         if gaps.contains(&crate::printers::setup::SetupGap::UnsupportedAdapter) {
             warnings.push(OperationWarning::supervisor(&printer.id));
         }
-        if crate::printers::setup::supervise_printer(
+        // Re-read under the guard: an archive or delete that committed after
+        // `replace_all` must not be undone by supervising the stale copy.
+        match crate::printers::setup::supervise_persisted(
             &services.manager,
+            &services.storage,
             services.credentials.as_ref(),
             &services.catalog,
             printer,
         )
         .await
-            == crate::printers::setup::SupervisionOutcome::CredentialRequired
         {
-            warnings.push(OperationWarning::credential_required(&printer.id));
+            crate::printers::setup::SupervisionOutcome::CredentialRequired => {
+                warnings.push(OperationWarning::credential_required(&printer.id));
+            }
+            crate::printers::setup::SupervisionOutcome::Archived(false)
+            | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
+                warnings.push(OperationWarning::supervisor(&printer.id));
+            }
+            _ => {}
         }
     }
     let resolved = stored
