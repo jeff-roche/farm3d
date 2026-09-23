@@ -66,7 +66,7 @@ describe("printer-catalog", () => {
     expect(await listCatalogModels()).toEqual([
       { modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon" },
     ]);
-    expect(fetchMock).toHaveBeenCalledWith("/src-tauri/resources/printer-catalog.json");
+    expect(fetchMock).toHaveBeenCalledWith("/catalog/printer-catalog.json");
     expect(tauriMock.invoke).not.toHaveBeenCalled();
   });
 

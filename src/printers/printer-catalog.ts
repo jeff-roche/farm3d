@@ -39,13 +39,13 @@ export async function previewProfile(catalogRef: CatalogRef): Promise<PrinterPro
 
 // --- `just web` fallback: reads the real, bundled catalog directly -------
 //
-// Vite's dev server serves any file under the project root by path, so this
-// reaches the exact same JSON Rust bundles as a Tauri resource — no
-// duplicated data, no config change, and it's always in sync with whatever
-// `gen-catalog` last produced. Fetch-based, not a static `import`: that
-// keeps this entirely out of a production `vite build` (which `just build`
-// and `npm run tauri build` both run) — the real Tauri app runs with
-// `isTauri() === true` and never executes this path at all.
+// The catalog lives in Vite's `public/` dir, so it's served at
+// `/catalog/printer-catalog.json` by the dev server and copied into `dist/`
+// by `vite build` -- a browser-served production build works too. Tauri
+// bundles the same file as its `resources/printer-catalog.json` resource,
+// which Rust loads; the real app runs with `isTauri() === true` and never
+// executes this path. The copy this adds to `dist/` is embedded
+// brotli-compressed in release builds (~21 KB), not at its 1.1 MB raw size.
 
 interface RawCatalogVariant extends PrinterProfile {
   variant: string;
@@ -63,7 +63,7 @@ let webCatalogCache: RawCatalogModel[] | null = null;
 
 async function fetchWebCatalog(): Promise<RawCatalogModel[]> {
   if (webCatalogCache) return webCatalogCache;
-  const response = await fetch("/src-tauri/resources/printer-catalog.json");
+  const response = await fetch("/catalog/printer-catalog.json");
   const catalog = (await response.json()) as { models: RawCatalogModel[] };
   webCatalogCache = catalog.models;
   return webCatalogCache;
