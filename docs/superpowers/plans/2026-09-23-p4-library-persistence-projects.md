@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the Library durable. Deliver Projects; managed and linked
+**Goal:** Make the Library durable. Deliver Projects with many-to-many
+Model membership; managed and linked
 Models; immutable Model Source Revisions with retained bytes; STL, 3MF, and
 G-code inspection; explicit duplicate resolution; linked-source watching;
 missing-link recovery; and the Library workspace. Imported G-code is
@@ -10,8 +11,9 @@ retained and inspectable, but not dispatchable.
 
 **Architecture:** Rust owns persisted truth.
 
-- **Schema.** A migration adds Projects, Models, revisions, thumbnails,
-  content blobs, and a blob-cleanup queue.
+- **Schema.** A migration adds Projects, Models, a `project_models`
+  membership join table, revisions, thumbnails, content blobs, and a
+  blob-cleanup queue.
 - **Content store.** A content-addressed SHA-256 store under
   `content_root` holds every revision's exact bytes, whether the Model is
   managed or linked.
@@ -35,10 +37,11 @@ tauri-plugin-dialog 2.7 (already present), SolidJS, TypeScript, Kobalte, CSS
 Modules, Vitest, and Rust unit and integration tests.
 
 **Spec:** `docs/superpowers/specs/2026-09-23-p4-library-persistence-projects-design.md`
-(decisions D1–D20 are cited below by number). The spec is a draft awaiting
-answers to Q1–Q6. This plan assumes each question's recommended option. If
-the user chooses otherwise, revise the tasks the spec names next to that
-question before starting them.
+(decisions D1–D20 are cited below by number). The spec is approved. The
+user answered its open questions on 2026-09-23, and those answers are fixed
+(spec §Status, decisions 1–6). The main one: **Projects are many-to-many**.
+A Model can belong to any number of flat Projects, or none (Unfiled).
+Deleting a Project removes only its memberships.
 
 ## Global Constraints
 
@@ -53,7 +56,7 @@ starts, rebase onto `main`. Then:
   `persistence::CURRENT_SCHEMA_VERSION` rather than a literal version.
 - **Command-count assertions** (`COMMAND_NAMES` length,
   `COMMAND_CONTRACTS` array length, `f1_contract_path.rs` counts) are
-  updated by **adding 16** to whatever `main` has. Never hard-code a total
+  updated by **adding 17** to whatever `main` has. Never hard-code a total
   from this plan.
 - **`RuntimeServices` / `for_test`.** Add the `library` field following
   whatever construction pattern P3 left. If P3 added a builder or extra
@@ -78,6 +81,10 @@ starts, rebase onto `main`. Then:
   nozzle, or material fact is inferred (D11). No Slice Revision, Queue, or
   dispatch control is created.
 - Duplicate resolution is never silent (D14).
+- Project membership lives only in `project_models`. Unfiled is derived
+  (no membership rows) and never stored. Membership edits bump the Model's
+  `revision` but never create a Model Source Revision (D1).
+- Deleting a Project never deletes a Model, revision, or blob (D18).
 
 **Events**
 
@@ -202,7 +209,7 @@ scope is any claim about Windows or macOS watcher behavior.
   - `saved-views.ts`
   - `import-flow.ts`
   - `web-fixtures.ts`
-- **Modify** `src/ipc/client.ts`: the 16 `CommandMap` entries.
+- **Modify** `src/ipc/client.ts`: the 17 `CommandMap` entries.
 - **Modify** `src/printers/printer-store.ts` and its test: the event-type
   filter.
 - **Create** the following in `src/screens/`, each with `.module.css` and
@@ -229,12 +236,17 @@ scope is any claim about Windows or macOS watcher behavior.
 
 - **Create**
   `docs/superpowers/baselines/2026-09-2x-p4-format-watcher-spike.md` (Task 1).
-- **Modify** `CONTEXT.md`: Model (refined), Unfiled, Managed Model, Linked
-  Model, Source state, and Import selection.
+- **Modify** `CONTEXT.md`: Project (reworded for many-to-many), Model
+  (refined), Unfiled, Managed Model, Linked Model, Source state, and Import
+  selection.
 - **Modify**
   `docs/superpowers/plans/2026-09-16-complete-v1-implementation-approach.md`:
-  close the "Parser and watcher libraries" and "Managed-content layout and
-  hashing" rows.
+  - Close the "Parser and watcher libraries" and "Managed-content layout
+    and hashing" rows.
+  - Reword "Projects are organizational folders, not orders" (line 1182)
+    for many-to-many grouping.
+- **Modify** `docs/superpowers/specs/2026-09-16-complete-v1-ui-workflows-design.md`:
+  replace the "folder" wording at lines 44, 59, and 327 (see Task 14).
 - **Create** `docs/verification/2026-09-2x-p4-library-persistence.md`.
 
 ---
@@ -436,6 +448,13 @@ Message: `test: add P4 library format fixtures and spike evidence`.
     `(tx, id, expected_revision, name)`.
   - `project_name_taken(tx, name, excluding)`: a Unicode `to_lowercase`
     comparison in Rust, with the index as a backstop.
+  - `project_ids_for(conn, model_id) -> Vec<String>`, ordered by
+    `lower(name)` then id, and `project_ids_by_model(conn) ->
+    HashMap<String, Vec<String>>` for list reads (one query, no N+1).
+  - `apply_membership(tx, model_id, add: &[String], remove: &[String]) ->
+    Result<MembershipChange { changed: bool, touched_projects: Vec<String> },
+    StorageError>`. It uses `INSERT OR IGNORE` and `DELETE`. An unknown
+    Project gives `StorageError::NotFound`.
 - Produces `Storage::paths(&self) -> &StoragePaths`.
 
 - [ ] **Step 1: Write the failing migration tests**
@@ -454,9 +473,15 @@ In `tests/p4_migration.rs`, following `p2_migration.rs` and using
    with a NULL `link_state` fails.
 5. `UPDATE model_source_revisions SET source_file_name='x'` fails with
    `model source revisions are immutable`. `DELETE FROM library_models`
-   cascades to revisions and thumbnails.
-6. `DELETE FROM content_blobs` for a referenced hash fails (FK).
-7. **Crash boundary:** `apply_through_failing_before_commit` at the new
+   cascades to revisions, thumbnails, and `project_models`.
+6. **Membership.**
+   - One Model in two Projects gives two `project_models` rows.
+   - Inserting the same `(project_id, model_id)` twice fails the primary
+     key.
+   - `DELETE FROM library_projects` for one Project removes only its
+     membership row. The Model and its other membership remain.
+7. `DELETE FROM content_blobs` for a referenced hash fails (FK).
+8. **Crash boundary:** `apply_through_failing_before_commit` at the new
    version leaves the database at the previous version and unchanged.
 
 Run
@@ -478,6 +503,11 @@ In `library/repository.rs`, using `crate::test_storage()`:
 - `rename_project` with a stale revision gives `CONFLICT`.
 - A Unicode case-fold duplicate (`Ärger` vs `ärger`) is rejected by
   `project_name_taken`.
+- `apply_membership`:
+  - Adding an existing membership returns `changed: false`.
+  - Add plus remove in one call applies both.
+  - An unknown Project id writes nothing.
+  - `project_ids_for` orders by name.
 
 Expected: FAIL.
 
@@ -853,9 +883,11 @@ Message: `feat: select, stage, and inspect Library import files`.
 
 - [ ] **Step 1: Write the failing tests** (in `tests/p4_import.rs`)
 
-1. **Managed STL** into Project P:
+1. **Managed STL** into Projects P and Q (`projectIds: [P, Q]`):
    - The result is `imported`.
-   - `library_models` has one row with `storage_mode='managed'`.
+   - `library_models` has one row with `storage_mode='managed'`, and
+     `project_models` has two rows for it. `ModelRecord.projectIds` is
+     `[P, Q]` ordered by name.
    - Revision 1 has `origin='import'` and the fixture hash.
    - The blob exists and staging is cleared for that item.
    - Events `library.model.changed` and `library.revision.created` follow,
@@ -871,7 +903,9 @@ Message: `feat: select, stage, and inspect Library import files`.
 4. **Duplicates:** re-inspect the same STL in a new selection. Its
    `duplicates[0].modelId` is the first Model.
    - No `duplicateAction`: `DUPLICATE_DECISION_REQUIRED`.
-   - `useExisting`: `reusedExisting`, with no new rows.
+   - `useExisting` with `projectIds: [R]`: `reusedExisting`. There is no new
+     Model or revision; the existing Model gains membership in R and keeps
+     P and Q.
    - `addAnother`: a new Model, and still exactly one `content_blobs` row
      for the hash.
    - `addRevision` targeting the first Model: `reusedExisting`, because the
@@ -903,9 +937,11 @@ Message: `feat: select, stage, and inspect Library import files`.
    by `startup_sweep`. The source file's hash is unchanged. A following
    import of the same selection (for (a) and (c), after re-inspection)
    succeeds.
-8. **Partial success:** a 3-item import where item 1 has a
-   missing-project `projectId` commits items 0 and 2 and returns item 1
-   `rejected: NOT_FOUND`.
+8. **Partial success:** a 3-item import where item 1's `projectIds`
+   contains an unknown id commits items 0 and 2, and returns item 1
+   `rejected: NOT_FOUND` with no rows or memberships written for it.
+9. **Unfiled import:** `projectIds: []` creates no membership rows, and
+   `projectIds` is `[]`. Duplicate ids in `projectIds` are collapsed.
 
 Expected: FAIL.
 
@@ -914,10 +950,13 @@ Expected: FAIL.
 - Process items in request order.
 - Check the cancel flag before each item's placement.
 - Each item calls `content.place_and_commit` with a closure that:
-  1. Revalidates the Project and the target Model revision.
+  1. Revalidates every id in `projectIds` and the target Model revision.
   2. Inserts the blob row if it is absent.
-  3. Inserts the Model (unless the action is `addRevision`), the revision,
-     and the thumbnail blob and row.
+  3. Inserts the Model (unless the action is `addRevision` or
+     `useExisting`), the revision (unless `useExisting`), and the thumbnail
+     blob and row.
+  4. Calls `apply_membership(model, projectIds, [])` for the new or target
+     Model. For an existing target, membership is only ever added.
 - After commit, record the outcome under `(selectionId, operationId,
   fileIndex)`, then publish events.
 - For linked items, call the Task 8 hook `links.register(model_id)`. It is
@@ -943,7 +982,7 @@ Message: `feat: import managed and linked Models with explicit duplicate handlin
 - Create: `src-tauri/src/library/blockers.rs`
 - Create: `src-tauri/tests/p4_contract_path.rs`
 - Modify: the registries (see Global Constraints); `f1_contract_path.rs`
-  counts +16 overall by the end of Task 8
+  counts +17 overall by the end of Task 8
 
 **Interfaces:**
 - `LibraryStream` follows P3's `InventoryStream`: `stream_id`, an
@@ -952,10 +991,14 @@ Message: `feat: import managed and linked Models with explicit duplicate handlin
 - Commands:
   - `list_library`
   - `create_project`, `rename_project`, `delete_project`
-  - `update_model`, `delete_model`
+  - `update_model` (name only), `set_model_projects`, `delete_model`
   - `list_model_revisions`
   - `get_revision_thumbnail`
   - `library_content_info`
+- `set_model_projects { modelId, expectedRevision, add, remove }` →
+  `ModelMutationResult`, with the spec §Commands semantics.
+- `delete_project` → `DeleteProjectResult { deletedId, affectedModelIds,
+  nowUnfiledModelIds }`.
 - `pub trait ModelDeletionBlocker: Send + Sync { fn blockers(&self, model:
   &StoredModel, tx: &Transaction) -> Result<Vec<LifecycleBlocker>,
   StorageError>; }`, with `blockers::registry() -> Vec<Box<dyn
@@ -971,27 +1014,42 @@ Use `common::runtime` with a recording event listener:
 2. **Project validation.** `create_project` with a duplicate name (case
    difference) gives `VALIDATION` with `fieldPath: "name"`.
    `rename_project` with a stale revision gives `CONFLICT` in P2's shape.
-3. **`delete_project`** with two Models:
-   - Both Models have `projectId: null` and bumped revisions.
-   - The events are two `library.model.changed` then one
+3. **`delete_project` removes memberships only.** Set up Project P with
+   Model A (also in Q) and Model B (only in P):
+   - The result is `affectedModelIds: [A, B]` and
+     `nowUnfiledModelIds: [B]`.
+   - A has `projectIds: [Q]`. B has `[]`. Both revisions are bumped.
+   - Both Models, their revisions, and their blobs still exist.
+   - The events are two `library.model.changed`, then one
      `library.project.removed`.
-   - The result lists both moved ids.
-4. **`update_model`** moves a Model between Projects and renames it. A
-   same-name sibling produces a `DUPLICATE_NAME` warning, not an error.
-5. **`delete_model`** for a linked Model whose blob is shared with another
+4. **`set_model_projects`:**
+   - `add: [P, Q]` on an Unfiled Model gives `projectIds: [P, Q]`. Events:
+     one `library.model.changed`, and `library.project.changed` for P and
+     Q with updated `modelCount`.
+   - Repeating the same `add` returns the Model unchanged: no revision bump
+     and no event.
+   - `remove: [P, Q]` makes it Unfiled.
+   - The same id in `add` and `remove` gives `VALIDATION`.
+   - An unknown Project gives `NOT_FOUND`, and nothing changes.
+   - A stale `expectedRevision` gives `CONFLICT`.
+5. **`update_model`** renames. A same-name Model sharing a Project produces
+   a `DUPLICATE_NAME` warning, not an error.
+6. **`delete_model`** for a linked Model whose blob is shared with another
    Model:
    - The shared blob stays. The unshared thumbnail blob is removed.
    - `library.model.removed` is emitted.
    - The linked source file still exists with its original bytes.
-6. **Blockers.** A test-registered blocker source makes `delete_model`
+   - Its `project_models` rows are gone, and the Projects' `modelCount`
+     drops (`library.project.changed` is emitted for each).
+7. **Blockers.** A test-registered blocker source makes `delete_model`
    return `LIFECYCLE_BLOCKED` with the blockers, and nothing changes. Use a
    `#[cfg(test)]`-injectable registry, following P2's lifecycle registry.
-7. **Revisions.** `list_model_revisions` returns revisions newest first
+8. **Revisions.** `list_model_revisions` returns revisions newest first
    with full `inspection`. `get_revision_thumbnail` returns base64 that
    decodes to the fixture PNG, or `null` for an STL revision.
-8. **No events on failure.** A failed mutation (for example `CONFLICT`)
+9. **No events on failure.** A failed mutation (for example `CONFLICT`)
    emits no event.
-9. **Contracts.** The generated contracts include every new type, and
+10. **Contracts.** The generated contracts include every new type, and
    `COMMAND_NAMES` grows by the number of commands registered so far,
    counted relative to the pre-P4 value captured in a constant at the top
    of the test.
@@ -1209,7 +1267,7 @@ Message: `feat: add FileDropSurface and SegmentedControl components`.
   - `saved-views.ts`
   - `import-flow.ts`
   - `web-fixtures.ts`
-- Modify: `src/ipc/client.ts` (16 `CommandMap` entries)
+- Modify: `src/ipc/client.ts` (17 `CommandMap` entries)
 - Modify: `src/printers/printer-store.ts` and its test
 
 **Interfaces:**
@@ -1224,7 +1282,8 @@ export function onImportProgress(handler: (selectionId: string, p: ImportProgres
 export async function createProject(name: string): Promise<ProjectRecord>;  // rejects for inline field errors
 export async function renameProject(id: string, name: string): Promise<void>;
 export async function deleteProject(id: string): Promise<void>;
-export async function updateModel(id: string, patch: ModelPatch): Promise<void>;
+export async function updateModel(id: string, patch: { name: string }): Promise<void>;
+export async function setModelProjects(id: string, change: { add: string[]; remove: string[] }): Promise<void>;
 export async function deleteModel(id: string): Promise<void>;
 export async function loadRevisions(modelId: string): Promise<ModelSourceRevisionRecord[]>;
 export async function loadThumbnail(revisionId: string): Promise<string | null>;  // data: URL, cached
@@ -1242,10 +1301,11 @@ export function searchModels(models: ModelRecord[], projects: ProjectRecord[], q
 export function sortModels(models: ModelRecord[], by: "name" | "recent"): ModelRecord[];
 export function viewCounts(models: ModelRecord[], now: Date): Record<SavedViewId, number>;
 // import-flow.ts
-export type ImportRow = { fileIndex: number; candidate: ImportCandidate; name: string; projectId: string | null;
+export type ImportRow = { fileIndex: number; candidate: ImportCandidate; name: string; projectIds: string[]; // [] = Unfiled
   storageMode: "managed" | "linked"; duplicateAction?: "useExisting"|"addAnother"|"addRevision";
   targetModelId?: string; acknowledgeUnsupported: boolean; result?: ImportItemResult };
-export function rowsFromInspection(inspection: ImportInspection, ctx: { projectId: string | null; models: ModelRecord[] }): ImportRow[];
+export function rowsFromInspection(inspection: ImportInspection, ctx: { projectIds: string[]; models: ModelRecord[] }): ImportRow[];
+export function applyProjectsToAll(rows: ImportRow[], projectIds: string[]): ImportRow[];
 export function rowBlockers(row: ImportRow): ("duplicateDecision"|"acknowledgeUnsupported"|"name"|"rejected")[];
 export function buildRequest(rows: ImportRow[], models: ModelRecord[]): ImportItemRequest[];  // only unblocked, not-yet-succeeded rows
 export function mergeResults(rows: ImportRow[], result: ImportModelsResult): ImportRow[];
@@ -1270,20 +1330,32 @@ export function mergeResults(rows: ImportRow[], result: ImportModelsResult): Imp
   6. `createProject` settles from the command result and rejects with the
      `CommandError` on `VALIDATION`.
   7. `checkSources` throttles to one call per 30 s unless forced.
-  8. **Web mode** (`isTauri` false):
+  8. `setModelProjects` settles `projectIds` from the result. A
+     `library.project.changed` event updates that Project's `modelCount`.
+  9. **Web mode** (`isTauri` false):
      - The fixtures load with `status: "ready"`.
-     - `createProject` works locally.
+     - `createProject` and `setModelProjects` work locally.
+     - `deleteProject` leaves every Model in place and drops the Project
+       from their `projectIds`.
      - `pickFiles` rejects with "Importing Models needs the desktop app."
 - **`saved-views.test.ts`:**
   - Every view's membership is checked, including `recent` at exactly
     14 days (inclusive) and `attention` excluding `ok` and managed Models.
+  - `unfiled` is exactly the Models with empty `projectIds`.
+  - A Model in two Projects appears in both Project views, so the Project
+    counts may sum to more than the All Models count.
   - Search matches the Project name and the linked file basename.
   - Counts equal the lengths of the filtered lists.
 - **`import-flow.test.ts`:**
-  - Rows default to Managed and the current Project.
+  - Rows default to Managed, with `projectIds` equal to the viewed Project,
+    or `[]` in a saved view.
+  - `applyProjectsToAll` copies one set of Projects to every non-rejected
+    row.
   - A duplicate row is blocked until an action is chosen.
-  - A same-name Model in the target Project pre-fills `targetModelId`
-    without choosing `addRevision`.
+  - A same-name Model in any of the row's Projects (or Unfiled, for an empty
+    set) pre-fills `targetModelId` without choosing `addRevision`. When
+    several match, the most recently updated wins.
+  - `buildRequest` sends `projectIds` de-duplicated.
   - Rich 3MF is blocked until acknowledged.
   - Rejected rows are excluded from `buildRequest`.
   - `mergeResults` keeps failed rows' choices, and a second `buildRequest`
@@ -1327,8 +1399,9 @@ Message: `feat: add the Library store and filter shared-channel events by type`.
 
 1. **`App.test.tsx`:**
    - `MODELS` is gone.
-   - Navigating to `#nav=v1/library/model/<fixture id>` selects that Model
-     and its Project.
+   - Navigating to `#nav=v1/library/model/<fixture id>` selects that Model.
+     The view stays if it contains the Model, and otherwise switches to All
+     Models.
    - An unknown model id shows "The requested item is no longer
      available."
    - The Library is available in the destination list.
@@ -1342,8 +1415,12 @@ Message: `feat: add the Library store and filter shared-channel events by type`.
      `loadThumbnail` resolves), otherwise the format icon with text.
    - A `missing` linked Model shows the `SeverityMarker` "Source missing".
    - Enter selects a card.
-4. **`ModelList`:** columns Name, Project, Format, Storage, Source,
-   Revisions, and Added. It scrolls horizontally inside its pane.
+   - A Model in Projects P and Q appears in both P's and Q's views.
+   - The card `DropdownMenu` (pointer events) offers **Add to Project**, and
+     inside a Project view **Remove from <Project>**, which calls
+     `setModelProjects` with that one `remove`.
+4. **`ModelList`:** columns Name, Projects (names joined, with `+N` past
+   two), Format, Storage, Source, Revisions, and Added. It scrolls horizontally inside its pane.
    - With `DataTable`, keyboard row selection works.
    - With the fallback, each row is a button.
 5. **`LibraryWorkspace`:**
@@ -1357,7 +1434,13 @@ Message: `feat: add the Library store and filter shared-channel events by type`.
    - A stale sync shows "Library may be out of date" and **Refresh**.
 6. **`ModelDetailsPanel`:**
    - Name edits call `updateModel` after blur or Enter.
-   - The Project `Select` (pointer events) moves the Model.
+   - Projects render as removable chips. Removing a chip calls
+     `setModelProjects({ add: [], remove: [id] })`. With no Projects, the
+     panel shows "Unfiled".
+   - **Add to Project…** (a `Combobox`, pointer events) lists only Projects
+     the Model isn't in, and calls `setModelProjects({ add: [id], remove:
+     [] })`. Its **New Project…** entry creates the Project and then adds
+     the Model.
    - A G-code Model shows "What the file says (not verified)" with its
      claims and no Slice, Queue, or Dispatch buttons.
    - A 3MF shows its "Not used by farm3d" list.
@@ -1413,8 +1496,11 @@ Mock the store functions:
 2. **Cancel during inspection** calls `cancelSelection` and closes the
    dialog.
 3. **Review step:**
-   - Rows show name, Project `Select` (default: the viewed Project),
-     and the Managed/Linked radio (Managed checked).
+   - Rows show name, a Projects multi-select `Combobox` (default: the
+     viewed Project, or none in a saved view; pointer events), and the
+     Managed/Linked radio (Managed checked).
+   - Choosing two Projects on a row sends `projectIds` with both.
+   - **Apply Projects to all rows** copies them to every other row.
    - A rejected row shows its reason and has no controls.
    - A duplicate row shows the three actions, none selected. **Import** is
      disabled with "Choose what to do with 1 duplicate file."
@@ -1482,9 +1568,11 @@ Message: `feat: import Models with managed or linked storage and explicit duplic
    `convertToManaged`.
 3. **Project dialogs:**
    - Create and rename show `VALIDATION` inline on the name field.
-   - Delete states "3 Models will move to Unfiled." and calls
-     `deleteProject`.
-   - When the viewed Project is deleted, the view becomes Unfiled.
+   - Delete states "Delete Brackets? Its 3 Models stay in the Library. 1 of
+     them will become Unfiled." and calls `deleteProject`. The counts come
+     from the store's `projectIds`.
+   - After deletion, no Model is removed from the store.
+   - When the viewed Project is deleted, the view becomes All Models.
 4. **`DeleteModelDialog`:**
    - It shows the D18 text.
    - `LIFECYCLE_BLOCKED` shows the blockers list.
@@ -1523,20 +1611,22 @@ Message: `feat: recover missing links and manage Projects and Models`.
 - Create: `src-tauri/tests/p4_tracer.rs`
 - Modify: `CONTEXT.md`
 - Modify: `docs/superpowers/plans/2026-09-16-complete-v1-implementation-approach.md`
+- Modify: `docs/superpowers/specs/2026-09-16-complete-v1-ui-workflows-design.md`
 - Create: `docs/verification/2026-09-2x-p4-library-persistence.md`
 
 - [ ] **Step 1: Write the automated tracer**
 
 It runs through `tauri::test` IPC in one test:
 
-1. `create_project "Brackets"`.
+1. `create_project "Brackets"` and `create_project "Calibration"`.
 2. Register a selection with `cube-binary.stl` (managed) and a temp-dir copy
-   of `orca-two-plates.3mf` (linked). Inspect it, then import both into
-   "Brackets", acknowledging the unsupported entries.
+   of `orca-two-plates.3mf` (linked). Inspect it, then import the STL into
+   both Projects and the 3MF into "Brackets", acknowledging the unsupported
+   entries.
 3. Record both revision-1 hashes.
 4. Rebuild `RuntimeServices` over the same metadata and content roots
-   (restart). `list_library` returns both Models with the same ids and
-   hashes, and the linked Model is `ok`.
+   (restart). `list_library` returns both Models with the same ids, hashes,
+   and `projectIds`, and the linked Model is `ok`.
 5. Overwrite the linked 3MF with `core-two-objects.3mf` bytes through
    temp-file plus rename. Wait for `library.revision.created` (sequence 2),
    or call `check_linked_sources` if polling.
@@ -1546,10 +1636,19 @@ It runs through `tauri::test` IPC in one test:
    becomes `ok` with no new revision (the content equals revision 2).
 8. For every revision of both Models, `open_verified` succeeds, and
    revision 1 of the linked Model still hashes to the recorded value.
+9. `delete_project "Calibration"`: the STL keeps `projectIds: [Brackets]`,
+   and both Models and all revisions remain.
 
 - [ ] **Step 2: Update `CONTEXT.md`**
 
-Add or refine these terms as worded in spec §Product vocabulary:
+Replace the **Project** entry's definition with exactly:
+
+> An organizational grouping of Models in the Library. A Model may belong
+> to any number of Projects, or none (Unfiled). A Project does not carry
+> production quantities, deadlines, or fulfillment state.
+
+Keep its `_Avoid_: Order, batch, job folder` line. Then add or refine these
+terms as worded in spec §Product vocabulary:
 
 - Model (G-code included)
 - Unfiled
@@ -1558,13 +1657,33 @@ Add or refine these terms as worded in spec §Product vocabulary:
 - Source state
 - Import selection
 
-- [ ] **Step 3: Close the known-unknowns rows**
+- [ ] **Step 3: Update the umbrella docs for many-to-many Projects**
+
+The umbrella documents still call Projects "folders." Update each of these
+to say "organizational groupings" (a Model may be in several Projects):
+
+- `2026-09-16-complete-v1-ui-workflows-design.md` line 44, "Organizational
+  Project folders" → "Organizational Project groupings".
+- The same file's line 59, "Projects are folders, not orders" → "Projects
+  are organizational groupings, not orders".
+- The same file's line 327, "Projects are organizational folders only" →
+  "Projects are organizational groupings only. A Model may belong to any
+  number of Projects, or none (Unfiled)".
+- `2026-09-16-complete-v1-implementation-approach.md` line 1182, "Projects
+  are organizational folders, not orders" → "Projects are organizational
+  groupings (many-to-many with Models), not orders".
+
+Line numbers are as of `main` at `212d2ae`; match the text, not the line.
+This is a recorded user decision (spec §Status, decision 4), so no new ADR
+is needed. Say so in the verification doc.
+
+- [ ] **Step 4: Close the known-unknowns rows**
 
 In the approach doc, mark "Parser and watcher libraries" resolved (spec D9,
 D10, D11, and D15, plus the spike report) and "Managed-content layout and
 hashing" resolved (spec D3 and D4).
 
-- [ ] **Step 4: Run the full verification**
+- [ ] **Step 5: Run the full verification**
 
 Run each of these:
 
@@ -1581,19 +1700,19 @@ Then:
 - Drop one file from the file manager.
 - Confirm that linked-file edits appear within 2 s.
 
-- [ ] **Step 5: Run the manual checks with a display**
+- [ ] **Step 6: Run the manual checks with a display**
 
 Run `just dev`:
 
 - Walk the tracer by hand at 1440 × 900 and 1024 × 700.
-- Complete the whole flow keyboard-only: sidebar, grid/list, import dialog,
-  locate, and delete.
+- Complete the whole flow keyboard-only: sidebar, grid/list, import dialog
+  (multi-Project), membership chips, locate, and delete.
 - Save screenshots to `docs/screenshots/p4-*.png`.
 
 If there's no display, record these checks, Gate D, and the installed-bundle
 checks as **unavailable**, not passed.
 
-- [ ] **Step 6: Write the verification doc**
+- [ ] **Step 7: Write the verification doc**
 
 Mirror `docs/verification/2026-09-22-p2-printer-lifecycle.md`. Include:
 
@@ -1604,7 +1723,7 @@ Mirror `docs/verification/2026-09-22-p2-printer-lifecycle.md`. Include:
   spike fallback taken.
 - The final `COMMAND_NAMES` count and schema version after the rebase.
 
-- [ ] **Step 7: Commit, push, and open a draft PR**
+- [ ] **Step 8: Commit, push, and open a draft PR**
 
 Commit with `docs: record P4 verification evidence`. Push and open a draft
 PR referencing #14. Do this only when the delivery lead authorizes it.
@@ -1637,21 +1756,20 @@ for P3 to merge, or for an explicit decision to take migration number
   and `zip` (`quick-xml` and `base64` are already vendored in the lockfile).
 - **No Windows or macOS host.** Watcher and drop behavior there stays
   unverified, as the supported-platforms baseline requires.
-- **User answers to Q1–Q6.** A different answer revises the tasks named in
-  the spec before they start.
 
 ## Expected deliverables
 
 - A new schema version with `library_projects`, `library_models`,
+  `project_models` (many-to-many membership),
   `model_source_revisions` (immutable), `model_revision_thumbnails`,
   `content_blobs`, and `pending_blob_cleanup`.
 - A content-addressed store under `farm3d-content/v1/blobs/sha256/` with
   crash-safe placement, startup sweep, and deferred cleanup.
 - STL, 3MF, and G-code inspectors with a committed fixture suite.
-- 16 new commands:
+- 17 new commands:
   - `list_library`
   - `create_project`, `rename_project`, `delete_project`
-  - `update_model`, `delete_model`
+  - `update_model`, `set_model_projects`, `delete_model`
   - `list_model_revisions`
   - `get_revision_thumbnail`
   - `pick_model_files`

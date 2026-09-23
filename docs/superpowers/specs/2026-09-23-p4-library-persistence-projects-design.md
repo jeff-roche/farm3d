@@ -2,107 +2,54 @@
 
 ## Status
 
-Draft — awaiting answers to the open questions and approval. This is the
-focused design for GitHub issue #14. It narrows the approved complete-v1
-interaction design (`2026-09-16-complete-v1-ui-workflows-design.md`,
-"Library, Projects, and slicing") to the work P4 owns, and it resolves the P4
-decision gate in the phase plan
-(`2026-09-16-complete-v1-implementation-approach.md`, P4 section): parser
-libraries, content hash, managed storage layout, watcher behavior,
-path/symlink policy, duplicate semantics, thumbnail ownership, rich-3MF
-preservation boundaries, and native file selection and drop.
+Approved focused design for GitHub issue #14. The user answered the open
+questions on 2026-09-23, and this document treats those answers as fixed.
+It narrows the approved complete-v1 interaction design
+(`2026-09-16-complete-v1-ui-workflows-design.md`, "Library, Projects, and
+slicing") to the work P4 owns. It also resolves the P4 decision gate in the
+phase plan (`2026-09-16-complete-v1-implementation-approach.md`, P4
+section): parser libraries, content hash, managed storage layout, watcher
+behavior, path/symlink policy, duplicate semantics, thumbnail ownership,
+rich-3MF preservation boundaries, and native file selection and drop.
 
-The rest of this document assumes the recommended answer (listed first) to
-each open question below. If the user picks a different answer, the affected
-decisions are named next to the question so they can be revised before
-implementation.
+The user decided these questions on 2026-09-23:
+
+1. **Managed is pre-selected** in the import dialog. Linked is one click
+   away (D5).
+2. **Duplicates** offer three explicit actions, and none is chosen for the
+   user (D14):
+   - **Add as a new revision of** a chosen Model, pre-filled from a
+     same-name match.
+   - **Use existing**.
+   - **Add as another Model**.
+
+   The old revision is always kept.
+3. **Deleting a Model is permanent after a confirmation.** farm3d's stored
+   copies are removed once nothing references them. A linked source file is
+   never touched, and later phases can block the delete (D18).
+4. **Projects are many-to-many.** A Model can belong to any number of
+   Projects, or none (Unfiled). Projects are flat, with no nesting, and the
+   entity keeps the name "Project" (D1).
+5. **Deleting a Project removes only its memberships.** Its Models are never
+   deleted. A Model left in no Project becomes Unfiled (D18).
+6. **Saved views are five fixed built-ins:** All Models, Unfiled, Recently
+   added, Needs attention, and Pre-sliced G-code (D19).
+
+Decision 4 changes the umbrella design's "Projects are organizational
+folders" wording and the `CONTEXT.md` **Project** entry. The plan's docs
+task updates those documents to "organizational grouping."
 
 Two decisions depend on a spike (Task 1 of the plan) and name their
 fallback: D10 (3MF reader) and D15 (watcher behavior). The spike can change
 an implementation detail; it cannot change the product behavior described
 here.
 
-## Open questions for the user
-
-### Q1. Which storage mode is pre-selected in the import dialog?
-
-1. **Managed is pre-selected (recommended).** It works without the original
-   file and needs no watching. Linked is one click away.
-2. Linked is pre-selected.
-3. The last choice made on this machine is pre-selected.
-4. Nothing is pre-selected. The user must pick before **Import** enables.
-
-Affects D5 and the import dialog.
-
-### Q2. What does "replace the managed source" mean for a duplicate?
-
-The umbrella design says a duplicate import offers "reuse existing, add as
-another Model, or replace the managed source." Replacing bytes in place would
-break the immutability of Model Source Revisions, so this needs a precise
-meaning.
-
-1. **"Add as a new revision of an existing Model" (recommended).** The import
-   row offers it whenever the user wants it, with a Model picker pre-filled
-   with a same-name Model in the target Project. The old revision is kept.
-   Only managed Models of the same format can receive a revision this way.
-   Exact-content duplicates additionally offer **Use existing** and **Add as
-   another Model**.
-2. Offer only **Use existing** and **Add as another Model**. A new revision of
-   a managed Model can only come from a later "Replace source…" action on the
-   Model itself.
-3. Treat only same-name files as "replace" candidates, with no picker.
-
-Affects D14 and the import dialog.
-
-### Q3. What does removing a Model do?
-
-1. **Delete permanently after a confirmation (recommended).** The Model, its
-   revisions, and farm3d's stored copies of their bytes go away once nothing
-   else references them. A linked source file on disk is never touched. Later
-   phases block deletion while a Slice Revision, Queue Entry, or Job refers to
-   the Model.
-2. Archive Models like Printers: hide them, and allow deletion only of
-   archived Models.
-3. Delete the Model but keep stored bytes until P9's disk-management tools
-   remove them.
-
-Affects D18.
-
-### Q4. What happens to a Project's Models when the Project is deleted?
-
-1. **They move to Unfiled (recommended).** Deleting a Project never deletes a
-   Model.
-2. The Project and its Models are deleted together, after a confirmation that
-   states the Model count.
-3. Only an empty Project can be deleted.
-
-Affects D18.
-
-### Q5. How are Projects structured?
-
-1. **Flat. Each Model is in at most one Project, or Unfiled
-   (recommended).** This matches "Projects are folders" and keeps moves
-   unambiguous.
-2. Nested Projects (folders within folders).
-3. Tags: a Model can belong to several Projects.
-
-Affects D1, the schema, and the sidebar.
-
-### Q6. What are "saved views"?
-
-1. **A fixed set of built-in views (recommended):** All Models, Unfiled,
-   Recently added (14 days), Needs attention (linked source missing,
-   unreadable, or invalid), and Pre-sliced G-code.
-2. The built-in views plus user-saved filters stored in Settings.
-3. Only All Models and Unfiled.
-
-Affects D19.
-
 ## Goal
 
 Make the Library durable. A user can:
 
-- Create Projects and organize Models into them, or leave Models Unfiled.
+- Create Projects and add each Model to any number of them, or leave it
+  Unfiled.
 - Import STL, 3MF, and pre-sliced G-code from a native file picker or by
   dropping files on the window, choosing managed or linked storage per file.
 - Resolve duplicate content deliberately.
@@ -120,8 +67,8 @@ external Slice Revision.
 
 ### In scope
 
-- Projects: create, rename, delete. Models: rename, move between Projects,
-  delete.
+- Projects: create, rename, delete. Models: rename, add to and remove from
+  Projects (many-to-many), delete.
 - Model Source Revisions with exact retained bytes, provenance, and inspection
   results.
 - A content-addressed managed store under the existing `content_root`.
@@ -163,6 +110,10 @@ These terms are added to or refined in `CONTEXT.md`:
   kept in the Library. A G-code Model is inspectable and retained, but it is
   never sliced, and it becomes dispatchable work only as an external Slice
   Revision (P5).
+- **Project** — refined: an organizational grouping of Models in the
+  Library. A Model may belong to any number of Projects, or none (Unfiled).
+  A Project does not carry production quantities, deadlines, or fulfillment
+  state.
 - **Unfiled** — the state of a Model that belongs to no Project. It is not a
   Project.
 - **Managed Model** — a Model whose source is farm3d's own stored copy. It
@@ -181,11 +132,24 @@ These terms are added to or refined in `CONTEXT.md`:
 ### D1. Library entities
 
 - **Project**: `{ id, revision, name }`. The name is trimmed, 1–128
-  characters, and unique case-insensitively. Projects are flat (Q5).
-- **Model**: `{ id, revision, name, projectId | null, format, storageMode }`,
-  plus link fields when linked. `format` is `stl`, `3mf`, or `gcode`, fixed
-  at creation. The name is trimmed and 1–255 characters. Names need not be
-  unique; a same-name Model in the same Project is a UI warning, as in P2.
+  characters, and unique case-insensitively. Projects are flat: no Project
+  contains another.
+- **Model**: `{ id, revision, name, projectIds, format, storageMode }`, plus
+  link fields when linked. `format` is `stl`, `3mf`, or `gcode`, fixed at
+  creation. The name is trimmed and 1–255 characters. Names need not be
+  unique; a same-name Model in a Project it shares is a UI warning, as in
+  P2.
+- **Project membership** is many-to-many (decision 4), stored as
+  `project_models(project_id, model_id, added_at)` rows.
+  - Membership is a set: adding a Model to a Project it already belongs to
+    is a successful no-op, not an error.
+  - **Unfiled is derived**, never stored: a Model with no membership row is
+    Unfiled. There is no "Unfiled" Project row.
+  - Adding or removing membership changes *organization* only. It bumps the
+    Model's `revision` (so the frontend's revision guard settles
+    correctly), but it creates no Model Source Revision.
+  - The ordering of `projectIds` in `ModelRecord` is by Project name
+    (case-insensitive), then id, so the UI and tests see a stable order.
 - **Model Source Revision**: an immutable row with a per-Model `sequence`
   starting at 1, the content hash, size, provenance, and inspection results.
   The Model's current revision is the one with the highest `sequence`.
@@ -300,7 +264,8 @@ as follows:
   a new revision** (D14).
 - **Linked.** The Model stores `linked_path` and follows it (D15). Its
   current revision stays current until a content change is captured.
-- The mode is chosen per file at import. Managed is pre-selected (Q1).
+- The mode is chosen per file at import. Managed is pre-selected
+  (decision 1).
 - **Convert to managed** (`convert_model_to_managed`) clears the link fields
   and stops watching. Because every revision's bytes are already stored (D2),
   conversion copies nothing and works in any source state, including
@@ -596,7 +561,8 @@ Import is three commands over one selection:
 `ImportItemRequest`:
 
 ```text
-{ fileIndex, name, projectId: string | null, storageMode: "managed" | "linked",
+{ fileIndex, name, projectIds: string[],   // [] = Unfiled; duplicates ignored
+  storageMode: "managed" | "linked",
   duplicateAction?: "useExisting" | "addAnother" | "addRevision",
   targetModelId?: string,           // required for useExisting and addRevision
   targetExpectedRevision?: number,  // required for addRevision
@@ -609,7 +575,13 @@ Import is three commands over one selection:
   - An item with unsupported 3MF entries and
     `acknowledgeUnsupported: false` is rejected with
     `UNSUPPORTED_NOT_ACKNOWLEDGED`.
-  - A missing `projectId` target is `NOT_FOUND`.
+  - Any unknown id in `projectIds` is `NOT_FOUND` for that item, and none
+    of its memberships are written. More than 64 `projectIds` is
+    `VALIDATION`.
+  - For `useExisting` and `addRevision`, the row's `projectIds` are *added*
+    to the target Model's memberships in the same transaction, never
+    removed. That way "import into Brackets, use existing" places the
+    existing Model in Brackets too.
   - An empty name is `VALIDATION`.
 - **Idempotency.** The registry records each committed item's outcome under
   `(selectionId, operationId, fileIndex)`. Repeating `import_models` with the
@@ -629,16 +601,17 @@ Import is three commands over one selection:
   after commit (D15).
 - **Events.** Events go out after each commit: `library.model.changed` and
   `library.revision.created`. Nothing is emitted for a rejected or cancelled
-  item.
+  item. Each commit also emits
+  `library.project.changed` for every Project that gained a member.
 
 ### D14. Duplicate semantics
 
 - **Identity.** Two files are duplicates when their SHA-256 hashes are equal.
   Names and paths never make content a duplicate.
 - **Detection.** Inspection returns `duplicates: [{ modelId, modelName,
-  projectId, revisionId, sequence, isCurrent }]`: every Model with *any*
+  projectIds, revisionId, sequence, isCurrent }]`: every Model with *any*
   revision of the same hash, marking whether it is the current one.
-- **Resolution (never silent, Q2 option 1):**
+- **Resolution (never silent, decision 2):**
   - **Use existing:** no new rows. The outcome `reusedExisting` names the
     Model, and the UI selects it.
   - **Add as another Model:** a new Model whose first revision refers to the
@@ -649,9 +622,11 @@ Import is three commands over one selection:
     the same format, checked against `targetExpectedRevision`. If the new
     bytes equal the target's current revision, the outcome is
     `reusedExisting` and no revision is added.
-- **Same-name suggestion.** When the target Project already has a Model with
-  the same name (case-insensitive), the UI pre-fills that Model as the
-  `addRevision` target. It does not select the action.
+- **Same-name suggestion.** When a Model with the same name
+  (case-insensitive) belongs to any of the row's chosen Projects, or is
+  Unfiled when the row has no Projects, the UI pre-fills it as the
+  `addRevision` target. If several match, it pre-fills the most recently
+  updated. It never selects the action.
 - **Linked Models** receive revisions only from their own source (D15) or
   from Locate (D16). An `addRevision` that targets a linked Model is
   `VALIDATION`.
@@ -772,7 +747,7 @@ and a sequence, following P3's `InventoryStream` pattern.
 |---|---|---|---|
 | `library.project.changed` | `project/<id>` | `ProjectRecord` | yes |
 | `library.project.removed` | `project/<id>` | `{}` | yes (absence) |
-| `library.model.changed` | `model/<id>` | `ModelRecord` | yes |
+| `library.model.changed` | `model/<id>` | `ModelRecord` (includes `projectIds`) | yes |
 | `library.model.removed` | `model/<id>` | `{}` | yes (absence) |
 | `library.revision.created` | `model/<id>` | `ModelSourceRevisionSummary` | via `ModelRecord.currentRevision` |
 | `library.selection.dropped` | `selection/<id>` | `ImportSelectionSummary` | no (ephemeral) |
@@ -801,24 +776,33 @@ and a sequence, following P3's `InventoryStream` pattern.
 
 ### D18. Deletion and cleanup
 
-- **`delete_model { id, expectedRevision }`**, following Q3 option 1:
+- **`delete_model { id, expectedRevision }`**, following decision 3:
   1. Evaluate `ModelDeletionBlocker` sources inside the transaction. P4
      registers none; P5 and P7 add "referenced by a Slice Revision, Queue
      Entry, or Job." A blocked delete returns `LIFECYCLE_BLOCKED` with the
      blockers.
-  2. Delete the Model. Its revisions and thumbnail rows cascade.
+  2. Delete the Model. Its revisions, thumbnail rows, and `project_models`
+     rows cascade.
   3. Unreferenced blobs follow D4's cleanup.
-  4. After commit, stop watching and emit `library.model.removed`.
+  4. After commit, stop watching and emit `library.model.removed`, then
+     `library.project.changed` for each Project whose `modelCount` dropped.
   5. The linked source file is never touched.
 
   The UI confirms with "Delete <name>? Its imported revisions are deleted.
   The original file on disk is not." There is no typed-name confirmation;
   that is reserved for Printers.
-- **`delete_project { id, expectedRevision }`**, following Q4 option 1: in
-  one transaction, set `project_id = NULL` on its Models (bumping each
-  Model's revision), then delete the Project. After commit, emit
-  `library.model.changed` for each moved Model, then
-  `library.project.removed`. The result lists the moved Model ids.
+- **`delete_project { id, expectedRevision }`**, following decision 5. In
+  one transaction:
+  1. Collect the ids of Models with a membership in the Project.
+  2. Bump each of those Models' `revision` and `updated_at`.
+  3. Delete the Project. Its `project_models` rows cascade.
+
+  After commit, emit `library.model.changed` for each affected Model (its
+  `projectIds` no longer lists the Project; it is Unfiled if that was its
+  only Project), then `library.project.removed`. The result is
+  `{ deletedId, affectedModelIds, nowUnfiledModelIds }`. No Model, revision,
+  or blob is deleted. The confirmation reads "Delete <Project>? Its 3 Models
+  stay in the Library. 1 of them will become Unfiled."
 - **Startup reconciliation** of content is D4's startup sweep.
 
 ### D19. Workspace, saved views, and navigation
@@ -832,29 +816,38 @@ and a sequence, following P3's `InventoryStream` pattern.
     name and approximate size.
   - Viewport state stays inside viewport components and is never part of
     `library-store`.
-- **Saved views** (Q6 option 1) are frontend filters over the store:
+- **Saved views** (decision 6) are frontend filters over the store:
   - All Models.
-  - Unfiled.
+  - Unfiled: `projectIds` is empty.
   - Recently added: current revision captured within 14 days.
   - Needs attention: linked and not `ok`.
   - Pre-sliced G-code.
 
   The sidebar lists the views, then the Projects alphabetically, each with a
-  count. The active view is display state and is remembered in
-  `localStorage`.
+  count. A Project's view shows every Model whose `projectIds` contains it,
+  so one Model appears under each of its Projects. View counts therefore
+  don't sum to the All Models count, and the UI never shows such a sum. The
+  active view is display state and is remembered in `localStorage`.
 - **Grid and list.**
   - **Grid:** cards with the thumbnail (or format icon), name, format, and a
     storage/source-state badge.
-  - **List:** `DataTable` (from P3) with these columns: Name, Project,
-    Format, Storage, Source, Revisions, Added.
+  - **List:** `DataTable` (from P3) with these columns: Name, Projects
+    (comma-separated names, truncated with a `+N` count), Format, Storage,
+    Source, Revisions, Added.
   - If P3's `DataTable` has not merged, a screen-local table following
     `BatchRowsTable` is used and swapped later. The mode is remembered in
     `localStorage`.
 - **Sort.** Name, or Recently added. Search matches Model name, Project name,
   and linked file name.
+- **Membership editing.** The details panel lists the Model's Projects as
+  removable chips, plus an **Add to Project…** `Combobox` (with a **New
+  Project…** entry). Grid cards and list rows have a `DropdownMenu` with
+  **Add to Project** and **Remove from <current Project>**; the second
+  appears only inside a Project view.
 - **Deep links.** `#nav=v1/library/project/<id>` opens that Project.
-  `#nav=v1/library/model/<id>` selects that Model in its Project, or in
-  Unfiled. `App.tsx`'s navigation context adds Library ids when the
+  `#nav=v1/library/model/<id>` selects that Model. The current view is kept
+  if it contains the Model; otherwise the view switches to All Models,
+  because a Model may be in several Projects and none is "its" Project. `App.tsx`'s navigation context adds Library ids when the
   destination is `library`. An unknown id shows the existing "no longer
   available" banner.
 
@@ -958,7 +951,6 @@ CREATE TABLE library_models (
   id TEXT PRIMARY KEY CHECK (id GLOB 'mdl-*' AND length(id) BETWEEN 5 AND 64),
   revision INTEGER NOT NULL CHECK (revision >= 1),
   name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255 AND name = trim(name)),
-  project_id TEXT REFERENCES library_projects(id) ON DELETE SET NULL,
   format TEXT NOT NULL CHECK (format IN ('stl', '3mf', 'gcode')),
   storage_mode TEXT NOT NULL CHECK (storage_mode IN ('managed', 'linked')),
   linked_path TEXT,
@@ -976,8 +968,15 @@ CREATE TABLE library_models (
         AND link_state IS NOT NULL)
   )
 ) STRICT;
-CREATE INDEX library_models_project ON library_models(project_id);
 CREATE INDEX library_models_linked ON library_models(storage_mode) WHERE storage_mode = 'linked';
+
+CREATE TABLE project_models (
+  project_id TEXT NOT NULL REFERENCES library_projects(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL REFERENCES library_models(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, model_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX project_models_model ON project_models(model_id);
 
 CREATE TABLE model_source_revisions (
   id TEXT PRIMARY KEY CHECK (id GLOB 'msr-*' AND length(id) BETWEEN 5 AND 64),
@@ -1026,6 +1025,11 @@ CREATE TABLE pending_blob_cleanup (
 
 Notes:
 
+- `project_models` is the whole of Project membership (D1). It cascades from
+  both sides: deleting a Project removes only its membership rows (decision
+  5), and deleting a Model removes its own. The composite primary key makes
+  a duplicate membership impossible. Rust uses `INSERT OR IGNORE` for the
+  set-add semantics.
 - `content_blobs` has no `ON DELETE` from its referrers. Cleanup deletes its
   rows explicitly (D4), and the default `RESTRICT` guards against deleting a
   blob that is still referenced.
@@ -1039,16 +1043,17 @@ Notes:
     rebase, Spools) unchanged.
   - Crash-boundary rollback.
   - The CHECK and trigger constraints.
+  - A duplicate `project_models` row is rejected, and both cascades hold.
 
 ### Domain and wire types
 
 All types are ts-rs exported under `domain/` or `command/`:
 
 ```text
-ProjectRecord { id, revision, name, modelCount, createdAt, updatedAt }
+ProjectRecord { id, revision, name, modelCount, createdAt, updatedAt }   // modelCount = membership rows
 
 ModelRecord {
-  id, revision, name, projectId: string | null,
+  id, revision, name, projectIds: string[],   // [] = Unfiled; ordered by Project name
   format: "stl" | "3mf" | "gcode",
   storageMode: "managed" | "linked",
   link: { path, state: SourceState, checkedAt: string | null,
@@ -1081,7 +1086,7 @@ for list display only. The UI labels them "claimed".
 Each command is added to `lib.rs` `COMMAND_NAMES` and `generate_handler!`,
 to `contracts/inventory.rs` `COMMAND_CONTRACTS` and the `CommandContracts`
 declaration and visitor, and to `src/ipc/client.ts` `CommandMap`. Counts are
-asserted as "the previous count plus P4's 16", not as a hard-coded total,
+asserted as "the previous count plus P4's 17", not as a hard-coded total,
 because P3 merges first.
 
 | Command | Args → Result |
@@ -1089,8 +1094,9 @@ because P3 merges first.
 | `list_library` | `{}` → `LibrarySnapshot` |
 | `create_project` | `{ name }` → `ProjectMutationResult { project }` |
 | `rename_project` | `{ id, expectedRevision, name }` → `ProjectMutationResult` |
-| `delete_project` | `{ id, expectedRevision }` → `DeleteProjectResult { deletedId, movedModelIds }` |
-| `update_model` | `{ id, expectedRevision, patch: { name?, projectId?: string \| null } }` → `ModelMutationResult { model, warnings }` |
+| `delete_project` | `{ id, expectedRevision }` → `DeleteProjectResult { deletedId, affectedModelIds, nowUnfiledModelIds }` |
+| `update_model` | `{ id, expectedRevision, patch: { name? } }` → `ModelMutationResult { model, warnings }` |
+| `set_model_projects` | `{ modelId, expectedRevision, add: string[], remove: string[] }` → `ModelMutationResult` |
 | `delete_model` | `{ id, expectedRevision }` → `DeleteModelResult { deletedId, warnings }` |
 | `list_model_revisions` | `{ modelId }` → `ModelSourceRevisionRecord[]` (newest first) |
 | `get_revision_thumbnail` | `{ revisionId }` → `RevisionThumbnail \| null` |
@@ -1102,6 +1108,24 @@ because P3 merges first.
 | `locate_linked_source` | `{ modelId, expectedRevision, selectionId, fileIndex, acceptDifferentContent }` → `ModelMutationResult` |
 | `convert_model_to_managed` | `{ modelId, expectedRevision }` → `ModelMutationResult` |
 | `library_content_info` | `{}` → `{ blobCount, totalBytes, pendingCleanupCount }` |
+
+`set_model_projects` is the one membership command:
+
+- In one transaction, it inserts the `add` memberships (`INSERT OR IGNORE`)
+  and deletes the `remove` memberships.
+- It checks `expectedRevision` against the Model and bumps its revision
+  only if the membership set actually changed. A call that changes nothing
+  returns the unchanged Model and emits no event.
+- An id in both `add` and `remove` is `VALIDATION`. An unknown Project id is
+  `NOT_FOUND`, and nothing is written.
+- Removing the last membership makes the Model Unfiled; that is not an
+  error.
+- It emits one `library.model.changed` after commit, plus
+  `library.project.changed` for each Project whose `modelCount` changed.
+
+Multi-Project membership at import goes through `ImportItemRequest.projectIds`
+(D13). Grid and list menus call `set_model_projects` for one Model at a
+time. Bulk multi-select editing is not in P4.
 
 `library_content_info` feeds the Library status line ("Stored copies:
 1.2 GB") and is P9's starting point for disk management.
@@ -1150,7 +1174,7 @@ because P3 merges first.
     `thumbnails` (a lazy cache keyed by revision id).
   - Actions settle from command results:
     - `createProject`, `renameProject`, `deleteProject`
-    - `updateModel`, `deleteModel`
+    - `updateModel`, `setModelProjects`, `deleteModel`
     - `loadRevisions`, `loadThumbnail`
     - `checkSources`, `locateSource`, `convertToManaged`
   - Mutations report into a store error signal shown in a Library banner,
@@ -1164,9 +1188,9 @@ because P3 merges first.
 - **`src/library/saved-views.ts`:** pure view filtering, search, sort, and
   counts (D19).
 - **`src/library/web-fixtures.ts`:** web mode data. Two Projects ("Brackets",
-  "Calibration"), five Models (managed STL, linked 3MF `ok`, linked STL
-  `missing`, G-code with claims, and one Unfiled), and embedded 1×1
-  thumbnails.
+  "Calibration"), five Models (managed STL in both Projects, linked 3MF
+  `ok`, linked STL `missing`, G-code with claims, and one Unfiled), and
+  embedded 1×1 thumbnails.
   - In web mode, Project and Model edits change local state.
   - `pickFiles`, `inspect`, `import`, `locate`, and `checkSources` throw
     "needs the desktop app".
@@ -1202,7 +1226,8 @@ because P3 merges first.
 - **`ModelGrid.tsx`** and **`ModelList.tsx`**: the two modes (D19). Both
   support multi-select-free single selection by click, Enter, or Space.
 - **`ModelDetailsPanel.tsx`**, showing:
-  - Name (editable) and Project (`Select`, including Unfiled).
+  - Name (editable), and Projects as removable chips with **Add to
+    Project…** (D19). "Unfiled" is shown when there are none.
   - Format.
   - Storage, with the source state shown as a `SeverityMarker`, icon, text,
     and colour, plus the path and the polling notice when polling.
@@ -1216,9 +1241,12 @@ because P3 merges first.
      inspecting and **Cancel**.
   2. **Review:** one row per file. It shows the detection result, size, and
      any warnings, and offers:
-     - A name field and a Project `Select` (defaulting to the Project
-       currently being viewed, or Unfiled).
-     - A Managed/Linked `RadioGroup` (Managed pre-selected, Q1).
+     - A name field and a Projects multi-select `Combobox` (Kobalte
+       `Combobox` with `multiple`). It defaults to the Project currently
+       being viewed, or none when a saved view is active. None means
+       Unfiled. An **Apply Projects to all rows** action copies one row's
+       Projects to every row.
+     - A Managed/Linked `RadioGroup` (Managed pre-selected, decision 1).
      - Duplicate resolution: a `RadioGroup` with **Use existing** / **Add as
        another Model** / **Add as a new revision of…** plus a Model
        `Combobox`. Nothing is pre-selected, and the row can't be imported
@@ -1238,7 +1266,7 @@ because P3 merges first.
   handles `SOURCE_CONTENT_DIFFERS` with **Relink and import as a new
   revision**.
 - **`ProjectDialogs.tsx`**: create, rename, and delete (the delete states
-  "N Models will move to Unfiled.").
+  the D18 wording: the Models stay, and N become Unfiled).
 - **`DeleteModelDialog.tsx`**: the D18 wording.
 - **Window drop:** `App.tsx` registers the webview drag listener once. Enter
   and leave toggle a global `dropActive` signal. On
@@ -1310,36 +1338,47 @@ because P3 merges first.
    - Locating a different file requires `acceptDifferentContent`, then adds
      a `relocate` revision.
    - Convert to managed works while `missing`.
-7. **Duplicates.** A content duplicate without a decision is rejected, and
+7. **Project membership.**
+   - A Model added to two Projects appears in both Project views and has
+     `projectIds` of length 2.
+   - Removing its last membership makes it Unfiled.
+   - Adding an existing membership is a no-op with no event.
+   - Deleting a Project deletes no Model, revision, or blob. Models that
+     were only in that Project become Unfiled, and the result lists them.
+   - Import with two `projectIds` creates both memberships. `useExisting`
+     adds the row's Projects to the existing Model without removing any.
+8. **Duplicates.** A content duplicate without a decision is rejected, and
    **Use existing**, **Add as another Model** (one blob), and **Add as a new
    revision** each behave as in D14.
-8. **Rich 3MF.** Unsupported entries are reported before import, an
+9. **Rich 3MF.** Unsupported entries are reported before import, an
    unacknowledged row is rejected, and the stored bytes equal the source
    bytes.
-9. **G-code.**
+10. **G-code.**
    - It is inspected, and its claims are stored verbatim with
      `trusted: false`.
    - The bytes are retained exactly.
    - No Slice Revision, Queue, or dispatch control appears.
    - Failure and cancellation at each injection point leave no Model,
      revision, blob row, or staged file.
-10. **Selection.** No command accepts a raw path. An expired selection
+11. **Selection.** No command accepts a raw path. An expired selection
     returns `SELECTION_EXPIRED`. A drop registers a selection and emits
     `library.selection.dropped`.
-11. **Events.** Library events are emitted after commit only, and backfill
+12. **Events.** Library events are emitted after commit only, and backfill
     ordering holds. A `library.*` event causes no Printer status backfill,
     and a `printer.status.*` event is ignored by the Library store.
-12. **Watcher spike.** It is recorded with its pass/fail result on Linux
+13. **Watcher spike.** It is recorded with its pass/fail result on Linux
     x86_64, and the chosen mode is implemented.
-13. **Frontend tests** cover the store (backfill, replay, revision guard, web
+14. **Frontend tests** cover the store (backfill, replay, revision guard, web
     mode), saved views, the import-flow reducer, the import dialog
     (duplicates, acknowledgment, cancel, retry), the sidebar, grid/list,
-    the details panel, locate and convert, project dialogs, and deep links.
-14. **The tracer completes through the Tauri path.** One managed and one
-    linked Model are imported into a Project. After a restart, the linked
+    the details panel, membership editing, locate and convert, project
+    dialogs, and deep links.
+15. **The tracer completes through the Tauri path.** One managed and one
+    linked Model are imported, one of them into two Projects. After a
+    restart, the memberships are unchanged, and the linked
     source is modified, then removed. The Model is recovered through Locate,
     and every prior revision still verifies.
-15. **Keyboard and window-size checks** pass at 1440 × 900 and 1024 × 700,
+16. **Keyboard and window-size checks** pass at 1440 × 900 and 1024 × 700,
     and `just package` succeeds on Linux, with the installed bundle picking
     and dropping files.
 
