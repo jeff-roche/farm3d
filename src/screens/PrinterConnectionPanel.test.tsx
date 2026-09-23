@@ -103,11 +103,101 @@ describe("PrinterConnectionPanel", () => {
     );
   });
 
+  it("shows a replacement probe failure inline with 'Save anyway', which resubmits with acceptUnverified (spec D8)", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "AUTHENTICATION_FAILED",
+      message: "Authentication failed",
+      recovery: [],
+      retryable: false,
+    });
+    setConnection.mockResolvedValueOnce(undefined);
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Authentication failed");
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(2));
+    expect(setConnection).toHaveBeenLastCalledWith(
+      "prn-1",
+      expect.objectContaining({ host: "voron.local" }),
+      true,
+    );
+    await waitFor(() => expect(screen.queryByText("Authentication failed")).not.toBeInTheDocument());
+  });
+
+  it("shows a non-probe Save error without offering 'Save anyway'", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "DUPLICATE_HOST",
+      message: "Another Printer already uses this host.",
+      recovery: [],
+      retryable: false,
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Another Printer already uses this host.");
+    expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+  });
+
+  it("drops the failed Save and its 'Save anyway' once the Connection is edited", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "PRINTER_UNREACHABLE",
+      message: "The printer could not be reached.",
+      recovery: [],
+      retryable: true,
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("The printer could not be reached.");
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron-2.local" } });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("The printer could not be reached.")).not.toBeInTheDocument();
+  });
+
   it("renders a probe failure inline rather than throwing it away", async () => {
     testConnection.mockRejectedValueOnce("Could not reach the printer: refused");
     render(() => <PrinterConnectionPanel printer={printer} />);
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     expect(await screen.findByText(/Could not reach the printer/)).toBeInTheDocument();
+  });
+
+  it("keeps a verified Test result visible after a Save that didn't edit the connection", async () => {
+    testConnection.mockResolvedValueOnce({
+      kind: "moonraker",
+      hostSoftware: "Moonraker 0.9",
+      firmware: "Klipper v0.12",
+      reportedName: "Bay 1",
+      state: "online",
+      stateMessage: "",
+      reported: {},
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("online")).toBeInTheDocument();
+
+    // Save's own `finally` resets the (already-blank) credential field back
+    // to "" -- that reset must not read as an edit that invalidates the
+    // just-verified probe.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText("online")).toBeInTheDocument();
   });
 
   it("shows which credential store is live", async () => {
@@ -127,5 +217,97 @@ describe("PrinterConnectionPanel", () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     await screen.findByRole("button", { name: /Moonraker/ });
     expect(screen.getAllByText("Kind")).toHaveLength(1);
+  });
+});
+
+describe("PrinterConnectionPanel — Remove credentials", () => {
+  const withCredential = {
+    id: "prn-1",
+    name: "Bay 1",
+    profile: PROFILE,
+    connection: {
+      kind: "moonraker",
+      host: "voron.local",
+      port: 7125,
+      useTls: false,
+      credentialRef: "farm3d/credential/prn-1",
+    },
+  } as unknown as ResolvedPrinter;
+
+  it("is offered only when a credential is stored", () => {
+    const withoutCredential = {
+      ...withCredential,
+      connection: { ...withCredential.connection, credentialRef: undefined },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={withoutCredential} />);
+
+    expect(screen.queryByRole("button", { name: "Remove credentials" })).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation and does nothing when cancelled", async () => {
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent('deletes the stored API key for "Bay 1"');
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(setConnection).not.toHaveBeenCalled();
+  });
+
+  it("clears the stored credential on the saved Connection, ignoring unsaved edits", async () => {
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "unsaved.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    await screen.findByRole("dialog");
+    const confirm = screen
+      .getAllByRole("button", { name: "Remove credentials" })
+      .find((button) => button.closest("[role=dialog]"))!;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(setConnection).toHaveBeenCalledWith("prn-1", {
+      kind: "moonraker",
+      host: "voron.local",
+      port: 7125,
+      useTls: false,
+      credential: "",
+    });
+  });
+
+  it("keeps the dialog open and shows the error when removal fails", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1, code: "CREDENTIAL_UNAVAILABLE", message: "The credential store is unavailable.",
+      recovery: [], retryable: true,
+    });
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Remove credentials" }).find((button) => dialog.contains(button))!,
+    );
+
+    expect(await screen.findByText("The credential store is unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+describe("unsupported suggested host types", () => {
+  it("falls back to Moonraker when the catalog suggests a kind this build can't connect to", async () => {
+    const prusa = {
+      id: "prn-1",
+      name: "Core One",
+      profile: { ...PROFILE, suggestedHostType: "prusalink" },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={prusa} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "core.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
+    expect(setConnection).toHaveBeenCalledWith("prn-1", expect.objectContaining({ kind: "moonraker" }));
   });
 });

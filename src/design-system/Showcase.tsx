@@ -23,6 +23,8 @@ import {
   Field,
   SeverityMarker,
   PrinterRoster,
+  Stepper,
+  Textarea,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -35,6 +37,8 @@ export function Showcase() {
   const [radioValue, setRadioValue] = createSignal("b");
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
+  const [stepperCurrent, setStepperCurrent] = createSignal("connect");
+  const [textareaValue, setTextareaValue] = createSignal("");
 
   return (
     <div class={styles.page}>
@@ -258,6 +262,47 @@ export function Showcase() {
               stateLabel: index % 2 === 0 ? "Ready" : "Printing",
             }))}
             onViewAll={() => {}}
+          />
+        </div>
+      </Panel>
+
+      <Panel title="Stepper">
+        <div class={styles.column}>
+          <Stepper
+            aria-label="Batch setup steps"
+            steps={[
+              { id: "identify", label: "Identify", state: "complete" },
+              { id: "connect", label: "Connect", state: "complete" },
+              { id: "confirm", label: "Confirm" },
+            ]}
+            current={stepperCurrent()}
+            onSelect={setStepperCurrent}
+          />
+          <Stepper
+            aria-label="Steps with an error"
+            steps={[
+              { id: "identify", label: "Identify", state: "complete" },
+              { id: "connect", label: "Connect", state: "error" },
+              { id: "confirm", label: "Confirm" },
+            ]}
+            current="connect"
+          />
+        </div>
+      </Panel>
+
+      <Panel title="Textarea">
+        <div class={styles.column}>
+          <Textarea
+            label="Notes"
+            placeholder="Anything worth remembering about this batch..."
+            value={textareaValue()}
+            onChange={setTextareaValue}
+          />
+          <Textarea
+            label="Notes with error"
+            value=""
+            onChange={() => {}}
+            errorMessage="Notes are required"
           />
         </div>
       </Panel>

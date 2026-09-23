@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
+use farm3d_lib::connections::{ConnectionConfig, DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
+use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StoragePaths};
 use farm3d_lib::printers::repository::PrinterRepository;
-use farm3d_lib::printers::{CatalogRef, PrinterProfileOverrides, StoredPrinter};
+use farm3d_lib::printers::{CatalogRef, PrinterProfileOverrides, StartSafety, StoredPrinter};
 use farm3d_lib::settings::commands::{MonitorDensity, MonitorSection};
 use farm3d_lib::settings::repository::SettingsRepository;
 
@@ -150,4 +151,90 @@ fn import_orphan_never_demotes_an_automatic_cleanup_reason() {
         })
         .unwrap();
     assert_eq!(retained, ("cleared".to_string(), Some("prn-z".to_string())));
+}
+
+fn connection_at(host: &str) -> ConnectionConfig {
+    ConnectionConfig {
+        kind: MOONRAKER_KIND.to_string(),
+        host: host.to_string(),
+        port: DEFAULT_MOONRAKER_PORT,
+        use_tls: false,
+        credential_ref: None,
+    }
+}
+
+/// D3: two non-archived Printers may never share a host identity — the
+/// repository's precheck must reject the second `create`.
+#[test]
+fn creating_a_second_active_printer_with_the_same_host_is_a_duplicate_host_error() {
+    let (_temp, _lease, storage) = storage();
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let mut first = printer("prn-a");
+    first.connection = Some(connection_at("voron.local"));
+    repository.create(first).unwrap();
+
+    let mut second = printer("prn-b");
+    second.connection = Some(connection_at("voron.local"));
+    let error = repository.create(second).unwrap_err();
+
+    assert!(matches!(
+        error,
+        RepositoryError::DuplicateHost { conflicting_printer_id } if conflicting_printer_id == "prn-a"
+    ));
+}
+
+/// An archived Printer does not reserve its host identity (D3) — creating a
+/// new active Printer on the same host must succeed.
+#[test]
+fn the_same_host_is_available_once_the_first_printer_is_archived() {
+    let (_temp, _lease, storage) = storage();
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let mut first = printer("prn-a");
+    first.connection = Some(connection_at("voron.local"));
+    let first = repository.create(first).unwrap();
+    repository
+        .update(&first.id, first.revision, |value| {
+            value.archived_at = Some("2026-09-22T00:00:00.000Z".to_string());
+        })
+        .unwrap();
+
+    let mut second = printer("prn-b");
+    second.connection = Some(connection_at("voron.local"));
+    let created = repository.create(second).unwrap();
+
+    assert_eq!(created.id, "prn-b");
+}
+
+/// `location`, `startSafety`, and `archivedAt` round-trip through the
+/// repository like every other stored field.
+#[test]
+fn location_start_safety_and_archived_at_round_trip() {
+    let (_temp, _lease, storage) = storage();
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let mut fresh = printer("prn-a");
+    fresh.location = Some("Bay 3".to_string());
+    fresh.start_safety = StartSafety::Unattended;
+    let created = repository.create(fresh).unwrap();
+
+    assert_eq!(created.location.as_deref(), Some("Bay 3"));
+    assert_eq!(created.start_safety, StartSafety::Unattended);
+    assert_eq!(created.archived_at, None);
+
+    let archived = repository
+        .update(&created.id, created.revision, |value| {
+            value.archived_at = Some("2026-09-22T00:00:00.000Z".to_string());
+        })
+        .unwrap();
+
+    assert_eq!(
+        archived.archived_at.as_deref(),
+        Some("2026-09-22T00:00:00.000Z")
+    );
+    let reloaded = repository.get(&archived.id).unwrap().unwrap();
+    assert_eq!(reloaded.location.as_deref(), Some("Bay 3"));
+    assert_eq!(reloaded.start_safety, StartSafety::Unattended);
+    assert_eq!(
+        reloaded.archived_at.as_deref(),
+        Some("2026-09-22T00:00:00.000Z")
+    );
 }

@@ -16,6 +16,7 @@ const readinessLabels = {
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
   unknownState: "Unknown state",
+  archived: "Archived",
 } as const;
 
 function formatObservedAge(timestamp: string | undefined): string {

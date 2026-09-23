@@ -17,6 +17,8 @@ import { NumberField } from "./NumberField";
 import { Field } from "./Field";
 import { SeverityMarker } from "./SeverityMarker";
 import { PrinterRoster } from "./PrinterRoster";
+import { Stepper, type StepperStep } from "./Stepper";
+import { Textarea } from "./Textarea";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -225,6 +227,18 @@ describe("Dialog", () => {
     expect(screen.queryByText("Confirm")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByText("Open"));
     await waitFor(() => expect(screen.getByText("Confirm")).toBeInTheDocument());
+  });
+
+  it("renders no trigger button when trigger is omitted and is driven by `open` alone", async () => {
+    render(() => (
+      <Dialog title="Confirm" open>
+        Body content
+      </Dialog>
+    ));
+
+    expect(await screen.findByText("Body content")).toBeInTheDocument();
+    // Only the Close button — no trigger.
+    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Close"]);
   });
 });
 
@@ -438,5 +452,57 @@ describe("PrinterRoster", () => {
     await fireEvent.click(screen.getByLabelText("8 Printers"));
     await waitFor(() => expect(screen.getByText("Printer 8")).toBeVisible());
     expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  });
+});
+
+const stepperSteps: StepperStep[] = [
+  { id: "identify", label: "Identify", state: "complete" },
+  { id: "connect", label: "Connect", state: "complete" },
+  { id: "confirm", label: "Confirm" },
+];
+
+describe("Stepper", () => {
+  it("marks the current step aria-current=\"step\"", () => {
+    render(() => <Stepper steps={stepperSteps} current="connect" />);
+
+    expect(screen.getByText("Connect").closest("li")).toHaveAttribute("aria-current", "step");
+    expect(screen.getByText("Identify").closest("li")).not.toHaveAttribute("aria-current");
+    expect(screen.getByText("Confirm").closest("li")).not.toHaveAttribute("aria-current");
+  });
+
+  it("calls onSelect with the step id when a complete step is clicked", async () => {
+    const onSelect = vi.fn();
+    render(() => <Stepper steps={stepperSteps} current="confirm" onSelect={onSelect} />);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Identify" }));
+    expect(onSelect).toHaveBeenCalledWith("identify");
+  });
+
+  it("does not render incomplete future steps as buttons", () => {
+    render(() => <Stepper steps={stepperSteps} current="identify" onSelect={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    expect(screen.getByText("Confirm")).toBeInTheDocument();
+  });
+});
+
+describe("Textarea", () => {
+  it("renders its label and calls onChange when typed into", async () => {
+    const onChange = vi.fn();
+    render(() => <Textarea label="Notes" value="" onChange={onChange} />);
+
+    expect(screen.getByText("Notes")).toBeInTheDocument();
+    const field = screen.getByLabelText("Notes");
+    await fireEvent.input(field, { target: { value: "hello" } });
+    expect(onChange).toHaveBeenCalledWith("hello");
+  });
+
+  it("renders errorMessage with aria-invalid", () => {
+    render(() => (
+      <Textarea label="Notes" value="" onChange={vi.fn()} errorMessage="Notes are required" />
+    ));
+
+    expect(screen.getByText("Notes are required")).toBeInTheDocument();
+    expect(screen.getByLabelText("Notes")).toHaveAttribute("aria-invalid", "true");
   });
 });

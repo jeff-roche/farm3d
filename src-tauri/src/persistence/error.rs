@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::printers::lifecycle::LifecycleBlocker;
+
 #[derive(Debug)]
 pub enum StorageError {
     PathCollision,
@@ -15,6 +17,11 @@ pub enum StorageError {
     Database,
     Filesystem,
     OperationFailed,
+    /// Another active Printer already owns this host identity (D3). Carries
+    /// the conflicting Printer's id, or an empty string when it's raised by
+    /// the partial unique index backstop and the follow-up lookup for that
+    /// id itself fails.
+    DuplicateHost(String),
 }
 
 impl fmt::Display for StorageError {
@@ -30,6 +37,7 @@ impl fmt::Display for StorageError {
             Self::Database => "database operation failed",
             Self::Filesystem => "storage filesystem operation failed",
             Self::OperationFailed => "storage operation was cancelled",
+            Self::DuplicateHost(_) => "another active printer already uses this host and port",
         })
     }
 }
@@ -86,6 +94,13 @@ pub enum RepositoryError {
         expected_count: usize,
         current_count: usize,
     },
+    DuplicateHost {
+        conflicting_printer_id: String,
+    },
+    /// D7: `archive`/`unarchive`/`delete` is blocked by the Printer's
+    /// current lifecycle state (or, in a later phase, other work that still
+    /// depends on it). See `crate::printers::lifecycle::evaluate`.
+    LifecycleBlocked(Vec<LifecycleBlocker>),
     Storage(StorageError),
 }
 

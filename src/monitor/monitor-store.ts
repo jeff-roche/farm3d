@@ -4,7 +4,7 @@ import type { MonitorSection } from "../generated/contracts/domain/MonitorSectio
 import type { PrinterStatus } from "../generated/contracts/domain/PrinterStatus";
 import type { ResolvedPrinter } from "../printers/types";
 
-export type MonitorFilter = "all" | "attention" | "printing" | "ready" | "offline" | "setupIncomplete";
+export type MonitorFilter = "all" | "attention" | "printing" | "ready" | "offline" | "setupIncomplete" | "archived";
 export type MonitorSeverity = "fatal" | "warning" | "info" | "resolved";
 
 export interface MonitorPrinterView {
@@ -13,6 +13,8 @@ export interface MonitorPrinterView {
   vendor: string;
   model: string;
   modelLabel: string;
+  location?: string;
+  archived: boolean;
   catalogStatus: ResolvedPrinter["catalogStatus"];
   status?: PrinterStatus;
   operationalState?: PrinterStatus["operationalState"];
@@ -93,6 +95,7 @@ export interface MonitorStore {
 }
 
 const UNLINKED_KEY = "__unlinked__";
+const NO_LOCATION_KEY = "__no_location__";
 const ROSTER_LIMIT = 8;
 
 function compareByName(left: MonitorPrinterView, right: MonitorPrinterView): number {
@@ -127,6 +130,7 @@ const readinessLabels = {
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
   unknownState: "Unknown state",
+  archived: "Archived",
 } as const;
 
 function operationalLabel(status: PrinterStatus | undefined): string {
@@ -194,6 +198,8 @@ function toView(printer: ResolvedPrinter): MonitorPrinterView {
     vendor: printer.catalogRef.vendor,
     model: printer.catalogRef.model,
     modelLabel: printer.modelLabel,
+    location: printer.location,
+    archived: Boolean(printer.archivedAt),
     catalogStatus: printer.catalogStatus,
     status,
     operationalState: status?.operationalState,
@@ -233,12 +239,15 @@ function matchesSearch(printer: MonitorPrinterView, search: string): boolean {
     printer.model,
     `${printer.vendor} ${printer.model}`,
     printer.hostActivityName,
+    printer.location,
   ]
     .filter((value): value is string => value !== undefined)
     .some((value) => value.toLocaleLowerCase().includes(normalized));
 }
 
 function matchesFilter(printer: MonitorPrinterView, filter: MonitorFilter): boolean {
+  if (filter === "archived") return printer.archived;
+  if (printer.archived) return false;
   switch (filter) {
     case "all":
       return true;
@@ -265,6 +274,12 @@ function modelSection(printer: MonitorPrinterView): { key: string; label: string
   };
 }
 
+function locationSection(printer: MonitorPrinterView): { key: string; label: string } {
+  const trimmed = printer.location?.trim();
+  if (!trimmed) return { key: NO_LOCATION_KEY, label: "No location" };
+  return { key: trimmed.toLocaleLowerCase(), label: trimmed };
+}
+
 function sectionFor(printer: MonitorPrinterView, section: MonitorSection): { key: string; label: string } {
   switch (section) {
     case "operationalState":
@@ -275,15 +290,17 @@ function sectionFor(printer: MonitorPrinterView, section: MonitorSection): { key
     case "none":
       return { key: "none", label: "" };
     case "location":
+      return locationSection(printer);
     case "printerModel":
       return modelSection(printer);
   }
 }
 
 function orderSections(section: MonitorSectionView[]): MonitorSectionView[] {
+  const isLast = (key: string) => key === UNLINKED_KEY || key === NO_LOCATION_KEY;
   return section.sort((left, right) => {
-    if (left.key === UNLINKED_KEY) return 1;
-    if (right.key === UNLINKED_KEY) return -1;
+    if (isLast(left.key)) return isLast(right.key) ? 0 : 1;
+    if (isLast(right.key)) return -1;
     return left.label.localeCompare(right.label) || left.key.localeCompare(right.key);
   });
 }
@@ -389,7 +406,7 @@ export function createMonitorStore(dependencies: MonitorStoreDependencies): Moni
     sections,
     rosters: () => sections().map((current) => roster(current.key, current.label, current.printers)),
     shell: () => {
-      const printers = snapshot();
+      const printers = snapshot().filter((printer) => !printer.archived);
       return {
         printerRoster: roster("all", "Printers", printers),
         operationalRosters: [

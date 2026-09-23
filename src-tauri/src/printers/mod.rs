@@ -7,9 +7,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+pub mod batch;
 pub mod commands;
+pub mod create;
+pub mod host_identity;
+pub mod lifecycle;
 pub mod operational;
 pub mod repository;
+pub mod setup;
 
 const PRINTERS_FILE_NAME: &str = "printers.json";
 const PRINTERS_SCHEMA_VERSION: u32 = 1;
@@ -39,10 +44,32 @@ pub struct StoredPrinter {
     /// never here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<crate::connections::ConnectionConfig>,
+    /// A free-text bay/room label (P2 D-series). Never derived — set by the
+    /// user during single or batch setup.
+    #[serde(default)]
+    pub location: Option<String>,
+    /// Whether a start requires bed-clear confirmation. P2 stores and
+    /// surfaces this; enforcement is a later phase (see D5).
+    #[serde(default)]
+    pub start_safety: StartSafety,
+    /// Set once, by `archive_printer` (D6). An archived Printer keeps its
+    /// Connection and data but is excluded from supervision and the
+    /// Monitor's default view.
+    #[serde(default)]
+    pub archived_at: Option<String>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/StartSafety.ts")]
+pub enum StartSafety {
+    #[default]
+    ConfirmBedClear,
+    Unattended,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
@@ -194,6 +221,27 @@ pub struct PrinterPatch {
     pub name: Option<String>,
     #[ts(optional)]
     pub notes: Option<String>,
+    /// `undefined` (field absent) = leave unchanged; `null` = clear;
+    /// a string = set. The `double_option` deserializer distinguishes
+    /// "absent" from "present and null", which a plain `Option<String>`
+    /// cannot.
+    #[serde(default, deserialize_with = "double_option")]
+    #[ts(optional, type = "string | null")]
+    pub location: Option<Option<String>>,
+    #[ts(optional)]
+    pub start_safety: Option<StartSafety>,
+}
+
+/// See `PrinterPatch::location`'s doc comment for why this exists: without
+/// it, serde's plain `Option<String>` cannot tell "the field was omitted"
+/// (`None`) apart from "the field was present and `null`" (also `None`),
+/// which collapses "leave unchanged" and "clear" into the same wire shape.
+fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 fn app_config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -276,6 +324,7 @@ pub fn create_printer_legacy<R: tauri::Runtime>(
         connection: None,
         created_at: String::new(),
         updated_at: String::new(),
+        ..Default::default()
     };
 
     let resolved = resolve_printer(&catalog, &stored);
@@ -590,6 +639,7 @@ mod tests {
             connection: None,
             created_at: String::new(),
             updated_at: String::new(),
+            ..Default::default()
         }
     }
 

@@ -15,7 +15,7 @@ function printer(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
     id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
     catalogRef: { vendor: "Bambu Lab", model: "X1 Carbon", variant: "X1 Carbon 0.4", modelId: "x1", printerVariant: "0.4" },
     catalogStatus: "ok", modelLabel: "X1 Carbon", variantLabel: "X1 Carbon 0.4", overriddenFields: [], inherited: {},
-    profileDrift: [], unknownOverrideKeys: [], createdAt: "", updatedAt: "",
+    profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", setupGaps: [], createdAt: "", updatedAt: "",
     profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
     ...overrides,
   };
@@ -33,22 +33,42 @@ describe("PrinterDashboard", () => {
 
   it("keeps loading separate from first-run and an empty Farm", () => {
     const empty = store([]);
-    render(() => <PrinterDashboard store={empty} loading isFirstRun={false} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={empty} loading isFirstRun={false} />);
     expect(screen.getByText("Loading persisted Printers…")).toBeInTheDocument();
 
     cleanup();
-    render(() => <PrinterDashboard store={empty} isFirstRun onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={empty} isFirstRun />);
     expect(screen.getByText("Start your Farm by adding a Printer.")).toBeInTheDocument();
 
     cleanup();
-    render(() => <PrinterDashboard store={empty} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={empty} />);
     expect(screen.getByText("This Farm has no Printers.")).toBeInTheDocument();
+  });
+
+  it("opens the batch dialog from the toolbar's 'Add Printers…' button", async () => {
+    const monitor = store([]);
+    render(() => <PrinterDashboard store={monitor} />);
+
+    expect(screen.queryByRole("dialog", { name: "Add Printers" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
+    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
+  });
+
+  it("also offers 'Add Printers…' from the first-run empty state", async () => {
+    const empty = store([]);
+    render(() => <PrinterDashboard store={empty} isFirstRun />);
+
+    // One in the toolbar (always present) plus one in the first-run empty state.
+    const buttons = screen.getAllByRole("button", { name: "Add Printers…" });
+    expect(buttons).toHaveLength(2);
+    await fireEvent.click(buttons[1]);
+    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
   });
 
   it("preserves the active filter for filtered-empty results and clears it only on request", async () => {
     const monitor = store([printer()]);
     monitor.setSearch("missing");
-    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={monitor} />);
 
     expect(screen.getByText("No Printers match the current search and filters.")).toBeInTheDocument();
     expect(monitor.search()).toBe("missing");
@@ -60,7 +80,7 @@ describe("PrinterDashboard", () => {
   it("renders sections from the Monitor store, retains content during sync uncertainty, and selects a card", async () => {
     const monitor = store([printer()]);
     const onSelectionChange = vi.fn();
-    render(() => <PrinterDashboard store={monitor} syncState="uncertain" onAddPrinter={vi.fn()} onSelectionChange={onSelectionChange} />);
+    render(() => <PrinterDashboard store={monitor} syncState="uncertain" onSelectionChange={onSelectionChange} />);
 
     expect(screen.getByText("X1 Carbon")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Live status is still reconciling.");
@@ -76,7 +96,7 @@ describe("PrinterDashboard", () => {
   it("returns View all to the complete section instead of leaving the roster action inert", async () => {
     const printers = Array.from({ length: 9 }, (_, index) => printer({ id: `prn-${index}`, name: `Bay ${index}` }));
     const monitor = store(printers);
-    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={monitor} />);
 
     const heading = screen.getByRole("heading", { name: "X1 Carbon" });
     await fireEvent.focus(screen.getByRole("button", { name: "9 Printers" }));
@@ -97,7 +117,7 @@ describe("PrinterDashboard", () => {
     const monitor = store([printer()]);
     monitor.setSelectedPrinterId("prn-1");
 
-    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={monitor} />);
 
     await waitFor(() => expect(screen.getByRole("complementary", { name: "North Bay" })).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -116,7 +136,7 @@ describe("PrinterDashboard", () => {
     const monitor = store([printer()]);
     monitor.setSelectedPrinterId("prn-1");
 
-    render(() => <PrinterDashboard store={monitor} onAddPrinter={vi.fn()} />);
+    render(() => <PrinterDashboard store={monitor} />);
 
     await waitFor(() => expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument());
     expect(screen.queryByRole("complementary", { name: "North Bay" })).not.toBeInTheDocument();

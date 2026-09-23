@@ -15,6 +15,33 @@ A physical 3D printer farm3d connects to, monitors, and can dispatch print
 Jobs to.
 _Avoid_: Device, machine
 
+**Location**:
+An optional free-text label for where a Printer physically sits, such as
+"Bay A" or "Rack 2". It is durable Printer data. Monitor Sections may group
+by it, but it is not a grouping entity itself. Batch setup's "bays" are
+Location values, not Material Slots.
+_Avoid_: Group
+
+**Profile-only Printer**:
+A Printer saved with a resolved Printer Profile and no Connection. It is
+valid, durable, and shown as Setup incomplete.
+
+**Setup incomplete**:
+The derived state of a Printer whose durable configuration cannot support
+monitoring — for example, a Profile-only Printer, or one whose Connection
+uses an unsupported adapter. It differs from Offline, which describes a
+configured Connection farm3d cannot currently reach.
+
+**Start-safety rule**:
+A per-Printer rule for whether farm3d may start a Job on it unattended. The
+default is to confirm the bed is clear.
+_Avoid_: Auto-start setting
+
+**Archive**:
+The default way to retire a Printer. It keeps the Printer's identity and
+history, and removes it from monitoring and scheduling.
+_Avoid_: Delete, remove
+
 **Monitor Section**:
 A temporary visual grouping of individual Printer cards by location, Printer
 Model, or operational state. It is a view preference, not persisted Farm data.

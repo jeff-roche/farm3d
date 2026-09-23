@@ -1,8 +1,9 @@
 import { createEffect, createResource, on, onCleanup, Show } from "solid-js";
-import { Select, TextField } from "../design-system";
+import { RadioGroup, Select, TextField } from "../design-system";
 import { listCatalogVariants } from "../printers/printer-catalog";
 import { rebindPrinter, updatePrinter } from "../printers/printer-store";
-import type { CatalogVariantSummary, ResolvedPrinter } from "../printers/types";
+import type { CatalogVariantSummary, ResolvedPrinter, StartSafety } from "../printers/types";
+import { START_SAFETY_OPTIONS } from "./PrinterSetupWizard";
 import styles from "./PrinterSetupPanel.module.css";
 
 export interface PrinterSetupPanelProps {
@@ -14,6 +15,7 @@ const DEBOUNCE_MS = 300;
 export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
   let nameTimer: ReturnType<typeof setTimeout> | undefined;
   let notesTimer: ReturnType<typeof setTimeout> | undefined;
+  let locationTimer: ReturnType<typeof setTimeout> | undefined;
   const [variants] = createResource(
     () => [props.printer.catalogRef.vendor, props.printer.catalogRef.model] as const,
     ([vendor, model]) => listCatalogVariants(vendor, model),
@@ -23,10 +25,12 @@ export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
     if (previousId === undefined) return;
     clearTimeout(nameTimer);
     clearTimeout(notesTimer);
+    clearTimeout(locationTimer);
   }));
   onCleanup(() => {
     clearTimeout(nameTimer);
     clearTimeout(notesTimer);
+    clearTimeout(locationTimer);
   });
 
   const saveAfterDelay = (
@@ -38,6 +42,18 @@ export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
     clearTimeout(currentTimer());
     const printerId = props.printer.id;
     setTimer(setTimeout(() => void updatePrinter(printerId, { [field]: value }), DEBOUNCE_MS));
+  };
+  const saveLocationAfterDelay = (value: string) => {
+    clearTimeout(locationTimer);
+    const printerId = props.printer.id;
+    // Empty clears the field (`{location: null}`); a `PrinterPatch` treats an
+    // absent key as "leave unchanged" and `null` as "clear" (see
+    // `PrinterPatch`'s own doc comment), so this must send `null`, not `""`.
+    const trimmed = value.trim();
+    locationTimer = setTimeout(
+      () => void updatePrinter(printerId, { location: trimmed === "" ? null : value }),
+      DEBOUNCE_MS,
+    );
   };
   const rebind = (variant: CatalogVariantSummary) => {
     if (variant.variant === props.printer.catalogRef.variant) return;
@@ -79,6 +95,18 @@ export function PrinterSetupPanel(props: PrinterSetupPanelProps) {
         value={props.printer.notes}
         onChange={(value) => saveAfterDelay("notes", value, () => notesTimer, (timer) => (notesTimer = timer))}
         placeholder="Spare parts, quirks, anything worth remembering"
+      />
+      <TextField
+        label="Location"
+        value={props.printer.location ?? ""}
+        onChange={saveLocationAfterDelay}
+        placeholder="Bay 1"
+      />
+      <RadioGroup
+        label="Start safety"
+        options={START_SAFETY_OPTIONS}
+        value={props.printer.startSafety}
+        onChange={(v) => void updatePrinter(props.printer.id, { startSafety: v as StartSafety })}
       />
     </div>
   );

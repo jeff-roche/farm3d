@@ -4,6 +4,9 @@
   align-items: stretch;
   gap: 0.5rem;
   min-width: 0;
+  /* The card is a design-system Button, whose fixed control height would
+     otherwise clip it to a single row. */
+  height: auto;
   padding: 0.75rem;
   text-align: left;
   border-color: var(--f3d-color-border);

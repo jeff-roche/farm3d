@@ -6,17 +6,18 @@ import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import {
-  addPrinter,
+  dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
   exportPrinters,
   importPrinters,
+  loadDuplicateHostArchives,
   loadPrinters,
+  printerArchiveNotice,
   printers,
   printerStoreError,
   printerStoreRetryable,
   printerStoreStatus,
   printerStatusSyncState,
-  removePrinter,
   startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
@@ -108,6 +109,7 @@ function App() {
           return;
         }
         if (disposed || generation !== startupGeneration) return;
+        void loadDuplicateHostArchives();
         setIsFirstRun(isFirstFarmVisit() && printers().length === 0);
         markFarmVisited();
         setMonitorStore(createMonitorStore({
@@ -186,6 +188,16 @@ function App() {
           </div>
         )}
       </Show>
+      <Show when={printerArchiveNotice()}>
+        {(message) => (
+          <div class={styles.noticeBanner} role="status">
+            <p class={styles.noticeMessage}>{message()}</p>
+            <Button variant="ghost" onClick={dismissPrinterArchiveNotice}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
       <Show when={navigation.availability() === "destinationUnavailable"}>
         <div class={styles.errorBanner} role="status">
           <p class={styles.errorMessage}>{SCREEN_TITLE[active()]} is not available in this version.</p>
@@ -217,20 +229,21 @@ function App() {
                 destination: "monitor",
                 ...(id ? { selection: { kind: "printer", id } } : {}),
               })}
-              onAddPrinter={async (draft) => {
-                const id = await addPrinter(draft);
-                if (id) setIsFirstRun(false);
-                return id ? printers().find((p) => p.id === id) : undefined;
-              }}
+              existingPrinters={printers()}
+              onPrinterCreated={() => setIsFirstRun(false)}
               onImport={() => void importPrinters().then(() => {
                 setIsFirstRun(false);
                 reconcileNavigation();
               })}
               onExport={() => void exportPrinters()}
-              onRemovePrinter={(id) => void removePrinter(id).then(() => {
+              // The Setup tab's guarded Archive -> Delete... flow already
+              // called `removePrinter` itself (spec D7's typed-name confirm)
+              // before this fires -- this only reconciles navigation and
+              // first-run state the way P1's direct removal did.
+              onRemovePrinter={() => {
                 setIsFirstRun(false);
                 reconcileNavigation();
-              })}
+              }}
             />
           )}
         </Show>

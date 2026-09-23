@@ -9,6 +9,7 @@ use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVe
 use crate::document_io::DocumentKind;
 use crate::persistence::SnapshotKind;
 
+use super::create::{validate_location, validate_name, CreatePrinterOptions};
 use super::repository::PrinterRepository;
 use super::{CatalogRef, PrinterPatch};
 
@@ -33,6 +34,10 @@ pub enum OperationWarningCode {
     CredentialCleanupPending,
     CredentialRequired,
     SupervisorReconciliationFailed,
+    /// D3, via import: a later Printer in the document shared an active
+    /// Printer's host identity and was imported archived instead. See
+    /// `printers::host_identity::archive_duplicates`.
+    DuplicateHostArchived,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -61,6 +66,12 @@ impl OperationWarning {
     pub fn supervisor(id: &str) -> Self {
         Self {
             code: OperationWarningCode::SupervisorReconciliationFailed,
+            entity_id: Some(id.to_string()),
+        }
+    }
+    pub fn duplicate_host_archived(id: &str) -> Self {
+        Self {
+            code: OperationWarningCode::DuplicateHostArchived,
             entity_id: Some(id.to_string()),
         }
     }
@@ -110,47 +121,51 @@ pub fn list_printers<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub fn create_printer<R: tauri::Runtime>(
+pub async fn create_printer<R: tauri::Runtime>(
     _app: AppHandle<R>,
-    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     name: String,
     catalog_ref: CatalogRef,
+    location: Option<String>,
+    start_safety: Option<super::StartSafety>,
+    default_bed_type: Option<String>,
+    connection: Option<crate::connections::commands::ConnectionSubmission>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let catalog = &services.catalog;
-    let (variant, _) = crate::catalog::resolve::resolve_catalog_ref(catalog, &catalog_ref);
-    let variant = variant.ok_or_else(|| {
-        CommandError::validation_at("catalogRef", "The Printer Profile could not be resolved.")
-    })?;
-    let stored = super::StoredPrinter {
-        id: PrinterRepository::generate_id(),
-        name,
-        catalog_ref,
-        notes: String::new(),
-        overrides: super::PrinterProfileOverrides::default(),
-        last_known_good: Some(super::LastKnownGood {
-            profile: crate::catalog::PrinterProfile::from(variant),
-            catalog_version: catalog.source_tag.clone(),
-            resolved_at: crate::printers::now_rfc3339(),
-        }),
-        connection: None,
-        ..Default::default()
-    };
-    let stored = PrinterRepository::new(Arc::clone(&services.storage))
-        .create(stored)
-        .map_err(CommandError::from_repository)?;
-    services.manager.reconcile_printer(
-        &stored.id,
-        crate::connections::supervisor::PrinterSetupFacts {
-            has_usable_connection: false,
-            profile_resolved: true,
+    let connection = connection.map(|submission| {
+        let secret = submission
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| zeroize::Zeroizing::new(value.to_string()));
+        let config = crate::connections::ConnectionConfig {
+            kind: submission.kind,
+            host: submission.host,
+            port: submission.port,
+            use_tls: submission.use_tls,
+            credential_ref: None,
+        };
+        (config, secret)
+    });
+    let outcome = super::create::create_printer_with(
+        &services,
+        CreatePrinterOptions {
+            name,
+            catalog_ref,
+            location,
+            start_safety: start_safety.unwrap_or_default(),
+            default_bed_type,
+            connection,
         },
-    );
-    Ok(mutation(crate::catalog::resolve::resolve_printer(
-        catalog, &stored,
-    )))
+    )
+    .await?;
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
+        warnings: outcome.warnings,
+    }))
 }
 
 #[tauri::command]
@@ -163,20 +178,36 @@ pub fn update_printer<R: tauri::Runtime>(
     patch: PrinterPatch,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
-    if patch.name.is_none() && patch.notes.is_none() {
+    if patch.name.is_none()
+        && patch.notes.is_none()
+        && patch.location.is_none()
+        && patch.start_safety.is_none()
+    {
         return Err(CommandError::validation_at(
             "patch",
             "At least one field is required.",
         ));
     }
+    let name = patch.name.as_deref().map(validate_name).transpose()?;
+    let location = patch
+        .location
+        .map(|value| validate_location(value.as_deref()))
+        .transpose()?;
+    let start_safety = patch.start_safety;
     let services = bootstrap.ready()?;
     let updated = PrinterRepository::new(Arc::clone(&services.storage))
         .update(&id, expected_revision, |printer| {
-            if let Some(name) = patch.name {
+            if let Some(name) = name {
                 printer.name = name;
             }
             if let Some(notes) = patch.notes {
                 printer.notes = notes;
+            }
+            if let Some(location) = location {
+                printer.location = location;
+            }
+            if let Some(start_safety) = start_safety {
+                printer.start_safety = start_safety;
             }
         })
         .map_err(CommandError::from_repository)?;
@@ -184,6 +215,113 @@ pub fn update_printer<R: tauri::Runtime>(
         &services.catalog,
         &updated,
     )))
+}
+
+#[tauri::command]
+pub fn printer_lifecycle_eligibility<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    id: String,
+) -> Result<CommandSuccess<crate::printers::lifecycle::LifecycleEligibility>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let eligibility = PrinterRepository::new(Arc::clone(&services.storage))
+        .lifecycle_eligibility(&id)
+        .map_err(|error| CommandError::from_repository(error.into()))?
+        .ok_or_else(|| CommandError::not_found(&id))?;
+    Ok(CommandSuccess::new(eligibility))
+}
+
+/// Lists the Printers the v3 migration archived for sharing a host with an
+/// older Printer, so the UI can explain them (see `DuplicateHostArchive`).
+#[tauri::command]
+pub fn list_duplicate_host_archives<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<Vec<crate::printers::host_identity::DuplicateHostArchive>>, CommandError>
+{
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    crate::printers::host_identity::duplicate_host_archives(&services.storage)
+        .map(CommandSuccess::new)
+        .map_err(|error| CommandError::from_repository(error.into()))
+}
+
+/// D6: moves a Printer into the archived state. Order matters: the
+/// repository write commits first, then the supervisor is stopped under the
+/// reconciliation guard — never the other way around, or the supervisor
+/// could reconnect against a Connection the archive just excluded from
+/// supervision.
+#[tauri::command]
+pub async fn archive_printer<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
+    id: String,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let archived = PrinterRepository::new(Arc::clone(&services.storage))
+        .archive(&id, expected_revision)
+        .map_err(CommandError::from_repository)?;
+    let mut warnings = Vec::new();
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    match crate::printers::setup::supervise_persisted(
+        &services.manager,
+        &services.storage,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &archived,
+    )
+    .await
+    {
+        crate::printers::setup::SupervisionOutcome::Archived(false)
+        | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
+            warnings.push(OperationWarning::supervisor(&id));
+        }
+        _ => {}
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
+        warnings,
+    }))
+}
+
+/// D6: moves an archived Printer back to active and resumes supervision.
+#[tauri::command]
+pub async fn unarchive_printer<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    expected_revision: i64,
+    id: String,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let unarchived = PrinterRepository::new(Arc::clone(&services.storage))
+        .unarchive(&id, expected_revision)
+        .map_err(CommandError::from_repository)?;
+    let mut warnings = Vec::new();
+    let _reconciliation = services.manager.reconciliation_guard().await;
+    if crate::printers::setup::supervise_persisted(
+        &services.manager,
+        &services.storage,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &unarchived,
+    )
+    .await
+        == crate::printers::setup::SupervisionOutcome::CredentialRequired
+    {
+        warnings.push(OperationWarning::credential_required(&id));
+    }
+    Ok(CommandSuccess::new(PrinterMutationResult {
+        printer: crate::catalog::resolve::resolve_printer(&services.catalog, &unarchived),
+        warnings,
+    }))
 }
 
 #[tauri::command]
@@ -467,7 +605,7 @@ pub async fn export_printers<R: tauri::Runtime>(
         .map(export_printer)
         .collect::<Result<Vec<_>, _>>()?;
     let bytes = serde_json::to_vec_pretty(&ExportPrintersDocument {
-        schema_version: 1,
+        schema_version: 2,
         exported_at: &exported_at,
         printers: &exported,
     })
@@ -511,7 +649,7 @@ pub async fn import_printers<R: tauri::Runtime>(
             "The Printers document is too large.",
         ));
     }
-    let document = parse_printers_document(&bytes)?;
+    let mut document = parse_printers_document(&bytes)?;
     let mut ids = std::collections::HashSet::new();
     if document
         .printers
@@ -520,6 +658,14 @@ pub async fn import_printers<R: tauri::Runtime>(
     {
         return Err(CommandError::validation("Printer IDs must be unique."));
     }
+    // D3: a later active Printer in the document that shares an earlier
+    // one's host identity is imported archived instead of rejected — see
+    // "Export and import" in the P2 design spec ("handled exactly as in the
+    // migration rule"). Doing this before `replace_all` also means the
+    // write path's partial unique index backstop never has to fire for an
+    // import: no two active rows it writes ever share a host identity.
+    let duplicate_hosts =
+        crate::printers::host_identity::archive_duplicates(&mut document.printers);
     let repository = PrinterRepository::new(Arc::clone(&services.storage));
     let current = repository
         .list()
@@ -570,75 +716,39 @@ pub async fn import_printers<R: tauri::Runtime>(
     .map_err(CommandError::from_repository)?;
     services.documents.after_printers_commit();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<OperationWarning> = duplicate_hosts
+        .iter()
+        .map(|(_kept_id, archived_id)| OperationWarning::duplicate_host_archived(archived_id))
+        .collect();
     for printer in old_records {
         if !services.manager.stop_and_wait(&printer.id).await {
             warnings.push(OperationWarning::supervisor(&printer.id));
         }
     }
-    let needs_store = stored.iter().any(|printer| {
-        printer
-            .connection
-            .as_ref()
-            .and_then(|connection| connection.credential_ref.as_ref())
-            .is_some()
-    });
-    let credential_store = needs_store.then(|| Arc::clone(&services.credentials));
     for printer in &stored {
-        let profile_resolved =
-            crate::catalog::resolve::resolve_catalog_ref(&services.catalog, &printer.catalog_ref)
-                .0
-                .is_some();
-        let Some(config) = printer.connection.clone() else {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
-            continue;
-        };
-        if config.kind != crate::connections::MOONRAKER_KIND {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
+        let (_, gaps) = crate::printers::setup::derive_setup_facts(printer, &services.catalog);
+        if gaps.contains(&crate::printers::setup::SetupGap::UnsupportedAdapter) {
             warnings.push(OperationWarning::supervisor(&printer.id));
-            continue;
         }
-        let credential = match config.credential_ref.as_deref() {
-            None => None,
-            Some(reference) => credential_store
-                .as_ref()
-                .and_then(|store| store.get(reference).ok())
-                .flatten(),
-        };
-        if config.credential_ref.is_some() && credential.is_none() {
-            services.manager.reconcile_printer(
-                &printer.id,
-                crate::connections::supervisor::PrinterSetupFacts {
-                    has_usable_connection: false,
-                    profile_resolved,
-                },
-            );
-            warnings.push(OperationWarning::credential_required(&printer.id));
-        } else {
-            services
-                .manager
-                .start(
-                    printer.id.clone(),
-                    config,
-                    credential.map(zeroize::Zeroizing::new),
-                    crate::connections::supervisor::PrinterSetupFacts {
-                        has_usable_connection: true,
-                        profile_resolved,
-                    },
-                )
-                .await;
+        // Re-read under the guard: an archive or delete that committed after
+        // `replace_all` must not be undone by supervising the stale copy.
+        match crate::printers::setup::supervise_persisted(
+            &services.manager,
+            &services.storage,
+            services.credentials.as_ref(),
+            &services.catalog,
+            printer,
+        )
+        .await
+        {
+            crate::printers::setup::SupervisionOutcome::CredentialRequired => {
+                warnings.push(OperationWarning::credential_required(&printer.id));
+            }
+            crate::printers::setup::SupervisionOutcome::Archived(false)
+            | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
+                warnings.push(OperationWarning::supervisor(&printer.id));
+            }
+            _ => {}
         }
     }
     let resolved = stored
@@ -660,6 +770,9 @@ fn export_printer(printer: &super::StoredPrinter) -> Result<serde_json::Value, C
     object.remove("group");
     object.remove("createdAt");
     object.remove("updatedAt");
+    // P2's lifecycle columns (location/startSafety/archivedAt) are part of
+    // the schemaVersion-2 document shape (see "Export and import" in the P2
+    // design spec) — kept as-is here, defaulted by serde when absent.
     object
         .entry("overrides")
         .or_insert_with(|| serde_json::json!({}));
@@ -714,11 +827,11 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 1 {
+    if version > 2 {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 {
-        return Err(CommandError::validation("schemaVersion must be 1."));
+    if version != 1 && version != 2 {
+        return Err(CommandError::validation("schemaVersion must be 1 or 2."));
     }
     let rows = root
         .get("printers")
@@ -738,6 +851,13 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         "overrides",
         "lastKnownGood",
         "connection",
+        // P2 (schemaVersion 2): optional for both schema versions and
+        // defaulted by serde (`StoredPrinter`'s struct-level `#[serde(default)]`)
+        // when absent, so a v1 document — which never carries them — still
+        // parses.
+        "location",
+        "startSafety",
+        "archivedAt",
     ];
     for row in rows {
         let object = row
@@ -759,10 +879,10 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
             ));
         }
     }
-    let document: PrintersDocument = serde_json::from_value(raw).map_err(|_| {
+    let mut document: PrintersDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Printers document has an invalid shape.")
     })?;
-    for printer in &document.printers {
+    for printer in &mut document.printers {
         if printer.id.is_empty()
             || printer.id.len() > 512
             || printer.id.chars().any(char::is_control)
@@ -789,6 +909,11 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
                 validate_credential_reference(reference)?;
             }
         }
+        // P2: the document's location must already be valid — reuses the
+        // same trim/length/control-character rule `create_printer` and
+        // `update_printer` enforce, so an import can't smuggle in a
+        // location those commands would have rejected.
+        printer.location = validate_location(printer.location.as_deref())?;
     }
     let mut ids = std::collections::HashSet::new();
     if document
@@ -843,7 +968,7 @@ mod import_export_tests {
 
     #[test]
     fn printer_import_rejects_future_schema_duplicate_ids_and_secret_fields() {
-        let future = br#"{"schemaVersion":2,"exportedAt":"x","printers":[]}"#;
+        let future = br#"{"schemaVersion":3,"exportedAt":"x","printers":[]}"#;
         assert_eq!(
             parse_printers_document(future).unwrap_err().code,
             ErrorCode::UnsupportedSchemaVersion
@@ -883,5 +1008,74 @@ mod import_export_tests {
             parse_printers_document(&malformed).unwrap_err().code,
             ErrorCode::Validation
         );
+    }
+
+    /// Step 1 item 2: a schemaVersion-2 export document round-trips through
+    /// `parse_printers_document` (accepted, lifecycle fields populated) and
+    /// back through `export_printer` (the same fields reappear, unstripped).
+    #[test]
+    fn v2_fixture_round_trips_through_parse_and_export() {
+        let fixture =
+            include_str!("../../tests/fixtures/persistence/v2/printers-export.json").as_bytes();
+
+        let parsed = parse_printers_document(fixture).expect("v2 fixture parses");
+
+        assert_eq!(parsed.printers.len(), 2);
+        let active = &parsed.printers[0];
+        assert_eq!(active.id, "prn-v2-active");
+        assert_eq!(active.location.as_deref(), Some("Bay 1"));
+        assert_eq!(active.start_safety, super::super::StartSafety::Unattended);
+        assert_eq!(active.archived_at, None);
+        let archived = &parsed.printers[1];
+        assert_eq!(archived.id, "prn-v2-archived");
+        assert_eq!(archived.location, None);
+        assert_eq!(
+            archived.start_safety,
+            super::super::StartSafety::ConfirmBedClear
+        );
+        assert_eq!(
+            archived.archived_at.as_deref(),
+            Some("2026-09-20T00:00:00.000Z")
+        );
+
+        for printer in &parsed.printers {
+            let exported = export_printer(printer).unwrap();
+            assert_eq!(exported["location"], serde_json::json!(printer.location));
+            assert_eq!(
+                exported["startSafety"],
+                serde_json::to_value(printer.start_safety).unwrap()
+            );
+            assert_eq!(
+                exported["archivedAt"],
+                serde_json::json!(printer.archived_at)
+            );
+        }
+    }
+
+    /// Step 1 item 3: a v1 document (no location/startSafety/archivedAt
+    /// keys at all) still imports, defaulted to `null`/`confirmBedClear`/
+    /// not archived.
+    #[test]
+    fn v1_document_without_lifecycle_fields_still_parses_with_defaults() {
+        let parsed = parse_printers_document(&document("null", "{}")).unwrap();
+
+        let printer = &parsed.printers[0];
+        assert_eq!(printer.location, None);
+        assert_eq!(printer.start_safety, super::super::StartSafety::default());
+        assert_eq!(printer.archived_at, None);
+    }
+
+    /// Step 1 item 6: an invalid location in the document is rejected the
+    /// same way `create_printer`/`update_printer` would reject it.
+    #[test]
+    fn printer_import_rejects_an_invalid_location() {
+        let too_long = "x".repeat(129);
+        let raw = format!(
+            r#"{{"schemaVersion":2,"exportedAt":"x","printers":[{{"id":"legacy/Bay α","revision":1,"name":"Bay","catalogRef":{{"vendor":"Example","model":"Printer","variant":"0.4","modelId":"Example-1","printerVariant":"0.4"}},"notes":"","overrides":{{}},"lastKnownGood":null,"connection":null,"location":"{too_long}","startSafety":"confirmBedClear","archivedAt":null}}]}}"#
+        );
+
+        let error = parse_printers_document(raw.as_bytes()).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::Validation);
     }
 }

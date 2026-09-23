@@ -1,6 +1,10 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
+import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
+import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
+import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
 import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
@@ -9,10 +13,11 @@ import { resolveWebCatalogVariant } from "./printer-catalog";
 import type {
   CatalogRef,
   ConnectionSubmission,
+  CreatePrinterOptions,
   CredentialStoreInfo,
   DiscoveredPrinter,
+  LifecycleEligibility,
   OverridableField,
-  PrinterDraft,
   PrinterPatch,
   PrinterProfile,
   PrinterStatus,
@@ -26,6 +31,8 @@ interface PrinterStoreState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
   retryable: boolean;
+  /** Explains Printers archived automatically for sharing a host (D3). */
+  archiveNotice: { message: string; dismissKeys: string[] } | null;
 }
 function compareUtf8(left: string, right: string): number {
   const encoder = new TextEncoder();
@@ -43,6 +50,7 @@ const [state, setState] = createStore<PrinterStoreState>({
   status: "idle",
   error: null,
   retryable: false,
+  archiveNotice: null,
 });
 let statusStore: ReturnType<typeof createPrinterStatusStore> | undefined;
 const [statusStoreRevision, setStatusStoreRevision] = createSignal(0);
@@ -52,6 +60,7 @@ export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
+export const printerArchiveNotice = () => state.archiveNotice?.message ?? null;
 export const printerStatusSyncState = () => {
   statusStoreRevision();
   return statusStore?.syncState() ?? "syncing";
@@ -61,8 +70,15 @@ export const printerStatusSyncState = () => {
  * Mutations report failures into `state.error` (surfaced by App's banner)
  * rather than rejecting: every call site does `void fn(...)`, so a rethrow
  * would only relocate the unhandled rejection.
+ *
+ * Exported for the handful of callers (currently just
+ * `PrinterConnectionPanel`'s replace-connection save) whose own mutation
+ * function rejects instead -- because its caller needs the rejection to
+ * offer something the banner can't (Ruling R2's "Save anyway") -- but who
+ * still want a rejection they don't otherwise handle to land in the same
+ * banner every other mutation uses.
  */
-function reportError(e: unknown): void {
+export function reportError(e: unknown): void {
   setState({
     error: isCommandError(e) ? e.message : "The operation could not be completed.",
     retryable: isCommandError(e) && e.retryable,
@@ -71,6 +87,71 @@ function reportError(e: unknown): void {
 
 export function dismissPrinterStoreError(): void {
   setState({ error: null, retryable: false });
+}
+
+const DISMISSED_ARCHIVES_KEY = "farm3d:dismissed-duplicate-host-archives";
+
+function dismissedArchiveIds(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(DISMISSED_ARCHIVES_KEY) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function archiveNoticeMessage(cause: string, names: string[]): string {
+  const one = names.length === 1;
+  return (
+    `Archived ${cause} because ${one ? "it shares" : "they share"} a host with another Printer: ${names.join(", ")}. ` +
+    `Change ${one ? "its host" : "their hosts"}, then unarchive ${one ? "it" : "them"}.`
+  );
+}
+
+/** Dismisses the archive notice. A notice from the upgrade stays dismissed
+ *  across restarts (its ledger ids are remembered in localStorage). */
+export function dismissPrinterArchiveNotice(): void {
+  const keys = state.archiveNotice?.dismissKeys ?? [];
+  if (keys.length > 0) {
+    try {
+      const dismissed = dismissedArchiveIds();
+      for (const key of keys) dismissed.add(key);
+      window.localStorage.setItem(DISMISSED_ARCHIVES_KEY, JSON.stringify([...dismissed]));
+    } catch {
+      // Storage unavailable: the notice returns next launch, which is harmless.
+    }
+  }
+  setState({ archiveNotice: null });
+}
+
+/** Reads the Printers the v3 upgrade archived for sharing a host and, for
+ *  those still archived and not yet dismissed, raises the archive notice.
+ *  Advisory only: a failed read is ignored rather than raised as an error. */
+export async function loadDuplicateHostArchives(): Promise<void> {
+  if (!desktopAvailable()) return;
+  let archives;
+  try {
+    archives = await command("list_duplicate_host_archives");
+  } catch {
+    return;
+  }
+  const dismissed = dismissedArchiveIds();
+  const byId = new Map(state.printers.map((printer) => [printer.id, printer]));
+  const pending = archives.filter(
+    (archive) => !dismissed.has(archive.warningId) && byId.get(archive.archivedPrinterId)?.archivedAt,
+  );
+  if (pending.length === 0) return;
+  const names = pending.map((archive) => {
+    const name = byId.get(archive.archivedPrinterId)!.name;
+    const kept = byId.get(archive.keptPrinterId)?.name;
+    return kept ? `${name} (same host as ${kept})` : name;
+  });
+  setState({
+    archiveNotice: {
+      message: archiveNoticeMessage("during the upgrade", names),
+      dismissKeys: pending.map((archive) => archive.warningId),
+    },
+  });
 }
 
 const EMPTY_PROFILE: PrinterProfile = {
@@ -141,6 +222,8 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         inherited: {},
         profileDrift: [],
         unknownOverrideKeys: [],
+        startSafety: "confirmBedClear",
+        setupGaps: [],
         createdAt: "",
         updatedAt: "",
       };
@@ -188,47 +271,55 @@ function removeById(id: string): void {
   statusStore?.prune();
 }
 
-export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
+/** Single-step create (spec D1/D5/D9) — can also carry a Connection, start
+ *  safety, and a shared bed-type override up front. */
+export async function createPrinter(options: CreatePrinterOptions): Promise<ResolvedPrinter | undefined> {
   if (!desktopAvailable()) {
     const id = `prn-web-${state.printers.length + 1}`;
-    // The Add dialog's Brand/Model/Nozzle selects are themselves backed by
-    // the real catalog in web mode now (see printer-catalog.ts), so this
-    // resolves real profile data for whatever the user picked rather than
-    // falling back to a generic placeholder. EMPTY_PROFILE only covers the
-    // case where that lookup itself fails (e.g. the catalog fetch errored).
     const match = await resolveWebCatalogVariant(
-      draft.catalogRef.vendor,
-      draft.catalogRef.model,
-      draft.catalogRef.printerVariant,
+      options.catalogRef.vendor,
+      options.catalogRef.model,
+      options.catalogRef.printerVariant,
     );
-    setState("printers", (list) => [
-      ...list,
-      {
-        id,
-        revision: 1,
-        name: draft.name,
-        notes: "",
-        overrides: {},
-        catalogRef: draft.catalogRef,
-        catalogStatus: "ok",
-        modelLabel: match?.modelLabel ?? draft.catalogRef.model,
-        variantLabel: match?.variantLabel ?? draft.catalogRef.variant,
-        profile: match?.profile ?? EMPTY_PROFILE,
-        overriddenFields: [],
-        inherited: {},
-        profileDrift: [],
-        unknownOverrideKeys: [],
-        createdAt: "",
-        updatedAt: "",
-      },
-    ]);
-    return id;
+    const resolved: ResolvedPrinter = {
+      id,
+      revision: 1,
+      name: options.name,
+      notes: "",
+      overrides: {},
+      catalogRef: options.catalogRef,
+      catalogStatus: "ok",
+      modelLabel: match?.modelLabel ?? options.catalogRef.model,
+      variantLabel: match?.variantLabel ?? options.catalogRef.variant,
+      profile: match?.profile ?? EMPTY_PROFILE,
+      overriddenFields: [],
+      inherited: {},
+      profileDrift: [],
+      unknownOverrideKeys: [],
+      location: options.location,
+      startSafety: options.startSafety ?? "confirmBedClear",
+      setupGaps: options.connection ? [] : ["missingConnection"],
+      createdAt: "",
+      updatedAt: "",
+      ...(options.connection
+        ? {
+            connection: {
+              kind: options.connection.kind,
+              host: options.connection.host,
+              port: options.connection.port,
+              useTls: options.connection.useTls,
+            },
+          }
+        : {}),
+    };
+    setState("printers", (list) => [...list, resolved]);
+    return resolved;
   }
   try {
-    const { printer } = await command("create_printer", draft);
+    const { printer } = await command("create_printer", options);
     const resolved = resolvePrinterRecord(printer);
     setState("printers", (list) => [...list, resolved]);
-    return resolved.id;
+    return resolved;
   } catch (e) {
     reportError(e);
     return undefined;
@@ -237,7 +328,15 @@ export async function addPrinter(draft: PrinterDraft): Promise<string | undefine
 
 export async function updatePrinter(id: string, patch: PrinterPatch): Promise<void> {
   if (!desktopAvailable()) {
-    setState("printers", (p) => p.id === id, (p) => ({ ...p, ...patch }));
+    // PrinterPatch.location is `string | null` (null clears it), but
+    // ResolvedPrinter.location is `string | undefined` — map null to
+    // undefined so the optimistic merge below stays assignable.
+    const { location, ...rest } = patch;
+    setState("printers", (p) => p.id === id, (p) => ({
+      ...p,
+      ...rest,
+      ...(location !== undefined ? { location: location ?? undefined } : {}),
+    }));
     return;
   }
   try {
@@ -249,16 +348,25 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
   }
 }
 
-export async function removePrinter(id: string): Promise<void> {
+export type RemovePrinterResult = { ok: true } | { ok: false; message: string };
+
+/** Resolves (never rejects) with whether the delete committed, so its one
+ *  caller -- `DeletePrinterDialog` -- can keep itself open and show the
+ *  failure inline instead of closing over an unchanged row. */
+export async function removePrinter(id: string): Promise<RemovePrinterResult> {
   if (!desktopAvailable()) {
     removeById(id);
-    return;
+    return { ok: true };
   }
   try {
     await command("delete_printer", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 });
     removeById(id);
+    return { ok: true };
   } catch (e) {
-    reportError(e);
+    return {
+      ok: false,
+      message: isCommandError(e) ? e.message : "The Printer could not be deleted.",
+    };
   }
 }
 
@@ -311,7 +419,7 @@ export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise
     setState("printers", (p) => p.id === id, (p) => ({
       ...p,
       catalogRef: match.catalogRef,
-      catalogStatus: "ok",
+      catalogStatus: "ok" as const,
       modelLabel: match.modelLabel,
       variantLabel: match.variantLabel,
       profile: match.profile,
@@ -367,6 +475,13 @@ export async function importPrinters(): Promise<PrintersImportOutcome | undefine
         return runtimeStatus === undefined ? resolved : { ...resolved, runtimeStatus };
       }));
       statusStore?.prune();
+      const archivedIds = new Set(
+        result.warnings.filter((warning) => warning.code === "DUPLICATE_HOST_ARCHIVED").map((warning) => warning.entityId),
+      );
+      const names = result.printers.filter((record) => archivedIds.has(record.id)).map((record) => record.name);
+      if (names.length > 0) {
+        setState({ archiveNotice: { message: archiveNoticeMessage("on import", names), dismissKeys: [] } });
+      }
     }
     return result;
   } catch (e) {
@@ -418,13 +533,26 @@ export async function startStatusListener(): Promise<() => void> {
   }
 }
 
-export async function setConnection(id: string, submission: ConnectionSubmission): Promise<void> {
+/** Rejects rather than reporting into the banner (Ruling R2): when a
+ *  Connection is being replaced, the backend probes the new submission
+ *  first, and a probe failure must let the caller offer "Save anyway"
+ *  (`acceptUnverified: true`) instead of the failure silently only showing
+ *  up in the banner. `PrinterConnectionPanel` currently catches this itself
+ *  and routes it to `reportError` so its own behaviour is unchanged until
+ *  Task 11 adds the inline "Save anyway" affordance. */
+export async function setConnection(
+  id: string,
+  submission: ConnectionSubmission,
+  acceptUnverified?: boolean,
+): Promise<void> {
   if (!desktopAvailable()) return;
-  try {
-    spliceResolved(resolvePrinterRecord((await command("set_printer_connection", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1, submission })).printer));
-  } catch (e) {
-    reportError(e);
-  }
+  const { printer } = await command("set_printer_connection", {
+    id,
+    expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+    submission,
+    ...(acceptUnverified !== undefined ? { acceptUnverified } : {}),
+  });
+  spliceResolved(resolvePrinterRecord(printer));
 }
 
 export async function clearConnection(id: string): Promise<void> {
@@ -446,6 +574,15 @@ export async function testConnection(
   return command("test_printer_connection", { id, submission });
 }
 
+/** Rejects rather than reporting into the banner: the wizard/batch dialog's
+ *  Connect step renders a probe failure inline. Unlike `testConnection`,
+ *  there is no Printer id yet -- this probes a candidate submission before
+ *  any Printer exists (spec D8). */
+export async function probeCandidate(submission: ConnectionSubmission): Promise<ProbeResult> {
+  if (!desktopAvailable()) throw new Error("Probing a printer needs the desktop app");
+  return command("probe_connection", { submission });
+}
+
 export async function discoverPrinters(): Promise<DiscoveredPrinter[]> {
   if (!desktopAvailable()) return [];
   try {
@@ -464,4 +601,180 @@ export async function credentialStoreInfo(): Promise<CredentialStoreInfo | null>
     reportError(e);
     return null;
   }
+}
+
+/** Upserts by id: every printer a batch result carries is newly created, so
+ *  this is normally an append, but it stays id-keyed rather than a plain
+ *  push so a retried/duplicated response can't double a row. */
+function mergeCreatedPrinters(records: ResolvedPrinter[]): void {
+  if (records.length === 0) return;
+  setState("printers", (list) => {
+    const byId = new Map(list.map((printer) => [printer.id, printer]));
+    for (const record of records) byId.set(record.id, record);
+    return [...byId.values()];
+  });
+}
+
+/** The `PrinterRecord` shape of a web-mode `ResolvedPrinter`, for results
+ *  that carry a `printer` (e.g. the batch web shim). */
+function toWebRecord(printer: ResolvedPrinter): PrinterRecord {
+  const {
+    catalogStatus,
+    modelLabel,
+    variantLabel,
+    profile,
+    overriddenFields,
+    inherited,
+    profileDrift,
+    unknownOverrideKeys,
+    runtimeStatus: _runtimeStatus, // live-only; not part of the durable record
+    ...record
+  } = printer;
+  return {
+    ...record,
+    profileResolution: {
+      catalogStatus,
+      modelLabel,
+      variantLabel,
+      profile,
+      overriddenFields,
+      inherited,
+      profileDrift,
+      unknownOverrideKeys,
+    },
+  };
+}
+
+/** Rejects rather than reporting into the banner: the batch dialog's
+ *  Review & results step renders per-row outcomes and errors inline, and a
+ *  batch-level failure (e.g. a duplicate `batchId`) needs to reach that same
+ *  step rather than the global banner. Successfully created Printers are
+ *  merged into the store either way. */
+export async function createPrintersBatch(
+  input: CreatePrintersBatchInput,
+): Promise<CreatePrintersBatchOutput> {
+  if (!desktopAvailable()) {
+    const created: ResolvedPrinter[] = [];
+    const rows: BatchRowResult[] = [];
+    for (const row of input.rows) {
+      const match = await resolveWebCatalogVariant(
+        input.shared.catalogRef.vendor,
+        input.shared.catalogRef.model,
+        input.shared.catalogRef.printerVariant,
+      );
+      const resolved: ResolvedPrinter = {
+        id: `prn-web-${state.printers.length + created.length + 1}`,
+        revision: 1,
+        name: row.name,
+        notes: "",
+        overrides: {},
+        catalogRef: input.shared.catalogRef,
+        catalogStatus: "ok",
+        modelLabel: match?.modelLabel ?? input.shared.catalogRef.model,
+        variantLabel: match?.variantLabel ?? input.shared.catalogRef.variant,
+        profile: match?.profile ?? EMPTY_PROFILE,
+        overriddenFields: [],
+        inherited: {},
+        profileDrift: [],
+        unknownOverrideKeys: [],
+        location: row.location,
+        startSafety: input.shared.startSafety,
+        setupGaps: ["missingConnection"],
+        createdAt: "",
+        updatedAt: "",
+      };
+      created.push(resolved);
+      rows.push({
+        rowId: row.rowId,
+        outcome: "createdSetupIncomplete",
+        // The same local record merged below, so callers can correlate
+        // row -> Printer exactly as on desktop.
+        printer: toWebRecord(resolved),
+        credentialStored: false,
+        errors: [],
+        warnings: [],
+      });
+    }
+    mergeCreatedPrinters(created);
+    return { batchId: input.batchId, rows };
+  }
+  const output = await command("create_printers_batch", { input });
+  mergeCreatedPrinters(
+    output.rows.flatMap((row) => (row.printer ? [resolvePrinterRecord(row.printer)] : [])),
+  );
+  return output;
+}
+
+export async function cancelBatch(batchId: string): Promise<void> {
+  if (!desktopAvailable()) return;
+  try {
+    await command("cancel_printer_batch", { batchId });
+  } catch (e) {
+    reportError(e);
+  }
+}
+
+export async function archivePrinter(id: string): Promise<void> {
+  if (!desktopAvailable()) {
+    setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
+    return;
+  }
+  try {
+    const { printer } = await command("archive_printer", {
+      id,
+      expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+    });
+    spliceResolved(resolvePrinterRecord(printer));
+  } catch (e) {
+    reportError(e);
+  }
+}
+
+/** Rejects rather than reporting into the banner: unarchiving re-checks the
+ *  host identity (spec D3/D6), and a `DUPLICATE_HOST` failure needs to reach
+ *  the Setup tab inline so it can name the conflicting Printer — the banner
+ *  has no room for that. Mirrors `setConnection`'s rejection for the same
+ *  reason. */
+export async function unarchivePrinter(id: string): Promise<void> {
+  if (!desktopAvailable()) {
+    setState("printers", (p) => p.id === id, produce((printer) => {
+      delete printer.archivedAt;
+    }));
+    return;
+  }
+  const { printer } = await command("unarchive_printer", {
+    id,
+    expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+  });
+  spliceResolved(resolvePrinterRecord(printer));
+}
+
+/** Rejects rather than reporting into the banner: the Setup tab renders
+ *  blockers inline next to the Archive/Unarchive/Delete actions they
+ *  explain. In web mode this derives the same shape locally from
+ *  `archivedAt` (spec D7's P2 blocker source: `NOT_ARCHIVED`/
+ *  `ALREADY_ARCHIVED`), since there is no backend to ask. */
+export async function lifecycleEligibility(id: string): Promise<LifecycleEligibility> {
+  if (!desktopAvailable()) {
+    const archived = Boolean(state.printers.find((printer) => printer.id === id)?.archivedAt);
+    return archived
+      ? {
+          canArchive: false,
+          canUnarchive: true,
+          canDelete: true,
+          blockers: [
+            { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
+          ],
+        }
+      : {
+          canArchive: true,
+          canUnarchive: false,
+          canDelete: false,
+          blockers: [
+            { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
+            { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
+          ],
+        };
+  }
+  return command("printer_lifecycle_eligibility", { id });
 }

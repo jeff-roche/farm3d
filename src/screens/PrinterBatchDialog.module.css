@@ -1,0 +1,181 @@
+/* A fixed-ish width so the dialog doesn't size itself to the row grid; the
+   grid scrolls horizontally inside it instead (spec: 1024 × 700 must work). */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(60rem, 85vw);
+  min-width: 0;
+  padding: 0 0.25rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+
+.intake {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-border);
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sectionTitle {
+  flex: 1;
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+}
+
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.inline > * {
+  flex: 1 1 10rem;
+}
+
+/* Wide enough that "Quantity per location" stays on one line, so the
+   field lines up with its neighbours. */
+.inline > .narrow {
+  flex: 0 0 10rem;
+}
+
+/* Fields with and without a description line share this row, so align
+   their labels rather than their (differently offset) bottoms. */
+.alignTop {
+  align-items: flex-start;
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.checkboxField {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.fileInput {
+  display: none;
+}
+
+.issues {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.candidates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.candidate {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) 11rem minmax(12rem, 1.5fr);
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text);
+}
+
+.candidateName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.assign {
+  min-width: 0;
+}
+
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.summary p {
+  margin: 0;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.warn {
+  margin: 0;
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-warning);
+}
+
+.error {
+  margin: 0;
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-danger);
+}
+
+/* Sticky rather than in normal flow: the dialog's own scroll container
+   (`Dialog.module.css` `.content`, `max-height: 85vh; overflow: auto;`) can
+   be shorter than the batch content (rows grid, results list) at compact
+   viewports such as 1024 x 700, which would otherwise push Create/Cancel/
+   Retry below the fold. Pinning the footer keeps it reachable without
+   hunting for a scrollbar. */
+.footer {
+  position: sticky;
+  /* Dialog's scroll container has 1rem of padding, and a sticky element
+     sticks to the inside of that padding -- so at `bottom: 0` rows scrolled
+     behind the footer showed through the 1rem strip beneath it. Pin to the
+     scroll edge instead and pad that strip back so the buttons don't move. */
+  bottom: -1rem;
+  margin-bottom: -1rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 0.25rem 1.75rem;
+  background-color: var(--f3d-color-surface-raised);
+}
+
+.footerSpacer {
+  flex: 1;
+}

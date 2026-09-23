@@ -1,6 +1,6 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 23);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_lifecycle_additions() {
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 30);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -15,6 +15,9 @@ fn command_inventory_is_exactly_the_f1_inventory() {
             "set_printer_override",
             "rebind_printer",
             "resolve_profile_drift",
+            "printer_lifecycle_eligibility",
+            "archive_printer",
+            "unarchive_printer",
             "export_printers",
             "import_printers",
             "list_catalog_models",
@@ -27,6 +30,10 @@ fn command_inventory_is_exactly_the_f1_inventory() {
             "credential_store_info",
             "discover_printers",
             "printer_statuses",
+            "probe_connection",
+            "create_printers_batch",
+            "cancel_printer_batch",
+            "list_duplicate_host_archives",
         ]
     );
 }
@@ -49,7 +56,7 @@ fn generated_contracts_and_sqlite_never_contain_the_fixture_secret() {
 }
 
 #[test]
-fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() {
+fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
     use farm3d_lib::bootstrap::BootstrapState;
     use farm3d_lib::contracts::command::CommandError;
     use farm3d_lib::RuntimeServices;
@@ -92,6 +99,9 @@ fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::printers::commands::set_printer_override,
             farm3d_lib::printers::commands::rebind_printer,
             farm3d_lib::printers::commands::resolve_profile_drift,
+            farm3d_lib::printers::commands::printer_lifecycle_eligibility,
+            farm3d_lib::printers::commands::archive_printer,
+            farm3d_lib::printers::commands::unarchive_printer,
             farm3d_lib::printers::commands::export_printers,
             farm3d_lib::printers::commands::import_printers,
             farm3d_lib::catalog::commands::list_catalog_models,
@@ -104,6 +114,10 @@ fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::connections::commands::credential_store_info,
             farm3d_lib::connections::commands::discover_printers,
             farm3d_lib::connections::commands::printer_statuses,
+            farm3d_lib::printers::create::probe_connection,
+            farm3d_lib::printers::batch::create_printers_batch,
+            farm3d_lib::printers::batch::cancel_printer_batch,
+            farm3d_lib::printers::commands::list_duplicate_host_archives,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -151,11 +165,14 @@ fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() 
             "resolve_profile_drift",
             json!({"id":"p","expectedRevision":1,"action":"accept"}),
         ),
+        ("printer_lifecycle_eligibility", json!({"id":"p"})),
+        ("archive_printer", json!({"id":"p","expectedRevision":1})),
+        ("unarchive_printer", json!({"id":"p","expectedRevision":1})),
         ("export_printers", json!({})),
         ("import_printers", json!({"expectedRevisions":[]})),
         ("list_catalog_models", json!({})),
         ("list_catalog_variants", json!({"vendor":"v","model":"m"})),
-        ("preview_profile", json!({"catalogRef":catalog_ref})),
+        ("preview_profile", json!({"catalogRef":catalog_ref.clone()})),
         ("catalog_info", json!({})),
         (
             "set_printer_connection",
@@ -167,13 +184,28 @@ fn all_twenty_three_handlers_return_the_captured_nonretryable_bootstrap_error() 
         ),
         (
             "test_printer_connection",
-            json!({"id":"p","submission":submission}),
+            json!({"id":"p","submission":submission.clone()}),
         ),
         ("credential_store_info", json!({})),
         ("discover_printers", json!({})),
         ("printer_statuses", json!({})),
+        (
+            "probe_connection",
+            json!({"submission": submission.clone()}),
+        ),
+        (
+            "create_printers_batch",
+            json!({"input": {
+                "batchId": "b",
+                "shared": {"catalogRef": catalog_ref.clone(), "startSafety": "confirmBedClear"},
+                "probe": false,
+                "rows": [],
+            }}),
+        ),
+        ("cancel_printer_batch", json!({"batchId": "b"})),
+        ("list_duplicate_host_archives", json!({})),
     ];
-    assert_eq!(cases.len(), 23);
+    assert_eq!(cases.len(), 30);
     for (command, mut body) in cases {
         body["contractVersion"] = json!(1);
         let error = invoke(&webview, command, body).unwrap_err();

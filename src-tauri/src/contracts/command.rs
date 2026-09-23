@@ -300,6 +300,8 @@ pub enum ErrorCode {
     Timeout,
     IncompatibleContractVersion,
     Internal,
+    DuplicateHost,
+    LifecycleBlocked,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -573,6 +575,36 @@ impl CommandError {
         error
     }
 
+    /// D3: another active Printer already owns this host identity.
+    pub fn duplicate_host(conflicting_printer_id: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::DuplicateHost,
+            "Another active Printer already uses this host and port.",
+            vec![RecoveryCode::EditFields],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "conflictingPrinterId".to_string(),
+            JsonValue::String(conflicting_printer_id.to_string()),
+        )]));
+        error
+    }
+
+    /// D7: an action (e.g. delete) is blocked by other work that still
+    /// depends on this Printer.
+    pub fn lifecycle_blocked(blockers: serde_json::Value) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::LifecycleBlocked,
+            "This Printer cannot be changed while other work depends on it.",
+            vec![],
+            false,
+        );
+        let blockers =
+            JsonValue::from_serde_value(blockers).unwrap_or_else(|_| JsonValue::Array(Vec::new()));
+        error.details = Some(BTreeMap::from([("blockers".to_string(), blockers)]));
+        error
+    }
+
     pub fn safe_network(
         code: ErrorCode,
         message: impl Into<String>,
@@ -686,6 +718,15 @@ impl CommandError {
                 expected_count,
                 current_count,
             } => Self::set_conflict(expected_count, current_count),
+            RepositoryError::DuplicateHost {
+                conflicting_printer_id,
+            } => Self::duplicate_host(&conflicting_printer_id),
+            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
+                serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
+            ),
+            RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
+                Self::duplicate_host(&conflicting_printer_id)
+            }
             RepositoryError::Storage(StorageError::CorruptData { .. }) => Self::database_corrupt(),
             RepositoryError::Storage(StorageError::PersistenceUnavailable)
             | RepositoryError::Storage(StorageError::Filesystem)
@@ -749,5 +790,41 @@ mod tests {
         assert_eq!(unavailable.code, ErrorCode::PersistenceUnavailable);
         assert!(unavailable.retryable);
         assert_eq!(unavailable.recovery, vec![RecoveryCode::Retry]);
+
+        let duplicate_host = CommandError::from_repository(RepositoryError::DuplicateHost {
+            conflicting_printer_id: "printer-a".to_string(),
+        });
+        assert_eq!(duplicate_host.code, ErrorCode::DuplicateHost);
+        assert!(!duplicate_host.retryable);
+        assert_eq!(duplicate_host.recovery, vec![RecoveryCode::EditFields]);
+        assert_eq!(
+            duplicate_host.details.unwrap().get("conflictingPrinterId"),
+            Some(&JsonValue::String("printer-a".to_string()))
+        );
+
+        // The partial unique index backstop (StorageError::DuplicateHost)
+        // must map identically to the repository precheck's own variant.
+        let backstop = CommandError::from_repository(RepositoryError::Storage(
+            StorageError::DuplicateHost("printer-b".to_string()),
+        ));
+        assert_eq!(backstop.code, ErrorCode::DuplicateHost);
+        assert_eq!(
+            backstop.details.unwrap().get("conflictingPrinterId"),
+            Some(&JsonValue::String("printer-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn lifecycle_blocked_carries_its_blockers_and_is_never_retryable() {
+        let error = CommandError::lifecycle_blocked(serde_json::json!(["setup-incomplete"]));
+        assert_eq!(error.code, ErrorCode::LifecycleBlocked);
+        assert!(!error.retryable);
+        assert!(error.recovery.is_empty());
+        assert_eq!(
+            error.details.unwrap().get("blockers"),
+            Some(&JsonValue::Array(vec![JsonValue::String(
+                "setup-incomplete".to_string()
+            )]))
+        );
     }
 }

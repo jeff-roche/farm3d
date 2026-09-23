@@ -53,6 +53,11 @@ pub enum ReadinessReason {
     StaleTelemetry,
     PrinterBusy,
     UnknownState,
+    /// An archived Printer has no live status at all, so nothing in this
+    /// policy ever produces this variant today. It exists so P7's
+    /// eligibility checks have a `ReadinessReason` to point to when
+    /// explaining why an archived Printer cannot be assigned work.
+    Archived,
 }
 
 /// The readiness state and its explanatory reason, when one exists.

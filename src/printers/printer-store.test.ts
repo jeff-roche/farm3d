@@ -79,23 +79,6 @@ describe("printer-store", () => {
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
     });
 
-    it("adds a printer via create_printer and appends the resolved result", async () => {
-      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
-      const { loadPrinters, addPrinter, printers } = await import("./printer-store");
-      await loadPrinters();
-      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
-
-      const id = await addPrinter({ name: "Centauri Carbon — Bay 1", catalogRef: A_RESOLVED_PRINTER.catalogRef });
-
-      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", {
-        contractVersion: 1,
-        name: "Centauri Carbon — Bay 1",
-        catalogRef: A_RESOLVED_PRINTER.catalogRef,
-      });
-      expect(id).toBe("prn-1");
-      expect(printers()).toEqual([A_RESOLVED_PRINTER]);
-    });
-
     it("revertField sends value: null", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, revertField } = await import("./printer-store");
@@ -119,10 +102,22 @@ describe("printer-store", () => {
       await loadPrinters();
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { deletedId: "prn-1", deletedRevision: 1, credentialCleanupPending: false, warnings: [] } });
 
-      await removePrinter("prn-1");
+      expect(await removePrinter("prn-1")).toEqual({ ok: true });
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { contractVersion: 1, expectedRevision: 1, id: "prn-1" });
       expect(printers()).toEqual([]);
+    });
+
+    it("removePrinter reports a failed delete to its caller and keeps the row", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, removePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "REVISION_CONFLICT", message: "The Printer changed.", recovery: [], retryable: false,
+      });
+
+      expect(await removePrinter("prn-1")).toEqual({ ok: false, message: "The Printer changed." });
+      expect(printers().map((printer) => printer.id)).toEqual(["prn-1"]);
     });
 
     it("preserves runtime status only for Printers that survive an applied import", async () => {
@@ -147,6 +142,76 @@ describe("printer-store", () => {
         { ...flattenRecord(importedRecord), runtimeStatus: liveStatus },
         flattenRecord(createdRecord),
       ]);
+    });
+
+    it("explains Printers an import archived for sharing a host", async () => {
+      const kept = { ...structuredClone(A_PRINTER_RECORD), id: "prn-a", name: "Voron A" };
+      const archived = {
+        ...structuredClone(A_PRINTER_RECORD), id: "prn-b", name: "Voron B", archivedAt: "2026-09-23T00:00:00Z",
+      };
+      tauriMock.invoke.mockResolvedValue({
+        contractVersion: 1,
+        data: {
+          status: "applied", printers: [kept, archived], createdCount: 2, updatedCount: 0, deletedCount: 0,
+          warnings: [{ code: "DUPLICATE_HOST_ARCHIVED", entityId: "prn-b" }],
+        },
+      });
+      const { importPrinters, printerArchiveNotice, dismissPrinterArchiveNotice } = await import("./printer-store");
+
+      await importPrinters();
+
+      expect(printerArchiveNotice()).toBe(
+        "Archived on import because it shares a host with another Printer: Voron B. " +
+          "Change its host, then unarchive it.",
+      );
+      dismissPrinterArchiveNotice();
+      expect(printerArchiveNotice()).toBeNull();
+    });
+
+    it("explains Printers the upgrade archived until the notice is dismissed", async () => {
+      const storage = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => void storage.set(key, value),
+      });
+      const kept = { ...structuredClone(A_PRINTER_RECORD), id: "prn-a", name: "Voron A" };
+      const archived = {
+        ...structuredClone(A_PRINTER_RECORD), id: "prn-b", name: "Voron B", archivedAt: "2026-09-23T00:00:00Z",
+      };
+      const archives = [
+        { warningId: "w-1", archivedPrinterId: "prn-b", keptPrinterId: "prn-a" },
+        // A Printer the user already unarchived needs no explanation.
+        { warningId: "w-2", archivedPrinterId: "prn-a", keptPrinterId: "prn-b" },
+      ];
+      tauriMock.invoke.mockImplementation(async (name: string) => ({
+        contractVersion: 1,
+        data: name === "list_printers" ? [kept, archived] : archives,
+      }));
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+
+      await store.loadDuplicateHostArchives();
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("list_duplicate_host_archives", { contractVersion: 1 });
+      expect(store.printerArchiveNotice()).toBe(
+        "Archived during the upgrade because it shares a host with another Printer: Voron B (same host as Voron A). " +
+          "Change its host, then unarchive it.",
+      );
+      store.dismissPrinterArchiveNotice();
+      await store.loadDuplicateHostArchives();
+      expect(store.printerArchiveNotice()).toBeNull();
+    });
+
+    it("does not surface a failed archive-notice read as a store error", async () => {
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "Storage is unavailable.", recovery: [], retryable: true,
+      });
+      const { loadDuplicateHostArchives, printerArchiveNotice, printerStoreError } = await import("./printer-store");
+
+      await loadDuplicateHostArchives();
+
+      expect(printerArchiveNotice()).toBeNull();
+      expect(printerStoreError()).toBeNull();
     });
 
     it("sorts import revision preconditions by exact UTF-8 bytes", async () => {
@@ -318,6 +383,120 @@ describe("printer-store", () => {
       expect(unlisten).toHaveBeenCalledOnce();
     });
 
+    it("createPrinter sends the new args and splices in the result", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
+      const { loadPrinters, createPrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
+
+      const options = {
+        name: "Centauri Carbon — Bay 1",
+        catalogRef: A_RESOLVED_PRINTER.catalogRef,
+        location: "Bay 1",
+        startSafety: "unattended" as const,
+        connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
+      };
+      const created = await createPrinter(options);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", {
+        contractVersion: 1,
+        ...options,
+      });
+      expect(created).toEqual(A_RESOLVED_PRINTER);
+      expect(printers()).toEqual([A_RESOLVED_PRINTER]);
+    });
+
+    it("createPrintersBatch merges every returned printer into the store and returns the output unchanged", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
+      const { loadPrinters, createPrintersBatch, printers } = await import("./printer-store");
+      await loadPrinters();
+      const secondPrinter = { ...structuredClone(A_PRINTER_RECORD), id: "prn-2" };
+      const batchOutput = {
+        batchId: "batch-1",
+        rows: [
+          { rowId: "row-1", outcome: "created", printer: A_PRINTER_RECORD, credentialStored: false, errors: [], warnings: [] },
+          { rowId: "row-2", outcome: "created", printer: secondPrinter, credentialStored: false, errors: [], warnings: [] },
+          { rowId: "row-3", outcome: "rejected", credentialStored: false, errors: [{ code: "VALIDATION", message: "bad" }], warnings: [] },
+        ],
+      };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: batchOutput });
+
+      const input = {
+        batchId: "batch-1",
+        shared: { catalogRef: A_RESOLVED_PRINTER.catalogRef, startSafety: "confirmBedClear" as const },
+        probe: true,
+        rows: [],
+      };
+      const result = await createPrintersBatch(input);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printers_batch", { contractVersion: 1, input });
+      expect(result).toEqual(batchOutput);
+      expect(printers().map((p) => p.id).sort()).toEqual(["prn-1", "prn-2"]);
+    });
+
+    it("archivePrinter replaces the record", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      const archivedRecord = { ...structuredClone(A_PRINTER_RECORD), archivedAt: "2026-09-22T00:00:00.000Z" };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: archivedRecord, warnings: [] } });
+
+      await archivePrinter("prn-1");
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("archive_printer", { contractVersion: 1, id: "prn-1", expectedRevision: 1 });
+      expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+    });
+
+    it("unarchivePrinter rejects on error (e.g. DUPLICATE_HOST) instead of routing to the banner", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, unarchivePrinter, printerStoreError } = await import("./printer-store");
+      await loadPrinters();
+      const failure = {
+        contractVersion: 1,
+        code: "DUPLICATE_HOST",
+        message: "Another Printer already uses this host.",
+        recovery: [],
+        retryable: false,
+        details: { conflictingPrinterId: "prn-2" },
+      };
+      tauriMock.invoke.mockRejectedValue(failure);
+
+      await expect(unarchivePrinter("prn-1")).rejects.toEqual(failure);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("unarchive_printer", { contractVersion: 1, id: "prn-1", expectedRevision: 1 });
+      expect(printerStoreError()).toBeNull();
+    });
+
+    it("setConnection rejects on error and passes acceptUnverified", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, setConnection } = await import("./printer-store");
+      await loadPrinters();
+      const failure = {
+        contractVersion: 1,
+        code: "PROTOCOL_ERROR",
+        message: "Probe failed",
+        recovery: ["RETRY"],
+        retryable: true,
+      };
+      tauriMock.invoke.mockRejectedValue(failure);
+
+      await expect(
+        setConnection(
+          "prn-1",
+          { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
+          true,
+        ),
+      ).rejects.toEqual(failure);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("set_printer_connection", {
+        contractVersion: 1,
+        id: "prn-1",
+        expectedRevision: 1,
+        submission: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
+        acceptUnverified: true,
+      });
+    });
+
     it("a rejected mutation surfaces the message instead of rejecting, and can be dismissed", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, overrideField, printerStoreError, dismissPrinterStoreError } =
@@ -478,6 +657,75 @@ describe("printer-store", () => {
         useTls: false,
       });
       expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("createPrinter appends locally without invoking a command", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const before = store.printers().length;
+
+      const created = await store.createPrinter({
+        name: "Bay 4",
+        catalogRef: {
+          vendor: "Elegoo", model: "Elegoo Centauri Carbon",
+          variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
+        },
+      });
+
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+      expect(created?.name).toBe("Bay 4");
+      expect(store.printers()).toHaveLength(before + 1);
+    });
+
+    it("createPrintersBatch returns createdSetupIncomplete for valid rows, with local records", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const before = store.printers().length;
+
+      const output = await store.createPrintersBatch({
+        batchId: "batch-1",
+        shared: {
+          catalogRef: {
+            vendor: "Elegoo", model: "Elegoo Centauri Carbon",
+            variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4",
+          },
+          startSafety: "confirmBedClear",
+        },
+        probe: true,
+        rows: [
+          { rowId: "row-1", name: "Voron A" },
+          { rowId: "row-2", name: "Voron B" },
+        ],
+      });
+
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+      expect(output.rows.map((r) => r.outcome)).toEqual(["createdSetupIncomplete", "createdSetupIncomplete"]);
+      expect(store.printers()).toHaveLength(before + 2);
+      // Each created row carries its local record, and it is the one merged
+      // into the store, so the batch dialog can correlate row -> Printer.
+      const ids = output.rows.map((r) => r.printer?.id);
+      expect(ids.every((id) => typeof id === "string")).toBe(true);
+      expect(output.rows.map((r) => r.printer?.name)).toEqual(["Voron A", "Voron B"]);
+      for (const id of ids) expect(store.printers().some((p) => p.id === id)).toBe(true);
+    });
+
+    it("probeCandidate rejects with a message needing the desktop app", async () => {
+      const { probeCandidate } = await import("./printer-store");
+      await expect(
+        probeCandidate({ kind: "moonraker", host: "voron.local", port: 7125, useTls: false }),
+      ).rejects.toThrow("needs the desktop app");
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("archivePrinter sets archivedAt locally", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const id = store.printers()[0].id;
+
+      await store.archivePrinter(id);
+
+      expect(tauriMock.invoke).not.toHaveBeenCalled();
+      expect(store.printers().find((p) => p.id === id)?.archivedAt).toBeTruthy();
     });
   });
 });

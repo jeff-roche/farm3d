@@ -5,6 +5,7 @@ import { PrinterCompactRow } from "./PrinterCompactRow";
 
 const printer: MonitorPrinterView = {
   id: "prn-1", name: "North Bay", vendor: "Bambu Lab", model: "X1 Carbon", modelLabel: "X1 Carbon",
+  archived: false,
   catalogStatus: "ok", operationalState: "ready", readiness: { state: "ready", reason: null },
   operationalLabel: "Ready", freshness: "unavailable", freshnessLabel: "Telemetry unavailable", severity: "fatal", severityLabel: "Connection error",
   hostActivity: "idle", statusSummary: "Telemetry unavailable", hasMissingReadings: true, readings: {},

@@ -10,6 +10,7 @@ function printer(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterVie
     vendor: "Bambu Lab",
     model: "X1 Carbon",
     modelLabel: "X1 Carbon",
+    archived: false,
     catalogStatus: "ok",
     operationalLabel: "Ready",
     severity: "resolved",

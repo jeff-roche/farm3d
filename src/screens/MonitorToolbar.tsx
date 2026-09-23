@@ -6,6 +6,7 @@ import styles from "./MonitorToolbar.module.css";
 export interface MonitorToolbarProps {
   store: MonitorStore;
   onAddPrinter: () => void;
+  onAddPrinters?: () => void;
   onImport?: () => void;
   onExport?: () => void;
 }
@@ -17,10 +18,12 @@ const filters: readonly { value: MonitorFilter; label: string }[] = [
   { value: "ready", label: "Ready" },
   { value: "offline", label: "Offline" },
   { value: "setupIncomplete", label: "Setup incomplete" },
+  { value: "archived", label: "Archived" },
 ];
 
 const sections = [
   { value: "printerModel", label: "Printer model" },
+  { value: "location", label: "Location" },
   { value: "operationalState", label: "Operational state" },
   { value: "none", label: "No section" },
 ] as const;
@@ -77,6 +80,9 @@ export function MonitorToolbar(props: MonitorToolbarProps) {
         </Show>
         <Show when={props.onExport}>
           <Button variant="ghost" size="sm" onClick={() => props.onExport?.()}>Export</Button>
+        </Show>
+        <Show when={props.onAddPrinters}>
+          <Button variant="secondary" size="sm" onClick={() => props.onAddPrinters?.()}>Add Printers…</Button>
         </Show>
         <Button size="sm" onClick={props.onAddPrinter}>Add Printer</Button>
       </div>

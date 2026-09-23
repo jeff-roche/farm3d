@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 23] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 30] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -58,6 +58,21 @@ contracts![
         "resolve_profile_drift",
         "ResolveProfileDriftRequest",
         "ResolveProfileDriftResult"
+    ),
+    (
+        "printer_lifecycle_eligibility",
+        "PrinterLifecycleEligibilityRequest",
+        "PrinterLifecycleEligibilityResult"
+    ),
+    (
+        "archive_printer",
+        "ArchivePrinterRequest",
+        "ArchivePrinterResult"
+    ),
+    (
+        "unarchive_printer",
+        "UnarchivePrinterRequest",
+        "UnarchivePrinterResult"
     ),
     (
         "export_printers",
@@ -115,9 +130,29 @@ contracts![
         "PrinterStatusesRequest",
         "PrinterStatusesResult"
     ),
+    (
+        "probe_connection",
+        "ProbeConnectionRequest",
+        "ProbeConnectionResult"
+    ),
+    (
+        "create_printers_batch",
+        "CreatePrintersBatchRequest",
+        "CreatePrintersBatchResult"
+    ),
+    (
+        "cancel_printer_batch",
+        "CancelPrinterBatchRequest",
+        "CancelPrinterBatchResult"
+    ),
+    (
+        "list_duplicate_host_archives",
+        "ListDuplicateHostArchivesRequest",
+        "ListDuplicateHostArchivesResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 23] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 30] {
     &COMMAND_CONTRACTS
 }
 
@@ -150,7 +185,7 @@ export type ImportSettingsRequest = ContractRequest & { expectedRevision: number
 export type ImportSettingsResult = CommandSuccess<SettingsImportOutcome>;
 export type ListPrintersRequest = NoArgsRequest;
 export type ListPrintersResult = CommandSuccess<PrinterRecord[]>;
-export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef };
+export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission };
 export type CreatePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type UpdatePrinterRequest = ContractRequest & { id: string; expectedRevision: number; patch: PrinterPatch };
 export type UpdatePrinterResult = CommandSuccess<PrinterMutationResult>;
@@ -162,6 +197,12 @@ export type RebindPrinterRequest = ContractRequest & { id: string; expectedRevis
 export type RebindPrinterResult = CommandSuccess<PrinterMutationResult>;
 export type ResolveProfileDriftRequest = ContractRequest & { id: string; expectedRevision: number; action: "accept" | "pin" };
 export type ResolveProfileDriftResult = CommandSuccess<PrinterMutationResult>;
+export type PrinterLifecycleEligibilityRequest = ContractRequest & { id: string };
+export type PrinterLifecycleEligibilityResult = CommandSuccess<LifecycleEligibility>;
+export type ArchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type ArchivePrinterResult = CommandSuccess<PrinterMutationResult>;
+export type UnarchivePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
+export type UnarchivePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type ExportPrintersRequest = NoArgsRequest;
 export type ExportPrintersResult = CommandSuccess<PrintersExportOutcome>;
 export type ImportPrintersRequest = ContractRequest & { expectedRevisions: PrinterRevisionPrecondition[] };
@@ -174,7 +215,7 @@ export type PreviewProfileRequest = ContractRequest & { catalogRef: CatalogRef }
 export type PreviewProfileResult = CommandSuccess<PrinterProfile>;
 export type CatalogInfoRequest = NoArgsRequest;
 export type CatalogInfoResult = CommandSuccess<CatalogInfo>;
-export type SetPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number; submission: ConnectionSubmission };
+export type SetPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number; submission: ConnectionSubmission; acceptUnverified?: boolean };
 export type SetPrinterConnectionResult = CommandSuccess<PrinterMutationResult>;
 export type ClearPrinterConnectionRequest = ContractRequest & { id: string; expectedRevision: number };
 export type ClearPrinterConnectionResult = CommandSuccess<PrinterMutationResult>;
@@ -185,7 +226,15 @@ export type CredentialStoreInfoResult = CommandSuccess<CredentialStoreInfo>;
 export type DiscoverPrintersRequest = NoArgsRequest;
 export type DiscoverPrintersResult = CommandSuccess<DiscoveredPrinter[]>;
 export type PrinterStatusesRequest = NoArgsRequest;
-export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_string()
+export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;
+export type ProbeConnectionRequest = ContractRequest & { submission: ConnectionSubmission };
+export type ProbeConnectionResult = CommandSuccess<ProbeResult>;
+export type CreatePrintersBatchRequest = ContractRequest & { input: CreatePrintersBatchInput };
+export type CreatePrintersBatchResult = CommandSuccess<CreatePrintersBatchOutput>;
+export type CancelPrinterBatchRequest = ContractRequest & { batchId: string };
+export type CancelPrinterBatchResult = CommandSuccess<CancelPrinterBatchData>;
+export type ListDuplicateHostArchivesRequest = NoArgsRequest;
+export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchive[]>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -203,9 +252,11 @@ export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_
         visitor.visit::<crate::printers::commands::PrinterRevisionPrecondition>();
         visitor.visit::<crate::printers::PrinterPatch>();
         visitor.visit::<crate::printers::CatalogRef>();
+        visitor.visit::<crate::printers::StartSafety>();
         visitor.visit::<crate::catalog::PrinterProfile>();
         visitor.visit::<crate::catalog::resolve::ResolvedPrinter>();
         visitor.visit::<crate::printers::commands::PrinterMutationResult>();
+        visitor.visit::<crate::printers::lifecycle::LifecycleEligibility>();
         visitor.visit::<crate::printers::commands::DeletePrinterResult>();
         visitor.visit::<crate::printers::commands::ExportResult>();
         visitor.visit::<crate::printers::commands::PrintersImportResult>();
@@ -217,6 +268,10 @@ export type PrinterStatusesResult = CommandSuccess<PrinterStatusBackfill>;"#.to_
         visitor.visit::<crate::connections::commands::CredentialStoreInfo>();
         visitor.visit::<crate::connections::discovery::DiscoveredPrinter>();
         visitor.visit::<crate::connections::supervisor::PrinterStatusBackfill>();
+        visitor.visit::<crate::printers::batch::CreatePrintersBatchInput>();
+        visitor.visit::<crate::printers::batch::CreatePrintersBatchOutput>();
+        visitor.visit::<crate::printers::batch::CancelPrinterBatchData>();
+        visitor.visit::<crate::printers::host_identity::DuplicateHostArchive>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

@@ -28,16 +28,26 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::printers::batch::{
+    BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
+    BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
+    CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
+};
 use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
     OperationWarningCode, PrinterMutationResult, PrinterRevisionPrecondition, PrintersImportResult,
+};
+use farm3d_lib::printers::host_identity::DuplicateHostArchive;
+use farm3d_lib::printers::lifecycle::{
+    LifecycleAction, LifecycleBlocker, LifecycleBlockerCode, LifecycleEligibility,
 };
 use farm3d_lib::printers::operational::{
     HostActivity, OperationalInput, OperationalResult, OperationalState, PrinterReadiness,
     ReadinessReason, ReadinessState, TelemetryFreshness,
 };
+use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
-use farm3d_lib::printers::{CatalogRef, PrinterPatch};
+use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
@@ -225,6 +235,12 @@ fn export_registry() -> Vec<Export> {
         export::<LastKnownGood>(),
         export::<ResolvedPrinter>(),
         export::<PrinterPatch>(),
+        export::<StartSafety>(),
+        export::<SetupGap>(),
+        export::<LifecycleAction>(),
+        export::<LifecycleBlockerCode>(),
+        export::<LifecycleBlocker>(),
+        export::<LifecycleEligibility>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),
@@ -239,6 +255,20 @@ fn export_registry() -> Vec<Export> {
         export::<DeletePrinterResult>(),
         export::<PrintersExportResult>(),
         export::<PrintersImportResult>(),
+        export::<CreatePrintersBatchInput>(),
+        export::<BatchShared>(),
+        export::<BatchRowInput>(),
+        export::<BatchRowConnection>(),
+        export::<BatchCredentialSource>(),
+        export::<CreatePrintersBatchOutput>(),
+        export::<BatchRowResult>(),
+        export::<BatchRowOutcome>(),
+        export::<BatchRowError>(),
+        export::<BatchRowErrorCode>(),
+        export::<BatchRowWarning>(),
+        export::<BatchRowWarningCode>(),
+        export::<CancelPrinterBatchData>(),
+        export::<DuplicateHostArchive>(),
         export::<SettingsExportResult>(),
         export::<SettingsImportResult>(),
         export::<EventSubject>(),
@@ -845,7 +875,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));

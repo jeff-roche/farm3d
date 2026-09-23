@@ -256,12 +256,15 @@ impl StatusMap {
         Some(envelope)
     }
 
+    /// Drops any retained status/hydration entry, bumps the epoch, and
+    /// builds the removal envelope — all under one lock, so no concurrent
+    /// publish can land between the drop and the epoch bump.
     fn publish_removed(&self, id: &str) -> PrinterStatusEvent {
         let mut state = self.state.lock().expect("status map lock");
-        let epoch = state.epochs.entry(id.to_string()).or_default();
-        *epoch = epoch.saturating_add(1);
         state.values.remove(id);
         state.hydrated.remove(id);
+        let epoch = state.epochs.entry(id.to_string()).or_default();
+        *epoch = epoch.saturating_add(1);
         next_envelope(
             &mut state,
             id,
@@ -778,18 +781,54 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         graceful
     }
 
+    /// Removes a Printer's live status and publishes `printer.status.removed`
+    /// without stopping a supervisor task or touching the telemetry
+    /// snapshot row. For a Printer under active supervision, `stop` is the
+    /// right call; `forget` is for a status that was never backed by a
+    /// running task (e.g. a probe's transient status).
+    pub fn forget(&self, printer_id: &str) {
+        self.publish_removed(printer_id);
+    }
+
+    /// Builds a `PrinterConnection` for `config` through the manager's
+    /// (possibly test-injected) connection factory, without starting any
+    /// supervision around it. Exposed so a probe can reuse the same factory
+    /// the supervisor uses instead of constructing its own adapter.
+    pub fn connection_for(
+        &self,
+        config: &ConnectionConfig,
+        api_key: Option<zeroize::Zeroizing<String>>,
+    ) -> Option<Box<dyn PrinterConnection>> {
+        (self.connection_factory)(config, api_key)
+    }
+
     pub async fn stop_and_wait(&self, printer_id: &str) -> bool {
         self.stop(printer_id).await
     }
 
-    pub async fn clear_connection(&self, printer_id: &str, profile_resolved: bool) -> bool {
-        let graceful = self.stop_task_and_wait(printer_id).await;
+    fn delete_telemetry_snapshot(&self, printer_id: &str) {
         if let Err(error) = self.repository.delete(printer_id) {
             eprintln!("farm3d: cannot clear telemetry cache: {error}");
             self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         } else {
             self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         }
+    }
+
+    /// `clear_connection` for an archived Printer (D6): stops any task and
+    /// drops the telemetry snapshot like `clear_connection`, but publishes
+    /// removal instead of a live Offline/Setup-incomplete status.
+    pub async fn discard_connection(&self, printer_id: &str) -> bool {
+        let graceful = self.stop_task_and_wait(printer_id).await;
+        self.delete_telemetry_snapshot(printer_id);
+        self.clear_cache_warnings_for(printer_id);
+        self.publish_removed(printer_id);
+        graceful
+    }
+
+    pub async fn clear_connection(&self, printer_id: &str, profile_resolved: bool) -> bool {
+        let graceful = self.stop_task_and_wait(printer_id).await;
+        self.delete_telemetry_snapshot(printer_id);
         let now = self.now();
         let mut next = status_from_parts(
             ConnectionState::Offline,
@@ -1527,5 +1566,85 @@ mod tests {
         assert_eq!(status.freshness, TelemetryFreshness::Unavailable);
         assert_eq!(status.telemetry.nozzle_temp_c, None);
         assert!(repository.get("prn-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn forget_removes_the_status_and_publishes_a_tombstone_without_touching_the_snapshot_row() {
+        let (_root, _lease, storage) = crate::test_storage();
+        PrinterRepository::new(Arc::clone(&storage))
+            .create(StoredPrinter {
+                id: "prn-1".to_string(),
+                name: "Forget me".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let repository = Arc::new(StatusRepository::new(Arc::clone(&storage)));
+        repository
+            .save_if_due(
+                &StoredTelemetrySnapshot {
+                    printer_id: "prn-1".to_string(),
+                    telemetry: PrinterTelemetry {
+                        host_activity: HostActivity::Idle,
+                        host_activity_name: None,
+                        job_name: None,
+                        progress: None,
+                        nozzle_temp_c: Some(200.0),
+                        nozzle_target_c: None,
+                        bed_temp_c: None,
+                        bed_target_c: None,
+                        print_duration_s: None,
+                    },
+                    last_observed_at: "2026-09-18T12:00:00Z".to_string(),
+                },
+                SnapshotWrite::Periodic,
+            )
+            .unwrap();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::new(app.handle().clone(), Arc::clone(&repository));
+        // Startup hydration already seeded prn-1 into statuses() from the
+        // snapshot saved above.
+        assert!(manager.statuses().contains_key("prn-1"));
+
+        manager.forget("prn-1");
+
+        assert!(!manager.statuses().contains_key("prn-1"));
+        assert!(
+            repository.get("prn-1").unwrap().is_some(),
+            "forget must not touch the snapshot row"
+        );
+        let backfill = manager.status_backfill();
+        assert!(backfill
+            .statuses
+            .iter()
+            .all(|row| row.printer_id != "prn-1"));
+    }
+
+    #[test]
+    fn connection_for_calls_the_injected_factory() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let calls = Arc::new(Mutex::new(0));
+        let counter = Arc::clone(&calls);
+        let manager = ConnectionManager::with_clock_and_factory(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+            Utc::now,
+            move |_config, _key| {
+                *counter.lock().expect("call counter lock") += 1;
+                None
+            },
+        );
+        let config = ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "printer.local".to_string(),
+            port: 7125,
+            use_tls: false,
+            credential_ref: None,
+        };
+
+        let connection = manager.connection_for(&config, None);
+
+        assert!(connection.is_none());
+        assert_eq!(*calls.lock().expect("call counter lock"), 1);
     }
 }

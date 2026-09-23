@@ -15,7 +15,11 @@ fn snapshot_is_complete() {
     assert!(!catalog.models.is_empty(), "snapshot has no models");
 
     for model in &catalog.models {
-        assert!(!model.variants.is_empty(), "{} has no variants", model.model);
+        assert!(
+            !model.variants.is_empty(),
+            "{} has no variants",
+            model.model
+        );
         for variant in &model.variants {
             assert!(
                 variant.printable_height_mm > 0.0,
@@ -23,7 +27,9 @@ fn snapshot_is_complete() {
                 variant.variant
             );
             match &variant.bed_shape {
-                BedShape::Rectangular { width_mm, depth_mm, .. } => {
+                BedShape::Rectangular {
+                    width_mm, depth_mm, ..
+                } => {
                     assert!(
                         *width_mm > 0.0 && *depth_mm > 0.0,
                         "{} has a zero-size rectangular bed",

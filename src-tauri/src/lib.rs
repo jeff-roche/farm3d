@@ -15,12 +15,14 @@ use connections::commands::{
     set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
-    create_printer, delete_printer, export_printers, import_printers, list_printers,
-    rebind_printer, resolve_profile_drift, set_printer_override, update_printer,
+    archive_printer, create_printer, delete_printer, export_printers, import_printers,
+    list_duplicate_host_archives, list_printers, printer_lifecycle_eligibility, rebind_printer,
+    resolve_profile_drift, set_printer_override, unarchive_printer, update_printer,
 };
+use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
@@ -69,7 +71,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 23] = [
+pub const COMMAND_NAMES: [&str; 30] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -81,6 +83,9 @@ pub const COMMAND_NAMES: [&str; 23] = [
     "set_printer_override",
     "rebind_printer",
     "resolve_profile_drift",
+    "printer_lifecycle_eligibility",
+    "archive_printer",
+    "unarchive_printer",
     "export_printers",
     "import_printers",
     "list_catalog_models",
@@ -93,132 +98,25 @@ pub const COMMAND_NAMES: [&str; 23] = [
     "credential_store_info",
     "discover_printers",
     "printer_statuses",
+    "probe_connection",
+    "create_printers_batch",
+    "cancel_printer_batch",
+    "list_duplicate_host_archives",
 ];
 
-fn credential_store_for_startup(
-    dir: &Path,
-    file: &printers::PrintersFile,
-    detect: impl FnOnce(PathBuf) -> connections::credentials::CredentialStore,
-) -> Option<connections::credentials::CredentialStore> {
-    let needed = file.printers.iter().any(|stored| {
-        stored
-            .connection
-            .as_ref()
-            .and_then(|config| config.credential_ref.as_ref())
-            .is_some()
-    });
-    connections::commands::credential_store_if_needed(dir, needed, detect)
-}
-
-pub fn restore_stored_connections<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    manager: &Arc<ConnectionManager<R>>,
-) {
-    if let Ok(dir) = app.path().app_config_dir() {
-        if let Ok(file) = printers::load_printers_from(&dir) {
-            let store = credential_store_for_startup(
-                &dir,
-                &file,
-                connections::credentials::CredentialStore::detect,
-            );
-            for stored in &file.printers {
-                let Some(config) = stored.connection.clone() else {
-                    continue;
-                };
-                let api_key = match config.credential_ref.as_deref() {
-                    None => None,
-                    Some(key) => {
-                        let Some(store) = store.as_ref() else {
-                            manager.reconcile_printer(
-                                &stored.id,
-                                connections::supervisor::PrinterSetupFacts {
-                                    has_usable_connection: false,
-                                    profile_resolved: true,
-                                },
-                            );
-                            continue;
-                        };
-                        match store.get(key) {
-                            Ok(found) => found,
-                            Err(e) => {
-                                eprintln!(
-                                    "farm3d: cannot read the stored credential for {}: {e}",
-                                    stored.id
-                                );
-                                manager.reconcile_printer(
-                                    &stored.id,
-                                    connections::supervisor::PrinterSetupFacts {
-                                        has_usable_connection: false,
-                                        profile_resolved: true,
-                                    },
-                                );
-                                continue;
-                            }
-                        }
-                    }
-                };
-                tauri::async_runtime::block_on(manager.start(
-                    stored.id.clone(),
-                    config,
-                    api_key.map(zeroize::Zeroizing::new),
-                    connections::supervisor::PrinterSetupFacts {
-                        has_usable_connection: true,
-                        profile_resolved: stored.last_known_good.is_some(),
-                    },
-                ));
-            }
-        }
-    }
-}
-
-fn restore_persisted_connections<R: tauri::Runtime>(
+/// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
+/// exercise a simulated app restart over the same storage — mirrors what
+/// `build_runtime_services` does at real startup.
+pub fn restore_persisted_connections<R: tauri::Runtime>(
     manager: &Arc<ConnectionManager<R>>,
     storage: Arc<persistence::Storage>,
     store: &connections::credentials::CredentialStore,
     catalog: &catalog::Catalog,
 ) -> Result<(), persistence::StorageError> {
     let stored_printers = printers::repository::PrinterRepository::new(storage).list()?;
-    for printer in stored_printers {
-        let profile_resolved = catalog::resolve::resolve_catalog_ref(catalog, &printer.catalog_ref)
-            .0
-            .is_some();
-        let has_usable_connection = printer.connection.as_ref().is_some_and(|config| {
-            config.kind == connections::MOONRAKER_KIND
-                && config
-                    .credential_ref
-                    .as_deref()
-                    .map(|reference| store.get(reference).ok().flatten().is_some())
-                    .unwrap_or(true)
-        });
-        let setup = connections::supervisor::PrinterSetupFacts {
-            has_usable_connection,
-            profile_resolved,
-        };
-        manager.reconcile_printer(&printer.id, setup);
-        let Some(config) = printer.connection else {
-            continue;
-        };
-        let credential = match config.credential_ref.as_deref() {
-            Some(reference) => match store.get(reference).ok().flatten() {
-                Some(value) => Some(value),
-                None => {
-                    manager.reconcile_printer(
-                        &printer.id,
-                        connections::supervisor::PrinterSetupFacts {
-                            has_usable_connection: false,
-                            profile_resolved,
-                        },
-                    );
-                    continue;
-                }
-            },
-            None => None,
-        };
-        tauri::async_runtime::block_on(manager.start(
-            printer.id,
-            config,
-            credential.map(zeroize::Zeroizing::new),
-            setup,
+    for printer in &stored_printers {
+        tauri::async_runtime::block_on(printers::setup::supervise_printer(
+            manager, store, catalog, printer,
         ));
     }
     Ok(())
@@ -236,9 +134,9 @@ pub fn startup_command_error(
     match error {
         persistence::StorageError::UnsupportedLocking => Err(()),
         persistence::StorageError::MigrationFailed => Ok(CommandError::migration_failed()),
-        persistence::StorageError::UnsupportedSchemaVersion => {
-            Ok(CommandError::unsupported_schema(2))
-        }
+        persistence::StorageError::UnsupportedSchemaVersion => Ok(
+            CommandError::unsupported_schema(persistence::CURRENT_SCHEMA_VERSION),
+        ),
         persistence::StorageError::CorruptData {
             source_name,
             source_sha256,
@@ -250,6 +148,9 @@ pub fn startup_command_error(
         | persistence::StorageError::PersistenceUnavailable
         | persistence::StorageError::Filesystem
         | persistence::StorageError::OperationFailed => Ok(CommandError::persistence_unavailable()),
+        // Startup only ever reads through storage (restoring persisted
+        // Connections); this write-path variant cannot occur here.
+        persistence::StorageError::DuplicateHost(_) => Ok(CommandError::internal()),
     }
 }
 
@@ -369,36 +270,7 @@ pub(crate) fn test_storage() -> (
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connections::{ConnectionConfig, MOONRAKER_KIND};
-    use crate::printers::{PrintersFile, StoredPrinter};
-    use std::cell::Cell;
-
-    #[test]
-    fn credential_free_startup_does_not_invoke_the_store_detector() {
-        let file = PrintersFile {
-            schema_version: 1,
-            printers: vec![StoredPrinter {
-                id: "prn-1".to_string(),
-                connection: Some(ConnectionConfig {
-                    kind: MOONRAKER_KIND.to_string(),
-                    host: "printer.local".to_string(),
-                    port: 7125,
-                    use_tls: false,
-                    credential_ref: None,
-                }),
-                ..Default::default()
-            }],
-        };
-        let detections = Cell::new(0);
-
-        let store = credential_store_for_startup(std::path::Path::new("unused"), &file, |dir| {
-            detections.set(detections.get() + 1);
-            connections::credentials::CredentialStore::file_backed(dir)
-        });
-
-        assert!(store.is_none());
-        assert_eq!(detections.get(), 0);
-    }
+    use crate::printers::StoredPrinter;
 
     #[test]
     fn startup_propagates_printer_decode_failure() {
@@ -498,6 +370,9 @@ pub fn run() {
             set_printer_override,
             rebind_printer,
             resolve_profile_drift,
+            printer_lifecycle_eligibility,
+            archive_printer,
+            unarchive_printer,
             export_printers,
             import_printers,
             list_catalog_models,
@@ -510,6 +385,10 @@ pub fn run() {
             credential_store_info,
             discover_printers,
             printer_statuses,
+            probe_connection,
+            create_printers_batch,
+            cancel_printer_batch,
+            list_duplicate_host_archives,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

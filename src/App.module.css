@@ -17,3 +17,15 @@
   color: var(--f3d-color-danger);
   overflow-wrap: anywhere;
 }
+
+/* Advisory, not a failure (e.g. Printers archived for sharing a host):
+   same layout as the error banner, in the warning color. */
+.noticeBanner {
+  composes: errorBanner;
+  border-color: var(--f3d-color-warning);
+}
+
+.noticeMessage {
+  composes: errorMessage;
+  color: var(--f3d-color-warning);
+}
