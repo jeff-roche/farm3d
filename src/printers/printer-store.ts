@@ -645,6 +645,11 @@ export async function archivePrinter(id: string): Promise<void> {
   }
 }
 
+/** Rejects rather than reporting into the banner: unarchiving re-checks the
+ *  host identity (spec D3/D6), and a `DUPLICATE_HOST` failure needs to reach
+ *  the Setup tab inline so it can name the conflicting Printer — the banner
+ *  has no room for that. Mirrors `setConnection`'s rejection for the same
+ *  reason. */
 export async function unarchivePrinter(id: string): Promise<void> {
   if (!desktopAvailable()) {
     setState("printers", (p) => p.id === id, produce((printer) => {
@@ -652,15 +657,11 @@ export async function unarchivePrinter(id: string): Promise<void> {
     }));
     return;
   }
-  try {
-    const { printer } = await command("unarchive_printer", {
-      id,
-      expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
-    });
-    spliceResolved(resolvePrinterRecord(printer));
-  } catch (e) {
-    reportError(e);
-  }
+  const { printer } = await command("unarchive_printer", {
+    id,
+    expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+  });
+  spliceResolved(resolvePrinterRecord(printer));
 }
 
 /** Rejects rather than reporting into the banner: the Setup tab renders
@@ -685,8 +686,8 @@ export async function lifecycleEligibility(id: string): Promise<LifecycleEligibi
           canUnarchive: false,
           canDelete: false,
           blockers: [
+            { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
             { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
-            { action: "delete", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
           ],
         };
   }

@@ -6,6 +6,7 @@ import { PrinterCard } from "./PrinterCard";
 function view(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {
     id: "prn-1", name: "North Bay", vendor: "Bambu Lab", model: "X1 Carbon", modelLabel: "X1 Carbon",
+    archived: false,
     catalogStatus: "ok", operationalState: "printing", readiness: { state: "notReady", reason: "printerBusy" },
     operationalLabel: "Printing", freshness: "fresh", severity: "warning", severityLabel: "Monitor cache warning",
     hostActivity: "printing", hostActivityName: "Calibration cube", statusSummary: "Host print: Calibration cube · 42%", hasMissingReadings: false,

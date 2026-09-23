@@ -162,7 +162,29 @@ describe("Monitor store", () => {
     expect(none[0].printers.map((item) => item.id)).toEqual(["ready", "offline"]);
   });
 
-  it("falls back from unavailable location grouping without rewriting the explicit saved preference", () => {
+  it("groups by trimmed, case-insensitive location, labelled with the first-seen casing, and sorts 'No location' last", () => {
+    const store = monitor(
+      [
+        printer({ id: "b1", name: "Alpha", location: "bay a" }),
+        printer({ id: "b2", name: "Beta", location: " Bay A " }),
+        printer({ id: "none", name: "Zulu", location: undefined }),
+        printer({ id: "c1", name: "Gamma", location: "Bay C" }),
+      ],
+      "location",
+    );
+
+    expect(store.sections().map((section) => section.key)).toEqual([
+      "bay a",
+      "bay c",
+      "__no_location__",
+    ]);
+    expect(store.sections()[0].label).toBe("bay a"); // first-seen casing, by name order (Alpha before Beta)
+    expect(store.sections()[0].printers.map((item) => item.id)).toEqual(["b1", "b2"]);
+    expect(store.sections()[2].label).toBe("No location");
+    expect(store.sections()[2].printers.map((item) => item.id)).toEqual(["none"]);
+  });
+
+  it("does not rewrite the explicit saved preference just from reading the location section", () => {
     const persistPreferences = vi.fn().mockResolvedValue(undefined);
     const store = createMonitorStore({
       printers: () => [printer()],
@@ -172,8 +194,45 @@ describe("Monitor store", () => {
     });
 
     expect(store.section()).toBe("location");
-    expect(store.sections()[0].key).toBe("Bambu Lab::X1 Carbon");
+    store.sections();
     expect(persistPreferences).not.toHaveBeenCalled();
+  });
+
+  it("searches location case-insensitively", () => {
+    const store = monitor([
+      printer({ id: "matches", location: "Bay North" }),
+      printer({ id: "other", location: "Bay South" }),
+    ]);
+
+    store.setSearch("bay north");
+    expect(store.visiblePrinters().map((item) => item.id)).toEqual(["matches"]);
+  });
+
+  it("adds the archived filter: every other filter excludes archived Printers, and archived shows only them", () => {
+    const store = monitor([
+      printer({ id: "active", archivedAt: undefined }),
+      printer({ id: "gone", archivedAt: "2026-09-22T00:00:00.000Z" }),
+    ]);
+
+    for (const filter of ["all", "attention", "printing", "ready", "offline", "setupIncomplete"] as const) {
+      store.setFilter(filter);
+      expect(store.visiblePrinters().some((item) => item.id === "gone")).toBe(false);
+    }
+
+    store.setFilter("archived");
+    expect(store.visiblePrinters().map((item) => item.id)).toEqual(["gone"]);
+  });
+
+  it("excludes archived Printers from counts and rosters", () => {
+    const store = monitor([
+      printer({ id: "active-1", name: "Alpha" }),
+      printer({ id: "active-2", name: "Beta" }),
+      printer({ id: "archived-1", name: "Zulu", archivedAt: "2026-09-22T00:00:00.000Z" }),
+    ]);
+
+    expect(store.shell().printerRoster.count).toBe(2);
+    expect(store.shell().printerRoster.printers.map((item) => item.id)).not.toContain("archived-1");
+    expect(store.rosters().flatMap((roster) => roster.printers.map((item) => item.id))).not.toContain("archived-1");
   });
 
   it("distinguishes filtered-empty results from a Farm with zero Printers", () => {

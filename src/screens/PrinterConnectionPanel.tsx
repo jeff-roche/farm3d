@@ -1,14 +1,14 @@
 import { createResource, createSignal, Show } from "solid-js";
 import { Button } from "../design-system";
 import { buildMismatches, ConnectionFields, toSubmission, type ConnectionDraft } from "./ConnectionFields";
+import { isCommandError } from "../ipc/client";
 import {
   clearConnection,
   credentialStoreInfo,
-  reportError,
   setConnection,
   testConnection,
 } from "../printers/printer-store";
-import type { ResolvedPrinter } from "../printers/types";
+import type { ConnectionSubmission, ResolvedPrinter } from "../printers/types";
 import styles from "./PrinterConnectionPanel.module.css";
 
 export { buildMismatches };
@@ -34,19 +34,46 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   });
 
   const [store] = createResource(credentialStoreInfo);
+  const [saveError, setSaveError] = createSignal<string | null>(null);
+  // The exact submission a failed Save was attempted with, so "Save anyway"
+  // (D8's `acceptUnverified`) resubmits it unchanged -- `draft().credential`
+  // is blanked right after the failed attempt below (never re-echoing a
+  // typed secret), so re-deriving the submission from the draft at that
+  // point would silently drop it.
+  const [failedSubmission, setFailedSubmission] = createSignal<ConnectionSubmission | null>(null);
+
+  async function attemptSave(submission: ConnectionSubmission, acceptUnverified?: boolean) {
+    try {
+      if (acceptUnverified !== undefined) {
+        await setConnection(props.printer.id, submission, acceptUnverified);
+      } else {
+        await setConnection(props.printer.id, submission);
+      }
+      setSaveError(null);
+      setFailedSubmission(null);
+    } catch (e) {
+      // `setConnection` rejects (Ruling R2, superseded by spec D8) so a
+      // replacement probe failure can be shown inline next to a "Save
+      // anyway" affordance, instead of only reaching the store's error
+      // banner.
+      setSaveError(isCommandError(e) ? e.message : "The Connection could not be saved.");
+      setFailedSubmission(submission);
+    }
+  }
 
   async function onSave() {
+    const submission = toSubmission(draft(), "edit");
     try {
-      await setConnection(props.printer.id, toSubmission(draft(), "edit"));
-    } catch (e) {
-      // `setConnection` now rejects (Ruling R2) so a caller that renders the
-      // failure inline can offer "Save anyway" (`acceptUnverified`). This
-      // panel doesn't do that yet (Task 11), so it falls back to the same
-      // store error banner `setConnection` used to populate itself.
-      reportError(e);
+      await attemptSave(submission);
     } finally {
       setDraft((d) => ({ ...d, credential: "" }));
     }
+  }
+
+  async function onSaveAnyway() {
+    const submission = failedSubmission();
+    if (!submission) return;
+    await attemptSave(submission, true);
   }
 
   return (
@@ -68,6 +95,17 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
               {(reason) => <span class={styles.warn}> — no OS keychain available ({reason()})</span>}
             </Show>
           </p>
+        )}
+      </Show>
+
+      <Show when={saveError()}>
+        {(message) => (
+          <div class={styles.saveError}>
+            <p class={styles.error} role="alert">{message()}</p>
+            <Button variant="secondary" onClick={() => void onSaveAnyway()}>
+              Save anyway
+            </Button>
+          </div>
         )}
       </Show>
 

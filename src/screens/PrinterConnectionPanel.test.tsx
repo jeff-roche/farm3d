@@ -6,14 +6,12 @@ import type { PrinterProfile, ResolvedPrinter } from "../printers/types";
 const setConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const testConnection = vi.hoisted(() => vi.fn());
 const discoverPrinters = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-const reportError = vi.hoisted(() => vi.fn());
 vi.mock("../printers/printer-store", () => ({
   setConnection,
   clearConnection: vi.fn(),
   testConnection,
   discoverPrinters,
   credentialStoreInfo: vi.fn().mockResolvedValue({ kind: "keychain" }),
-  reportError,
 }));
 
 // This suite doesn't run with vitest's `globals: true`, so
@@ -105,14 +103,31 @@ describe("PrinterConnectionPanel", () => {
     );
   });
 
-  it("routes a rejected save (Ruling R2) to the store's error banner", async () => {
-    setConnection.mockRejectedValueOnce(new Error("Probe failed: connection refused"));
+  it("shows a replacement probe failure inline with 'Save anyway', which resubmits with acceptUnverified (spec D8)", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "AUTHENTICATION_FAILED",
+      message: "Authentication failed",
+      recovery: [],
+      retryable: false,
+    });
+    setConnection.mockResolvedValueOnce(undefined);
     render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Authentication failed");
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeInTheDocument();
 
-    await waitFor(() => expect(reportError).toHaveBeenCalledTimes(1));
-    expect(reportError).toHaveBeenCalledWith(expect.any(Error));
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(2));
+    expect(setConnection).toHaveBeenLastCalledWith(
+      "prn-1",
+      expect.objectContaining({ host: "voron.local" }),
+      true,
+    );
+    await waitFor(() => expect(screen.queryByText("Authentication failed")).not.toBeInTheDocument());
   });
 
   it("renders a probe failure inline rather than throwing it away", async () => {

@@ -11,8 +11,9 @@ function renderToolbar(persistPreferences = vi.fn().mockResolvedValue(undefined)
     persistPreferences,
   });
   const onAddPrinter = vi.fn();
-  render(() => <MonitorToolbar store={store} onAddPrinter={onAddPrinter} />);
-  return { store, onAddPrinter };
+  const onAddPrinters = vi.fn();
+  render(() => <MonitorToolbar store={store} onAddPrinter={onAddPrinter} onAddPrinters={onAddPrinters} />);
+  return { store, onAddPrinter, onAddPrinters };
 }
 
 describe("MonitorToolbar", () => {
@@ -29,6 +30,7 @@ describe("MonitorToolbar", () => {
     for (const [label, filter] of [
       ["All", "all"], ["Attention", "attention"], ["Printing", "printing"],
       ["Ready", "ready"], ["Offline", "offline"], ["Setup incomplete", "setupIncomplete"],
+      ["Archived", "archived"],
     ] as const) {
       await fireEvent.click(screen.getByRole("button", { name: label }));
       expect(store.filter()).toBe(filter);
@@ -38,7 +40,14 @@ describe("MonitorToolbar", () => {
     expect(onAddPrinter).toHaveBeenCalledOnce();
   });
 
-  it("offers only P1 sections and changes selectors through Kobalte pointer events", async () => {
+  it("starts the batch dialog from 'Add Printers…'", async () => {
+    const { onAddPrinters } = renderToolbar();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
+    expect(onAddPrinters).toHaveBeenCalledOnce();
+  });
+
+  it("offers Location alongside the P1 sections, and changes selectors through Kobalte pointer events", async () => {
     const { store } = renderToolbar();
 
     const section = screen.getByRole("button", { name: /Monitor section/ });
@@ -46,7 +55,7 @@ describe("MonitorToolbar", () => {
     expect(screen.getByRole("option", { name: "Printer model" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Operational state" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "No section" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Location" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Location" })).toBeInTheDocument();
     const operationalState = screen.getByRole("option", { name: "Operational state" });
     await fireEvent.pointerDown(operationalState, { button: 0, pointerType: "mouse" });
     await fireEvent.pointerUp(operationalState, { button: 0, pointerType: "mouse" });

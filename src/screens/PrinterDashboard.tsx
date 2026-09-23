@@ -3,6 +3,7 @@ import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { MonitorToolbar } from "./MonitorToolbar";
+import { PrinterBatchDialog } from "./PrinterBatchDialog";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
@@ -21,11 +22,14 @@ export interface PrinterDashboardProps {
   onPrinterCreated?: (printer: ResolvedPrinter) => void;
   onImport?: () => void;
   onExport?: () => void;
+  /** Called once a Printer has been permanently deleted through the Setup
+   *  tab's guarded Archive → Delete… flow. */
   onRemovePrinter?: (id: string) => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [wizardOpen, setWizardOpen] = createSignal(false);
+  const [batchDialogOpen, setBatchDialogOpen] = createSignal(false);
   const sections = new Map<string, HTMLElement>();
   let workspace: HTMLDivElement | undefined;
   let selectionTrigger: HTMLButtonElement | undefined;
@@ -71,6 +75,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
       <MonitorToolbar
         store={props.store}
         onAddPrinter={() => setWizardOpen(true)}
+        onAddPrinters={() => setBatchDialogOpen(true)}
         onImport={props.onImport}
         onExport={props.onExport}
       />
@@ -87,7 +92,11 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             <EmptyState message="Loading persisted Printers…" />
           </Match>
           <Match when={isFirstRun()}>
-            <EmptyState message="Start your Farm by adding a Printer." onAdd={() => setWizardOpen(true)} />
+            <EmptyState
+              message="Start your Farm by adding a Printer."
+              onAdd={() => setWizardOpen(true)}
+              onAddBatch={() => setBatchDialogOpen(true)}
+            />
           </Match>
           <Match when={props.store.isFilteredEmpty()}>
             <div class={styles.empty}>
@@ -156,7 +165,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           printer={props.store.selectedPrinter()}
           mode={dockMode()}
           onClose={closeDock}
-          onRemove={(id) => props.onRemovePrinter?.(id)}
+          onDeleted={(id) => props.onRemovePrinter?.(id)}
           syncState={props.syncState}
         />
       </div>
@@ -166,16 +175,24 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
         existingPrinters={props.existingPrinters ?? []}
         onCreated={props.onPrinterCreated}
       />
+      <PrinterBatchDialog
+        open={batchDialogOpen()}
+        onOpenChange={setBatchDialogOpen}
+        existingPrinters={props.existingPrinters ?? []}
+      />
     </div>
   );
 }
 
-function EmptyState(props: { message: string; onAdd?: () => void }) {
+function EmptyState(props: { message: string; onAdd?: () => void; onAddBatch?: () => void }) {
   return (
     <div class={styles.empty}>
       <p>{props.message}</p>
       <Show when={props.onAdd}>
         <Button onClick={() => props.onAdd?.()}>Add Printer</Button>
+      </Show>
+      <Show when={props.onAddBatch}>
+        <Button variant="secondary" onClick={() => props.onAddBatch?.()}>Add Printers…</Button>
       </Show>
     </div>
   );

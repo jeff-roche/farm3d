@@ -72,4 +72,44 @@ describe("PrinterSetupPanel", () => {
 
     expect(updatePrinter).not.toHaveBeenCalled();
   });
+
+  it("persists a Location edit after the debounce, like name and notes", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterSetupPanel printer={printer} />);
+
+    await fireEvent.input(screen.getByLabelText("Location"), { target: { value: "Bay 2" } });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { location: "Bay 2" });
+  });
+
+  it("clears Location to null, not an empty string, after the debounce", async () => {
+    vi.useFakeTimers();
+    render(() => <PrinterSetupPanel printer={{ ...printer, location: "Bay 2" }} />);
+
+    await fireEvent.input(screen.getByLabelText("Location"), { target: { value: "" } });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { location: null });
+  });
+
+  it("cancels a pending Location edit when the selected Printer changes", async () => {
+    vi.useFakeTimers();
+    const [selected, setSelected] = createSignal(printer);
+    render(() => <Show when={selected()}>{(current) => <PrinterSetupPanel printer={current()} />}</Show>);
+
+    await fireEvent.input(screen.getByLabelText("Location"), { target: { value: "Bay 2" } });
+    setSelected({ ...printer, id: "prn-2" });
+    vi.advanceTimersByTime(300);
+
+    expect(updatePrinter).not.toHaveBeenCalled();
+  });
+
+  it("saves the start-safety RadioGroup immediately, without a debounce", async () => {
+    render(() => <PrinterSetupPanel printer={printer} />);
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Allow unattended starts" }));
+
+    expect(updatePrinter).toHaveBeenCalledWith("prn-1", { startSafety: "unattended" });
+  });
 });

@@ -15,7 +15,6 @@ import {
   printerStoreRetryable,
   printerStoreStatus,
   printerStatusSyncState,
-  removePrinter,
   startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
@@ -223,10 +222,14 @@ function App() {
                 reconcileNavigation();
               })}
               onExport={() => void exportPrinters()}
-              onRemovePrinter={(id) => void removePrinter(id).then(() => {
+              // The Setup tab's guarded Archive -> Delete... flow already
+              // called `removePrinter` itself (spec D7's typed-name confirm)
+              // before this fires -- this only reconciles navigation and
+              // first-run state the way P1's direct removal did.
+              onRemovePrinter={() => {
                 setIsFirstRun(false);
                 reconcileNavigation();
-              })}
+              }}
             />
           )}
         </Show>

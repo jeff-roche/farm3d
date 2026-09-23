@@ -45,6 +45,26 @@ describe("PrinterDashboard", () => {
     expect(screen.getByText("This Farm has no Printers.")).toBeInTheDocument();
   });
 
+  it("opens the batch dialog from the toolbar's 'Add Printers…' button", async () => {
+    const monitor = store([]);
+    render(() => <PrinterDashboard store={monitor} />);
+
+    expect(screen.queryByRole("dialog", { name: "Add Printers" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
+    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
+  });
+
+  it("also offers 'Add Printers…' from the first-run empty state", async () => {
+    const empty = store([]);
+    render(() => <PrinterDashboard store={empty} isFirstRun />);
+
+    // One in the toolbar (always present) plus one in the first-run empty state.
+    const buttons = screen.getAllByRole("button", { name: "Add Printers…" });
+    expect(buttons).toHaveLength(2);
+    await fireEvent.click(buttons[1]);
+    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
+  });
+
   it("preserves the active filter for filtered-empty results and clears it only on request", async () => {
     const monitor = store([printer()]);
     monitor.setSearch("missing");

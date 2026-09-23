@@ -365,6 +365,26 @@ describe("printer-store", () => {
       expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
     });
 
+    it("unarchivePrinter rejects on error (e.g. DUPLICATE_HOST) instead of routing to the banner", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, unarchivePrinter, printerStoreError } = await import("./printer-store");
+      await loadPrinters();
+      const failure = {
+        contractVersion: 1,
+        code: "DUPLICATE_HOST",
+        message: "Another Printer already uses this host.",
+        recovery: [],
+        retryable: false,
+        details: { conflictingPrinterId: "prn-2" },
+      };
+      tauriMock.invoke.mockRejectedValue(failure);
+
+      await expect(unarchivePrinter("prn-1")).rejects.toEqual(failure);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("unarchive_printer", { contractVersion: 1, id: "prn-1", expectedRevision: 1 });
+      expect(printerStoreError()).toBeNull();
+    });
+
     it("setConnection rejects on error and passes acceptUnverified", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, setConnection } = await import("./printer-store");

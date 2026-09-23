@@ -253,7 +253,6 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
   return (
     <Dialog
       title="Add printer"
-      trigger="+ Add printer"
       open={props.open}
       onOpenChange={props.onOpenChange}
     >
