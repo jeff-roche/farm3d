@@ -1,12 +1,17 @@
-.focusRing {
+/* These are baselines that components `composes` and then build on, so they
+   carry zero specificity (`:where`). Otherwise whichever stylesheet the
+   bundler happened to emit last would win: in the production bundle this
+   file lands after most components, and its `padding: 0` / `font: inherit`
+   silently erased their own padding and fonts (e.g. Tabs triggers). */
+:where(.focusRing) {
   outline: none;
 }
-.focusRing:focus-visible {
+:where(.focusRing):focus-visible {
   outline: 2px solid var(--f3d-color-focus-ring);
   outline-offset: 2px;
 }
 
-.resetButton {
+:where(.resetButton) {
   appearance: none;
   border: none;
   background: none;
@@ -16,6 +21,6 @@
   color: inherit;
   cursor: pointer;
 }
-.resetButton:disabled {
+:where(.resetButton):disabled {
   cursor: not-allowed;
 }
