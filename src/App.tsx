@@ -6,7 +6,6 @@ import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import {
-  addPrinter,
   dismissPrinterStoreError,
   exportPrinters,
   importPrinters,
@@ -217,11 +216,8 @@ function App() {
                 destination: "monitor",
                 ...(id ? { selection: { kind: "printer", id } } : {}),
               })}
-              onAddPrinter={async (draft) => {
-                const id = await addPrinter(draft);
-                if (id) setIsFirstRun(false);
-                return id ? printers().find((p) => p.id === id) : undefined;
-              }}
+              existingPrinters={printers()}
+              onPrinterCreated={() => setIsFirstRun(false)}
               onImport={() => void importPrinters().then(() => {
                 setIsFirstRun(false);
                 reconcileNavigation();

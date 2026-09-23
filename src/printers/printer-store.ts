@@ -17,7 +17,6 @@ import type {
   DiscoveredPrinter,
   LifecycleEligibility,
   OverridableField,
-  PrinterDraft,
   PrinterPatch,
   PrinterProfile,
   PrinterStatus,
@@ -202,59 +201,8 @@ function removeById(id: string): void {
   statusStore?.prune();
 }
 
-export async function addPrinter(draft: PrinterDraft): Promise<string | undefined> {
-  if (!desktopAvailable()) {
-    const id = `prn-web-${state.printers.length + 1}`;
-    // The Add dialog's Brand/Model/Nozzle selects are themselves backed by
-    // the real catalog in web mode now (see printer-catalog.ts), so this
-    // resolves real profile data for whatever the user picked rather than
-    // falling back to a generic placeholder. EMPTY_PROFILE only covers the
-    // case where that lookup itself fails (e.g. the catalog fetch errored).
-    const match = await resolveWebCatalogVariant(
-      draft.catalogRef.vendor,
-      draft.catalogRef.model,
-      draft.catalogRef.printerVariant,
-    );
-    setState("printers", (list) => [
-      ...list,
-      {
-        id,
-        revision: 1,
-        name: draft.name,
-        notes: "",
-        overrides: {},
-        catalogRef: draft.catalogRef,
-        catalogStatus: "ok",
-        modelLabel: match?.modelLabel ?? draft.catalogRef.model,
-        variantLabel: match?.variantLabel ?? draft.catalogRef.variant,
-        profile: match?.profile ?? EMPTY_PROFILE,
-        overriddenFields: [],
-        inherited: {},
-        profileDrift: [],
-        unknownOverrideKeys: [],
-        startSafety: "confirmBedClear",
-        setupGaps: [],
-        createdAt: "",
-        updatedAt: "",
-      },
-    ]);
-    return id;
-  }
-  try {
-    const { printer } = await command("create_printer", draft);
-    const resolved = resolvePrinterRecord(printer);
-    setState("printers", (list) => [...list, resolved]);
-    return resolved.id;
-  } catch (e) {
-    reportError(e);
-    return undefined;
-  }
-}
-
-/** Single-step create (spec D1/D5/D9) — unlike `addPrinter`/`PrinterDraft`,
- *  this can also carry a Connection, start safety, and a shared bed-type
- *  override up front. `addPrinter` stays until Task 9 removes it once the
- *  new wizard replaces the old add dialog that still calls it. */
+/** Single-step create (spec D1/D5/D9) — can also carry a Connection, start
+ *  safety, and a shared bed-type override up front. */
 export async function createPrinter(options: CreatePrinterOptions): Promise<ResolvedPrinter | undefined> {
   if (!desktopAvailable()) {
     const id = `prn-web-${state.printers.length + 1}`;

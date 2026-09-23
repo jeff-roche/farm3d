@@ -1,9 +1,9 @@
 import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
-import type { PrinterDraft, ResolvedPrinter } from "../printers/types";
+import type { ResolvedPrinter } from "../printers/types";
 import { MonitorToolbar } from "./MonitorToolbar";
-import { PrinterAddDialog } from "./PrinterAddDialog";
+import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
 import { PrinterDetailDock } from "./PrinterDetailDock";
@@ -15,14 +15,17 @@ export interface PrinterDashboardProps {
   isFirstRun?: boolean;
   syncState?: "syncing" | "current" | "uncertain";
   onSelectionChange?: (id: string | null) => void;
-  onAddPrinter?: (draft: PrinterDraft) => Promise<ResolvedPrinter | undefined>;
+  /** Every printer already in the Farm, for the setup wizard's unique-name
+   *  suggestion and duplicate-name warning. */
+  existingPrinters?: ResolvedPrinter[];
+  onPrinterCreated?: (printer: ResolvedPrinter) => void;
   onImport?: () => void;
   onExport?: () => void;
   onRemovePrinter?: (id: string) => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
-  const [addDialogOpen, setAddDialogOpen] = createSignal(false);
+  const [wizardOpen, setWizardOpen] = createSignal(false);
   const sections = new Map<string, HTMLElement>();
   let workspace: HTMLDivElement | undefined;
   let selectionTrigger: HTMLButtonElement | undefined;
@@ -67,7 +70,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
     <div class={styles.dashboard}>
       <MonitorToolbar
         store={props.store}
-        onAddPrinter={() => setAddDialogOpen(true)}
+        onAddPrinter={() => setWizardOpen(true)}
         onImport={props.onImport}
         onExport={props.onExport}
       />
@@ -84,7 +87,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             <EmptyState message="Loading persisted Printers…" />
           </Match>
           <Match when={isFirstRun()}>
-            <EmptyState message="Start your Farm by adding a Printer." onAdd={() => setAddDialogOpen(true)} />
+            <EmptyState message="Start your Farm by adding a Printer." onAdd={() => setWizardOpen(true)} />
           </Match>
           <Match when={props.store.isFilteredEmpty()}>
             <div class={styles.empty}>
@@ -145,7 +148,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             </For>
           </Match>
           <Match when={true}>
-            <EmptyState message="This Farm has no Printers." onAdd={() => setAddDialogOpen(true)} />
+            <EmptyState message="This Farm has no Printers." onAdd={() => setWizardOpen(true)} />
           </Match>
         </Switch>
         </div>
@@ -157,11 +160,11 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           syncState={props.syncState}
         />
       </div>
-      <PrinterAddDialog
-        open={addDialogOpen()}
-        onOpenChange={setAddDialogOpen}
-        onAdd={(draft) => props.onAddPrinter?.(draft) ?? Promise.resolve(undefined)}
-        existingPrinterNames={props.store.printerNames()}
+      <PrinterSetupWizard
+        open={wizardOpen()}
+        onOpenChange={setWizardOpen}
+        existingPrinters={props.existingPrinters ?? []}
+        onCreated={props.onPrinterCreated}
       />
     </div>
   );

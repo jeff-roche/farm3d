@@ -12,8 +12,17 @@ export interface PrinterProfilePanelProps {
 const DEBOUNCE_MS = 300;
 
 /** The values `defaultBedType` actually takes in the shipped catalog:
- *  "" (942 variants), "4" (20) and "Textured PEI Plate" (9). */
-const BED_TYPE_OPTIONS = ["", "4", "Textured PEI Plate"];
+ *  "" (942 variants), "4" (20) and "Textured PEI Plate" (9). Exported so
+ *  `PrinterSetupWizard`'s Operate step offers the same set (spec D9) rather
+ *  than inventing a second list. */
+export const BED_TYPE_OPTIONS = ["", "4", "Textured PEI Plate"];
+
+/** Defensively carries a printer's own value when it isn't one of the known
+ *  three, so a future catalog regeneration introducing a new bed type can
+ *  never leave a Select silently showing a blank, unmatched value. */
+export function bedTypeOptionsFor(current: string): string[] {
+  return BED_TYPE_OPTIONS.includes(current) ? BED_TYPE_OPTIONS : [...BED_TYPE_OPTIONS, current];
+}
 
 function isOverridden(printer: ResolvedPrinter, field: OverridableField): boolean {
   return printer.overriddenFields.includes(field);
@@ -92,13 +101,7 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
     return shape.kind === "rectangular" ? shape : null;
   });
 
-  // Defensively carry the printer's own value when it isn't one of the known
-  // three, so a future catalog regeneration introducing a new bed type can
-  // never leave the control silently showing a blank, unmatched value.
-  const bedTypeOptions = createMemo(() => {
-    const current = props.printer.profile.defaultBedType;
-    return BED_TYPE_OPTIONS.includes(current) ? BED_TYPE_OPTIONS : [...BED_TYPE_OPTIONS, current];
-  });
+  const bedTypeOptions = createMemo(() => bedTypeOptionsFor(props.printer.profile.defaultBedType));
 
   return (
     <div class={styles.panel}>

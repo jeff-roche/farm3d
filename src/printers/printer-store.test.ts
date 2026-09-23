@@ -79,23 +79,6 @@ describe("printer-store", () => {
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
     });
 
-    it("adds a printer via create_printer and appends the resolved result", async () => {
-      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
-      const { loadPrinters, addPrinter, printers } = await import("./printer-store");
-      await loadPrinters();
-      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
-
-      const id = await addPrinter({ name: "Centauri Carbon — Bay 1", catalogRef: A_RESOLVED_PRINTER.catalogRef });
-
-      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", {
-        contractVersion: 1,
-        name: "Centauri Carbon — Bay 1",
-        catalogRef: A_RESOLVED_PRINTER.catalogRef,
-      });
-      expect(id).toBe("prn-1");
-      expect(printers()).toEqual([A_RESOLVED_PRINTER]);
-    });
-
     it("revertField sends value: null", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, revertField } = await import("./printer-store");

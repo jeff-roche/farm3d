@@ -21,7 +21,6 @@ vi.mock("./settings/settings-store", () => ({
 }));
 
 vi.mock("./printers/printer-store", () => ({
-  addPrinter: vi.fn(),
   dismissPrinterStoreError: vi.fn(),
   exportPrinters: appState.exportPrinters,
   importPrinters: appState.importPrinters,

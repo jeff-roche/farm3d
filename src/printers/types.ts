@@ -30,14 +30,9 @@ export type { CatalogInfo } from "../generated/contracts/domain/CatalogInfo";
 export type { CatalogModelSummary } from "../generated/contracts/domain/CatalogModelSummary";
 export type { CatalogVariantSummary } from "../generated/contracts/domain/CatalogVariantSummary";
 
-export interface PrinterDraft {
-  name: string;
-  catalogRef: CatalogRef;
-}
-
 /** Options for `createPrinter` (spec D1/D5/D9) — a single-step create that
  *  may include a Connection, start safety, and a shared-bed-type override
- *  up front, unlike `PrinterDraft` which only ever names a catalog variant. */
+ *  up front. */
 export interface CreatePrinterOptions {
   name: string;
   catalogRef: CatalogRef;
