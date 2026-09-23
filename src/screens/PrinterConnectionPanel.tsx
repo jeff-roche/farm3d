@@ -4,6 +4,7 @@ import {
   buildMismatches,
   ConnectionFields,
   connectionDraftChanged,
+  supportedKind,
   toSubmission,
   type ConnectionDraft,
 } from "./ConnectionFields";
@@ -37,7 +38,7 @@ export interface PrinterConnectionPanelProps {
 
 export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   const existing = () => props.printer.connection;
-  const initialKind = existing()?.kind ?? props.printer.profile.suggestedHostType ?? "moonraker";
+  const initialKind = existing()?.kind ?? supportedKind(props.printer.profile.suggestedHostType) ?? "moonraker";
   const [draft, setDraft] = createSignal<ConnectionDraft>({
     kind: initialKind,
     host: existing()?.host ?? "",

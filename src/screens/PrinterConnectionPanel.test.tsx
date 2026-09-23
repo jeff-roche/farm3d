@@ -294,3 +294,20 @@ describe("PrinterConnectionPanel — Remove credentials", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });
+
+describe("unsupported suggested host types", () => {
+  it("falls back to Moonraker when the catalog suggests a kind this build can't connect to", async () => {
+    const prusa = {
+      id: "prn-1",
+      name: "Core One",
+      profile: { ...PROFILE, suggestedHostType: "prusalink" },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={prusa} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "core.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
+    expect(setConnection).toHaveBeenCalledWith("prn-1", expect.objectContaining({ kind: "moonraker" }));
+  });
+});

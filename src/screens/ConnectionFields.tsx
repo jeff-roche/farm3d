@@ -16,6 +16,14 @@ import styles from "./ConnectionFields.module.css";
  *  worse than not offering it. */
 export const KINDS = [{ value: "moonraker", label: "Moonraker (Klipper)" }];
 
+/** Catalog `suggestedHostType`s name every host the source catalog knows
+ *  (PrusaLink, OctoPrint, ...), not just the adapters this build ships; an
+ *  unsupported one would leave the Kind Select blank and save a Connection
+ *  that can only be Setup incomplete. */
+export function supportedKind(kind: string | null | undefined): string | undefined {
+  return KINDS.some((k) => k.value === kind) ? kind ?? undefined : undefined;
+}
+
 const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
 
 /** Millimetre-scale float noise is not a disagreement worth a warning. */
@@ -137,7 +145,7 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
   // deliberate pick the user already made (e.g. after opening the Kind
   // Select themselves).
   createEffect(() => {
-    const suggested = props.suggestedKind;
+    const suggested = supportedKind(props.suggestedKind);
     if (!suggested || kindTouched() || props.value.kind === suggested) return;
     props.onChange({ ...props.value, kind: suggested, port: DEFAULT_PORTS[suggested] ?? props.value.port });
   });

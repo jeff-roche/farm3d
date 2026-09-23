@@ -87,4 +87,13 @@ describe("ConnectionFields", () => {
     expect(screen.queryByText("online")).not.toBeInTheDocument();
     expect(screen.queryByText(/Moonraker 0\.9/)).not.toBeInTheDocument();
   });
+
+  it("ignores a catalog-suggested kind this build can't connect to", () => {
+    const onChange = vi.fn();
+    render(() => (
+      <ConnectionFields value={DEFAULT_DRAFT} onChange={onChange} suggestedKind="prusalink" onTest={vi.fn()} />
+    ));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });
