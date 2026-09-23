@@ -237,6 +237,36 @@ describe("moveSpool: optimistic settle", () => {
 
     expect(spoolState.spools.find((s) => s.id === moving.id)).toEqual(fresher);
   });
+
+  it("settles a move via its own result, then ignores an older spool.changed that arrives afterward (fix round 2, item C)", async () => {
+    const box = captureListenerHandler();
+    const moving = spool({ id: "spl-1", revision: 1 });
+    let resolveMove!: (value: unknown) => void;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [moving]));
+      if (command === "move_spool") return new Promise((resolve) => { resolveMove = resolve; });
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const movePromise = moveSpool({
+      spoolId: moving.id, expectedSpoolRevision: moving.revision,
+      destination: { kind: "storage", storageLabel: "Shelf A2" },
+    });
+    const settled = { ...moving, revision: 2, location: { kind: "storage" as const, storageLabel: "Shelf A2" } };
+    resolveMove({ contractVersion: 1, data: { spools: [settled], printers: [], movements: [] } });
+    await movePromise;
+    expect(spoolState.spools.find((s) => s.id === moving.id)).toEqual(settled);
+
+    // An older spool.changed (revision 1, the pre-move state) arrives on the
+    // stream afterward -- it must not regress the settled revision-2 state.
+    const stale = { ...moving, revision: 1, colorName: "Stale" };
+    box.handler({ payload: envelope(1, { type: "spoolChanged", spool: stale }) });
+
+    expect(spoolState.spools.find((s) => s.id === moving.id)).toEqual(settled);
+  });
 });
 
 describe("moveSpool: restore on failure", () => {
@@ -482,6 +512,74 @@ describe("moveSpool: availability hints", () => {
 
     expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual(target.availability);
   });
+
+  it("accepts a same-revision spool.changed's availability even after a command result set the marker to +Infinity, then still accepts a newer hint (fix round 2, finding A)", async () => {
+    const box = captureListenerHandler();
+    const target = spool({ id: "spl-1", availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 } });
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [target]));
+      if (command === "update_spool") {
+        return Promise.resolve({
+          contractVersion: 1,
+          data: { spool: { ...target, revision: 2, colorName: "Renamed" }, printers: [], warnings: [] },
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, updateSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    // A command result settles the Spool at revision 2 -- the marker
+    // becomes +Infinity (this store's own ruling).
+    await updateSpool(target.id, {
+      manufacturer: target.manufacturer, materialFamily: target.materialFamily, colorName: "Renamed",
+      diameter: target.diameter, nominalMg: target.nominalMg, lowThresholdMg: target.lowThresholdMg,
+    });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.revision).toBe(2);
+
+    // A reservation change (P7) never bumps `spools.revision` (D8) -- its
+    // confirming `spool.changed` arrives at the *same* revision (2), but
+    // carries fresh availability. It must still apply, and it must bring
+    // the marker back down from +Infinity to a real sequence.
+    const reservationAvailability = { currentMg: 500_000, reservedMg: 50_000, availableMg: 450_000 };
+    box.handler({
+      payload: envelope(1, {
+        type: "spoolChanged",
+        spool: { ...target, revision: 2, colorName: "Renamed", availability: reservationAvailability },
+      }),
+    });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual(reservationAvailability);
+
+    // A newer hint now applies too, proving the marker really did come back
+    // down to a real (finite) sequence rather than staying stuck forever.
+    const hintAvailability = { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 };
+    box.handler({
+      payload: envelope(2, { type: "spoolAvailabilityChanged", spoolId: target.id, availability: hintAvailability }),
+    });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual(hintAvailability);
+  });
+
+  it("applies a hint that is newer than an existing finite marker set by a prior spool.changed (fix round 2, finding A)", async () => {
+    const box = captureListenerHandler();
+    const target = spool({ id: "spl-1", revision: 1 });
+    tauriMock.invoke.mockResolvedValue(snapshotResponse(0, [target]));
+
+    const { loadInventory, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    // A spool.changed event bumps the revision and sets a real, finite marker.
+    const changed = { ...target, revision: 2, colorName: "Renamed elsewhere" };
+    box.handler({ payload: envelope(3, { type: "spoolChanged", spool: changed }) });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.revision).toBe(2);
+
+    // A hint at a higher sequence than that finite marker still applies.
+    const hintAvailability = { currentMg: 42, reservedMg: 0, availableMg: 42 };
+    box.handler({
+      payload: envelope(4, { type: "spoolAvailabilityChanged", spoolId: target.id, availability: hintAvailability }),
+    });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual(hintAvailability);
+  });
 });
 
 describe("web mode", () => {
@@ -505,6 +603,13 @@ describe("web mode", () => {
       expectedSpoolRevision: storedSpool.revision,
       destination: { kind: "slot", slotId, expectedOccupantSpoolId: null },
     })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    // Fix round 2 (item C): assert the restored state directly, rather than
+    // only relying on the swap below to still succeed regardless of it.
+    // The optimistic placement `moveSpool` applied before the (synchronous)
+    // CONFLICT was raised must have been rolled back for both Spools.
+    expect(spoolState.spools.find((s) => s.id === storedSpool.id)).toEqual(storedSpool);
+    expect(spoolState.spools.find((s) => s.id === loadedSpool.id)).toEqual(loadedSpool);
 
     // Swaps in, displacing the occupant to storage.
     const result = await moveSpool({

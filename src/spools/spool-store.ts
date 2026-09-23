@@ -1,6 +1,11 @@
 import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
-import { printers as printerRecords, spliceResolved, WEB_FIXTURE_EQUIPPED_PRINTER_ID } from "../printers/printer-store";
+import {
+  printers as printerRecords,
+  registerWebSpoolLookup,
+  spliceResolved,
+  WEB_FIXTURE_EQUIPPED_PRINTER_ID,
+} from "../printers/printer-store";
 import { resolvePrinterRecord } from "../printers/types";
 import { buildWebInventoryFixture } from "./web-fixtures";
 import type { AmountConfidence } from "../generated/contracts/domain/AmountConfidence";
@@ -48,6 +53,15 @@ const [state, setState] = createStore<SpoolStoreState>({
  *  design's "Frontend architecture -> State"). Read its fields inside a
  *  tracked scope (JSX/`createMemo`) for Solid to pick up changes. */
 export const spoolState = state;
+
+/** Fix round 2 (finding B): pushes a lookup into `printer-store.ts` so its
+ *  web `lifecycleEligibility`/`archivePrinter` can resolve a slot's
+ *  `occupantSpoolId` to a real `SpoolRecord` without importing this module
+ *  (which would be a real cycle -- this module already imports
+ *  printer-store). Registered once, closing over the stable `state`
+ *  reference `createStore` returns, so it always sees the current spools
+ *  even though this runs before any are loaded. */
+registerWebSpoolLookup((spoolId) => state.spools.find((s) => s.id === spoolId));
 
 export function spoolStoreError(): string | null {
   return state.error;
@@ -121,10 +135,35 @@ const lastAuthoritativeSequence = new Map<string, number>();
  *  locally-computed revisions are always exactly `current + 1`, so the
  *  guard never blocks them. `atSequence` is the stream sequence to record
  *  as this Spool's freshness marker; omitted (command results, every web
- *  mutation) it defaults to `+Infinity` -- see `lastAuthoritativeSequence`. */
+ *  mutation) it defaults to `+Infinity` -- see `lastAuthoritativeSequence`.
+ *
+ *  A reservation change (P7, `src-tauri/src/spools/reservations.rs`) never
+ *  bumps the Spool's own `revision` -- so its confirming `spool.changed`
+ *  arrives at exactly `existing.revision`, carrying fresh
+ *  `availability`/`facets` this function would otherwise drop entirely,
+ *  including the case where it's the *same* write's own confirmation (a
+ *  command result just set the marker to `+Infinity`). Patch those two
+ *  fields in for a same-revision *event* (`atSequence` present -- a
+ *  same-revision command result carries nothing new and is still a no-op),
+ *  and always accept it regardless of the current marker: the top-level
+ *  sequence gate in `applyInventoryEnvelope` already guarantees this event
+ *  is fresher than anything the stream has delivered so far, so nothing
+ *  finite could ever be "greater than" a `+Infinity` marker -- requiring
+ *  that here would leave the marker stuck at `+Infinity` forever, exactly
+ *  the bug this is fixing. This is also what lets the marker come back
+ *  down from `+Infinity` to a real sequence, so a later availability hint
+ *  can apply again. A strictly older revision is still ignored. */
 function upsertSpool(record: SpoolRecord, atSequence?: number): void {
   const existing = state.spools.find((s) => s.id === record.id);
-  if (existing && record.revision <= existing.revision) return;
+  if (existing && record.revision < existing.revision) return;
+  if (existing && record.revision === existing.revision) {
+    if (atSequence === undefined) return;
+    setState("spools", (list) => list.map((s) => (
+      s.id === record.id ? { ...s, availability: record.availability, facets: record.facets } : s
+    )));
+    lastAuthoritativeSequence.set(record.id, atSequence);
+    return;
+  }
   setState("spools", (list) => (
     existing ? list.map((s) => (s.id === record.id ? record : s)) : [...list, record]
   ));
@@ -213,6 +252,7 @@ function syncWebPrinterOccupancy(printerId: string): void {
  *  at or below the snapshot's `snapshotSequence` are dropped (D11). */
 export async function loadInventory(): Promise<void> {
   disposeListener();
+  lastAuthoritativeSequence.clear();
   if (!desktopAvailable()) {
     const fixture = buildWebInventoryFixture();
     setState({ spools: fixture.spools, tares: fixture.tares, loaded: true, error: null });

@@ -1,11 +1,13 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
 import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
 import type { SpoolDispositionInput } from "../generated/contracts/domain/SpoolDispositionInput";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
 import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
@@ -17,6 +19,7 @@ import type {
   CreatePrinterOptions,
   CredentialStoreInfo,
   DiscoveredPrinter,
+  LifecycleBlocker,
   LifecycleEligibility,
   MaterialSlot,
   OverridableField,
@@ -28,6 +31,24 @@ import type {
   SlotSpec,
 } from "./types";
 import { resolvePrinterRecord } from "./types";
+
+/** P3 D10 (finding B): printer-store can't import `spool-store.ts` without
+ *  a real import cycle (it already imports this module). `spool-store.ts`
+ *  pushes a lookup in here instead, once, at its own module init -- so web
+ *  mode's `lifecycleEligibility`/`archivePrinter` can resolve a slot's
+ *  `occupantSpoolId` to the real `SpoolRecord` without either module
+ *  importing the other's runtime values. `undefined` (spool-store never
+ *  loaded, e.g. a printer-store-only test) means "no Spool data available",
+ *  not "no Spools loaded" -- callers treat that as an empty `loadedSpools`. */
+let webSpoolLookup: ((spoolId: string) => SpoolRecord | undefined) | undefined;
+
+export function registerWebSpoolLookup(lookup: (spoolId: string) => SpoolRecord | undefined): void {
+  webSpoolLookup = lookup;
+}
+
+function lifecycleBlockedError(message: string): CommandError {
+  return { contractVersion: 1, code: "LIFECYCLE_BLOCKED", message, recovery: [], retryable: false };
+}
 
 interface PrinterStoreState {
   printers: ResolvedPrinter[];
@@ -827,17 +848,23 @@ export async function cancelBatch(batchId: string): Promise<void> {
  *  empty for a Printer with nothing loaded. */
 /** Web mode has no transaction to apply D10's Spool dispositions atomically
  *  alongside the archive, and no reservation/ledger data to validate them
- *  against -- rather than half-implement that, it refuses outright (the
- *  same "needs the desktop app" shape as `testConnection`/`probeCandidate`)
- *  whenever the Printer has an occupied slot, so a web-only session can
- *  never leave a Spool loaded on an archived Printer (D10). `materialSlots`
- *  is kept in sync with `spool-store.ts`'s own web fixture locations via
- *  `spliceResolved`, so this needs no dependency on that module. */
+ *  against -- rather than half-implement that, it refuses outright whenever
+ *  the Printer has an occupied slot, so a web-only session can never leave
+ *  a Spool loaded on an archived Printer (D10). `materialSlots` is kept in
+ *  sync with `spool-store.ts`'s own web fixture locations via
+ *  `spliceResolved`, so this needs no dependency on that module.
+ *
+ *  Fix round 2 (finding B): this reports into the banner rather than
+ *  rejecting -- unlike `testConnection`/`unarchivePrinter`, this function's
+ *  one call site (`PrinterDetailDock`'s `onArchive`) `await`s it with no
+ *  `catch`, matching every other store mutation that already reports its
+ *  own failures this way (the desktop branch below has always done this). */
 export async function archivePrinter(id: string, dispositions: SpoolDispositionInput[] = []): Promise<void> {
   if (!desktopAvailable()) {
     const printer = state.printers.find((p) => p.id === id);
     if (printer?.materialSlots.some((slot) => slot.occupantSpoolId !== undefined)) {
-      throw new Error("Archiving a Printer with a loaded Spool needs the desktop app.");
+      reportError(lifecycleBlockedError("Archiving a Printer with a loaded Spool needs the desktop app."));
+      return;
     }
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
@@ -878,30 +905,50 @@ export async function unarchivePrinter(id: string): Promise<void> {
  *  blockers inline next to the Archive/Unarchive/Delete actions they
  *  explain. In web mode this derives the same shape locally from
  *  `archivedAt` (spec D7's P2 blocker source: `NOT_ARCHIVED`/
- *  `ALREADY_ARCHIVED`), since there is no backend to ask. */
+ *  `ALREADY_ARCHIVED`), since there is no backend to ask.
+ *
+ *  Fix round 2 (finding B, load-bearing for Task 11): also derives the
+ *  `SPOOLS_LOADED` archive blocker and the real `loadedSpools` the desktop
+ *  path gets from Rust (D10) -- Task 11's archive dialog reads
+ *  `loadedSpools` to prompt for dispositions, and a web session with a
+ *  Spool loaded must see the same shape, not silently claim `canArchive`.
+ *  Resolves each occupied slot's `occupantSpoolId` through
+ *  `webSpoolLookup` (registered by `spool-store.ts`, see above) rather than
+ *  importing that module directly, to avoid a real import cycle -- an
+ *  unregistered lookup (spool-store never loaded) resolves to no Spools
+ *  found, same as an empty inventory would. */
 export async function lifecycleEligibility(id: string): Promise<LifecycleEligibility> {
   if (!desktopAvailable()) {
-    const archived = Boolean(state.printers.find((printer) => printer.id === id)?.archivedAt);
-    return archived
-      ? {
-          canArchive: false,
-          canUnarchive: true,
-          canDelete: true,
-          blockers: [
-            { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
-          ],
-          loadedSpools: [],
-        }
-      : {
-          canArchive: true,
-          canUnarchive: false,
-          canDelete: false,
-          blockers: [
-            { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
-            { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
-          ],
-          loadedSpools: [],
-        };
+    const printer = state.printers.find((printer) => printer.id === id);
+    const archived = Boolean(printer?.archivedAt);
+    if (archived) {
+      return {
+        canArchive: false,
+        canUnarchive: true,
+        canDelete: true,
+        blockers: [
+          { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
+        ],
+        loadedSpools: [],
+      };
+    }
+    const loadedSpools: SpoolRecord[] = (printer?.materialSlots ?? [])
+      .map((slot) => slot.occupantSpoolId)
+      .filter((spoolId): spoolId is string => spoolId !== undefined)
+      .map((spoolId) => webSpoolLookup?.(spoolId))
+      .filter((spool): spool is SpoolRecord => spool !== undefined);
+    const blockers: LifecycleBlocker[] = [
+      { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
+      { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
+    ];
+    if (loadedSpools.length > 0) {
+      blockers.push({
+        action: "archive",
+        code: "SPOOLS_LOADED",
+        message: "Unload every Spool before archiving this Printer.",
+      });
+    }
+    return { canArchive: loadedSpools.length === 0, canUnarchive: false, canDelete: false, blockers, loadedSpools };
   }
   return command("printer_lifecycle_eligibility", { id });
 }

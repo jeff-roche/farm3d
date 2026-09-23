@@ -878,6 +878,8 @@ describe("printer-store", () => {
     it("archivePrinter refuses a web Printer with a loaded Spool rather than leaving it loaded on the archived Printer (D10)", async () => {
       // D10: archive must never leave a Spool loaded on an archived Printer.
       // Web mode has no dispositions transaction, so it refuses outright.
+      // Fix round 2 (finding B): this reports into the banner rather than
+      // rejecting -- its one call site awaits it with no catch.
       const store = await import("./printer-store");
       await store.loadPrinters();
       const printer = store.printers()[0];
@@ -886,9 +888,56 @@ describe("printer-store", () => {
         materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
       });
 
-      await expect(store.archivePrinter(printer.id)).rejects.toThrow("needs the desktop app");
+      await store.archivePrinter(printer.id);
 
+      expect(store.printerStoreError()).toMatch(/needs the desktop app/);
       expect(store.printers().find((p) => p.id === printer.id)?.archivedAt).toBeFalsy();
+    });
+
+    it("lifecycleEligibility returns the real loadedSpools and a SPOOLS_LOADED blocker for a web Printer with an occupied slot (fix round 2, finding B)", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const printer = store.printers()[0];
+
+      // No Spool data registered yet (spool-store.ts never loaded in this
+      // test) -- an occupied slot with no resolvable Spool contributes
+      // nothing to `loadedSpools`, and the Printer is otherwise eligible.
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-unregistered" }],
+      });
+      const unregistered = await store.lifecycleEligibility(printer.id);
+      expect(unregistered.loadedSpools).toEqual([]);
+      expect(unregistered.canArchive).toBe(true);
+      expect(unregistered.blockers.some((b) => b.code === "SPOOLS_LOADED")).toBe(false);
+
+      // Registering a lookup (mirroring what spool-store.ts does at its own
+      // module init) lets a loaded Spool resolve for real.
+      const loadedSpool = { id: "spl-loaded", revision: 1 } as unknown as import("../generated/contracts/domain/SpoolRecord").SpoolRecord;
+      store.registerWebSpoolLookup((spoolId) => (spoolId === "spl-loaded" ? loadedSpool : undefined));
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
+      });
+
+      const eligibility = await store.lifecycleEligibility(printer.id);
+      expect(eligibility.loadedSpools).toEqual([loadedSpool]);
+      expect(eligibility.canArchive).toBe(false);
+      expect(eligibility.blockers).toContainEqual({
+        action: "archive", code: "SPOOLS_LOADED", message: "Unload every Spool before archiving this Printer.",
+      });
+      // The NOT_ARCHIVED blockers for delete/unarchive still apply alongside it.
+      expect(eligibility.blockers.some((b) => b.code === "NOT_ARCHIVED" && b.action === "delete")).toBe(true);
+
+      // An archived Printer still reports its own shape, unaffected by any
+      // loaded Spool (mirrors P2's ALREADY_ARCHIVED branch).
+      store.spliceResolved({ ...printer, archivedAt: new Date().toISOString(), materialSlots: printer.materialSlots });
+      const archivedEligibility = await store.lifecycleEligibility(printer.id);
+      expect(archivedEligibility.canArchive).toBe(false);
+      expect(archivedEligibility.loadedSpools).toEqual([]);
+      expect(archivedEligibility.blockers).toEqual([
+        { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
+      ]);
     });
   });
 });
