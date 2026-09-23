@@ -75,6 +75,33 @@ describe("DataTable", () => {
     expect(onActivate).toHaveBeenCalledWith("b");
   });
 
+  it("is itself tabbable when nothing is selected, and selects+focuses the first row on ArrowDown", async () => {
+    function UnselectedTable() {
+      const [selectedId, setSelectedId] = createSignal<string | null>(null);
+      return (
+        <DataTable
+          label="Rows"
+          rows={rows}
+          rowId={(row) => row.id}
+          columns={columns}
+          selectedId={selectedId()}
+          onSelect={setSelectedId}
+        />
+      );
+    }
+    render(() => <UnselectedTable />);
+
+    const grid = screen.getByRole("grid", { name: "Rows" });
+    expect(grid.tabIndex).toBe(0);
+
+    await fireEvent.keyDown(grid, { key: "ArrowDown" });
+
+    const alphaRow = screen.getByRole("row", { name: /Alpha/ });
+    expect(alphaRow.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(alphaRow);
+    expect(grid.tabIndex).toBe(-1);
+  });
+
   it("toggles aria-sort on header click", async () => {
     const onSortChange = vi.fn();
     render(() => (

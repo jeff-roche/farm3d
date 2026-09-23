@@ -42,6 +42,7 @@ export interface DataTableProps<T> {
  *  its header is sticky. */
 export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
   const rowIds = createMemo(() => props.rows.map((row) => props.rowId(row)));
+  const rowRefs = new Map<string, HTMLTableRowElement>();
 
   const currentIndex = createMemo(() => {
     if (props.selectedId == null) return -1;
@@ -53,7 +54,12 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
     if (ids.length === 0) return;
     const clamped = Math.max(0, Math.min(index, ids.length - 1));
     const id = ids[clamped];
-    if (id !== undefined) props.onSelect?.(id);
+    if (id !== undefined) {
+      props.onSelect?.(id);
+      // Roving tabindex: move real DOM focus onto the newly-active row so a
+      // keyboard user's Tab stop tracks selection, not just `aria-selected`.
+      rowRefs.get(id)?.focus();
+    }
   };
 
   const handleKeyDown: JSX.EventHandler<HTMLTableElement, KeyboardEvent> = (event) => {
@@ -109,6 +115,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
         role="grid"
         aria-label={props.label}
         aria-rowcount={props.rows.length}
+        tabIndex={currentIndex() < 0 && props.rows.length > 0 ? 0 : -1}
         onKeyDown={handleKeyDown}
       >
         <thead class={styles.head}>
@@ -157,6 +164,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
 
                 return (
                   <tr
+                    ref={(el) => rowRefs.set(id(), el)}
                     role="row"
                     class={styles.row}
                     aria-rowindex={index() + 1}
