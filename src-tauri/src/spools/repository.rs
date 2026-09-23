@@ -289,7 +289,7 @@ pub fn check_and_bump_revision(
 /// D5's blank-to-`None` storage label rule (mirrors
 /// `SpoolFields::normalize`'s optional-text handling), plus the migration's
 /// 1-64 char length CHECK.
-fn normalize_storage_label(label: Option<&str>) -> Result<Option<String>, RepositoryError> {
+pub(crate) fn normalize_storage_label(label: Option<&str>) -> Result<Option<String>, RepositoryError> {
     let Some(label) = label else {
         return Ok(None);
     };

@@ -5,7 +5,7 @@ mod migrations;
 pub mod snapshot;
 pub mod validation;
 
-pub use database::{FailurePoint, MetadataRootLease, Storage, StoragePaths};
+pub use database::{take_transaction_failure, FailurePoint, MetadataRootLease, Storage, StoragePaths};
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
 pub use migrations::CURRENT_SCHEMA_VERSION;

@@ -10,6 +10,7 @@
 //! against.
 
 pub mod ledger;
+pub mod movement;
 pub mod repository;
 pub mod tares;
 pub mod weight;

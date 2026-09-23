@@ -151,8 +151,17 @@ impl Storage {
 
     #[doc(hidden)]
     pub fn inject_failure_once(&self, point: FailurePoint) {
-        self.failure_point
-            .store(point as u8, AtomicOrdering::SeqCst);
+        match point {
+            FailurePoint::Snapshot => self
+                .failure_point
+                .store(point as u8, AtomicOrdering::SeqCst),
+            FailurePoint::AfterDisplacement => {
+                let database = canonical_or_raw(&self.paths.database);
+                if let Ok(mut pending) = TRANSACTION_FAILURES.lock() {
+                    pending.push((database, point));
+                }
+            }
+        }
     }
 
     pub(super) fn take_failure(&self, point: FailurePoint) -> bool {
@@ -280,6 +289,50 @@ impl Storage {
 #[repr(u8)]
 pub enum FailurePoint {
     Snapshot = 1,
+    /// Inside `spools::movement::apply_move`, between the displaced Spool's
+    /// write and the moved Spool's write (P3 D6). Checked with
+    /// [`take_transaction_failure`], since `apply_move` only has the
+    /// caller's `&Transaction`, not the `Storage`.
+    AfterDisplacement = 2,
+}
+
+/// Failure points armed for code that only sees a `&Transaction` (see
+/// [`FailurePoint::AfterDisplacement`]), keyed by the canonical database
+/// path so parallel tests with separate databases never consume each
+/// other's injection.
+static TRANSACTION_FAILURES: Mutex<Vec<(PathBuf, FailurePoint)>> = Mutex::new(Vec::new());
+
+/// [`Storage::take_failure`]'s sibling for code that runs inside a caller's
+/// transaction: returns `true` exactly once after
+/// [`Storage::inject_failure_once`] armed `point` for this connection's
+/// database. Cheap when nothing is armed (one uncontended lock, no
+/// filesystem access).
+#[doc(hidden)]
+pub fn take_transaction_failure(connection: &Connection, point: FailurePoint) -> bool {
+    let Ok(mut pending) = TRANSACTION_FAILURES.lock() else {
+        return false;
+    };
+    if pending.is_empty() {
+        return false;
+    }
+    let Some(path) = connection.path().filter(|path| !path.is_empty()) else {
+        return false;
+    };
+    let database = canonical_or_raw(Path::new(path));
+    match pending
+        .iter()
+        .position(|(armed, armed_point)| *armed == database && *armed_point == point)
+    {
+        Some(index) => {
+            pending.remove(index);
+            true
+        }
+        None => false,
+    }
+}
+
+fn canonical_or_raw(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn configure_connection(connection: &Connection) -> Result<(), StorageError> {

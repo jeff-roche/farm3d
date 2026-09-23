@@ -97,6 +97,12 @@ pub enum RepositoryError {
     DuplicateHost {
         conflicting_printer_id: String,
     },
+    /// P3 D6 step 3: a slot's current occupant isn't the one the move
+    /// expected (`expectedOccupantSpoolId`). `None` means the slot is empty.
+    OccupancyConflict {
+        slot_id: String,
+        current_occupant_spool_id: Option<String>,
+    },
     /// D7: `archive`/`unarchive`/`delete` is blocked by the Printer's
     /// current lifecycle state (or, in a later phase, other work that still
     /// depends on it). See `crate::printers::lifecycle::evaluate`.

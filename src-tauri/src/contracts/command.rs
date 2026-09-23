@@ -462,6 +462,21 @@ impl CommandError {
         error
     }
 
+    /// P3 D6 step 3: the destination slot's occupant changed since the
+    /// client read it. `currentOccupantSpoolId` is `null` for an empty slot.
+    pub fn occupancy_conflict(slot_id: &str, current_occupant_spool_id: Option<&str>) -> Self {
+        let mut error = Self::conflict("The slot changed; reload and try again.");
+        error.details = Some(BTreeMap::from([
+            ("slotId".to_string(), JsonValue::String(slot_id.to_string())),
+            (
+                "currentOccupantSpoolId".to_string(),
+                current_occupant_spool_id
+                    .map_or(JsonValue::Null(()), |id| JsonValue::String(id.to_string())),
+            ),
+        ]));
+        error
+    }
+
     pub fn set_conflict(expected_count: usize, current_count: usize) -> Self {
         let mut error = Self::conflict("Printers changed; reload and try again.");
         error.details = Some(BTreeMap::from([
@@ -721,6 +736,10 @@ impl CommandError {
             RepositoryError::DuplicateHost {
                 conflicting_printer_id,
             } => Self::duplicate_host(&conflicting_printer_id),
+            RepositoryError::OccupancyConflict {
+                slot_id,
+                current_occupant_spool_id,
+            } => Self::occupancy_conflict(&slot_id, current_occupant_spool_id.as_deref()),
             RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
                 serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
             ),
@@ -774,6 +793,27 @@ mod tests {
         assert!(details.contains_key("entityId"));
         assert!(details.contains_key("expectedRevision"));
         assert!(details.contains_key("currentRevision"));
+
+        let occupancy = CommandError::from_repository(RepositoryError::OccupancyConflict {
+            slot_id: "slt-a".to_string(),
+            current_occupant_spool_id: Some("spl-a".to_string()),
+        });
+        assert_eq!(occupancy.code, ErrorCode::Conflict);
+        let details = occupancy.details.unwrap();
+        assert_eq!(details.len(), 2);
+        assert_eq!(details.get("slotId"), Some(&JsonValue::String("slt-a".to_string())));
+        assert_eq!(
+            details.get("currentOccupantSpoolId"),
+            Some(&JsonValue::String("spl-a".to_string()))
+        );
+        let empty_slot = CommandError::from_repository(RepositoryError::OccupancyConflict {
+            slot_id: "slt-a".to_string(),
+            current_occupant_spool_id: None,
+        });
+        assert_eq!(
+            empty_slot.details.unwrap().get("currentOccupantSpoolId"),
+            Some(&JsonValue::Null(()))
+        );
 
         let corrupt =
             CommandError::from_repository(RepositoryError::Storage(StorageError::CorruptData {
