@@ -2,20 +2,20 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** `97b27d9` (`fix: keep the batch dialog's footer
-reachable at compact viewports`), the last code commit on
-`feature/p2-printer-lifecycle` before this doc, itself committed as
-`docs: record P2 verification evidence` alongside the tracer test
-(`src-tauri/tests/p2_tracer.rs`) and the `CONTEXT.md`/known-unknowns
-updates. Covers Tasks 1–12 (P2 in full).
+**Validated source:** `a5796d0` (`fix: keep failed P2 saves and deletes
+visible instead of reporting success`), the last code commit on
+`feature/p2-printer-lifecycle`, after the final whole-branch review fix
+wave (see "Final review fix wave" below). The original verification pass
+ran against `97b27d9`; every command below was re-run against `a5796d0`.
+Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
 
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 32 files, 311 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 11 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 12 `p2_contract_path`, 7 `p2_lifecycle`, 5 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
+| `just test` | Passed: 32 files, 321 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 11 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 5 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) — the frontend's generated contracts already match the Rust side. |
 
 ### The tracer (spec acceptance criterion 16)
@@ -70,13 +70,13 @@ drives the real `tauri::test` IPC path in one test:
 | 6 | Retrying a `createdSetupIncomplete` row attaches a Connection to the same Printer, never a duplicate | `p2_contract_path.rs`: `set_printer_connection_probes_before_replacing_a_working_connection`, `first_time_set_printer_connection_never_probes` (backend half); `src/screens/PrinterBatchDialog.test.tsx` (frontend retry flow, see AC15) |
 | 7 | A seeded shared secret appears in no batch result, error, warning, log, SQLite file, or generated contract | `p2_batch.rs`: `batch_secrets_never_leave_the_credential_store`, `batch_output_streams_never_contain_the_secrets` |
 | 8 | Probes never exceed 4 concurrent; cancellation leaves uncommitted rows `cancelled`, unpersisted | `p2_batch.rs`: `at_most_four_probes_are_in_flight`, `cancelling_keeps_committed_rows_and_cancels_the_rest` |
-| 9 | Duplicate hosts rejected against DB, within a batch, and on unarchive; archived Printers don't reserve hosts | `p2_batch.rs`: `a_later_row_duplicating_an_earlier_rows_host_is_created_without_a_connection`, `a_row_duplicating_an_active_printers_host_is_created_without_a_connection`; `p2_contract_path.rs`: `create_printer_with_a_duplicate_active_host_persists_nothing`; `p2_lifecycle.rs`: `unarchiving_into_a_reclaimed_host_fails_with_duplicate_host`; `p2_migration.rs`: `after_upgrade_a_third_active_printer_on_the_same_host_conflicts` |
+| 9 | Duplicate hosts rejected against DB, within a batch, and on unarchive; archived Printers don't reserve hosts | `p2_batch.rs`: `a_later_row_duplicating_an_earlier_rows_host_is_created_without_a_connection`, `a_row_duplicating_an_active_printers_host_is_created_without_a_connection`; `p2_contract_path.rs`: `create_printer_with_a_duplicate_active_host_persists_nothing`, `first_time_set_printer_connection_to_a_taken_host_is_duplicate_host_without_writing_a_secret`, `replacing_a_connection_with_a_taken_host_is_duplicate_host_without_probing`; `p2_lifecycle.rs`: `unarchiving_into_a_reclaimed_host_fails_with_duplicate_host`; `p2_migration.rs`: `after_upgrade_a_third_active_printer_on_the_same_host_conflicts` |
 | 10 | Shared bed type copied as an independent per-Printer override | `p2_batch.rs`: `each_created_printer_gets_its_own_default_bed_type_override` |
-| 11 | Archive stops supervision, survives restart unsupervised, keeps identity; unarchive restores supervision | `p2_lifecycle.rs`: `archiving_a_connected_printer_stops_supervision_and_preserves_the_connection_and_credential`, `after_archiving_a_restart_never_supervises_the_archived_printer_but_keeps_it_listed`, `unarchiving_restarts_supervision`; `p2_tracer.rs` |
+| 11 | Archive stops supervision, survives restart unsupervised, keeps identity; unarchive restores supervision | `p2_lifecycle.rs`: `archiving_a_connected_printer_stops_supervision_and_preserves_the_connection_and_credential`, `after_archiving_a_restart_never_supervises_the_archived_printer_but_keeps_it_listed`, `unarchiving_restarts_supervision`, `clearing_the_connection_of_an_archived_printer_publishes_no_status`, `supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing`; `p2_tracer.rs` |
 | 12 | Deleting a non-archived Printer fails `LIFECYCLE_BLOCKED`; deleting an archived Printer keeps the delete/credential-cleanup ordering | `p2_lifecycle.rs`: `delete_of_an_active_printer_is_lifecycle_blocked_and_leaves_the_row_untouched`, `deleting_an_archived_printer_succeeds_and_removes_its_credential` |
 | 13 | Replacing a working Connection with a failing one is rejected unless `acceptUnverified` | `p2_contract_path.rs`: `set_printer_connection_probes_before_replacing_a_working_connection` |
 | 14 | Location, start safety, and archive state round-trip through export v2; v1 imports still load | `f1_import_export.rs`: `printers_export_writes_schema_version_2_with_lifecycle_fields`, `printers_import_defaults_lifecycle_fields_for_a_v1_document` |
-| 15 | Frontend tests cover the wizard, batch intake, generation, mapping, retry, Setup tab guards, Monitor location/archive views | `src/printers/batch-intake.test.ts`, `src/printers/host-identity.test.ts`, `src/printers/printer-store.test.ts`, `src/screens/PrinterSetupWizard.test.tsx`, `src/screens/PrinterBatchDialog.test.tsx`, `src/screens/BatchRowsTable.test.tsx`, `src/screens/PrinterSetupPanel.test.tsx`, `src/screens/MonitorToolbar.test.tsx`, `src/monitor/monitor-store.test.ts` — 132 tests across these 9 files, all passing (subset of the 311-test `just test` run above) |
+| 15 | Frontend tests cover the wizard, batch intake, generation, mapping, retry, Setup tab guards, Monitor location/archive views | `src/printers/batch-intake.test.ts`, `src/printers/host-identity.test.ts`, `src/printers/printer-store.test.ts`, `src/screens/PrinterSetupWizard.test.tsx`, `src/screens/PrinterBatchDialog.test.tsx`, `src/screens/BatchRowsTable.test.tsx`, `src/screens/PrinterSetupPanel.test.tsx`, `src/screens/MonitorToolbar.test.tsx`, `src/monitor/monitor-store.test.ts` — 139 tests across these 9 files, all passing (subset of the 321-test `just test` run above) |
 | 16 | The tracer completes through the Tauri path | `p2_tracer.rs` (new; see above) |
 | 17 | Keyboard and viewport checks pass at 1440 × 900 and 1024 × 700 | **Unavailable** — see "Manual verification limitations" below |
 
@@ -136,10 +136,18 @@ cannot operate a launched Tauri window once open.
 - **A missing credential is not a `setupGap`.** Per the design's plan
   clarification 1, `derive_setup_facts`'s `setupGaps` covers
   `missingConnection`, `unsupportedAdapter`, and `unresolvedProfile` only.
-  A Connection whose credential cannot be read at runtime is *not* a setup
-  gap; it surfaces as a runtime authentication error at supervision/probe
-  time (`ConnectionError::Auth` → `AUTHENTICATION_FAILED`), the same as
-  today. This is by design, not a defect.
+  A Connection whose referenced credential cannot be read from the
+  credential store is *not* a setup gap: `supervise_printer` does not start
+  supervision for it, but reconciles the Printer's live status to Setup
+  incomplete (as if it had no usable Connection), and the mutating command
+  (`create_printer`, `set_printer_connection`, `unarchive_printer`) returns
+  a `CREDENTIAL_REQUIRED` operation warning. `setupGaps` stays empty. It
+  does *not* surface as `AUTHENTICATION_FAILED`. This is by design, not a
+  defect.
+- **`ReadinessReason::Archived` exists but is never emitted in P2.** The
+  enum variant (and its generated `"archived"` TypeScript value) is there
+  for P7's eligibility checks. P2 publishes no live status at all for an
+  archived Printer, so no status ever carries this reason.
 - **Batch dialog footer: found and fixed a real layout defect, via static
   CSS review (visual confirmation was unavailable — see above).** A prior
   review flagged that the batch dialog's Create/Cancel/Retry footer could
@@ -243,6 +251,70 @@ across `f0_tauri_path`/`f1_contract_path`/`f1_import_export`/
 The "Automated evidence" and "The tracer" sections above already reflect
 the fixed test's actual, corrected behavior — no stale wording was left
 describing the disproven claim.
+
+## Final review fix wave
+
+The final whole-branch review raised six required findings and five
+smaller accuracy fixes. All were fixed in `67fd705` (backend) and
+`a5796d0` (frontend), each with a covering test first seen failing:
+
+1. **Clearing an archived Printer's Connection published a live status
+   (D6).** `clear_printer_connection` now re-reads the Printer after its
+   commit. For an archived Printer it calls the new
+   `ConnectionManager::discard_connection`, which stops any task, deletes
+   the telemetry snapshot, and publishes removal. Test:
+   `p2_lifecycle.rs::clearing_the_connection_of_an_archived_printer_publishes_no_status`.
+2. **Batch "Retry failed" saved a Connection that had just failed its
+   probe and reported the row as created.** With "Test each Connection
+   before saving it" on, a created row's reconnection now calls
+   `probe_connection` first. If the probe fails, the row stays failed,
+   shows the error, and gets its own "Save anyway" button, which saves with
+   `acceptUnverified`. Editing the row's Connection or the shared
+   credential removes that button. With the toggle off, the Connection is
+   saved directly. `credentialStored` now reflects whether a credential
+   was submitted. Tests: `PrinterBatchDialog.test.tsx` (probe failure,
+   Save anyway, edit drops Save anyway, toggle off).
+3. **A failed delete still closed the dock.** `removePrinter` now resolves
+   with `{ ok: true }` or `{ ok: false, message }` and never rejects.
+   `DeletePrinterDialog` closes and calls `onDeleted` only on success. On
+   failure it stays open and shows the error inline. Tests:
+   `DeletePrinterDialog.test.tsx`, `printer-store.test.ts`.
+4. **"Save anyway" in the Connection panel appeared for any Save error.**
+   It now appears only for probe error codes (`PRINTER_UNREACHABLE`,
+   `TIMEOUT`, `AUTHENTICATION_FAILED`, `PROTOCOL_ERROR`). A material draft
+   change (`connectionDraftChanged`) clears the failed save. Tests:
+   `PrinterConnectionPanel.test.tsx`.
+5. **`set_printer_connection` probed and wrote the secret before checking
+   for a duplicate host.** It now runs the same
+   `find_active_by_host_identity` precheck as `create_printer_with`
+   first. The check excludes the Printer itself and is skipped for archived
+   Printers. Tests: the two `..._taken_host_...` tests in
+   `p2_contract_path.rs` check for `DUPLICATE_HOST`, no factory call, an
+   unchanged credential file, and an unchanged row.
+6. **A concurrent archive could be undone by supervising a stale copy.**
+   The new `setup::supervise_persisted` re-reads the Printer once the
+   reconciliation guard is held. It then supervises the stored row, or
+   stops supervision if the row is gone. `archive_printer`,
+   `unarchive_printer`, `create_printer_with` (and so the batch path) and
+   `set_printer_connection` use it, and `clear_printer_connection` re-reads
+   the same way. Tests:
+   `p2_lifecycle.rs::supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing`,
+   `..._of_a_deleted_printer_removes_its_status`.
+7. This document: validated source, missing-credential wording,
+   `ReadinessReason::Archived` note, and re-run counts.
+8. `StatusMap::publish_removed` now takes one lock for the removal and the
+   epoch bump. The separate `remove` helper was folded in.
+9. Host-identity parity: IPv4-mapped IPv6 vectors (`::ffff:192.168.1.1`,
+   `[::FFFF:C0A8:0101]` → `[::ffff:192.168.1.1]:7125`, Rust's dotted form)
+   were added to the shared fixture. `host-identity.ts` now rewrites the
+   URL parser's hex form to match.
+10. The detail dock lists only blockers for actions it shows: Archive or
+    Unarchive, depending on state, plus Delete.
+11. Batch `toRowError` maps codes outside the row vocabulary to
+    `CREDENTIAL_UNAVAILABLE` (`CREDENTIAL_REQUIRED`),
+    `PERSISTENCE_UNAVAILABLE` (data/migration failures), or `VALIDATION`
+    (everything else). It no longer uses `PROTOCOL_ERROR` for these, and
+    the original message is kept.
 
 ## Files changed in this task
 
