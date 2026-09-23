@@ -1204,8 +1204,8 @@ The following have an owning phase and may not be silently decided elsewhere:
 | Cross-tier type strategy | F1 | Current manual mirrors versus evaluated alternatives |
 | Navigation/deep-link representation | F1/P1 | Shell and notification selection requirements |
 | Operational-state precedence/staleness | P1 | Adapter status fixtures and UX states |
-| `group` to location migration | P1/P2 | Existing persisted files and approved vocabulary |
-| Batch CSV and host matching | P2 | User workflow plus discovery fixtures |
+| `group` to location migration | P1/P2 | Existing persisted files and approved vocabulary — **Resolved (P2)**: no migration exists or is needed. P2's `location` is new, durable Printer data (migration `0003_p2_printer_lifecycle.sql`); it does not derive from or replace any persisted `group` value. |
+| Batch CSV and host matching | P2 | User workflow plus discovery fixtures — **Resolved (P2)**: see the P2 design's D2 (canonical host identity), D10 (CSV/paste intake format and rules), and D12 (discovery mapping). |
 | Slot count/topology source | P3 | Catalog and real-hardware evidence |
 | Weight precision/material taxonomy | P3 | Inventory and slicer requirements |
 | Parser and watcher libraries | P4 | Representative STL/3MF/G-code/platform fixtures |
