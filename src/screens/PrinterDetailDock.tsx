@@ -84,28 +84,51 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
     }
   };
 
-  createEffect(on(() => props.printer.id, (id, previousId) => {
-    // `on()` doesn't dedupe by value -- it reruns whenever the tracked
-    // expression's *dependencies* invalidate, which includes every store
-    // push that replaces this Printer's object (e.g. Archive's own
-    // `refreshEligibility`, a Connection save, a rename), not only an
-    // actual Printer-selection change. Without this guard, any such push
-    // while this dock is open would blow away the eligibility state (and
-    // any in-flight `onArchive`/`onUnarchive` refetch's result) with a
-    // fresh, momentarily-null one for the *same* id.
-    if (id === previousId) return;
-    setUnarchiveError(null);
-    setEligibility(null);
-    setEligibilityError(null);
-    void refreshEligibility(id);
-  }));
+  // Keyed on the *pair* (id, archivedAt), not just id: `on()` doesn't dedupe
+  // by value, so tracking `id` alone reruns on any push that replaces this
+  // Printer's object for reasons that don't matter here (e.g. an unrelated
+  // field edit whose reactive plumbing happens to swap the object identity)
+  // -- refetching would be harmless there, except it can race an in-flight
+  // refetch and flash the eligibility state to null. But archivedAt truly
+  // *can* change out from under this dock while it's open, through a path
+  // that isn't this dock's own Archive/Unarchive (e.g. `importPrinters()`
+  // replacing the whole Printer list), and that case must still refetch --
+  // otherwise Unarchive/Delete… stay stuck showing stale permissions until
+  // the dock is reopened. Comparing both values, not just noticing *a*
+  // rerun, gets both right: skip only when neither actually changed.
+  createEffect(on(
+    () => [props.printer.id, props.printer.archivedAt] as const,
+    ([id, archivedAt], previous) => {
+      const idChanged = !previous || previous[0] !== id;
+      const archivedAtChanged = !previous || previous[1] !== archivedAt;
+      if (!idChanged && !archivedAtChanged) return;
+      if (idChanged) {
+        // A genuine Printer-selection change: every bit of this dock's
+        // lifecycle state belongs to the *previous* Printer and must not
+        // leak into the next one. An archivedAt-only change (same
+        // Printer) leaves `unarchiveError`/`eligibility` alone until the
+        // refetch below actually resolves, per Fix round 2: the
+        // eligibility error clears only on an id change or a successful
+        // refetch, not just because a refetch started.
+        setUnarchiveError(null);
+        setEligibility(null);
+        setEligibilityError(null);
+      }
+      void refreshEligibility(id);
+    },
+  ));
 
+  /** Archiving/unarchiving doesn't call `refreshEligibility` itself on
+   *  success -- the effect above already refetches once the store's
+   *  `archivedAt` push for this Printer lands, and doing it here too would
+   *  double the fetch for the same outcome (Fix round 2). It's only called
+   *  explicitly here on failure paths that don't change `archivedAt` at
+   *  all, where the effect has nothing to react to. */
   async function onArchive() {
     if (actionPending()) return;
     setActionPending(true);
     try {
       await archivePrinter(props.printer.id);
-      await refreshEligibility(props.printer.id);
     } finally {
       setActionPending(false);
     }
@@ -121,7 +144,6 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
     setUnarchiveError(null);
     try {
       await unarchivePrinter(props.printer.id);
-      await refreshEligibility(props.printer.id);
     } catch (e) {
       if (isCommandError(e) && e.code === "DUPLICATE_HOST") {
         const conflictId = e.details?.conflictingPrinterId;

@@ -260,12 +260,56 @@ describe("PrinterDetailDock", () => {
     expect(archivePrinter).toHaveBeenCalledTimes(1);
 
     // Mirrors what the real store push does once archivePrinter succeeds --
-    // PrinterDashboard re-renders this dock from the freshly archived record.
+    // PrinterDashboard re-renders this dock from the freshly archived
+    // record. The (id, archivedAt)-keyed effect (not an explicit call from
+    // onArchive, per Fix round 2) is what refetches eligibility here.
     setCurrent({ ...printer, archivedAt: "2026-09-22T00:00:00.000Z" });
     resolveArchive?.();
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("button", { name: "Unarchive" })).not.toBeDisabled());
     expect(screen.getByRole("button", { name: "Delete…" })).toBeInTheDocument();
+  });
+
+  it("refetches eligibility when the same Printer's archivedAt changes through a non-dock push (e.g. importPrinters()), and the buttons reflect it", async () => {
+    lifecycleEligibility.mockReset()
+      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY)
+      .mockResolvedValueOnce(ARCHIVED_ELIGIBILITY);
+    const [current, setCurrent] = createSignal(printer);
+    render(() => <PrinterDetailDock printer={current()} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    const archiveButton = await screen.findByRole("button", { name: "Archive" });
+    await waitFor(() => expect(archiveButton).not.toBeDisabled());
+    expect(lifecycleEligibility).toHaveBeenCalledTimes(1);
+
+    // Not a dock action -- archivePrinter/unarchivePrinter are never
+    // called. Simulates e.g. importPrinters() replacing the whole Printer
+    // list while this dock is open.
+    setCurrent({ ...printer, archivedAt: "2026-09-22T00:00:00.000Z" });
+
+    await waitFor(() => expect(lifecycleEligibility).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unarchive" })).not.toBeDisabled());
+    expect(screen.getByRole("button", { name: "Delete…" })).toBeInTheDocument();
+    expect(archivePrinter).not.toHaveBeenCalled();
+    expect(unarchivePrinter).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch eligibility for a same-id push that leaves archivedAt unchanged", async () => {
+    lifecycleEligibility.mockReset().mockResolvedValue(ACTIVE_ELIGIBILITY);
+    const [current, setCurrent] = createSignal(printer);
+    render(() => <PrinterDetailDock printer={current()} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    await screen.findByRole("button", { name: "Archive" });
+    await waitFor(() => expect(lifecycleEligibility).toHaveBeenCalledTimes(1));
+
+    // A new object reference for the *same* Printer with the *same*
+    // archivedAt (e.g. a rename pushed from elsewhere) -- must not refetch.
+    setCurrent({ ...printer, name: "North Bay (renamed)" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lifecycleEligibility).toHaveBeenCalledTimes(1);
   });
 });
