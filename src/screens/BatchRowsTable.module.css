@@ -1,0 +1,111 @@
+/* The grid scrolls horizontally inside its own box (spec: at 1024 wide the
+   batch grid scrolls inside the dialog, not the page). Column widths are
+   fixed per mode so every row's independent grid lines up. */
+.scroller {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+}
+
+.table {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+}
+
+.edit {
+  --batch-columns: 2rem 13rem 10rem 11rem 5.5rem;
+}
+
+.connect {
+  --batch-columns: 2rem 9rem 7rem 6.5rem 11rem 5rem 3rem 9rem 11rem;
+}
+
+.results {
+  --batch-columns: 11rem 8rem 11rem 5rem 12rem minmax(16rem, 1fr);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: var(--batch-columns);
+  gap: 0.5rem;
+  align-items: start;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  border-top: none;
+  background-color: var(--f3d-color-surface);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-muted);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.125rem;
+  min-width: 0;
+  min-height: 1.75rem;
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--f3d-type-body-size);
+  color: var(--f3d-color-text);
+}
+
+.muted {
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.preview {
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-text-muted);
+}
+
+.warn {
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-warning);
+}
+
+.error {
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-danger);
+}
+
+.fieldPath {
+  font-family: var(--f3d-type-mono-font);
+  color: var(--f3d-color-text-muted);
+}
+
+.messages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

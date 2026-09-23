@@ -1,11 +1,9 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, Show } from "solid-js";
-import { Button, Combobox, Dialog, RadioGroup, Select, Stepper, TextField } from "../design-system";
-import { listCatalogModels, listCatalogVariants, previewProfile } from "../printers/printer-catalog";
-import { pickDefaultVariant, stripBrandPrefix, suggestUniqueName } from "../printers/printer-identity";
+import { Button, Dialog, RadioGroup, Select, Stepper, TextField } from "../design-system";
+import { suggestUniqueName } from "../printers/printer-identity";
 import { createPrinter, credentialStoreInfo, probeCandidate } from "../printers/printer-store";
 import type {
   CatalogModelSummary,
-  CatalogVariantSummary,
   PrinterProfile,
   ProbeResult,
   ResolvedPrinter,
@@ -19,6 +17,7 @@ import {
   toSubmission,
   type ConnectionDraft,
 } from "./ConnectionFields";
+import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
 import styles from "./PrinterSetupWizard.module.css";
 
 const STEP_ORDER = ["identify", "connect", "operate", "review"] as const;
@@ -30,7 +29,7 @@ const STEP_LABELS: Record<StepId, string> = {
   review: "Review",
 };
 
-const START_SAFETY_OPTIONS = [
+export const START_SAFETY_OPTIONS = [
   { value: "confirmBedClear", label: "Confirm the bed is clear before each start" },
   { value: "unattended", label: "Allow unattended starts" },
 ];
@@ -75,11 +74,8 @@ export interface PrinterSetupWizardProps {
  *  Review) persists anything — every earlier step is free to revisit or
  *  abandon. */
 export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
-  const [models] = createResource(listCatalogModels);
-  const [vendorQuery, setVendorQuery] = createSignal("");
-  const [selectedVendor, setSelectedVendor] = createSignal<string | null>(null);
-  const [selectedModel, setSelectedModel] = createSignal<CatalogModelSummary | null>(null);
-  const [selectedVariant, setSelectedVariant] = createSignal<CatalogVariantSummary | null>(null);
+  const picker = createCatalogPicker();
+  const { models, catalogRef, preview } = picker;
   const [name, setName] = createSignal("");
   const [nameTouched, setNameTouched] = createSignal(false);
   const [location, setLocation] = createSignal("");
@@ -113,10 +109,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
   const existingNames = () => props.existingPrinters.map((printer) => printer.name);
 
   function resetForm() {
-    setSelectedVendor(null);
-    setSelectedModel(null);
-    setSelectedVariant(null);
-    setVendorQuery("");
+    picker.reset();
     setName("");
     setNameTouched(false);
     setLocation("");
@@ -153,57 +146,11 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     const match = loadedModels.find((m) => m.vendor === prefill.vendor && m.model === prefill.model);
     resetForm();
     if (match) {
-      setSelectedVendor(match.vendor);
-      setSelectedModel(match);
+      picker.seed(match);
       setName(suggestUniqueName(match.model, new Set(existingNames())));
     }
     seededThisOpen = true;
   });
-
-  const vendors = createMemo(() => {
-    const seen = new Set<string>();
-    for (const m of models() ?? []) seen.add(m.vendor);
-    return [...seen].sort((a, b) => a.localeCompare(b));
-  });
-
-  const filteredVendors = createMemo(() => {
-    const q = vendorQuery().trim().toLowerCase();
-    const all = vendors();
-    return q ? all.filter((v) => v.toLowerCase().includes(q)) : all;
-  });
-
-  const modelsForVendor = createMemo(() => {
-    const vendor = selectedVendor();
-    return vendor ? (models() ?? []).filter((m) => m.vendor === vendor) : [];
-  });
-
-  const [variants] = createResource(selectedModel, (model) =>
-    model ? listCatalogVariants(model.vendor, model.model) : Promise.resolve([]),
-  );
-
-  // Auto-selects the sole variant, or defaults to 0.4mm, without clobbering
-  // a manual choice the user already made.
-  createEffect(() => {
-    const list = variants();
-    if (!list || list.length === 0 || selectedVariant()) return;
-    setSelectedVariant(pickDefaultVariant(list) ?? null);
-  });
-
-  const catalogRef = createMemo(() => {
-    const model = selectedModel();
-    const variant = selectedVariant();
-    return model && variant
-      ? {
-          vendor: model.vendor,
-          model: model.model,
-          variant: variant.variant,
-          modelId: model.modelId,
-          printerVariant: variant.printerVariant,
-        }
-      : null;
-  });
-
-  const [preview] = createResource(catalogRef, (ref) => (ref ? previewProfile(ref) : Promise.resolve(null)));
 
   // Seeds the bed-type default from the variant's own catalog value (spec
   // D9) until the user picks one themselves, and re-seeds on a later
@@ -214,15 +161,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     setBedType(p.defaultBedType);
   });
 
-  function onSelectVendor(vendor: string) {
-    setSelectedVendor(vendor);
-    setSelectedModel(null);
-    setSelectedVariant(null);
-  }
-
   function onSelectModel(model: CatalogModelSummary) {
-    setSelectedModel(model);
-    setSelectedVariant(null);
     if (!nameTouched()) setName(model.model);
   }
 
@@ -323,34 +262,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
 
         <Show when={step() === "identify"}>
           <div class={styles.form}>
-            <Combobox
-              label="Brand"
-              options={filteredVendors()}
-              value={selectedVendor() ?? undefined}
-              onChange={onSelectVendor}
-              onInputChange={setVendorQuery}
-              placeholder={`Search ${vendors().length} brands...`}
-            />
-            <Show when={selectedVendor()}>
-              <Select
-                label="Model"
-                options={modelsForVendor()}
-                optionValue={(m: CatalogModelSummary) => m.model}
-                optionLabel={(m: CatalogModelSummary) => stripBrandPrefix(m.model, m.vendor)}
-                value={selectedModel() ?? undefined}
-                onChange={onSelectModel}
-              />
-            </Show>
-            <Show when={selectedModel()}>
-              <Select
-                label="Nozzle"
-                options={variants() ?? []}
-                optionValue={(v: CatalogVariantSummary) => v.variant}
-                optionLabel={(v: CatalogVariantSummary) => `${v.printerVariant} mm`}
-                value={selectedVariant() ?? undefined}
-                onChange={setSelectedVariant}
-              />
-            </Show>
+            <CatalogPickerFields picker={picker} onModelSelected={onSelectModel} />
             <TextField
               label="Name"
               value={name()}

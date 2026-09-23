@@ -228,6 +228,18 @@ describe("Dialog", () => {
     await fireEvent.click(screen.getByText("Open"));
     await waitFor(() => expect(screen.getByText("Confirm")).toBeInTheDocument());
   });
+
+  it("renders no trigger button when trigger is omitted and is driven by `open` alone", async () => {
+    render(() => (
+      <Dialog title="Confirm" open>
+        Body content
+      </Dialog>
+    ));
+
+    expect(await screen.findByText("Body content")).toBeInTheDocument();
+    // Only the Close button — no trigger.
+    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Close"]);
+  });
 });
 
 describe("Popover", () => {

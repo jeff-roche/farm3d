@@ -14,7 +14,7 @@ import styles from "./ConnectionFields.module.css";
  *  entries would need a prop `Select` does not have (verified: `SelectProps`
  *  exposes no `optionDisabled`), and offering a kind that errors on save is
  *  worse than not offering it. */
-const KINDS = [{ value: "moonraker", label: "Moonraker (Klipper)" }];
+export const KINDS = [{ value: "moonraker", label: "Moonraker (Klipper)" }];
 
 const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
 

@@ -1,12 +1,14 @@
 import { Dialog as KDialog } from "@kobalte/core/dialog";
-import type { JSX, ParentProps } from "solid-js";
+import { Show, type JSX, type ParentProps } from "solid-js";
 import styles from "./Dialog.module.css";
 
 export interface DialogProps extends ParentProps {
   title: string;
   description?: string;
-  /** Rendered as the content of Kobalte's own trigger <button> — pass text/icon content, not another button. */
-  trigger: JSX.Element;
+  /** Rendered as the content of Kobalte's own trigger <button> — pass text/icon content, not another button.
+   *  Omit it for a dialog opened only through the controlled `open` prop (e.g. a confirmation raised
+   *  from another dialog), which then renders no trigger at all. */
+  trigger?: JSX.Element;
   /** Extra class(es) for Kobalte's own trigger <button>, appended after the default trigger styling — e.g. to make it look like a primary Button. */
   triggerClass?: string;
   open?: boolean;
@@ -16,9 +18,11 @@ export interface DialogProps extends ParentProps {
 export function Dialog(props: DialogProps) {
   return (
     <KDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <KDialog.Trigger class={[styles.trigger, props.triggerClass].filter(Boolean).join(" ")}>
-        {props.trigger}
-      </KDialog.Trigger>
+      <Show when={props.trigger !== undefined}>
+        <KDialog.Trigger class={[styles.trigger, props.triggerClass].filter(Boolean).join(" ")}>
+          {props.trigger}
+        </KDialog.Trigger>
+      </Show>
       <KDialog.Portal>
         <KDialog.Overlay class={styles.overlay} />
         <KDialog.Content class={styles.content}>
