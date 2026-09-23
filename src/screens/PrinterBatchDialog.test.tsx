@@ -218,6 +218,17 @@ describe("PrinterBatchDialog — Rows step", () => {
     await waitFor(() => expect(nameValues()).toEqual(["Gamma"]));
   });
 
+  it("opens the CSV file picker from a design-system button", async () => {
+    renderDialog();
+    await toRowsStep();
+    const input = screen.getByLabelText("Import CSV file") as HTMLInputElement;
+    const click = vi.spyOn(input, "click").mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Import CSV file…" }));
+
+    expect(click).toHaveBeenCalledOnce();
+  });
+
   it("edits rows inline and removes them", async () => {
     renderDialog();
     await toRowsStep();

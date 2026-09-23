@@ -57,8 +57,22 @@
   flex: 1 1 10rem;
 }
 
+/* Wide enough that "Quantity per location" stays on one line, so the
+   field lines up with its neighbours. */
 .inline > .narrow {
-  flex: 0 0 7rem;
+  flex: 0 0 10rem;
+}
+
+/* Fields with and without a description line share this row, so align
+   their labels rather than their (differently offset) bottoms. */
+.alignTop {
+  align-items: flex-start;
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .checkboxField {
@@ -66,20 +80,8 @@
   align-self: center;
 }
 
-.fileLabel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-family: var(--f3d-type-label-font);
-  font-size: var(--f3d-type-label-size);
-  font-weight: var(--f3d-type-label-weight);
-  color: var(--f3d-color-text-muted);
-}
-
 .fileInput {
-  font-family: var(--f3d-type-body-font);
-  font-size: var(--f3d-type-body-small-size);
-  color: var(--f3d-color-text);
+  display: none;
 }
 
 .issues {

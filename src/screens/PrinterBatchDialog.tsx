@@ -271,6 +271,8 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     if (applyIntake(pasteText())) setPasteText("");
   }
 
+  let fileInput: HTMLInputElement | undefined;
+
   async function onFileChosen(input: HTMLInputElement) {
     const file = input.files?.[0];
     if (!file) return;
@@ -582,7 +584,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
             <div class={styles.intake}>
               <section class={styles.section} aria-label="Generate rows">
                 <span class={styles.sectionTitle}>Generate</span>
-                <div class={styles.inline}>
+                <div class={[styles.inline, styles.alignTop].join(" ")}>
                   <TextField
                     label="Quantity per location"
                     type="number"
@@ -626,19 +628,23 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                   placeholder={"name,location,host,port,protocol,tls"}
                   description="A header row is required. Credentials are never imported."
                 />
-                <div class={styles.inline}>
+                <div class={styles.buttonRow}>
                   <Button variant="secondary" disabled={pasteText().trim() === ""} onClick={onAddPasted}>
                     Add pasted rows
                   </Button>
-                  <label class={styles.fileLabel}>
-                    Import CSV file
-                    <input
-                      type="file"
-                      accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
-                      class={styles.fileInput}
-                      onChange={(e) => void onFileChosen(e.currentTarget)}
-                    />
-                  </label>
+                  {/* The native file input can't take design-system styling, so
+                      it stays hidden and a Button opens its picker. */}
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+                    aria-label="Import CSV file"
+                    class={styles.fileInput}
+                    onChange={(e) => void onFileChosen(e.currentTarget)}
+                  />
+                  <Button variant="secondary" onClick={() => fileInput?.click()}>
+                    Import CSV file…
+                  </Button>
                 </div>
                 <Show when={intakeErrors().length > 0}>
                   <ul class={[styles.issues, styles.error].join(" ")} role="alert">
