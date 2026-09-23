@@ -2,12 +2,13 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** `a0735e5` (`feat: let users remove a Printer's
-stored credentials`), the last code commit on `feature/p2-printer-lifecycle`,
-after the final whole-branch review fix wave and the PR follow-ups (see
-"Final review fix wave" and "PR follow-ups" below). The original
-verification pass ran against `97b27d9`; every command below was re-run
-against `a0735e5`.
+**Validated source:** `807447c` (`style: show the archive notice as a
+warning, not an error`), the last code commit on
+`feature/p2-printer-lifecycle`. It follows the final whole-branch review
+fix wave, the PR follow-ups, and the browser verification pass (see "Final
+review fix wave", "PR follow-ups", and "Visual and keyboard verification"
+below). The original verification pass ran against `97b27d9`; every
+command below was re-run against `807447c`.
 Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
@@ -15,7 +16,7 @@ Covers Tasks 1–12 (P2 in full).
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 32 files, 329 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
+| `just test` | Passed: 32 files, 332 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
 | `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) — the frontend's generated contracts already match the Rust side. |
 
@@ -79,51 +80,85 @@ drives the real `tauri::test` IPC path in one test:
 | 14 | Location, start safety, and archive state round-trip through export v2; v1 imports still load | `f1_import_export.rs`: `printers_export_writes_schema_version_2_with_lifecycle_fields`, `printers_import_defaults_lifecycle_fields_for_a_v1_document` |
 | 15 | Frontend tests cover the wizard, batch intake, generation, mapping, retry, Setup tab guards, Monitor location/archive views | `src/printers/batch-intake.test.ts`, `src/printers/host-identity.test.ts`, `src/printers/printer-store.test.ts`, `src/screens/PrinterSetupWizard.test.tsx`, `src/screens/PrinterBatchDialog.test.tsx`, `src/screens/BatchRowsTable.test.tsx`, `src/screens/PrinterSetupPanel.test.tsx`, `src/screens/MonitorToolbar.test.tsx`, `src/monitor/monitor-store.test.ts` — 139 tests across these 9 files, all passing (subset of the 321-test `just test` run above) |
 | 16 | The tracer completes through the Tauri path | `p2_tracer.rs` (new; see above) |
-| 17 | Keyboard and viewport checks pass at 1440 × 900 and 1024 × 700 | **Unavailable** — see "Manual verification limitations" below |
+| 17 | Keyboard and viewport checks pass at 1440 × 900 and 1024 × 700 | **Passed in a browser against `just web`**, after the fixes listed in "Visual and keyboard verification" below. The native Tauri window and real hardware remain **unavailable**. |
 
-## Manual verification limitations
+## Visual and keyboard verification
 
-Per Ruling R5, this non-interactive session cannot drive the native Tauri
-window, so the plan was to check layout and keyboard operation against
-`just web` (frontend-only, browser at `http://localhost:1420`) using the
-Playwright browser tools.
+The first verification round could not drive a browser: Playwright's Chrome
+launch hung on its CDP pipe handshake in that environment. On a later run
+Playwright launched normally, and the checks below were done in Chrome
+against `npm run dev` (`http://localhost:1420`) at 1440 × 900 and
+1024 × 700.
 
-`just web` itself started cleanly (`vite v6.4.3 ready`, listening on
-`http://localhost:1420/`), confirming the web-mode dev server is healthy.
-However, every attempt to drive a browser against it failed at the browser
-*launch* step, before any page load: `mcp__playwright__browser_navigate`
-timed out after 180 s three times in a row, each time with Chrome launched
-(`--remote-debugging-pipe ... about:blank`) but never completing its CDP
-handshake (no renderer/GPU subprocess ever spawned). To rule out an
-MCP-specific problem, the same launch was reproduced directly from the
-shell — `chrome --remote-debugging-pipe --user-data-dir=... about:blank`
-with file descriptors 3/4 provided — and it hung identically (`timeout`
-killed it at 15 s with no CDP output on fd 4), while the same Chrome binary
-launched fine with a TCP `--remote-debugging-port` instead. This points to
-a pipe-transport-specific incompatibility in this sandboxed environment,
-not a flaky one-off; retrying further would not have changed the outcome.
+`just web` has no Rust backend, so it covers only the web-mode fallbacks.
+For the states that need desktop data, the page was loaded with a small
+in-page mock of the Tauri IPC layer (`window.__TAURI_INTERNALS__`) in
+place of the backend. Those states are: a stored credential, an archived
+Printer, the upgrade's duplicate-host notice, and lifecycle eligibility.
+The mock replays the command contracts. It is not the Rust backend, so it
+verifies rendering and interaction, not backend behavior.
 
-Because of this, the following are recorded as **unavailable, not passed**,
-exactly as the P1 doc records its equivalent gaps:
+Checked, with screenshots in `docs/screenshots/p2-*.png`:
 
-- Wide 1440 × 900 and compact 1024 × 700 walkthroughs of the setup wizard,
-  the "Add Printers…" batch dialog (row generation, Bay A/Bay B, create),
-  the Monitor's Location section, a Printer's Setup tab archive action and
-  the Archived filter.
-- The batch dialog footer's reachability and the batch grid's horizontal
-  (not page) scroll at 1024 × 700, in an actual rendered browser.
-- The keyboard-only pass (Tab/Enter/Space/Escape) through the wizard.
-- `docs/screenshots/p2-*.png` — none were captured; no browser session ever
-  reached a page to screenshot.
+- **Monitor:** cards at both sizes, the Location grouping with "No
+  location" last, the Archived filter, and the toolbar wrapping at 1024.
+- **Setup wizard:** all four steps, driven by keyboard (Brand combobox,
+  Model/Nozzle Selects, Next); a Profile-only save lands under "Bay A".
+- **Batch dialog:** Shared → Rows (2 per location across Bay A, Bay B) →
+  Connect → Review → Create. It creates 4 Setup incomplete Printers, the
+  footer stays reachable, and the row grid scrolls horizontally inside the
+  dialog.
+- **Detail dock:** the Setup tab's Location, Start safety, Connection
+  actions, and Archive with its delete blocker. An archived Printer shows
+  Unarchive and Delete…, and the delete dialog needs the exact name.
+  Escape closes it.
+- **Remove credentials:** focus moves into the confirmation dialog, and it
+  resubmits the saved Connection with `credential: ""`. Afterwards the
+  button disappears and the API key hint reverts to "Optional".
+- **Archive notice:** shown after startup and dismissible.
+- **Keyboard:** Tab order from Search runs through the filters, Monitor
+  section, density, Import, Export, and Add Printers…
 
-No real Moonraker host or Printer hardware was available, so live
-connected-Printer probing/supervision also remains **unavailable**, as in
-P1 — every probe and supervision path above is covered by the injected
-fake connection factory instead.
+The pass found five defects. Each is fixed in its own commit, with a
+failing test first where jsdom can observe it:
 
-The native desktop window (`just dev`) was not attempted this round, for
-the same reason P1 recorded it as unavailable: a non-interactive session
-cannot operate a launched Tauri window once open.
+1. **Monitor cards were clipped to one row** (`26616af`, a P1 regression
+   visible in every P2 Monitor view). Each card is a design-system Button
+   and inherited its fixed 1.75rem height. The Printer name and readings
+   spilled into the next section. `.card` now sets `height: auto`.
+2. **Kind was blank for 288 catalog variants** (`acbd84f`). The catalog's
+   `suggestedHostType` names hosts this build has no adapter for, such as
+   `prusalink` and `octoprint`. The wizard and the Connection tab seeded
+   Kind with them, so the Select showed nothing, and saving would store a
+   Connection that could only be Setup incomplete. Suggested kinds outside
+   `KINDS` are now ignored, and Kind falls back to Moonraker. Tests are in
+   `ConnectionFields.test.tsx` and `PrinterConnectionPanel.test.tsx`.
+3. **The bed-type Select was blank for a catalog default of `""`**
+   (`cd848d9`). Kobalte treats `""` as no selection, so the wizard and
+   batch dialog showed an empty field, while the Profile panel already
+   used a "Default" placeholder. Both now do the same. Test:
+   `PrinterSetupWizard.test.tsx`.
+4. **Rows showed through below the batch dialog's sticky footer**
+   (`d5ad6a1`). The footer stuck inside the dialog's 1rem scroll padding.
+   It is now pinned to the scroll edge, and the padding is added back.
+5. **The archive notice was styled as an error** (`807447c`). It is
+   advisory, so it now uses `--f3d-color-warning` instead of the danger
+   color.
+
+Still **unavailable**:
+
+- The native desktop window (`just dev`). The non-interactive session
+  cannot operate a Tauri window.
+- Live connected-Printer probing and supervision against a real Moonraker
+  host. No hardware was available, so these paths are covered only by the
+  injected connection factory in the Rust tests.
+
+Cosmetic observations, not fixed:
+
+- On the Rows step, the "Quantity per location" label wraps onto two lines
+  at 1024 px, and the CSV import is a native, unstyled file input.
+- The dock's "Status" and "Setup" tab labels have almost no gap between
+  them (P1 styling).
 
 ## Deviations and findings
 
@@ -172,8 +207,9 @@ cannot operate a launched Tauri window once open.
   (`PrinterBatchDialog.test.tsx`, `BatchRowsTable.test.tsx`, 35 tests) were
   re-run after the change and still pass; jsdom does not compute CSS
   `position: sticky`, so this fix's actual on-screen effect could not be
-  asserted by an automated test and remains part of the unavailable
-  manual-viewport verification above, not confirmed visually.
+  asserted by an automated test. The later browser pass confirmed the
+  footer stays reachable and found a follow-up gap beneath it (fix 4 in
+  "Visual and keyboard verification" above).
 
 ## Fix round 1: the restart-resupervision assertion was a false positive
 
