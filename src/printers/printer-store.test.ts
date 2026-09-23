@@ -144,6 +144,76 @@ describe("printer-store", () => {
       ]);
     });
 
+    it("explains Printers an import archived for sharing a host", async () => {
+      const kept = { ...structuredClone(A_PRINTER_RECORD), id: "prn-a", name: "Voron A" };
+      const archived = {
+        ...structuredClone(A_PRINTER_RECORD), id: "prn-b", name: "Voron B", archivedAt: "2026-09-23T00:00:00Z",
+      };
+      tauriMock.invoke.mockResolvedValue({
+        contractVersion: 1,
+        data: {
+          status: "applied", printers: [kept, archived], createdCount: 2, updatedCount: 0, deletedCount: 0,
+          warnings: [{ code: "DUPLICATE_HOST_ARCHIVED", entityId: "prn-b" }],
+        },
+      });
+      const { importPrinters, printerArchiveNotice, dismissPrinterArchiveNotice } = await import("./printer-store");
+
+      await importPrinters();
+
+      expect(printerArchiveNotice()).toBe(
+        "Archived on import because it shares a host with another Printer: Voron B. " +
+          "Change its host, then unarchive it.",
+      );
+      dismissPrinterArchiveNotice();
+      expect(printerArchiveNotice()).toBeNull();
+    });
+
+    it("explains Printers the upgrade archived until the notice is dismissed", async () => {
+      const storage = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => void storage.set(key, value),
+      });
+      const kept = { ...structuredClone(A_PRINTER_RECORD), id: "prn-a", name: "Voron A" };
+      const archived = {
+        ...structuredClone(A_PRINTER_RECORD), id: "prn-b", name: "Voron B", archivedAt: "2026-09-23T00:00:00Z",
+      };
+      const archives = [
+        { warningId: "w-1", archivedPrinterId: "prn-b", keptPrinterId: "prn-a" },
+        // A Printer the user already unarchived needs no explanation.
+        { warningId: "w-2", archivedPrinterId: "prn-a", keptPrinterId: "prn-b" },
+      ];
+      tauriMock.invoke.mockImplementation(async (name: string) => ({
+        contractVersion: 1,
+        data: name === "list_printers" ? [kept, archived] : archives,
+      }));
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+
+      await store.loadDuplicateHostArchives();
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("list_duplicate_host_archives", { contractVersion: 1 });
+      expect(store.printerArchiveNotice()).toBe(
+        "Archived during the upgrade because it shares a host with another Printer: Voron B (same host as Voron A). " +
+          "Change its host, then unarchive it.",
+      );
+      store.dismissPrinterArchiveNotice();
+      await store.loadDuplicateHostArchives();
+      expect(store.printerArchiveNotice()).toBeNull();
+    });
+
+    it("does not surface a failed archive-notice read as a store error", async () => {
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "Storage is unavailable.", recovery: [], retryable: true,
+      });
+      const { loadDuplicateHostArchives, printerArchiveNotice, printerStoreError } = await import("./printer-store");
+
+      await loadDuplicateHostArchives();
+
+      expect(printerArchiveNotice()).toBeNull();
+      expect(printerStoreError()).toBeNull();
+    });
+
     it("sorts import revision preconditions by exact UTF-8 bytes", async () => {
       const astral = { ...structuredClone(A_PRINTER_RECORD), id: "\u{10000}", revision: 4 };
       const privateUse = { ...structuredClone(A_PRINTER_RECORD), id: "\u{e000}", revision: 3 };

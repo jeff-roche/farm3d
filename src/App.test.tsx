@@ -11,9 +11,12 @@ const appState = vi.hoisted(() => ({
   removePrinter: vi.fn(),
   importPrinters: vi.fn(),
   exportPrinters: vi.fn(),
+  loadDuplicateHostArchives: vi.fn(),
+  dismissPrinterArchiveNotice: vi.fn(),
 }));
 
 const [syncState, setSyncState] = createSignal("syncing");
+const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
 
 vi.mock("./settings/settings-store", () => ({
   loadSettings: appState.loadSettings,
@@ -21,7 +24,10 @@ vi.mock("./settings/settings-store", () => ({
 }));
 
 vi.mock("./printers/printer-store", () => ({
+  dismissPrinterArchiveNotice: appState.dismissPrinterArchiveNotice,
   dismissPrinterStoreError: vi.fn(),
+  loadDuplicateHostArchives: appState.loadDuplicateHostArchives,
+  printerArchiveNotice: archiveNotice,
   exportPrinters: appState.exportPrinters,
   importPrinters: appState.importPrinters,
   loadPrinters: appState.loadPrinters,
@@ -134,6 +140,9 @@ beforeEach(() => {
   appState.removePrinter.mockReset();
   appState.importPrinters.mockReset().mockResolvedValue({ status: "applied" });
   appState.exportPrinters.mockReset().mockResolvedValue({ status: "exported" });
+  appState.loadDuplicateHostArchives.mockReset().mockResolvedValue(undefined);
+  appState.dismissPrinterArchiveNotice.mockReset().mockImplementation(() => setArchiveNotice(null));
+  setArchiveNotice(null);
   setSyncState("syncing");
   window.location.hash = "";
 });
@@ -208,6 +217,22 @@ describe("App", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Live Printer status could not be started.");
     expect(screen.getByRole("button", { name: "Retry startup" })).toBeInTheDocument();
+  });
+
+  it("reads duplicate-host archives after Printers load and shows a dismissible notice", async () => {
+    appState.loadDuplicateHostArchives.mockImplementation(async () => {
+      expect(appState.loadPrinters).toHaveBeenCalled();
+      setArchiveNotice("Archived during the upgrade because it shares a host with another Printer: Voron B.");
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    const notice = await screen.findByText(/shares a host with another Printer: Voron B\./);
+    expect(notice.closest("[role=status]")).not.toBeNull();
+    screen.getByRole("button", { name: "Dismiss" }).click();
+    expect(appState.dismissPrinterArchiveNotice).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByText(/shares a host/)).not.toBeInTheDocument());
   });
 
   it("updates Monitor sync state after listener reconciliation", async () => {

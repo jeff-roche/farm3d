@@ -31,6 +31,8 @@ interface PrinterStoreState {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
   retryable: boolean;
+  /** Explains Printers archived automatically for sharing a host (D3). */
+  archiveNotice: { message: string; dismissKeys: string[] } | null;
 }
 function compareUtf8(left: string, right: string): number {
   const encoder = new TextEncoder();
@@ -48,6 +50,7 @@ const [state, setState] = createStore<PrinterStoreState>({
   status: "idle",
   error: null,
   retryable: false,
+  archiveNotice: null,
 });
 let statusStore: ReturnType<typeof createPrinterStatusStore> | undefined;
 const [statusStoreRevision, setStatusStoreRevision] = createSignal(0);
@@ -57,6 +60,7 @@ export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
+export const printerArchiveNotice = () => state.archiveNotice?.message ?? null;
 export const printerStatusSyncState = () => {
   statusStoreRevision();
   return statusStore?.syncState() ?? "syncing";
@@ -83,6 +87,71 @@ export function reportError(e: unknown): void {
 
 export function dismissPrinterStoreError(): void {
   setState({ error: null, retryable: false });
+}
+
+const DISMISSED_ARCHIVES_KEY = "farm3d:dismissed-duplicate-host-archives";
+
+function dismissedArchiveIds(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(DISMISSED_ARCHIVES_KEY) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function archiveNoticeMessage(cause: string, names: string[]): string {
+  const one = names.length === 1;
+  return (
+    `Archived ${cause} because ${one ? "it shares" : "they share"} a host with another Printer: ${names.join(", ")}. ` +
+    `Change ${one ? "its host" : "their hosts"}, then unarchive ${one ? "it" : "them"}.`
+  );
+}
+
+/** Dismisses the archive notice. A notice from the upgrade stays dismissed
+ *  across restarts (its ledger ids are remembered in localStorage). */
+export function dismissPrinterArchiveNotice(): void {
+  const keys = state.archiveNotice?.dismissKeys ?? [];
+  if (keys.length > 0) {
+    try {
+      const dismissed = dismissedArchiveIds();
+      for (const key of keys) dismissed.add(key);
+      window.localStorage.setItem(DISMISSED_ARCHIVES_KEY, JSON.stringify([...dismissed]));
+    } catch {
+      // Storage unavailable: the notice returns next launch, which is harmless.
+    }
+  }
+  setState({ archiveNotice: null });
+}
+
+/** Reads the Printers the v3 upgrade archived for sharing a host and, for
+ *  those still archived and not yet dismissed, raises the archive notice.
+ *  Advisory only: a failed read is ignored rather than raised as an error. */
+export async function loadDuplicateHostArchives(): Promise<void> {
+  if (!desktopAvailable()) return;
+  let archives;
+  try {
+    archives = await command("list_duplicate_host_archives");
+  } catch {
+    return;
+  }
+  const dismissed = dismissedArchiveIds();
+  const byId = new Map(state.printers.map((printer) => [printer.id, printer]));
+  const pending = archives.filter(
+    (archive) => !dismissed.has(archive.warningId) && byId.get(archive.archivedPrinterId)?.archivedAt,
+  );
+  if (pending.length === 0) return;
+  const names = pending.map((archive) => {
+    const name = byId.get(archive.archivedPrinterId)!.name;
+    const kept = byId.get(archive.keptPrinterId)?.name;
+    return kept ? `${name} (same host as ${kept})` : name;
+  });
+  setState({
+    archiveNotice: {
+      message: archiveNoticeMessage("during the upgrade", names),
+      dismissKeys: pending.map((archive) => archive.warningId),
+    },
+  });
 }
 
 const EMPTY_PROFILE: PrinterProfile = {
@@ -350,7 +419,7 @@ export async function rebindPrinter(id: string, catalogRef: CatalogRef): Promise
     setState("printers", (p) => p.id === id, (p) => ({
       ...p,
       catalogRef: match.catalogRef,
-      catalogStatus: "ok",
+      catalogStatus: "ok" as const,
       modelLabel: match.modelLabel,
       variantLabel: match.variantLabel,
       profile: match.profile,
@@ -406,6 +475,13 @@ export async function importPrinters(): Promise<PrintersImportOutcome | undefine
         return runtimeStatus === undefined ? resolved : { ...resolved, runtimeStatus };
       }));
       statusStore?.prune();
+      const archivedIds = new Set(
+        result.warnings.filter((warning) => warning.code === "DUPLICATE_HOST_ARCHIVED").map((warning) => warning.entityId),
+      );
+      const names = result.printers.filter((record) => archivedIds.has(record.id)).map((record) => record.name);
+      if (names.length > 0) {
+        setState({ archiveNotice: { message: archiveNoticeMessage("on import", names), dismissKeys: [] } });
+      }
     }
     return result;
   } catch (e) {

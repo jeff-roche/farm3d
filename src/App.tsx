@@ -6,10 +6,13 @@ import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import {
+  dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
   exportPrinters,
   importPrinters,
+  loadDuplicateHostArchives,
   loadPrinters,
+  printerArchiveNotice,
   printers,
   printerStoreError,
   printerStoreRetryable,
@@ -106,6 +109,7 @@ function App() {
           return;
         }
         if (disposed || generation !== startupGeneration) return;
+        void loadDuplicateHostArchives();
         setIsFirstRun(isFirstFarmVisit() && printers().length === 0);
         markFarmVisited();
         setMonitorStore(createMonitorStore({
@@ -179,6 +183,16 @@ function App() {
               Retry startup
             </Button>
             <Button variant="ghost" onClick={() => setStatusStartupError(null)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
+      <Show when={printerArchiveNotice()}>
+        {(message) => (
+          <div class={styles.errorBanner} role="status">
+            <p class={styles.errorMessage}>{message()}</p>
+            <Button variant="ghost" onClick={dismissPrinterArchiveNotice}>
               Dismiss
             </Button>
           </div>

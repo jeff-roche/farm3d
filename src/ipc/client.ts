@@ -35,6 +35,10 @@ type CommandMap = {
   ];
   archive_printer: [Contracts.ArchivePrinterRequest, Contracts.ArchivePrinterResult];
   unarchive_printer: [Contracts.UnarchivePrinterRequest, Contracts.UnarchivePrinterResult];
+  list_duplicate_host_archives: [
+    Contracts.ListDuplicateHostArchivesRequest,
+    Contracts.ListDuplicateHostArchivesResult,
+  ];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;
