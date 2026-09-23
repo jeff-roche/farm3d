@@ -309,6 +309,9 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
               options={bedTypeOptionsFor(bedType())}
               optionLabel={bedTypeLabel}
               value={bedType()}
+              // Kobalte treats "" as no selection, so the catalog's blank bed type
+              // needs the placeholder to read "Default" (as in PrinterProfilePanel).
+              placeholder={bedTypeLabel("")}
               onChange={(v) => {
                 setBedTypeTouched(true);
                 setBedType(v);

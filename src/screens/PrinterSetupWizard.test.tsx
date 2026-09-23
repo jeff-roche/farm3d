@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import type { ResolvedPrinter } from "../printers/types";
 
@@ -288,6 +288,22 @@ describe("PrinterSetupWizard — Operate", () => {
     const bedTypeTrigger = screen.getByRole("button", { name: /Bed type/ });
     await fireEvent.pointerDown(bedTypeTrigger, { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Textured PEI Plate")).toBeInTheDocument();
+  });
+
+  it("shows Default in the closed bed-type Select when the catalog's bed type is blank", async () => {
+    const original = previewProfile.getMockImplementation();
+    onTestFinished(() => void previewProfile.mockImplementation(original!));
+    previewProfile.mockImplementation(() =>
+      Promise.resolve({
+        bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+        printableHeightMm: 256, nozzleDiameterMm: [0.4], bedExcludeAreas: [], defaultBedType: "",
+        nozzleType: "brass", gcodeFlavor: "marlin", hasAuxiliaryFan: false, supportsAirFiltration: false,
+        supportsMultiFilament: false, suggestedHostType: null,
+      }),
+    );
+    await reachOperate();
+
+    expect(screen.getByRole("button", { name: /Bed type/ })).toHaveTextContent("Default");
   });
 
   it("labels the catalog's blank bed type as Default, not a blank list item", async () => {
