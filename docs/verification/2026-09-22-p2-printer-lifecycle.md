@@ -38,15 +38,25 @@ drives the real `tauri::test` IPC path in one test:
    active supervision at archive time).
 5. A simulated restart: a brand-new `ConnectionManager`/`CredentialStore`
    driven through the same `restore_persisted_connections` function
-   `lib.rs` uses at real startup, over the *same* `Storage` — mirroring
-   `p2_lifecycle.rs`'s existing restart test.
+   `lib.rs` uses at real startup, over the *same* `Storage` and the *same*
+   credentials directory the original services wrote the connected
+   Printer's secret to (production reopens the same on-disk credential
+   store at restart, not a fresh one) — mirroring `p2_lifecycle.rs`'s
+   existing restart test.
 6. After restart: `list_printers` still returns all 6 Printers. The
    archived one keeps its id and name, has `archivedAt` set, and is absent
    from the restarted manager's `statuses()` map (no status). The other 5
    are present with `archivedAt: null` and the correct `setupGaps`
    (`[]` for the connected Printer, `["missingConnection"]` for the four
-   Profile-only/incomplete ones); the resupervised connected Printer is
-   present in the restarted manager's `statuses()`.
+   Profile-only/incomplete ones). Resupervision of the connected Printer is
+   proven two ways, not merely inferred from status presence (see "Fix
+   round 1" below for why that distinction matters): its status has
+   `connectionState: "connecting"` — which only `ConnectionManager::start`
+   ever sets, never the reconcile path a Printer with no usable Connection
+   takes — and the restart-scoped fake connection factory was actually
+   invoked, exactly once, for host `voron.local` and no other host (every
+   other Printer either has no Connection at all, or, for the archived
+   one, is stopped rather than started).
 
 ### Acceptance criteria 1–17, mapped to automated evidence
 
@@ -156,9 +166,88 @@ cannot operate a launched Tauri window once open.
   asserted by an automated test and remains part of the unavailable
   manual-viewport verification above, not confirmed visually.
 
+## Fix round 1: the restart-resupervision assertion was a false positive
+
+Review found a Critical issue in the tracer's restart step: `restart_credentials`
+was built from a brand-new, empty temp directory rather than the original
+`credentials_dir` the connected Printer's secret had been written to. On
+restart, `supervise_printer` therefore always took its `CredentialRequired`
+branch for the connected Printer — which still calls `reconcile_printer`
+and still inserts a status. The old assertion,
+`restart_manager.statuses().contains_key(&connected_id)`, is true for
+*every* non-archived Printer regardless of whether supervision actually
+started, so it proved nothing beyond "this Printer exists and isn't
+archived."
+
+**Fix**, in `src-tauri/tests/p2_tracer.rs`:
+
+1. `restart_credentials` now reopens the *same* `credentials_dir` the
+   original `common::runtime` call used, exactly as production reopens the
+   same on-disk credential store at restart rather than a fresh one.
+2. The restart `ConnectionManager` is now built with a recording factory
+   (`recording_factory`, new in this file, mirroring the pattern already
+   used in `p2_lifecycle.rs`/`p2_contract_path.rs`) instead of the plain
+   `factory`, so the test can observe which hosts actually reach it.
+3. The assertion is now two discriminating checks instead of one
+   non-discriminating one:
+   - `restart_manager.statuses()[&connected_id].connection_state ==
+     ConnectionState::Connecting` — only `ConnectionManager::start` ever
+     sets `Connecting`, and it does so synchronously before spawning the
+     task that calls the factory, so this is available immediately with
+     no timing race. The reconcile path this bug took instead leaves
+     `Offline` (a fresh manager's default) with `operationalState:
+     SetupIncomplete`.
+   - The restart factory is asserted (via a 2 s `recv_timeout`, since the
+     actual factory call happens inside the asynchronously spawned task)
+     to have been called exactly once, for host `voron.local` — proving
+     the factory was reached at all — and never again
+     (`expect_no_more_calls`), which also rules out the Profile-only
+     Printer, the three `createdSetupIncomplete` rows (none of which have
+     a Connection to supervise), and the archived Printer (which is
+     stopped, not started) ever reaching it.
+
+**RED/GREEN proof that the fix is discriminating:** I temporarily
+reverted step 1 alone (restart credentials pointed back at a fresh empty
+`tempfile::tempdir()`, everything else unchanged) and re-ran `cargo test
+--test p2_tracer`:
+
+```
+thread '...' panicked at tests/p2_tracer.rs:303:5:
+assertion `left == right` failed: the connected Printer must be
+resupervised (Connecting), not just reconciled: PrinterStatus {
+connection_state: Offline, ... operational_state: SetupIncomplete,
+readiness: PrinterReadiness { state: NotReady, reason:
+Some(SetupIncomplete) }, ... }
+  left: Offline
+ right: Connecting
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+RED, as expected — the new assertion catches exactly the bug review
+found. I then restored the fix (diffed clean against the pre-revert file)
+and re-ran:
+
+```
+test the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+GREEN. `source "$HOME/.cargo/env" && just test-rust` was then re-run in
+full: same counts as the original verification pass (255 library tests, 1
+ignored; 28 export-contract, 1 ignored; 5/3/11/5/7/12/15/12/7/5/**1**/3
+across `f0_tauri_path`/`f1_contract_path`/`f1_import_export`/
+`f1_migration`/`f1_repositories`/`f1_residual_acceptance`/`p2_batch`/
+`p2_contract_path`/`p2_lifecycle`/`p2_migration`/**`p2_tracer`**/
+`snapshot`), all passing, no regressions.
+
+The "Automated evidence" and "The tracer" sections above already reflect
+the fixed test's actual, corrected behavior — no stale wording was left
+describing the disproven claim.
+
 ## Files changed in this task
 
-- `src-tauri/tests/p2_tracer.rs` (new): the tracer test.
+- `src-tauri/tests/p2_tracer.rs` (new, then fixed in review round 1): the
+  tracer test.
 - `CONTEXT.md`: added Location, Profile-only Printer, Setup incomplete,
   Start-safety rule, and Archive.
 - `docs/superpowers/plans/2026-09-16-complete-v1-implementation-approach.md`:

@@ -16,11 +16,15 @@ mod common;
 
 use std::sync::Arc;
 
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::Mutex;
+use std::time::Duration;
+
 use common::{a_catalog, a_ref_json, invoke, FakeConnection};
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::status_repository::StatusRepository;
 use farm3d_lib::connections::supervisor::ConnectionManager;
-use farm3d_lib::connections::{ConnectionConfig, PrinterConnection};
+use farm3d_lib::connections::{ConnectionConfig, ConnectionState, PrinterConnection};
 use serde_json::{json, Value};
 use tauri::test::{mock_builder, mock_context, noop_assets};
 
@@ -36,6 +40,19 @@ fn printer_row<'a>(rows: &'a [Value], id: &str) -> &'a Value {
     rows.iter()
         .find(|row| row["id"] == json!(id))
         .unwrap_or_else(|| panic!("no Printer row with id {id} in {rows:?}"))
+}
+
+fn expect_a_call(calls: &Receiver<String>) -> String {
+    calls
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the connection factory should have been called")
+}
+
+fn expect_no_more_calls(calls: &Receiver<String>) {
+    match calls.recv_timeout(Duration::from_millis(300)) {
+        Err(RecvTimeoutError::Timeout) => {}
+        other => panic!("expected no further factory call, got {other:?}"),
+    }
 }
 
 fn setup_gaps(printer: &Value) -> Vec<String> {
@@ -54,6 +71,29 @@ fn factory(
     Some(Box::new(FakeConnection {
         host: config.host.clone(),
     }) as Box<dyn PrinterConnection>)
+}
+
+/// Like [`factory`], but records every host it is asked to build a
+/// Connection for — used at restart to prove supervision actually *started*
+/// for a Printer, rather than merely being reconciled to a status (which
+/// happens for every non-archived Printer, connected or not; see the fix
+/// this test received in review).
+fn recording_factory() -> (
+    impl Fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    Receiver<String>,
+) {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let tx = Mutex::new(tx);
+    let factory = move |config: &ConnectionConfig, _key: Option<zeroize::Zeroizing<String>>| {
+        let _ = tx.lock().unwrap().send(config.host.clone());
+        Some(Box::new(FakeConnection {
+            host: config.host.clone(),
+        }) as Box<dyn PrinterConnection>)
+    };
+    (factory, rx)
 }
 
 #[test]
@@ -191,16 +231,27 @@ fn the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart() {
     // `after_archiving_a_restart_never_supervises_the_archived_printer_but_keeps_it_listed`:
     // a brand-new manager/credential store driven through the same
     // `restore_persisted_connections` path `lib.rs` uses at real startup.
+    //
+    // The credential store is rebuilt over the *same* `credentials_dir` the
+    // original services wrote the connected Printer's secret to — exactly
+    // as production does (the credential store lives in the app's config
+    // dir, which restart reopens, not a fresh one). Pointing this at an
+    // empty directory instead (as an earlier version of this test did)
+    // makes `supervise_printer` take its `CredentialRequired` branch for
+    // every connected Printer, which still calls `reconcile_printer` and
+    // still inserts a status — silently turning every assertion below into
+    // a check that merely restates "every non-archived Printer has *a*
+    // status", true whether or not supervision ever actually started.
 
+    let (restart_factory, restart_calls) = recording_factory();
     let restart_app = mock_builder().build(mock_context(noop_assets())).unwrap();
     let restart_manager = Arc::new(ConnectionManager::with_clock_and_factory(
         restart_app.handle().clone(),
         Arc::new(StatusRepository::new(Arc::clone(&storage))),
         chrono::Utc::now,
-        factory,
+        restart_factory,
     ));
-    let restart_credentials =
-        CredentialStore::file_backed(tempfile::tempdir().unwrap().path().to_path_buf());
+    let restart_credentials = CredentialStore::file_backed(credentials_dir.path().to_path_buf());
     let catalog = a_catalog();
     farm3d_lib::restore_persisted_connections(
         &restart_manager,
@@ -235,10 +286,42 @@ fn the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart() {
     assert_eq!(connected_row["name"], json!("Connected Printer"));
     assert_eq!(connected_row["archivedAt"], Value::Null);
     assert!(setup_gaps(connected_row).is_empty());
-    assert!(
-        restart_manager.statuses().contains_key(&connected_id),
-        "the connected Printer must be resupervised after restart"
+
+    // Supervision must have actually *started* for the connected Printer,
+    // not merely been reconciled to a status. `ConnectionManager::start`
+    // applies a `Connecting` observation synchronously before it ever
+    // spawns the task that calls the factory (see `supervisor.rs::start`),
+    // so this is available immediately, with no timing race — unlike
+    // `reconcile_printer`, which would leave a Printer with a usable
+    // Connection at whatever `ConnectionState` it already had (`Offline`,
+    // freshly inserted here, since restart begins with an empty manager).
+    let restart_statuses = restart_manager.statuses();
+    let connected_status = restart_statuses
+        .get(&connected_id)
+        .expect("the connected Printer must have a status after restart");
+    assert_eq!(
+        connected_status.connection_state,
+        ConnectionState::Connecting,
+        "the connected Printer must be resupervised (Connecting), not just reconciled: {connected_status:?}"
     );
+
+    // And the factory itself — reached only from inside the task `start`
+    // spawns — must actually have been called for it. It runs
+    // asynchronously, so this polls with a timeout rather than asserting
+    // immediately.
+    assert_eq!(
+        expect_a_call(&restart_calls),
+        "voron.local",
+        "the restart factory must be called for the connected Printer's host"
+    );
+    // No other Printer has a Connection to supervise after restart: the
+    // batch's connected row was archived (archived Printers are stopped,
+    // never started — see `supervise_printer`), and every
+    // `createdSetupIncomplete` row was persisted without a Connection at
+    // all. So exactly one factory call is expected in total, which also
+    // rules out the Profile-only Printer (and every incomplete row) ever
+    // reaching the factory.
+    expect_no_more_calls(&restart_calls);
 
     let bay_a_2_row = printer_row(&rows, &bay_a_2_id);
     assert_eq!(bay_a_2_row["name"], json!("Bay A 2"));
