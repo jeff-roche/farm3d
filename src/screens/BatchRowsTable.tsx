@@ -19,6 +19,10 @@ export interface BatchRowsTableProps {
   existingNames?: readonly string[];
   /** Rows currently being created or connected (results mode). */
   pending?: ReadonlySet<string>;
+  /** Created rows whose reconnection probe failed and that may be saved
+   *  unverified (results mode, D8). */
+  unverified?: ReadonlySet<string>;
+  onSaveAnyway?: (rowId: string) => void;
 }
 
 const OUTCOME_MARKERS: Record<BatchRowOutcome, { severity: SeverityMarkerProps["severity"]; label: string }> = {
@@ -178,6 +182,11 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
               <For each={result().warnings}>{(warning) => <li class={styles.warn}>{warning.message}</li>}</For>
             </ul>
           )}
+        </Show>
+        <Show when={props.unverified?.has(row.rowId) && !props.pending?.has(row.rowId)}>
+          <Button variant="secondary" size="sm" onClick={() => props.onSaveAnyway?.(row.rowId)}>
+            Save anyway
+          </Button>
         </Show>
       </div>
     );

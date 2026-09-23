@@ -279,16 +279,25 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
   }
 }
 
-export async function removePrinter(id: string): Promise<void> {
+export type RemovePrinterResult = { ok: true } | { ok: false; message: string };
+
+/** Resolves (never rejects) with whether the delete committed, so its one
+ *  caller -- `DeletePrinterDialog` -- can keep itself open and show the
+ *  failure inline instead of closing over an unchanged row. */
+export async function removePrinter(id: string): Promise<RemovePrinterResult> {
   if (!desktopAvailable()) {
     removeById(id);
-    return;
+    return { ok: true };
   }
   try {
     await command("delete_printer", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 });
     removeById(id);
+    return { ok: true };
   } catch (e) {
-    reportError(e);
+    return {
+      ok: false,
+      message: isCommandError(e) ? e.message : "The Printer could not be deleted.",
+    };
   }
 }
 

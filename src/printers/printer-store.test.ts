@@ -102,10 +102,22 @@ describe("printer-store", () => {
       await loadPrinters();
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { deletedId: "prn-1", deletedRevision: 1, credentialCleanupPending: false, warnings: [] } });
 
-      await removePrinter("prn-1");
+      expect(await removePrinter("prn-1")).toEqual({ ok: true });
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("delete_printer", { contractVersion: 1, expectedRevision: 1, id: "prn-1" });
       expect(printers()).toEqual([]);
+    });
+
+    it("removePrinter reports a failed delete to its caller and keeps the row", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, removePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "REVISION_CONFLICT", message: "The Printer changed.", recovery: [], retryable: false,
+      });
+
+      expect(await removePrinter("prn-1")).toEqual({ ok: false, message: "The Printer changed." });
+      expect(printers().map((printer) => printer.id)).toEqual(["prn-1"]);
     });
 
     it("preserves runtime status only for Printers that survive an applied import", async () => {

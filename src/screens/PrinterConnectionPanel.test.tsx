@@ -130,6 +130,45 @@ describe("PrinterConnectionPanel", () => {
     await waitFor(() => expect(screen.queryByText("Authentication failed")).not.toBeInTheDocument());
   });
 
+  it("shows a non-probe Save error without offering 'Save anyway'", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "DUPLICATE_HOST",
+      message: "Another Printer already uses this host.",
+      recovery: [],
+      retryable: false,
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Another Printer already uses this host.");
+    expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+  });
+
+  it("drops the failed Save and its 'Save anyway' once the Connection is edited", async () => {
+    setConnection.mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "PRINTER_UNREACHABLE",
+      message: "The printer could not be reached.",
+      recovery: [],
+      retryable: true,
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("The printer could not be reached.");
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron-2.local" } });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("The printer could not be reached.")).not.toBeInTheDocument();
+  });
+
   it("renders a probe failure inline rather than throwing it away", async () => {
     testConnection.mockRejectedValueOnce("Could not reach the printer: refused");
     render(() => <PrinterConnectionPanel printer={printer} />);

@@ -1,6 +1,12 @@
 import { createResource, createSignal, Show } from "solid-js";
 import { Button } from "../design-system";
-import { buildMismatches, ConnectionFields, toSubmission, type ConnectionDraft } from "./ConnectionFields";
+import {
+  buildMismatches,
+  ConnectionFields,
+  connectionDraftChanged,
+  toSubmission,
+  type ConnectionDraft,
+} from "./ConnectionFields";
 import { isCommandError } from "../ipc/client";
 import {
   clearConnection,
@@ -14,6 +20,15 @@ import styles from "./PrinterConnectionPanel.module.css";
 export { buildMismatches };
 
 const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
+
+/** The error codes a replacement probe (D8) can fail with -- the only
+ *  failures "Save anyway" (`acceptUnverified`) can actually get past. */
+const PROBE_ERROR_CODES = new Set([
+  "PRINTER_UNREACHABLE",
+  "TIMEOUT",
+  "AUTHENTICATION_FAILED",
+  "PROTOCOL_ERROR",
+]);
 
 export interface PrinterConnectionPanelProps {
   printer: ResolvedPrinter;
@@ -40,7 +55,21 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   // is blanked right after the failed attempt below (never re-echoing a
   // typed secret), so re-deriving the submission from the draft at that
   // point would silently drop it.
+  // Only set for a probe failure; any other Save error has nothing
+  // `acceptUnverified` could get past.
   const [failedSubmission, setFailedSubmission] = createSignal<ConnectionSubmission | null>(null);
+
+  function clearSaveFailure() {
+    setSaveError(null);
+    setFailedSubmission(null);
+  }
+
+  // A failed Save describes the exact submission it was attempted with; a
+  // materially edited draft makes both the error and "Save anyway" stale.
+  function onDraftChange(next: ConnectionDraft) {
+    if (connectionDraftChanged(draft(), next)) clearSaveFailure();
+    setDraft(next);
+  }
 
   async function attemptSave(submission: ConnectionSubmission, acceptUnverified?: boolean) {
     try {
@@ -49,15 +78,14 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
       } else {
         await setConnection(props.printer.id, submission);
       }
-      setSaveError(null);
-      setFailedSubmission(null);
+      clearSaveFailure();
     } catch (e) {
       // `setConnection` rejects (Ruling R2, superseded by spec D8) so a
       // replacement probe failure can be shown inline next to a "Save
       // anyway" affordance, instead of only reaching the store's error
       // banner.
       setSaveError(isCommandError(e) ? e.message : "The Connection could not be saved.");
-      setFailedSubmission(submission);
+      setFailedSubmission(isCommandError(e) && PROBE_ERROR_CODES.has(e.code) ? submission : null);
     }
   }
 
@@ -80,7 +108,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
     <div class={styles.panel}>
       <ConnectionFields
         value={draft()}
-        onChange={setDraft}
+        onChange={onDraftChange}
         onTest={() => testConnection(props.printer.id, toSubmission(draft(), "edit"))}
         profile={props.printer.profile}
         credentialHint={existing()?.credentialRef ? "Stored — leave blank to keep" : undefined}
@@ -102,9 +130,11 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
         {(message) => (
           <div class={styles.saveError}>
             <p class={styles.error} role="alert">{message()}</p>
-            <Button variant="secondary" onClick={() => void onSaveAnyway()}>
-              Save anyway
-            </Button>
+            <Show when={failedSubmission()}>
+              <Button variant="secondary" onClick={() => void onSaveAnyway()}>
+                Save anyway
+              </Button>
+            </Show>
           </div>
         )}
       </Show>

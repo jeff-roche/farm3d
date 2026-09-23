@@ -121,6 +121,8 @@ describe("PrinterDetailDock", () => {
     await waitFor(() => expect(archiveButton).not.toBeDisabled());
     expect(screen.queryByRole("button", { name: "Delete…" })).not.toBeInTheDocument();
     expect(screen.getByText("Archive this Printer before deleting it.")).toBeInTheDocument();
+    // Unarchive isn't offered for an active Printer, so its blocker is noise.
+    expect(screen.queryByText("This Printer is not archived.")).not.toBeInTheDocument();
 
     fireEvent.click(archiveButton);
     await waitFor(() => expect(archivePrinter).toHaveBeenCalledWith("prn-1"));
@@ -136,6 +138,7 @@ describe("PrinterDetailDock", () => {
     const unarchiveButton = await screen.findByRole("button", { name: "Unarchive" });
     await waitFor(() => expect(unarchiveButton).not.toBeDisabled());
     const deleteButton = screen.getByRole("button", { name: "Delete…" });
+    expect(screen.queryByText("This Printer is already archived.")).not.toBeInTheDocument();
 
     expect(screen.queryByText("Delete dialog open for North Bay")).not.toBeInTheDocument();
     fireEvent.click(deleteButton);

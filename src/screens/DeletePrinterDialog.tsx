@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { Button, Dialog, TextField } from "../design-system";
 import { removePrinter } from "../printers/printer-store";
 import styles from "./DeletePrinterDialog.module.css";
@@ -8,7 +8,7 @@ export interface DeletePrinterDialogProps {
   onOpenChange: (open: boolean) => void;
   printerId: string;
   printerName: string;
-  /** Called after a successful delete, once the dialog has already asked to
+  /** Called only after a successful delete, once the dialog has already asked to
    *  close itself -- e.g. so the caller can close the detail dock too. */
   onDeleted?: () => void;
 }
@@ -20,9 +20,13 @@ export interface DeletePrinterDialogProps {
 export function DeletePrinterDialog(props: DeletePrinterDialogProps) {
   const [typed, setTyped] = createSignal("");
   const [pending, setPending] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
 
   createEffect(on(() => props.open, (open) => {
-    if (open) setTyped("");
+    if (open) {
+      setTyped("");
+      setError(null);
+    }
   }));
 
   const matches = () => typed() === props.printerName;
@@ -30,8 +34,13 @@ export function DeletePrinterDialog(props: DeletePrinterDialogProps) {
   async function onConfirm() {
     if (!matches() || pending()) return;
     setPending(true);
+    setError(null);
     try {
-      await removePrinter(props.printerId);
+      const result = await removePrinter(props.printerId);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
       props.onOpenChange(false);
       props.onDeleted?.();
     } finally {
@@ -51,6 +60,9 @@ export function DeletePrinterDialog(props: DeletePrinterDialogProps) {
           value={typed()}
           onChange={setTyped}
         />
+        <Show when={error()}>
+          {(message) => <p class={styles.error} role="alert">{message()}</p>}
+        </Show>
         <div class={styles.actions}>
           <Button variant="secondary" onClick={() => props.onOpenChange(false)}>
             Cancel

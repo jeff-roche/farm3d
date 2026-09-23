@@ -5,7 +5,7 @@ import type { CreatePrintersBatchInput } from "../generated/contracts/command/Cr
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
 import type { ResolvedPrinter } from "../printers/types";
-import { PrinterBatchDialog } from "./PrinterBatchDialog";
+import { PrinterBatchDialog, toRowError } from "./PrinterBatchDialog";
 
 vi.mock("../printers/printer-catalog", () => ({
   listCatalogModels: vi.fn().mockResolvedValue([
@@ -33,12 +33,14 @@ vi.mock("../printers/printer-catalog", () => ({
 const createPrintersBatch = vi.hoisted(() => vi.fn());
 const cancelBatch = vi.hoisted(() => vi.fn());
 const setConnection = vi.hoisted(() => vi.fn());
+const probeCandidate = vi.hoisted(() => vi.fn());
 const discoverPrinters = vi.hoisted(() => vi.fn());
 const credentialStoreInfo = vi.hoisted(() => vi.fn());
 vi.mock("../printers/printer-store", () => ({
   createPrintersBatch,
   cancelBatch,
   setConnection,
+  probeCandidate,
   discoverPrinters,
   credentialStoreInfo,
 }));
@@ -49,8 +51,14 @@ afterEach(() => {
   cancelBatch.mockResolvedValue(undefined);
   discoverPrinters.mockResolvedValue([]);
   credentialStoreInfo.mockResolvedValue({ kind: "keychain" });
+  probeCandidate.mockResolvedValue(A_PROBE);
 });
+const A_PROBE = {
+  kind: "moonraker", hostSoftware: "Moonraker", firmware: "Klipper", reportedName: "Voron",
+  state: "ready", stateMessage: "", reported: {},
+};
 cancelBatch.mockResolvedValue(undefined);
+probeCandidate.mockResolvedValue(A_PROBE);
 discoverPrinters.mockResolvedValue([]);
 credentialStoreInfo.mockResolvedValue({ kind: "keychain" });
 
@@ -446,6 +454,88 @@ describe("PrinterBatchDialog — Review & results", () => {
     expect(screen.getByLabelText("Host for row 2")).toHaveValue("10.0.0.2");
   });
 
+  async function toFailedReconnectRow(beforeReview?: () => void) {
+    createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await toReviewStep(beforeReview);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByRole("status", { name: "Not created" });
+    createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: [result(input.rows[0].rowId, "created", { printer: record("prn-3") })],
+    }));
+  }
+
+  const PROBE_FAILURE = {
+    contractVersion: 1,
+    code: "AUTHENTICATION_FAILED",
+    message: "The API key was rejected again",
+    recovery: [],
+    retryable: false,
+  };
+
+  it("probes a reconnection first and keeps the row failed, with no save, when the probe fails", async () => {
+    await toFailedReconnectRow();
+    probeCandidate.mockRejectedValueOnce(PROBE_FAILURE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+
+    expect(await screen.findByText("The API key was rejected again")).toBeInTheDocument();
+    expect(probeCandidate).toHaveBeenCalledWith({ kind: "moonraker", host: "10.0.0.2", port: 7125, useTls: false });
+    expect(setConnection).not.toHaveBeenCalled();
+    await waitFor(() => expect(marker("Created — Setup incomplete")).toHaveLength(1));
+    const row = screen.getAllByTestId(/^row-/)[1];
+    expect(within(row).getByRole("button", { name: "Save anyway" })).toBeInTheDocument();
+  });
+
+  it("'Save anyway' saves the failed row's Connection unverified and marks it created", async () => {
+    await toFailedReconnectRow();
+    probeCandidate.mockRejectedValueOnce(PROBE_FAILURE);
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+    const row = screen.getAllByTestId(/^row-/)[1];
+    const saveAnyway = await within(row).findByRole("button", { name: "Save anyway" });
+    setConnection.mockResolvedValueOnce(undefined);
+
+    fireEvent.click(saveAnyway);
+
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(1));
+    expect(setConnection.mock.calls[0]).toEqual([
+      "prn-2",
+      { kind: "moonraker", host: "10.0.0.2", port: 7125, useTls: false },
+      true,
+    ]);
+    await waitFor(() => expect(marker("Created")).toHaveLength(3));
+    expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+  });
+
+  it("drops 'Save anyway' once the failed row's host is edited", async () => {
+    await toFailedReconnectRow();
+    probeCandidate.mockRejectedValueOnce(PROBE_FAILURE);
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+    const row = screen.getAllByTestId(/^row-/)[1];
+    await within(row).findByRole("button", { name: "Save anyway" });
+
+    fireEvent.input(screen.getByLabelText("Host for row 2"), { target: { value: "10.0.0.22" } });
+
+    expect(within(row).queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+  });
+
+  it("saves a reconnection directly, without probing, when testing is turned off", async () => {
+    await toFailedReconnectRow(() => {});
+    fireEvent.click(screen.getByLabelText("Test each Connection before saving it"));
+    setConnection.mockResolvedValueOnce(undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(1));
+    expect(probeCandidate).not.toHaveBeenCalled();
+    expect(setConnection.mock.calls[0]).toEqual([
+      "prn-2",
+      { kind: "moonraker", host: "10.0.0.2", port: 7125, useTls: false },
+    ]);
+    await waitFor(() => expect(marker("Created")).toHaveLength(3));
+  });
+
   it("cancels a running batch and leaves cancelled rows retryable", async () => {
     let resolveBatch!: (output: CreatePrintersBatchOutput) => void;
     createPrintersBatch.mockImplementationOnce(
@@ -541,5 +631,24 @@ describe("PrinterBatchDialog — closing", () => {
     setOpen(true);
     await toConnectStep("1");
     expect(screen.getByLabelText("Shared credential")).toHaveValue("");
+  });
+});
+
+describe("toRowError", () => {
+  const failure = (code: string) => ({ contractVersion: 1, code, message: `msg ${code}`, recovery: [], retryable: false });
+
+  it("keeps row-vocabulary codes and the command's message", () => {
+    expect(toRowError(failure("TIMEOUT"))).toEqual({ code: "TIMEOUT", message: "msg TIMEOUT" });
+  });
+
+  it("maps codes outside the row vocabulary to the closest row code", () => {
+    expect(toRowError(failure("CREDENTIAL_REQUIRED"))).toEqual({
+      code: "CREDENTIAL_UNAVAILABLE",
+      message: "msg CREDENTIAL_REQUIRED",
+    });
+    expect(toRowError(failure("CONFLICT")).code).toBe("VALIDATION");
+    expect(toRowError(failure("NOT_FOUND")).code).toBe("VALIDATION");
+    expect(toRowError(failure("CORRUPT_DATA")).code).toBe("PERSISTENCE_UNAVAILABLE");
+    expect(toRowError(new Error("boom")).code).toBe("VALIDATION");
   });
 });

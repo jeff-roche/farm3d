@@ -3,13 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeletePrinterDialog } from "./DeletePrinterDialog";
 
-const removePrinter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const removePrinter = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("../printers/printer-store", () => ({ removePrinter }));
 
 afterEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
-  removePrinter.mockResolvedValue(undefined);
+  removePrinter.mockResolvedValue({ ok: true });
 });
 
 describe("DeletePrinterDialog", () => {
@@ -61,6 +61,31 @@ describe("DeletePrinterDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
 
     await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce());
+  });
+
+  it("stays open and shows the error inline when the delete fails", async () => {
+    removePrinter.mockResolvedValueOnce({ ok: false, message: "The Printer changed; reload and retry." });
+    const onOpenChange = vi.fn();
+    const onDeleted = vi.fn();
+    render(() => (
+      <DeletePrinterDialog
+        open
+        onOpenChange={onOpenChange}
+        printerId="prn-1"
+        printerName="North Bay"
+        onDeleted={onDeleted}
+      />
+    ));
+
+    await fireEvent.input(screen.getByLabelText("Type the Printer name to confirm"), {
+      target: { value: "North Bay" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The Printer changed; reload and retry.");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Delete permanently" })).not.toBeDisabled();
   });
 
   it("resets the typed name each time the dialog re-opens", async () => {

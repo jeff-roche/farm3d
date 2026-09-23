@@ -68,6 +68,13 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
   const [deleteOpen, setDeleteOpen] = createSignal(false);
 
   const archived = () => Boolean(props.printer.archivedAt);
+  // Only explain actions the dock actually shows: Archive for an active
+  // Printer, Unarchive for an archived one, Delete for either -- a blocker
+  // for the hidden one ("not archived" / "already archived") is noise.
+  const visibleBlockers = () =>
+    (eligibility()?.blockers ?? []).filter((blocker) =>
+      blocker.action === "delete" || blocker.action === (archived() ? "unarchive" : "archive"),
+    );
 
   const refreshEligibility = async (id: string) => {
     try {
@@ -237,7 +244,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                   <Show when={unarchiveError()}>
                     {(message) => <p class={styles.error} role="alert">{message()}</p>}
                   </Show>
-                  <For each={eligibility()?.blockers ?? []}>
+                  <For each={visibleBlockers()}>
                     {(blocker) => <p class={styles.blocker}>{blocker.message}</p>}
                   </For>
                 </div>

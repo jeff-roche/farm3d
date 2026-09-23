@@ -14,6 +14,7 @@ import {
 import type { BatchRowError } from "../generated/contracts/command/BatchRowError";
 import type { BatchRowErrorCode } from "../generated/contracts/command/BatchRowErrorCode";
 import type { BatchShared } from "../generated/contracts/command/BatchShared";
+import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import { isCommandError } from "../ipc/client";
 import {
   defaultPort,
@@ -31,9 +32,16 @@ import {
   createPrintersBatch,
   credentialStoreInfo,
   discoverPrinters,
+  probeCandidate,
   setConnection,
 } from "../printers/printer-store";
-import type { DiscoveredPrinter, ResolvedPrinter, StartSafety } from "../printers/types";
+import type {
+  ConnectionSubmission,
+  DiscoveredPrinter,
+  ProbeResult,
+  ResolvedPrinter,
+  StartSafety,
+} from "../printers/types";
 import { BatchRowsTable } from "./BatchRowsTable";
 import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
 import { KINDS, toSubmission } from "./ConnectionFields";
@@ -74,12 +82,28 @@ function errorMessage(e: unknown): string {
   return isCommandError(e) ? e.message : "The operation could not be completed.";
 }
 
-/** A `set_printer_connection` failure, shaped as a row error so the results
- *  grid shows it like any other. Codes outside the row vocabulary fall back
- *  to `PROTOCOL_ERROR`; the message is the command's own. */
-function toRowError(e: unknown): BatchRowError {
-  const code = isCommandError(e) && ROW_ERROR_CODES.has(e.code) ? (e.code as BatchRowErrorCode) : "PROTOCOL_ERROR";
-  return { code, message: errorMessage(e) };
+/** Command codes outside the row vocabulary that have a close row
+ *  equivalent; anything else unmapped is reported as `VALIDATION`. */
+const ROW_ERROR_FALLBACKS: Partial<Record<ErrorCode, BatchRowErrorCode>> = {
+  CREDENTIAL_REQUIRED: "CREDENTIAL_UNAVAILABLE",
+  CORRUPT_DATA: "PERSISTENCE_UNAVAILABLE",
+  MIGRATION_FAILED: "PERSISTENCE_UNAVAILABLE",
+  UNSUPPORTED_SCHEMA_VERSION: "PERSISTENCE_UNAVAILABLE",
+};
+
+/** The codes a Connection probe fails with -- the only failures "Save
+ *  anyway" (`acceptUnverified`) can get past (D8). */
+const PROBE_ERROR_CODES = new Set<string>(["PRINTER_UNREACHABLE", "TIMEOUT", "AUTHENTICATION_FAILED", "PROTOCOL_ERROR"]);
+
+/** A reconnection (`probe_connection`/`set_printer_connection`) failure,
+ *  shaped as a row error so the results grid shows it like any other. The
+ *  message is always the command's own. Exported for its unit test. */
+export function toRowError(e: unknown): BatchRowError {
+  if (!isCommandError(e)) return { code: "VALIDATION", message: errorMessage(e) };
+  const code = ROW_ERROR_CODES.has(e.code)
+    ? (e.code as BatchRowErrorCode)
+    : (ROW_ERROR_FALLBACKS[e.code as ErrorCode] ?? "VALIDATION");
+  return { code, message: e.message };
 }
 
 function candidateKey(candidate: DiscoveredPrinter): string {
@@ -150,6 +174,21 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   const [batchError, setBatchError] = createSignal<string | null>(null);
   const [confirmOpen, setConfirmOpen] = createSignal(false);
   const [store] = createResource(credentialStoreInfo);
+  // Created rows whose reconnection probe failed: each may be saved
+  // unverified with its own "Save anyway". Cleared per row as soon as that
+  // row's Connection input (or the shared credential) changes, so "Save
+  // anyway" never saves something other than what was just probed.
+  const [unverified, setUnverified] = createSignal<ReadonlySet<string>>(new Set());
+  function markUnverified(rowId: string, value: boolean) {
+    setUnverified((prev) => {
+      if (prev.has(rowId) === value) return prev;
+      const next = new Set(prev);
+      if (value) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+  }
+  createEffect(on(sharedCredential, () => setUnverified(new Set<string>()), { defer: true }));
 
   function reset() {
     picker.reset();
@@ -176,6 +215,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setRunningBatchId(null);
     setBatchError(null);
     setConfirmOpen(false);
+    setUnverified(new Set<string>());
   }
 
   createEffect(
@@ -331,14 +371,14 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     }
   }
 
-  async function reconnect(row: BatchRowDraft) {
+  function reconnectSubmission(row: BatchRowDraft): ConnectionSubmission {
     const credential =
       row.credential.source === "shared"
         ? sharedCredential()
         : row.credential.source === "row"
           ? row.credential.value
           : "";
-    const submission = toSubmission(
+    return toSubmission(
       {
         kind: row.protocol,
         host: row.host,
@@ -348,15 +388,69 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
       },
       "create",
     );
+  }
+
+  function setRowError(rowId: string, e: unknown) {
+    setRows((r) => r.rowId === rowId, "result", (result) =>
+      result ? { ...result, errors: [toRowError(e)] } : result,
+    );
+  }
+
+  /** Saves a created row's Connection; a first-time set never probes on the
+   *  backend (D8), so the caller decides whether it was verified first. */
+  async function saveConnection(
+    row: BatchRowDraft,
+    submission: ConnectionSubmission,
+    acceptUnverified: boolean,
+    probed?: ProbeResult,
+  ) {
     try {
-      await setConnection(row.printerId!, submission);
+      if (acceptUnverified) await setConnection(row.printerId!, submission, true);
+      else await setConnection(row.printerId!, submission);
       setRows((r) => r.rowId === row.rowId, "result", (result) =>
-        result ? { ...result, outcome: "created" as const, errors: [] } : result,
+        result
+          ? {
+              ...result,
+              outcome: "created" as const,
+              errors: [],
+              credentialStored: submission.credential !== undefined,
+              ...(probed ? { probe: probed } : {}),
+            }
+          : result,
       );
     } catch (e) {
-      setRows((r) => r.rowId === row.rowId, "result", (result) =>
-        result ? { ...result, errors: [toRowError(e)] } : result,
-      );
+      setRowError(row.rowId, e);
+    }
+  }
+
+  /** Retry for a created-but-incomplete row. With "Test each Connection"
+   *  on, the Connection is probed first and only saved if the probe passes;
+   *  a probe failure keeps the row failed and offers "Save anyway". */
+  async function reconnect(row: BatchRowDraft) {
+    const submission = reconnectSubmission(row);
+    markUnverified(row.rowId, false);
+    let probed: ProbeResult | undefined;
+    if (probe()) {
+      try {
+        probed = await probeCandidate(submission);
+      } catch (e) {
+        setRowError(row.rowId, e);
+        if (isCommandError(e) && PROBE_ERROR_CODES.has(e.code)) markUnverified(row.rowId, true);
+        return;
+      }
+    }
+    await saveConnection(row, submission, false, probed);
+  }
+
+  async function saveAnyway(rowId: string) {
+    const row = rows.find((r) => r.rowId === rowId);
+    if (!row?.printerId || busy() || !unverified().has(rowId)) return;
+    markUnverified(rowId, false);
+    setPending(new Set([rowId]));
+    try {
+      await saveConnection(row, reconnectSubmission(row), true);
+    } finally {
+      setPending(new Set<string>());
     }
   }
 
@@ -428,7 +522,12 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   });
 
   const tableHandlers = {
-    onChange: (rowId: string, patch: Partial<BatchRowDraft>) => setRows((row) => row.rowId === rowId, patch),
+    onChange: (rowId: string, patch: Partial<BatchRowDraft>) => {
+      if (["host", "port", "protocol", "useTls", "credential"].some((key) => key in patch)) {
+        markUnverified(rowId, false);
+      }
+      setRows((row) => row.rowId === rowId, patch);
+    },
     onToggle: (rowId: string, selected: boolean) => setRows((row) => row.rowId === rowId, "selected", selected),
     onToggleAll: (selected: boolean) => setRows(() => true, "selected", selected),
     onRemove: (rowId: string) => setRows((prev) => prev.filter((row) => row.rowId !== rowId)),
@@ -704,6 +803,8 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 preview={rowPreview()}
                 existingNames={existingNames()}
                 pending={pending()}
+                unverified={unverified()}
+                onSaveAnyway={(rowId) => void saveAnyway(rowId)}
               />
             </div>
           </Show>
