@@ -102,15 +102,33 @@ function touchedPrinterId(location: SpoolLocation): string | null {
   return location.kind === "slot" ? location.printerId : null;
 }
 
-/** Upserts a Spool by id. A known Spool is replaced only if `force` is set
- *  or the incoming record's revision is strictly newer -- this is what
- *  makes a duplicate/out-of-order/stale event (or replay) a no-op. */
-function upsertSpool(record: SpoolRecord, opts?: { force?: boolean }): void {
+/** Controller ruling: per-Spool marker of the last authoritative apply's
+ *  "freshness" -- a `spool.changed` event marks its own stream `sequence`;
+ *  a command result (there's no stream `sequence` to attach to a direct
+ *  RPC response) marks `+Infinity`, since it's always at least as fresh as
+ *  anything the frontend has seen through the stream so far. The next real
+ *  `spool.changed` for that Spool (which will eventually confirm the same
+ *  write) supersedes the `Infinity` marker with its own real `sequence`.
+ *  `applyAvailabilityHint` below is the one thing that reads this. */
+const lastAuthoritativeSequence = new Map<string, number>();
+
+/** Upserts a Spool by id. A known Spool is replaced only if the incoming
+ *  record's revision is strictly newer -- this is what makes a
+ *  duplicate/out-of-order/stale event, command result, or replay a no-op,
+ *  and what stops a command's own (possibly slower-arriving) result from
+ *  regressing a newer state a `spool.changed` event already applied. Every
+ *  caller goes through this guard, desktop and web alike -- web mode's own
+ *  locally-computed revisions are always exactly `current + 1`, so the
+ *  guard never blocks them. `atSequence` is the stream sequence to record
+ *  as this Spool's freshness marker; omitted (command results, every web
+ *  mutation) it defaults to `+Infinity` -- see `lastAuthoritativeSequence`. */
+function upsertSpool(record: SpoolRecord, atSequence?: number): void {
   const existing = state.spools.find((s) => s.id === record.id);
-  if (existing && !opts?.force && record.revision <= existing.revision) return;
+  if (existing && record.revision <= existing.revision) return;
   setState("spools", (list) => (
     existing ? list.map((s) => (s.id === record.id ? record : s)) : [...list, record]
   ));
+  lastAuthoritativeSequence.set(record.id, atSequence ?? Number.POSITIVE_INFINITY);
 }
 
 /** D12's `printer.slots.changed` carries only `{printerId, revision,
@@ -126,13 +144,17 @@ function isPending(spoolId: string): boolean {
   return Object.values(state.pending).some((ids) => ids.includes(spoolId));
 }
 
-/** Controller ruling: `spool.availability.changed` can arrive stale
- *  relative to a `spool.changed`/command result under concurrency (D11).
- *  Preferring the availability embedded in those over this hint, this is
- *  applied only when the Spool isn't mid-optimistic-move -- the one case
- *  this store itself already knows is racing an authoritative settle. */
-function applyAvailabilityHint(spoolId: string, availability: SpoolRecord["availability"]): void {
+/** D11: `spool.availability.changed` can arrive stale relative to a
+ *  `spool.changed`/command result under concurrency. `isPending` covers
+ *  this store's own `moveSpool` while its optimistic step is in flight
+ *  (before either has updated `lastAuthoritativeSequence` at all); the
+ *  marker covers everything after -- a hint at or below the sequence
+ *  recorded for that Spool's last authoritative apply is a stale echo and
+ *  is ignored, never regressing what's already there. */
+function applyAvailabilityHint(spoolId: string, availability: SpoolRecord["availability"], envelopeSequence: number): void {
   if (isPending(spoolId)) return;
+  const marker = lastAuthoritativeSequence.get(spoolId) ?? -1;
+  if (envelopeSequence <= marker) return;
   setState("spools", (list) => list.map((s) => (s.id === spoolId ? { ...s, availability } : s)));
 }
 
@@ -141,17 +163,29 @@ function applyInventoryEnvelope(envelope: InventoryEnvelope): void {
   if (envelope.sequence <= sequence) return;
   sequence = envelope.sequence;
   const payload = envelope.payload;
-  if (payload.type === "spoolChanged") upsertSpool(payload.spool);
-  else if (payload.type === "printerSlotsChanged") applyPrinterSlotsChanged(payload.printerId, payload.revision, payload.materialSlots);
-  else if (payload.type === "spoolAvailabilityChanged") applyAvailabilityHint(payload.spoolId, payload.availability);
+  if (payload.type === "spoolChanged") {
+    upsertSpool(payload.spool, envelope.sequence);
+  } else if (payload.type === "printerSlotsChanged") {
+    applyPrinterSlotsChanged(payload.printerId, payload.revision, payload.materialSlots);
+  } else if (payload.type === "spoolAvailabilityChanged") {
+    applyAvailabilityHint(payload.spoolId, payload.availability, envelope.sequence);
+  }
 }
 
-async function refetchInventory(): Promise<void> {
+/** D6's CONFLICT recovery: reloads only the Spools `moveSpool`'s optimistic
+ *  step touched, each through the revision guard, and leaves everything
+ *  else -- other Spools, tares, `pending`, and this store's own stream
+ *  `sequence`/`streamId` bookkeeping -- untouched. A whole-inventory
+ *  replace here would regress any other Spool an event settled more
+ *  recently than this (`list_spools`) snapshot, and lowering `sequence`
+ *  would make the live listener re-apply events it already processed. */
+async function refetchAffectedSpools(affectedIds: string[]): Promise<void> {
   try {
     const snapshot = await command("list_spools");
-    streamId = snapshot.streamId;
-    sequence = snapshot.snapshotSequence;
-    setState({ spools: snapshot.spools, tares: snapshot.tares });
+    for (const id of affectedIds) {
+      const fresh = snapshot.spools.find((s) => s.id === id);
+      if (fresh) upsertSpool(fresh);
+    }
   } catch {
     // Best-effort: the CONFLICT that triggered this is already being
     // rethrown to the caller regardless of whether this refetch lands.
@@ -256,7 +290,7 @@ function applyPlacement(
 }
 
 function settleMove(result: MoveSpoolData): void {
-  for (const record of result.spools) upsertSpool(record, { force: true });
+  for (const record of result.spools) upsertSpool(record);
   for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
 }
 
@@ -266,7 +300,9 @@ function settleMove(result: MoveSpoolData): void {
  *  return the touched `PrinterRecord`s in `printers` -- it updates
  *  printer-store directly via `spliceResolved` instead. Takes the pre-move
  *  `spool`/`occupant` and the already-computed placement as arguments, for
- *  the same reason `applyPlacement` does. */
+ *  the same reason `applyPlacement` does. Recomputes `facets.loaded` (via
+ *  `webFacets`) for both the moved and displaced Spool, so a web session's
+ *  own facet stays honest about where each Spool actually is. */
 function webMoveSpool(
   req: Omit<MoveSpoolRequest, "operationId" | "contractVersion">,
   spool: SpoolRecord,
@@ -281,7 +317,15 @@ function webMoveSpool(
     });
   }
 
-  const moved: SpoolRecord = { ...spool, location: nextLocation, revision: spool.revision + 1 };
+  const moved: SpoolRecord = {
+    ...spool,
+    location: nextLocation,
+    revision: spool.revision + 1,
+    facets: webFacets(
+      spool.lifecycle, spool.availability.currentMg, spool.lowThresholdMg,
+      spool.facets.confidence, nextLocation.kind === "slot", spool.availability.reservedMg,
+    ),
+  };
   const results: SpoolRecord[] = [moved];
 
   const touchedPrinterIds = new Set<string>();
@@ -291,10 +335,18 @@ function webMoveSpool(
   if (afterId) touchedPrinterIds.add(afterId);
 
   if (occupant && displacedLocation) {
-    results.push({ ...occupant, location: displacedLocation, revision: occupant.revision + 1 });
+    results.push({
+      ...occupant,
+      location: displacedLocation,
+      revision: occupant.revision + 1,
+      facets: webFacets(
+        occupant.lifecycle, occupant.availability.currentMg, occupant.lowThresholdMg,
+        occupant.facets.confidence, false, occupant.availability.reservedMg,
+      ),
+    });
   }
 
-  for (const record of results) upsertSpool(record, { force: true });
+  for (const record of results) upsertSpool(record);
   for (const printerId of touchedPrinterIds) syncWebPrinterOccupancy(printerId);
   return { spools: results, printers: [], movements: [] };
 }
@@ -304,13 +356,23 @@ function webMoveSpool(
  *  locally before the command resolves, marking every touched Spool
  *  `pending`. On success it settles from the authoritative result and hands
  *  any returned Printers to `printer-store` via `spliceResolved`. On
- *  failure it restores the pre-move snapshot; a `CONFLICT` also refetches
- *  through `list_spools` before rethrowing, so the caller (an inline
- *  handler, not the banner -- this rejects rather than reporting) sees
- *  fresh state alongside the error. */
+ *  failure it restores only the Spools this move itself touched, and only
+ *  those whose revision hasn't moved on since (i.e. still exactly the
+ *  optimistic placement, not something a settled move/mutation or an event
+ *  updated in the meantime) -- restoring the *whole* store here would
+ *  regress unrelated state that moved on while this move was in flight. A
+ *  `CONFLICT` also refetches those same affected Spools (only) through
+ *  `list_spools` before rethrowing, so the caller (an inline handler, not
+ *  the banner -- this rejects rather than reporting) sees fresh state
+ *  alongside the error. */
 export async function moveSpool(req: Omit<MoveSpoolRequest, "operationId" | "contractVersion">): Promise<MoveSpoolData> {
   const spool = state.spools.find((s) => s.id === req.spoolId);
   if (!spool) throw commandError("NOT_FOUND", "This Spool no longer exists.");
+  if (req.destination.kind === "slot" && spool.lifecycle === "archived") {
+    // D5: loading is blocked for an archived Spool (an empty one may still
+    // be loaded, so this checks lifecycle, not facets.loaded).
+    throw commandError("VALIDATION", "An archived Spool cannot be loaded.", { fieldPath: "destination.slotId" });
+  }
   if (req.destination.kind === "slot" && spool.location.kind === "slot" && spool.location.slotId === req.destination.slotId) {
     throw commandError("VALIDATION", "This Spool already occupies that slot.", { fieldPath: "destination.slotId" });
   }
@@ -321,8 +383,10 @@ export async function moveSpool(req: Omit<MoveSpoolRequest, "operationId" | "con
     : undefined;
 
   const operationId = crypto.randomUUID();
-  const previousSnapshot = state.spools;
-  const affected = occupant ? [spool.id, occupant.id] : [spool.id];
+  const originals = new Map<string, SpoolRecord>();
+  originals.set(spool.id, spool);
+  if (occupant) originals.set(occupant.id, occupant);
+  const affected = [...originals.keys()];
   setState("pending", operationId, affected);
   applyPlacement(spool, occupant, nextLocation, displacedLocation);
 
@@ -333,8 +397,11 @@ export async function moveSpool(req: Omit<MoveSpoolRequest, "operationId" | "con
     settleMove(result);
     return result;
   } catch (e) {
-    setState("spools", previousSnapshot);
-    if (isCommandError(e) && e.code === "CONFLICT") await refetchInventory();
+    setState("spools", (list) => list.map((s) => {
+      const original = originals.get(s.id);
+      return original && s.revision === original.revision ? original : s;
+    }));
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchAffectedSpools(affected);
     throw e;
   } finally {
     setState("pending", produce((pending) => {
@@ -411,7 +478,7 @@ export async function createSpool(
   }
   try {
     const result = await command("create_spool", { fields, initialAmount, storageLabel });
-    upsertSpool(result.spool, { force: true });
+    upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
@@ -431,13 +498,13 @@ export async function updateSpool(id: string, patch: SpoolFields): Promise<Spool
       revision: existing.revision + 1,
       updatedAt: new Date().toISOString(),
     };
-    upsertSpool(updated, { force: true });
+    upsertSpool(updated);
     return updated;
   }
   try {
     const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("update_spool", { id, expectedRevision, patch });
-    upsertSpool(result.spool, { force: true });
+    upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
@@ -460,7 +527,7 @@ export async function recordAmount(id: string, entry: AmountEntry, note?: string
         revision: existing.revision + 1,
         updatedAt: new Date().toISOString(),
       };
-      upsertSpool(updated, { force: true });
+      upsertSpool(updated);
       return updated;
     } catch (e) {
       reportSpoolError(e);
@@ -470,7 +537,7 @@ export async function recordAmount(id: string, entry: AmountEntry, note?: string
   try {
     const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("record_spool_amount", { id, expectedRevision, entry, ...(note !== undefined ? { note } : {}) });
-    upsertSpool(result.spool, { force: true });
+    upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
@@ -514,7 +581,7 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
     // web approximation always restores to "active" (the common case).
     updated = { ...existing, lifecycle: "active", revision: existing.revision + 1, updatedAt: now };
   }
-  upsertSpool(updated, { force: true });
+  upsertSpool(updated);
   return updated;
 }
 
@@ -527,7 +594,7 @@ export async function setLifecycle(
   try {
     const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("set_spool_lifecycle", { id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}) });
-    upsertSpool(result.spool, { force: true });
+    upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {

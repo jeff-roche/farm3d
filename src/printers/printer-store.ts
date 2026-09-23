@@ -825,8 +825,20 @@ export async function cancelBatch(batchId: string): Promise<void> {
 /** `dispositions` says where each loaded Spool goes (spec D10); it must
  *  cover every Spool in `lifecycleEligibility(id).loadedSpools`, and is
  *  empty for a Printer with nothing loaded. */
+/** Web mode has no transaction to apply D10's Spool dispositions atomically
+ *  alongside the archive, and no reservation/ledger data to validate them
+ *  against -- rather than half-implement that, it refuses outright (the
+ *  same "needs the desktop app" shape as `testConnection`/`probeCandidate`)
+ *  whenever the Printer has an occupied slot, so a web-only session can
+ *  never leave a Spool loaded on an archived Printer (D10). `materialSlots`
+ *  is kept in sync with `spool-store.ts`'s own web fixture locations via
+ *  `spliceResolved`, so this needs no dependency on that module. */
 export async function archivePrinter(id: string, dispositions: SpoolDispositionInput[] = []): Promise<void> {
   if (!desktopAvailable()) {
+    const printer = state.printers.find((p) => p.id === id);
+    if (printer?.materialSlots.some((slot) => slot.occupantSpoolId !== undefined)) {
+      throw new Error("Archiving a Printer with a loaded Spool needs the desktop app.");
+    }
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
   }

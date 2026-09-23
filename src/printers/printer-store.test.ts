@@ -874,5 +874,21 @@ describe("printer-store", () => {
       expect(tauriMock.invoke).not.toHaveBeenCalled();
       expect(store.printers().find((p) => p.id === id)?.archivedAt).toBeTruthy();
     });
+
+    it("archivePrinter refuses a web Printer with a loaded Spool rather than leaving it loaded on the archived Printer (D10)", async () => {
+      // D10: archive must never leave a Spool loaded on an archived Printer.
+      // Web mode has no dispositions transaction, so it refuses outright.
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const printer = store.printers()[0];
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
+      });
+
+      await expect(store.archivePrinter(printer.id)).rejects.toThrow("needs the desktop app");
+
+      expect(store.printers().find((p) => p.id === printer.id)?.archivedAt).toBeFalsy();
+    });
   });
 });

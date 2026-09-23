@@ -67,17 +67,28 @@ function envelope(
   };
 }
 
-function snapshotResponse(sequence: number, spools: SpoolRecord[]) {
-  return { contractVersion: 1, data: { streamId: "stream-a", snapshotSequence: sequence, spools, tares: [] } };
+function snapshotResponse(sequence: number, spools: SpoolRecord[], tares: unknown[] = []) {
+  return { contractVersion: 1, data: { streamId: "stream-a", snapshotSequence: sequence, spools, tares } };
+}
+
+/** Wires `eventMock.listen` to capture the registered handler and expose it
+ *  synchronously (once the listener promise itself resolves). */
+function captureListenerHandler(): { handler: (event: { payload: unknown }) => void } {
+  const box: { handler: (event: { payload: unknown }) => void } = { handler: () => {} };
+  eventMock.listen.mockImplementation((_name: string, cb: typeof box.handler) => {
+    box.handler = cb;
+    return Promise.resolve(vi.fn());
+  });
+  return box;
 }
 
 describe("loadInventory", () => {
   it("registers the event listener before backfilling through list_spools, and drops events at or below the snapshot sequence", async () => {
     const calls: string[] = [];
-    let handler!: (event: { payload: unknown }) => void;
-    eventMock.listen.mockImplementation((name: string, cb: typeof handler) => {
+    const box = captureListenerHandler();
+    eventMock.listen.mockImplementation((name: string, cb: typeof box.handler) => {
       calls.push(`listen:${name}`);
-      handler = cb;
+      box.handler = cb;
       return Promise.resolve(vi.fn());
     });
     tauriMock.invoke.mockImplementation((command: string) => {
@@ -92,34 +103,29 @@ describe("loadInventory", () => {
     expect(eventMock.listen).toHaveBeenCalledWith("farm3d-event-v1", expect.any(Function));
 
     const staleSpool = spool();
-    handler({ payload: envelope(5, { type: "spoolChanged", spool: staleSpool }) });
+    box.handler({ payload: envelope(5, { type: "spoolChanged", spool: staleSpool }) });
     expect(spoolState.spools).toEqual([]);
 
     const freshSpool = spool({ id: "spl-2" });
-    handler({ payload: envelope(6, { type: "spoolChanged", spool: freshSpool }) });
+    box.handler({ payload: envelope(6, { type: "spoolChanged", spool: freshSpool }) });
     expect(spoolState.spools).toEqual([freshSpool]);
   });
 
   it("buffers events received while backfilling and replays only those above the snapshot sequence", async () => {
-    let handler!: (event: { payload: unknown }) => void;
-    eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
-      handler = cb;
-      return Promise.resolve(vi.fn());
-    });
+    const box = captureListenerHandler();
     let resolveBackfill!: (value: unknown) => void;
     tauriMock.invoke.mockImplementation(() => new Promise((resolve) => (resolveBackfill = resolve)));
 
     const { loadInventory, spoolState } = await import("./spool-store");
     const started = loadInventory();
-    // `listen(...)` and then `list_spools` are only reached after internal
-    // `await`s (a dynamic import, then the listener promise itself), which
-    // can each take more than one microtask -- poll rather than guess.
-    for (let i = 0; i < 20 && (!handler || !resolveBackfill); i += 1) await Promise.resolve();
+    // `listen(...)` is only reached after an internal `await import(...)`,
+    // which can take more than one microtask -- poll rather than guess.
+    for (let i = 0; i < 20 && !resolveBackfill; i += 1) await Promise.resolve();
 
     const early = spool({ id: "spl-early" });
     const late = spool({ id: "spl-late" });
-    handler({ payload: envelope(2, { type: "spoolChanged", spool: early }) });
-    handler({ payload: envelope(4, { type: "spoolChanged", spool: late }) });
+    box.handler({ payload: envelope(2, { type: "spoolChanged", spool: early }) });
+    box.handler({ payload: envelope(4, { type: "spoolChanged", spool: late }) });
     resolveBackfill(snapshotResponse(2, []));
     await started;
 
@@ -146,7 +152,7 @@ const A_MINIMAL_PRINTER_RECORD = {
   createdAt: "", updatedAt: "",
 };
 
-describe("moveSpool", () => {
+describe("moveSpool: optimistic settle", () => {
   it("applies the expected placement locally before the invoke resolves, then settles from the result and hands returned Printers to printer-store", async () => {
     const occupant = spool({
       id: "spl-occupant", spoolNumber: 2,
@@ -199,13 +205,135 @@ describe("moveSpool", () => {
     expect(spoolState.pending).toEqual({});
   });
 
-  it("on a CONFLICT rejection, restores the pre-move snapshot, refetches through list_spools, and rethrows", async () => {
+  it("keeps a newer spool.changed record instead of letting the move's own (older) result regress it", async () => {
+    const box = captureListenerHandler();
+    const moving = spool({ id: "spl-1", revision: 1 });
+    let resolveMove!: (value: unknown) => void;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [moving]));
+      if (command === "move_spool") return new Promise((resolve) => { resolveMove = resolve; });
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const movePromise = moveSpool({
+      spoolId: moving.id, expectedSpoolRevision: moving.revision,
+      destination: { kind: "storage", storageLabel: "Shelf A2" },
+    });
+
+    // A concurrent external write races ahead of this move's own response,
+    // arriving via the ordered stream at revision 3.
+    const fresher = { ...moving, revision: 3, colorName: "Renamed elsewhere" };
+    box.handler({ payload: envelope(1, { type: "spoolChanged", spool: fresher }) });
+    expect(spoolState.spools.find((s) => s.id === moving.id)).toEqual(fresher);
+
+    // The move's own result is only revision 2 -- older than what the
+    // event already established -- and must not regress it.
+    const settled = { ...moving, revision: 2, location: { kind: "storage" as const, storageLabel: "Shelf A2" } };
+    resolveMove({ contractVersion: 1, data: { spools: [settled], printers: [], movements: [] } });
+    await movePromise;
+
+    expect(spoolState.spools.find((s) => s.id === moving.id)).toEqual(fresher);
+  });
+});
+
+describe("moveSpool: restore on failure", () => {
+  it("restores only the affected Spools on a non-CONFLICT error, leaving an unrelated Spool's mid-flight event applied", async () => {
+    const box = captureListenerHandler();
+    const occupant = spool({ id: "spl-occupant", location: { kind: "slot", slotId: "slt-1", printerId: "prn-1" } });
+    const moving = spool({ id: "spl-moving" });
+    const unrelated = spool({ id: "spl-unrelated", colorName: "Original" });
+    let rejectMove!: (reason: unknown) => void;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [occupant, moving, unrelated]));
+      if (command === "move_spool") return new Promise((_resolve, reject) => { rejectMove = reject; });
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const movePromise = moveSpool({
+      spoolId: moving.id,
+      expectedSpoolRevision: moving.revision,
+      destination: { kind: "slot", slotId: "slt-1", expectedOccupantSpoolId: occupant.id },
+    });
+
+    // Optimistic placement applied for both A and its occupant.
+    expect(spoolState.spools.find((s) => s.id === moving.id)?.location).toEqual({ kind: "slot", slotId: "slt-1", printerId: "prn-1" });
+
+    // An unrelated Spool's event lands while the move is still in flight.
+    const unrelatedFresh = { ...unrelated, revision: 2, colorName: "Fresh" };
+    box.handler({ payload: envelope(1, { type: "spoolChanged", spool: unrelatedFresh }) });
+
+    rejectMove({ contractVersion: 1, code: "VALIDATION", message: "Bad request.", recovery: [], retryable: false });
+    await expect(movePromise).rejects.toMatchObject({ code: "VALIDATION" });
+
+    // The two affected Spools are restored to their pre-move state...
+    expect(spoolState.spools.find((s) => s.id === moving.id)?.location).toEqual(moving.location);
+    expect(spoolState.spools.find((s) => s.id === occupant.id)?.location).toEqual(occupant.location);
+    // ...but the unrelated Spool's newer, mid-flight event survives.
+    expect(spoolState.spools.find((s) => s.id === unrelated.id)).toEqual(unrelatedFresh);
+    expect(spoolState.pending).toEqual({});
+  });
+
+  it("does not regress a different move's already-settled record when this move's own restore runs", async () => {
+    const spoolA = spool({ id: "spl-a" });
+    const spoolC = spool({ id: "spl-c" });
+    let moveCallCount = 0;
+    let rejectMoveA!: (reason: unknown) => void;
+    let resolveMoveC!: (value: unknown) => void;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [spoolA, spoolC]));
+      if (command === "move_spool") {
+        moveCallCount += 1;
+        if (moveCallCount === 1) return new Promise((_resolve, reject) => { rejectMoveA = reject; });
+        return new Promise((resolve) => { resolveMoveC = resolve; });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const movePromiseA = moveSpool({
+      spoolId: spoolA.id, expectedSpoolRevision: spoolA.revision,
+      destination: { kind: "storage", storageLabel: "Shelf A2" },
+    });
+    const movePromiseC = moveSpool({
+      spoolId: spoolC.id, expectedSpoolRevision: spoolC.revision,
+      destination: { kind: "storage", storageLabel: "Shelf C2" },
+    });
+
+    // Move C settles first, bumping its revision.
+    const settledC = { ...spoolC, revision: 2, location: { kind: "storage" as const, storageLabel: "Shelf C2" } };
+    resolveMoveC({ contractVersion: 1, data: { spools: [settledC], printers: [], movements: [] } });
+    await movePromiseC;
+    expect(spoolState.spools.find((s) => s.id === spoolC.id)).toEqual(settledC);
+
+    // Move A then fails (non-conflict) -- its restore must touch only A.
+    rejectMoveA({ contractVersion: 1, code: "VALIDATION", message: "Bad request.", recovery: [], retryable: false });
+    await expect(movePromiseA).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(spoolState.spools.find((s) => s.id === spoolA.id)?.location).toEqual(spoolA.location);
+    expect(spoolState.spools.find((s) => s.id === spoolC.id)).toEqual(settledC);
+  });
+});
+
+describe("moveSpool: CONFLICT recovery", () => {
+  it("restores, refetches only the affected Spool ids through list_spools, and rethrows", async () => {
     const original = spool({ id: "spl-1", revision: 3, location: { kind: "storage", storageLabel: "Shelf A" } });
+    // The refetch returns a *different* record from both the optimistic
+    // placement and the pre-move original -- proving the final state comes
+    // from the refetch, not merely from the restore.
+    const refetched = { ...original, revision: 4, location: { kind: "storage" as const, storageLabel: "Shelf Q" } };
     let listSpoolsCalls = 0;
     tauriMock.invoke.mockImplementation((command: string) => {
       if (command === "list_spools") {
         listSpoolsCalls += 1;
-        return Promise.resolve(snapshotResponse(0, [original]));
+        return Promise.resolve(snapshotResponse(0, [listSpoolsCalls === 1 ? original : refetched]));
       }
       if (command === "move_spool") {
         return Promise.reject({
@@ -227,27 +355,132 @@ describe("moveSpool", () => {
     })).rejects.toMatchObject({ code: "CONFLICT" });
 
     expect(listSpoolsCalls).toBe(2);
-    expect(spoolState.spools).toEqual([original]);
+    expect(spoolState.spools).toEqual([refetched]);
     expect(spoolState.pending).toEqual({});
   });
 
-  it("ignores a late spool.changed event with a lower revision than the settled one", async () => {
-    let handler!: (event: { payload: unknown }) => void;
-    eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
-      handler = cb;
-      return Promise.resolve(vi.fn());
+  it("leaves an unrelated Spool's newer event-applied state and the tares untouched by the refetch", async () => {
+    const box = captureListenerHandler();
+    const moving = spool({ id: "spl-1", location: { kind: "storage", storageLabel: "Shelf A" } });
+    const unrelatedOriginal = spool({ id: "spl-unrelated", colorName: "Original Color" });
+    const initialTares = [{ id: "tar-1", revision: 1, name: "Tare A", weightMg: 200_000, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" }];
+    let listSpoolsCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") {
+        listSpoolsCalls += 1;
+        // The refetch's own snapshot is stale for the unrelated Spool and
+        // carries a *different* tares array -- neither should land, since
+        // the refetch only merges the affected (moving) Spool's id.
+        return Promise.resolve(snapshotResponse(
+          0,
+          [moving, unrelatedOriginal],
+          listSpoolsCalls === 1 ? initialTares : [{ ...initialTares[0], name: "Different tare" }],
+        ));
+      }
+      if (command === "move_spool") {
+        return Promise.reject({
+          contractVersion: 1, code: "CONFLICT", message: "Conflict.",
+          recovery: ["RETRY"], retryable: true, details: { slotId: "slt-1", currentOccupantSpoolId: null },
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
     });
-    const settled = spool({ revision: 5, colorName: "Settled Color" });
-    tauriMock.invoke.mockResolvedValue(snapshotResponse(10, [settled]));
+
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    // An event bumps the unrelated Spool ahead of anything list_spools knows.
+    const unrelatedFresh = { ...unrelatedOriginal, revision: 2, colorName: "Fresh Color" };
+    box.handler({ payload: envelope(1, { type: "spoolChanged", spool: unrelatedFresh }) });
+    expect(spoolState.spools.find((s) => s.id === "spl-unrelated")).toEqual(unrelatedFresh);
+
+    await expect(moveSpool({
+      spoolId: moving.id,
+      expectedSpoolRevision: moving.revision,
+      destination: { kind: "slot", slotId: "slt-1", expectedOccupantSpoolId: null },
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(spoolState.spools.find((s) => s.id === "spl-unrelated")).toEqual(unrelatedFresh);
+    expect(spoolState.tares).toEqual(initialTares);
+  });
+});
+
+describe("moveSpool: validation", () => {
+  it("rejects loading an archived Spool into a slot (D5), without calling move_spool", async () => {
+    const archived = spool({ id: "spl-1", lifecycle: "archived" });
+    tauriMock.invoke.mockResolvedValue(snapshotResponse(0, [archived]));
+
+    const { loadInventory, moveSpool } = await import("./spool-store");
+    await loadInventory();
+    tauriMock.invoke.mockClear();
+
+    await expect(moveSpool({
+      spoolId: archived.id, expectedSpoolRevision: archived.revision,
+      destination: { kind: "slot", slotId: "slt-1", expectedOccupantSpoolId: null },
+    })).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(tauriMock.invoke).not.toHaveBeenCalledWith("move_spool", expect.anything());
+  });
+});
+
+describe("moveSpool: availability hints", () => {
+  it("applies a newer availability hint", async () => {
+    const box = captureListenerHandler();
+    const target = spool({ id: "spl-1" });
+    tauriMock.invoke.mockResolvedValue(snapshotResponse(0, [target]));
 
     const { loadInventory, spoolState } = await import("./spool-store");
     await loadInventory();
-    expect(spoolState.spools).toEqual([settled]);
 
-    const stale = spool({ revision: 3, colorName: "Stale Color" });
-    handler({ payload: envelope(11, { type: "spoolChanged", spool: stale }) });
+    box.handler({
+      payload: envelope(1, {
+        type: "spoolAvailabilityChanged",
+        spoolId: target.id,
+        availability: { currentMg: 111, reservedMg: 0, availableMg: 111 },
+      }),
+    });
 
-    expect(spoolState.spools).toEqual([settled]);
+    expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual({ currentMg: 111, reservedMg: 0, availableMg: 111 });
+  });
+
+  it("ignores an availability hint that arrives after a newer authoritative command result", async () => {
+    const box = captureListenerHandler();
+    const target = spool({ id: "spl-1", availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 } });
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [target]));
+      if (command === "update_spool") {
+        return Promise.resolve({
+          contractVersion: 1,
+          data: { spool: { ...target, revision: 2, colorName: "Renamed" }, printers: [], warnings: [] },
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, updateSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    // A command result settles the Spool -- no stream sequence attaches to
+    // it, so it's marked as authoritatively fresher than anything the
+    // stream has produced so far (this store's own ruling).
+    await updateSpool(target.id, {
+      manufacturer: target.manufacturer, materialFamily: target.materialFamily, colorName: "Renamed",
+      diameter: target.diameter, nominalMg: target.nominalMg, lowThresholdMg: target.lowThresholdMg,
+    });
+    expect(spoolState.spools.find((s) => s.id === target.id)?.revision).toBe(2);
+
+    // A stale hint arrives afterward -- ignored, since nothing on the
+    // stream has yet confirmed this Spool at a fresher point than the
+    // command result already established.
+    box.handler({
+      payload: envelope(1, {
+        type: "spoolAvailabilityChanged",
+        spoolId: target.id,
+        availability: { currentMg: 1, reservedMg: 0, availableMg: 1 },
+      }),
+    });
+
+    expect(spoolState.spools.find((s) => s.id === target.id)?.availability).toEqual(target.availability);
   });
 });
 
@@ -256,7 +489,7 @@ describe("web mode", () => {
     tauriMock.isTauri.mockReturnValue(false);
   });
 
-  it("fixture moves enforce one Spool per slot and swap with displacement", async () => {
+  it("fixture moves enforce one Spool per slot, swap with displacement, and keep facets.loaded honest", async () => {
     const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
     await loadInventory();
 
@@ -271,7 +504,7 @@ describe("web mode", () => {
       spoolId: storedSpool.id,
       expectedSpoolRevision: storedSpool.revision,
       destination: { kind: "slot", slotId, expectedOccupantSpoolId: null },
-    })).rejects.toBeTruthy();
+    })).rejects.toMatchObject({ code: "CONFLICT" });
 
     // Swaps in, displacing the occupant to storage.
     const result = await moveSpool({
@@ -286,10 +519,37 @@ describe("web mode", () => {
     expect(nowDisplaced.location).toEqual({ kind: "storage", storageLabel: "Displaced shelf" });
     expect(result.spools.map((s) => s.id).sort()).toEqual([storedSpool.id, loadedSpool.id].sort());
 
+    // The facet honestly reflects the new location on both sides of the swap.
+    expect(nowLoaded.facets.loaded).toBe(true);
+    expect(nowDisplaced.facets.loaded).toBe(false);
+
     // Only one Spool now occupies the slot.
     const occupants = spoolState.spools.filter((s) => s.location.kind === "slot" && s.location.slotId === slotId);
     expect(occupants).toHaveLength(1);
     expect(occupants[0].id).toBe(storedSpool.id);
+  });
+
+  it("rejects loading an archived Spool into a slot, but still allows loading an empty one (D5)", async () => {
+    const { loadInventory, moveSpool, setLifecycle, spoolState } = await import("./spool-store");
+    await loadInventory();
+    const loadedSpool = spoolState.spools.find((s) => s.facets.loaded)!;
+    const slotId = loadedSpool.location.kind === "slot" ? loadedSpool.location.slotId : "";
+    const archivedSpool = spoolState.spools.find((s) => s.lifecycle === "archived")!;
+    const activeStoredSpool = spoolState.spools.find((s) => !s.facets.loaded && s.lifecycle === "active" && s.id !== archivedSpool.id)!;
+
+    await expect(moveSpool({
+      spoolId: archivedSpool.id, expectedSpoolRevision: archivedSpool.revision,
+      destination: { kind: "slot", slotId, expectedOccupantSpoolId: loadedSpool.id },
+    })).rejects.toMatchObject({ code: "VALIDATION" });
+
+    // Mark a Spool empty, then load it -- allowed (only "archived" is blocked).
+    const emptied = await setLifecycle(activeStoredSpool.id, "markEmpty");
+    expect(emptied?.lifecycle).toBe("empty");
+    const loaded = await moveSpool({
+      spoolId: activeStoredSpool.id, expectedSpoolRevision: emptied!.revision,
+      destination: { kind: "slot", slotId, expectedOccupantSpoolId: loadedSpool.id },
+    });
+    expect(loaded.spools.find((s) => s.id === activeStoredSpool.id)?.location).toEqual({ kind: "slot", slotId, printerId: loadedSpool.location.kind === "slot" ? loadedSpool.location.printerId : "" });
   });
 
   it("createSpool, recordAmount, setLifecycle, and the tare CRUD actions work against the fixtures", async () => {
@@ -383,6 +643,36 @@ describe("other mutations against the desktop command path", () => {
     expect(spoolStoreError()).toBe("That color name is too long.");
     dismissSpoolStoreError();
     expect(spoolStoreError()).toBeNull();
+  });
+
+  it("does not regress a Spool a newer spool.changed event already updated", async () => {
+    const box = captureListenerHandler();
+    const target = spool({ id: "spl-1", revision: 1 });
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [target]));
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, updateSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const fresher = { ...target, revision: 3, colorName: "Fresher" };
+    box.handler({ payload: envelope(1, { type: "spoolChanged", spool: fresher }) });
+
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "update_spool") {
+        return Promise.resolve({
+          contractVersion: 1,
+          data: { spool: { ...target, revision: 2, colorName: "Older result" }, printers: [], warnings: [] },
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    await updateSpool(target.id, {
+      manufacturer: target.manufacturer, materialFamily: target.materialFamily, colorName: "Older result",
+      diameter: target.diameter, nominalMg: target.nominalMg, lowThresholdMg: target.lowThresholdMg,
+    });
+
+    expect(spoolState.spools.find((s) => s.id === target.id)).toEqual(fresher);
   });
 
   it("loadHistory calls spool_history on the desktop path", async () => {
