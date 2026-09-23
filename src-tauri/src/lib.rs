@@ -6,6 +6,7 @@ pub mod document_io;
 pub mod persistence;
 pub mod printers;
 pub mod settings;
+pub mod spools;
 
 use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
