@@ -4,6 +4,7 @@ import { command, desktopAvailable, isCommandError } from "../ipc/client";
 import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
+import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
 import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
@@ -529,6 +530,36 @@ function mergeCreatedPrinters(records: ResolvedPrinter[]): void {
   });
 }
 
+/** The `PrinterRecord` shape of a web-mode `ResolvedPrinter`, for results
+ *  that carry a `printer` (e.g. the batch web shim). */
+function toWebRecord(printer: ResolvedPrinter): PrinterRecord {
+  const {
+    catalogStatus,
+    modelLabel,
+    variantLabel,
+    profile,
+    overriddenFields,
+    inherited,
+    profileDrift,
+    unknownOverrideKeys,
+    runtimeStatus: _runtimeStatus, // live-only; not part of the durable record
+    ...record
+  } = printer;
+  return {
+    ...record,
+    profileResolution: {
+      catalogStatus,
+      modelLabel,
+      variantLabel,
+      profile,
+      overriddenFields,
+      inherited,
+      profileDrift,
+      unknownOverrideKeys,
+    },
+  };
+}
+
 /** Rejects rather than reporting into the banner: the batch dialog's
  *  Review & results step renders per-row outcomes and errors inline, and a
  *  batch-level failure (e.g. a duplicate `batchId`) needs to reach that same
@@ -571,6 +602,9 @@ export async function createPrintersBatch(
       rows.push({
         rowId: row.rowId,
         outcome: "createdSetupIncomplete",
+        // The same local record merged below, so callers can correlate
+        // row -> Printer exactly as on desktop.
+        printer: toWebRecord(resolved),
         credentialStored: false,
         errors: [],
         warnings: [],

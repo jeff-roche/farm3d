@@ -599,6 +599,12 @@ describe("printer-store", () => {
       expect(tauriMock.invoke).not.toHaveBeenCalled();
       expect(output.rows.map((r) => r.outcome)).toEqual(["createdSetupIncomplete", "createdSetupIncomplete"]);
       expect(store.printers()).toHaveLength(before + 2);
+      // Each created row carries its local record, and it is the one merged
+      // into the store, so the batch dialog can correlate row -> Printer.
+      const ids = output.rows.map((r) => r.printer?.id);
+      expect(ids.every((id) => typeof id === "string")).toBe(true);
+      expect(output.rows.map((r) => r.printer?.name)).toEqual(["Voron A", "Voron B"]);
+      for (const id of ids) expect(store.printers().some((p) => p.id === id)).toBe(true);
     });
 
     it("probeCandidate rejects with a message needing the desktop app", async () => {

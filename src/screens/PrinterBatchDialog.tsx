@@ -18,6 +18,7 @@ import { isCommandError } from "../ipc/client";
 import {
   defaultPort,
   generateRows,
+  isRowCreated,
   mapDiscovery,
   parseIntake,
   toBatchInput,
@@ -190,7 +191,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   const busy = () => pending().size > 0;
   const hasResults = () => rows.some((row) => row.result);
   const hasFailedRows = () => rows.some(isFailed);
-  const canRetry = () => rows.some((row) => (!row.printerId && row.result) || needsReconnect(row));
+  const canRetry = () => rows.some((row) => (!isRowCreated(row) && row.result) || needsReconnect(row));
   const rowsValid = () => rows.length > 0 && rows.every((row) => row.name.trim() !== "");
   const rowPreview = () => ({ defaultBedType: bedType(), startSafety: startSafety() });
 
@@ -257,7 +258,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   );
 
   const mapping = createMemo(() => mapDiscovery(candidates(), rows, props.existingPrinters));
-  const assignableRows = () => rows.filter((row) => !row.printerId);
+  const assignableRows = () => rows.filter((row) => !isRowCreated(row));
   const rowName = (rowId: string) => rows.find((row) => row.rowId === rowId)?.name ?? "";
 
   function assign(candidate: DiscoveredPrinter, rowId: string) {
@@ -267,7 +268,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   /** "Assign in order to selected rows" (D12): unclaimed assignable
    *  candidates go, in discovery order, to selected rows without a host. */
   function assignInOrder() {
-    const targets = rows.filter((row) => row.selected && !row.printerId && row.host.trim() === "");
+    const targets = rows.filter((row) => row.selected && !isRowCreated(row) && row.host.trim() === "");
     const free = candidates().filter((candidate) => {
       const match = mapping().get(candidateKey(candidate));
       return match?.kind === "assignable" && !match.rowId;
@@ -280,7 +281,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     const port = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
     const source = applyCredential();
     setRows(
-      (row) => row.selected && !row.printerId,
+      (row) => row.selected && !isRowCreated(row),
       (row) => ({
         protocol: applyKind(),
         port,
@@ -361,12 +362,14 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
 
   /** Create, and Retry failed: every row without a Printer goes out as a
    *  new batch (same `rowId`s, new `batchId`); a created-but-incomplete row
-   *  with Connection input reconnects its existing Printer instead. */
+   *  with Connection input reconnects its existing Printer instead. A row
+   *  created without a returned `printerId` is never re-sent and cannot be
+   *  reconnected from here. */
   async function submit() {
     const shared = sharedInput();
     if (!shared || busy()) return;
     setBatchError(null);
-    const batchRows = rows.filter((row) => !row.printerId);
+    const batchRows = rows.filter((row) => !isRowCreated(row));
     const reconnectRows = rows.filter(needsReconnect);
     setPending(new Set([...batchRows, ...reconnectRows].map((row) => row.rowId)));
     try {
@@ -635,7 +638,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 <div>
                   <Button
                     variant="secondary"
-                    disabled={!rows.some((row) => row.selected && !row.printerId)}
+                    disabled={!rows.some((row) => row.selected && !isRowCreated(row))}
                     onClick={applyToSelected}
                   >
                     Apply to selected

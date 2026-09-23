@@ -180,6 +180,22 @@ describe("BatchRowsTable — results mode", () => {
     expect(props.onChange).toHaveBeenCalledWith("c", { name: "Good" });
   });
 
+  it("treats a created outcome as created even without a printerId", () => {
+    renderTable({
+      mode: "results",
+      rows: [row({ result: { rowId: "r1", outcome: "createdSetupIncomplete", credentialStored: false, errors: [], warnings: [] } })],
+    });
+    expect(screen.queryByLabelText("Name for row 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Location for row 1")).not.toBeInTheDocument();
+    expect(screen.getByText("Voron 01")).toBeInTheDocument();
+  });
+
+  it("shows no inline edit or Remove in edit mode for a row with a created outcome but no printerId", () => {
+    renderTable({ rows: [row({ result: { rowId: "r1", outcome: "created", credentialStored: false, errors: [], warnings: [] } })] });
+    expect(screen.queryByLabelText("Name for row 1")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove Voron 01" })).not.toBeInTheDocument();
+  });
+
   it("shows in-progress rows as pending", () => {
     renderTable({ mode: "results", rows: [row()], pending: new Set(["r1"]) });
     expect(screen.getByRole("status", { name: "In progress" })).toBeInTheDocument();

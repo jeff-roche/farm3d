@@ -373,6 +373,54 @@ describe("PrinterBatchDialog — Review & results", () => {
     expect(screen.queryByRole("status", { name: "Created — Setup incomplete" })).not.toBeInTheDocument();
   });
 
+  it("never re-sends a created or createdSetupIncomplete row, even when its result has no printer record", async () => {
+    createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: [
+        result(input.rows[0].rowId, "created"),
+        result(input.rows[1].rowId, "createdSetupIncomplete", {
+          errors: [{ code: "TIMEOUT", message: "Timed out" }],
+        }),
+        result(input.rows[2].rowId, "rejected", { errors: [{ code: "VALIDATION", message: "Bad name", fieldPath: "name" }] }),
+      ],
+    }));
+    renderDialog();
+    await toReviewStep();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByRole("status", { name: "Not created" });
+    const first = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+
+    // Created rows' identity is fixed; only the rejected row stays editable.
+    expect(screen.queryByLabelText("Name for row 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Name for row 2")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Name for row 3")).toBeInTheDocument();
+
+    createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: input.rows.map((row) => result(row.rowId, "created", { printer: record("prn-x") })),
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed" }));
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(2));
+    const retry = createPrintersBatch.mock.calls[1][0] as CreatePrintersBatchInput;
+    expect(retry.rows.map((row) => row.rowId)).toEqual([first.rows[2].rowId]);
+    // No printerId to reconnect against, so no setConnection either.
+    expect(setConnection).not.toHaveBeenCalled();
+  });
+
+  it("offers no retry when the only failed row was created without a printer record", async () => {
+    createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: input.rows.map((row) =>
+        result(row.rowId, "createdSetupIncomplete", { errors: [{ code: "TIMEOUT", message: "Timed out" }] }),
+      ),
+    }));
+    renderDialog();
+    await toReviewStep();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(marker("Created — Setup incomplete")).toHaveLength(3));
+    expect((screen.getByRole("button", { name: "Retry failed" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("shows a failed reconnection's error on its row", async () => {
     createPrintersBatch.mockImplementationOnce(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
     renderDialog();

@@ -1,6 +1,6 @@
 import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js";
 import { Button, Checkbox, SeverityMarker, TextField, type SeverityMarkerProps } from "../design-system";
-import { defaultPort, type BatchRowDraft } from "../printers/batch-intake";
+import { defaultPort, isRowCreated, type BatchRowDraft } from "../printers/batch-intake";
 import type { StartSafety } from "../printers/types";
 import type { BatchRowOutcome } from "../generated/contracts/command/BatchRowOutcome";
 import { bedTypeLabel } from "./PrinterProfilePanel";
@@ -62,7 +62,7 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
     const existing = new Set((props.existingNames ?? []).map(nameKey));
     const warnings = new Map<string, string>();
     for (const row of props.rows) {
-      if (row.printerId) continue;
+      if (isRowCreated(row)) continue;
       const key = nameKey(row.name);
       if (!key) continue;
       if (existing.has(key)) warnings.set(row.rowId, "A Printer already has this name");
@@ -209,8 +209,14 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
 
         <For each={props.rows}>
           {(row, index) => {
-            const locked = () => !!row.printerId;
+            const locked = () => isRowCreated(row);
             const pending = () => props.pending?.has(row.rowId) ?? false;
+            // Connection input stays editable for rows not yet created, and
+            // for a created-but-incomplete row that can still be reconnected
+            // through its printerId.
+            const connectionEditable = () =>
+              !pending() &&
+              (!locked() || (!!row.printerId && row.result?.outcome === "createdSetupIncomplete"));
             return (
               <div role="row" class={styles.row} data-testid={`row-${row.rowId}`}>
                 <Show when={selectable()}>
@@ -277,7 +283,7 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
                     {nameCell(row, index(), !locked() && !pending())}
                     {locationCell(row, index(), !locked() && !pending())}
                     <Show
-                      when={row.result?.outcome !== "created" && !pending()}
+                      when={connectionEditable()}
                       fallback={
                         <>
                           <div role="cell" class={styles.cell}>

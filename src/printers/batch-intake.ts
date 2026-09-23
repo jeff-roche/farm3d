@@ -28,6 +28,16 @@ export interface BatchRowDraft {
   result?: BatchRowResult;
 }
 
+/** Whether this row already produced a Printer. Keyed on the latest
+ *  outcome as well as `printerId`: a `created`/`createdSetupIncomplete`
+ *  result without a `printer` record still means a Printer exists, so the
+ *  row must never be re-sent in a batch (D1: a retry never creates a second
+ *  Printer) and its identity is no longer editable. */
+export function isRowCreated(row: BatchRowDraft): boolean {
+  const outcome = row.result?.outcome;
+  return !!row.printerId || outcome === "created" || outcome === "createdSetupIncomplete";
+}
+
 export interface IntakeIssue {
   line: number;
   message: string;
