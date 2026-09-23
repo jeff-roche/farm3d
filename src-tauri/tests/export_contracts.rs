@@ -48,6 +48,8 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::spools::slots::SlotSpec;
+use farm3d_lib::spools::MaterialSlot;
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
@@ -234,6 +236,8 @@ fn export_registry() -> Vec<Export> {
         export::<ProfileResolution>(),
         export::<LastKnownGood>(),
         export::<ResolvedPrinter>(),
+        export::<MaterialSlot>(),
+        export::<SlotSpec>(),
         export::<PrinterPatch>(),
         export::<StartSafety>(),
         export::<SetupGap>(),
@@ -875,7 +879,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));

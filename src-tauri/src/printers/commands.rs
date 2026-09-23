@@ -12,6 +12,7 @@ use crate::persistence::SnapshotKind;
 use super::create::{validate_location, validate_name, CreatePrinterOptions};
 use super::repository::PrinterRepository;
 use super::{CatalogRef, PrinterPatch};
+use crate::spools::slots::{InitialLoad, SlotSpec};
 
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -131,6 +132,8 @@ pub async fn create_printer<R: tauri::Runtime>(
     start_safety: Option<super::StartSafety>,
     default_bed_type: Option<String>,
     connection: Option<crate::connections::commands::ConnectionSubmission>,
+    slot_layout: Option<Vec<SlotSpec>>,
+    initial_loads: Option<Vec<InitialLoad>>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
@@ -159,6 +162,8 @@ pub async fn create_printer<R: tauri::Runtime>(
             start_safety: start_safety.unwrap_or_default(),
             default_bed_type,
             connection,
+            slot_layout: slot_layout.unwrap_or_else(crate::spools::slots::default_layout),
+            initial_loads: initial_loads.unwrap_or_default(),
         },
     )
     .await?;
@@ -166,6 +171,29 @@ pub async fn create_printer<R: tauri::Runtime>(
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
     }))
+}
+
+/// D4/D12: sets a Printer's Material Slot layout (reorder/rename/add/remove
+/// an empty slot). Registration (ruling R2: this task fully registers it,
+/// since its own tests invoke it over IPC) — Task 9/11 are its UI callers.
+#[tauri::command]
+pub fn set_material_slot_layout<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    printer_id: String,
+    expected_revision: i64,
+    slots: Vec<SlotSpec>,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let updated = PrinterRepository::new(Arc::clone(&services.storage))
+        .set_material_slot_layout(&printer_id, expected_revision, &slots)
+        .map_err(CommandError::from_repository)?;
+    Ok(mutation(crate::catalog::resolve::resolve_printer(
+        &services.catalog,
+        &updated,
+    )))
 }
 
 #[tauri::command]
@@ -605,7 +633,7 @@ pub async fn export_printers<R: tauri::Runtime>(
         .map(export_printer)
         .collect::<Result<Vec<_>, _>>()?;
     let bytes = serde_json::to_vec_pretty(&ExportPrintersDocument {
-        schema_version: 2,
+        schema_version: 3,
         exported_at: &exported_at,
         printers: &exported,
     })
@@ -709,9 +737,32 @@ pub async fn import_printers<R: tauri::Runtime>(
     let old_records = PrinterRepository::new(Arc::clone(&services.storage))
         .list()
         .map_err(|error| CommandError::from_repository(error.into()))?;
+    // D12: a v1/v2 document (or a v3 Printer that omitted `materialSlots`)
+    // gets the default `[Main]` layout; a non-empty v3 layout is recreated
+    // with fresh slot ids inside `replace_all`'s transaction.
+    let layouts: std::collections::HashMap<String, Vec<SlotSpec>> = document
+        .printers
+        .iter()
+        .filter(|printer| !printer.material_slots.is_empty())
+        .map(|printer| {
+            let layout = printer
+                .material_slots
+                .iter()
+                .map(|slot| SlotSpec {
+                    id: None,
+                    name: slot.name.clone(),
+                    feeder_label: slot.feeder_label.clone(),
+                })
+                .collect();
+            (printer.id.clone(), layout)
+        })
+        .collect();
     let stored = crate::connections::commands::with_credential_coordination(|| {
-        PrinterRepository::new(Arc::clone(&services.storage))
-            .replace_all(&expected, document.printers)
+        PrinterRepository::new(Arc::clone(&services.storage)).replace_all(
+            &expected,
+            document.printers,
+            &layouts,
+        )
     })
     .map_err(CommandError::from_repository)?;
     services.documents.after_printers_commit();
@@ -782,6 +833,24 @@ fn export_printer(printer: &super::StoredPrinter) -> Result<serde_json::Value, C
     object
         .entry("connection")
         .or_insert(serde_json::Value::Null);
+    // D12: schemaVersion 3's materialSlots carries no id/position/occupancy
+    // — only name/feederLabel, in position order (the array's own order IS
+    // the position; `printer.material_slots` is already position-ordered).
+    let reduced_slots: Vec<serde_json::Value> = printer
+        .material_slots
+        .iter()
+        .map(|slot| {
+            let mut entry = serde_json::json!({ "name": slot.name });
+            if let Some(label) = &slot.feeder_label {
+                entry["feederLabel"] = serde_json::json!(label);
+            }
+            entry
+        })
+        .collect();
+    object.insert(
+        "materialSlots".to_string(),
+        serde_json::Value::Array(reduced_slots),
+    );
     Ok(value)
 }
 
@@ -827,11 +896,11 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 2 {
+    if version > 3 {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 && version != 2 {
-        return Err(CommandError::validation("schemaVersion must be 1 or 2."));
+    if version != 1 && version != 2 && version != 3 {
+        return Err(CommandError::validation("schemaVersion must be 1, 2, or 3."));
     }
     let rows = root
         .get("printers")
@@ -858,6 +927,10 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         "location",
         "startSafety",
         "archivedAt",
+        // P3 (schemaVersion 3, D12): optional; absent (v1/v2) or empty (a
+        // v3 Printer that omitted it) both fall back to
+        // `slots::default_layout()` in `import_printers` below.
+        "materialSlots",
     ];
     for row in rows {
         let object = row
@@ -968,7 +1041,7 @@ mod import_export_tests {
 
     #[test]
     fn printer_import_rejects_future_schema_duplicate_ids_and_secret_fields() {
-        let future = br#"{"schemaVersion":3,"exportedAt":"x","printers":[]}"#;
+        let future = br#"{"schemaVersion":4,"exportedAt":"x","printers":[]}"#;
         assert_eq!(
             parse_printers_document(future).unwrap_err().code,
             ErrorCode::UnsupportedSchemaVersion

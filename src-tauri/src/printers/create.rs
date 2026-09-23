@@ -24,12 +24,13 @@ use crate::printers::setup::{supervise_persisted, SupervisionOutcome};
 use crate::printers::{
     CatalogRef, LastKnownGood, PrinterProfileOverrides, StartSafety, StoredPrinter,
 };
+use crate::spools::slots::{InitialLoad, SlotSpec};
 use crate::RuntimeServices;
 
 use super::host_identity::canonical_host_identity;
 
-/// What `create_printer` (and, in a later task, the batch-create path) both
-/// build before handing off to [`create_printer_with`].
+/// What `create_printer` and the batch-create path both build before
+/// handing off to [`create_printer_with`].
 pub struct CreatePrinterOptions {
     pub name: String,
     pub catalog_ref: CatalogRef,
@@ -40,6 +41,14 @@ pub struct CreatePrinterOptions {
     /// carries a `credential_ref`; one is minted only once the secret (if
     /// any) is durably written.
     pub connection: Option<(ConnectionConfig, Option<Zeroizing<String>>)>,
+    /// D4/D12: the new Printer's Material Slot layout. Copied at creation —
+    /// there is no shared/batch layout entity (D12, user decision 3).
+    pub slot_layout: Vec<SlotSpec>,
+    /// D12: Spools to load into `slot_layout` positions in the same create
+    /// transaction as the layout insert, sharing one generated
+    /// `operationId`. Always empty for batch create (D12: "batch never
+    /// loads Spools").
+    pub initial_loads: Vec<InitialLoad>,
 }
 
 pub struct CreateOutcome {
@@ -319,11 +328,48 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         location,
         start_safety: options.start_safety,
         archived_at: None,
+        // Filled by `create_with_layout` before it returns — see that
+        // method's doc comment.
+        material_slots: Vec::new(),
         created_at: String::new(),
         updated_at: String::new(),
     };
 
-    let create_result = repository.create_in(printer, provisional_reference.as_deref());
+    // D12: each initial load must be an active Spool currently in storage —
+    // `movement::apply_move` alone wouldn't reject "steal a Spool from
+    // wherever it currently is", since a slot->slot move is an ordinary,
+    // valid move in general. Checked before the create transaction opens,
+    // so a rejection here creates no Printer row at all (not even a
+    // rolled-back one to distinguish from "never started").
+    for (index, load) in options.initial_loads.iter().enumerate() {
+        if load.slot_index >= options.slot_layout.len() {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].slotIndex"),
+                "slotIndex must reference an entry of slotLayout.",
+            ));
+        }
+        let spool = services
+            .storage
+            .read_transaction(|tx| Ok(crate::spools::repository::load_spool(tx, &load.spool_id)))
+            .and_then(|inner| inner)
+            .map_err(|error| CommandError::from_repository(error.into()))?;
+        let eligible = spool.is_some_and(|spool| {
+            spool.lifecycle == crate::spools::SpoolLifecycle::Active && spool.slot_id.is_none()
+        });
+        if !eligible {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].spoolId"),
+                "The Spool must be active and currently in storage.",
+            ));
+        }
+    }
+
+    let create_result = repository.create_with_layout(
+        printer,
+        provisional_reference.as_deref(),
+        &options.slot_layout,
+        &options.initial_loads,
+    );
     // Drop the coordinator lock before any further credential-store call —
     // `retry_pending_credential_cleanup` (below, on the error path) takes
     // the SAME lock itself, and it is not reentrant.

@@ -108,6 +108,13 @@ pub struct BatchShared {
     #[ts(optional)]
     pub default_bed_type: Option<String>,
     pub start_safety: StartSafety,
+    /// D12: copied into each row's own `CreatePrinterOptions` as its own,
+    /// independent set of freshly-generated slot ids — there is no batch or
+    /// shared layout entity (D12, user decision 3). `None` means every row
+    /// gets `slots::default_layout()`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub slot_layout: Option<Vec<crate::spools::slots::SlotSpec>>,
 }
 
 #[derive(Deserialize, Debug, TS)]
@@ -690,6 +697,12 @@ async fn commit_row<R: tauri::Runtime>(
         start_safety: shared.start_safety,
         default_bed_type: shared.default_bed_type.clone(),
         connection,
+        slot_layout: shared
+            .slot_layout
+            .clone()
+            .unwrap_or_else(crate::spools::slots::default_layout),
+        // D12: batch never loads Spools (user decision 3).
+        initial_loads: Vec::new(),
     };
     let connection = row
         .connection

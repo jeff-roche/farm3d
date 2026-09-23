@@ -302,6 +302,7 @@ pub enum ErrorCode {
     Internal,
     DuplicateHost,
     LifecycleBlocked,
+    SlotOccupied,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -472,6 +473,25 @@ impl CommandError {
                 "currentOccupantSpoolId".to_string(),
                 current_occupant_spool_id
                     .map_or(JsonValue::Null(()), |id| JsonValue::String(id.to_string())),
+            ),
+        ]));
+        error
+    }
+
+    /// P3 Task 5: `set_material_slot_layout` tried to soft-remove a slot
+    /// that still has a Spool loaded. The UI offers "Unload first".
+    pub fn slot_occupied(slot_id: &str, spool_id: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::SlotOccupied,
+            "This slot still has a Spool loaded. Unload it first.",
+            vec![RecoveryCode::EditFields],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("slotId".to_string(), JsonValue::String(slot_id.to_string())),
+            (
+                "spoolId".to_string(),
+                JsonValue::String(spool_id.to_string()),
             ),
         ]));
         error
@@ -740,6 +760,9 @@ impl CommandError {
                 slot_id,
                 current_occupant_spool_id,
             } => Self::occupancy_conflict(&slot_id, current_occupant_spool_id.as_deref()),
+            RepositoryError::SlotOccupied { slot_id, spool_id } => {
+                Self::slot_occupied(&slot_id, &spool_id)
+            }
             RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
                 serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
             ),

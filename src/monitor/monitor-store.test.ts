@@ -51,6 +51,7 @@ function printer(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
     profileDrift: [],
     unknownOverrideKeys: [],
     startSafety: "confirmBedClear",
+    materialSlots: [{ id: "slt-main", position: 0, name: "Main" }],
     setupGaps: [],
     createdAt: "",
     updatedAt: "",

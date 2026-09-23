@@ -14,6 +14,7 @@ pub mod ledger;
 pub mod movement;
 pub mod repository;
 pub mod reservations;
+pub mod slots;
 pub mod tares;
 pub mod weight;
 
@@ -202,8 +203,19 @@ pub struct SpoolRecord {
 }
 
 /// D4/D12: one Printer's Material Slot.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(rename_all = "camelCase")]
+///
+/// `#[serde(default)]` at the struct level makes every field lenient to
+/// deserialize even when absent — never relied on for a real read (the
+/// repository always sets every field), but it's what lets a schemaVersion-3
+/// Printers-export document's reduced `{ name, feederLabel? }` shape (D12:
+/// "no occupancy", and no `id`/`position` either — positions are the
+/// array's own order) parse straight into `Vec<MaterialSlot>` via
+/// `StoredPrinter::material_slots` without a second, import-only type. The
+/// wire contract for a real read stays exactly `{ id, position, name,
+/// feederLabel?, occupantSpoolId? }` — this is Rust-side deserialization
+/// leniency only, not reflected in `#[ts(optional)]`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
+#[serde(rename_all = "camelCase", default)]
 #[ts(rename_all = "camelCase", export_to = "domain/MaterialSlot.ts")]
 pub struct MaterialSlot {
     pub id: String,

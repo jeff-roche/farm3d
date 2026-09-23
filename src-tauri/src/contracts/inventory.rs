@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 30] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 31] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -33,6 +33,11 @@ contracts![
         "create_printer",
         "CreatePrinterRequest",
         "CreatePrinterResult"
+    ),
+    (
+        "set_material_slot_layout",
+        "SetMaterialSlotLayoutRequest",
+        "SetMaterialSlotLayoutResult"
     ),
     (
         "update_printer",
@@ -152,7 +157,7 @@ contracts![
     ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 30] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 31] {
     &COMMAND_CONTRACTS
 }
 
@@ -185,8 +190,10 @@ export type ImportSettingsRequest = ContractRequest & { expectedRevision: number
 export type ImportSettingsResult = CommandSuccess<SettingsImportOutcome>;
 export type ListPrintersRequest = NoArgsRequest;
 export type ListPrintersResult = CommandSuccess<PrinterRecord[]>;
-export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission };
+export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] };
 export type CreatePrinterResult = CommandSuccess<PrinterMutationResult>;
+export type SetMaterialSlotLayoutRequest = ContractRequest & { printerId: string; expectedRevision: number; slots: SlotSpec[] };
+export type SetMaterialSlotLayoutResult = CommandSuccess<PrinterMutationResult>;
 export type UpdatePrinterRequest = ContractRequest & { id: string; expectedRevision: number; patch: PrinterPatch };
 export type UpdatePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type DeletePrinterRequest = ContractRequest & { id: string; expectedRevision: number };
@@ -255,6 +262,13 @@ export type ListDuplicateHostArchivesResult = CommandSuccess<DuplicateHostArchiv
         visitor.visit::<crate::printers::StartSafety>();
         visitor.visit::<crate::catalog::PrinterProfile>();
         visitor.visit::<crate::catalog::resolve::ResolvedPrinter>();
+        // `MaterialSlot` isn't visited here: it's never referenced BY NAME
+        // in this file's own hand-written decl string (only `SlotSpec` is,
+        // in `CreatePrinterRequest`/`SetMaterialSlotLayoutRequest`) —
+        // `ResolvedPrinter`'s own `material_slots: Vec<MaterialSlot>` field
+        // already pulls it in as PrinterRecord.ts's dependency. Visiting it
+        // here too would add an unused import to CommandContracts.ts.
+        visitor.visit::<crate::spools::slots::SlotSpec>();
         visitor.visit::<crate::printers::commands::PrinterMutationResult>();
         visitor.visit::<crate::printers::lifecycle::LifecycleEligibility>();
         visitor.visit::<crate::printers::commands::DeletePrinterResult>();

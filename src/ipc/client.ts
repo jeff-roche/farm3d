@@ -9,6 +9,10 @@ type CommandMap = {
   import_settings: [Contracts.ImportSettingsRequest, Contracts.ImportSettingsResult];
   list_printers: [Contracts.ListPrintersRequest, Contracts.ListPrintersResult];
   create_printer: [Contracts.CreatePrinterRequest, Contracts.CreatePrinterResult];
+  set_material_slot_layout: [
+    Contracts.SetMaterialSlotLayoutRequest,
+    Contracts.SetMaterialSlotLayoutResult,
+  ];
   update_printer: [Contracts.UpdatePrinterRequest, Contracts.UpdatePrinterResult];
   delete_printer: [Contracts.DeletePrinterRequest, Contracts.DeletePrinterResult];
   set_printer_override: [Contracts.SetPrinterOverrideRequest, Contracts.SetPrinterOverrideResult];

@@ -103,6 +103,12 @@ pub enum RepositoryError {
         slot_id: String,
         current_occupant_spool_id: Option<String>,
     },
+    /// P3 Task 5: `set_material_slot_layout` tried to soft-remove a slot
+    /// that still has a Spool loaded. The UI offers "Unload first".
+    SlotOccupied {
+        slot_id: String,
+        spool_id: String,
+    },
     /// D7: `archive`/`unarchive`/`delete` is blocked by the Printer's
     /// current lifecycle state (or, in a later phase, other work that still
     /// depends on it). See `crate::printers::lifecycle::evaluate`.

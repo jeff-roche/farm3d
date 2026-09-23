@@ -20,7 +20,8 @@ use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
     archive_printer, create_printer, delete_printer, export_printers, import_printers,
     list_duplicate_host_archives, list_printers, printer_lifecycle_eligibility, rebind_printer,
-    resolve_profile_drift, set_printer_override, unarchive_printer, update_printer,
+    resolve_profile_drift, set_material_slot_layout, set_printer_override, unarchive_printer,
+    update_printer,
 };
 use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
@@ -72,13 +73,14 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 30] = [
+pub const COMMAND_NAMES: [&str; 31] = [
     "load_settings",
     "save_settings",
     "export_settings",
     "import_settings",
     "list_printers",
     "create_printer",
+    "set_material_slot_layout",
     "update_printer",
     "delete_printer",
     "set_printer_override",
@@ -366,6 +368,7 @@ pub fn run() {
             import_settings,
             list_printers,
             create_printer,
+            set_material_slot_layout,
             update_printer,
             delete_printer,
             set_printer_override,

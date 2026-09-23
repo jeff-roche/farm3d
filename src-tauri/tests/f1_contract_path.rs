@@ -1,6 +1,6 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory_plus_p2_lifecycle_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 30);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_additions() {
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 31);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -10,6 +10,7 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_lifecycle_additions() {
             "import_settings",
             "list_printers",
             "create_printer",
+            "set_material_slot_layout",
             "update_printer",
             "delete_printer",
             "set_printer_override",
@@ -56,7 +57,7 @@ fn generated_contracts_and_sqlite_never_contain_the_fixture_secret() {
 }
 
 #[test]
-fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
+fn all_thirty_one_handlers_return_the_captured_nonretryable_bootstrap_error() {
     use farm3d_lib::bootstrap::BootstrapState;
     use farm3d_lib::contracts::command::CommandError;
     use farm3d_lib::RuntimeServices;
@@ -94,6 +95,7 @@ fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
             farm3d_lib::settings::commands::import_settings,
             farm3d_lib::printers::commands::list_printers,
             farm3d_lib::printers::commands::create_printer,
+            farm3d_lib::printers::commands::set_material_slot_layout,
             farm3d_lib::printers::commands::update_printer,
             farm3d_lib::printers::commands::delete_printer,
             farm3d_lib::printers::commands::set_printer_override,
@@ -147,6 +149,10 @@ fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
         (
             "create_printer",
             json!({"name":"p","catalogRef":catalog_ref.clone()}),
+        ),
+        (
+            "set_material_slot_layout",
+            json!({"printerId":"p","expectedRevision":1,"slots":[]}),
         ),
         (
             "update_printer",
@@ -205,7 +211,7 @@ fn all_thirty_handlers_return_the_captured_nonretryable_bootstrap_error() {
         ("cancel_printer_batch", json!({"batchId": "b"})),
         ("list_duplicate_host_archives", json!({})),
     ];
-    assert_eq!(cases.len(), 30);
+    assert_eq!(cases.len(), 31);
     for (command, mut body) in cases {
         body["contractVersion"] = json!(1);
         let error = invoke(&webview, command, body).unwrap_err();

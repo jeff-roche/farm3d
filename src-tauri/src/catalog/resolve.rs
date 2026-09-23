@@ -70,6 +70,11 @@ pub struct ResolvedPrinter {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub archived_at: Option<String>,
+    /// D4/D12: this Printer's live Material Slot layout, in position order.
+    /// Copied verbatim from `StoredPrinter::material_slots` — never derived
+    /// here, since occupancy is persisted truth, not something a pure
+    /// resolver could compute.
+    pub material_slots: Vec<crate::spools::MaterialSlot>,
     pub setup_gaps: Vec<SetupGap>,
     pub profile_resolution: ProfileResolution,
     pub created_at: String,
@@ -252,6 +257,7 @@ pub fn resolve_printer(catalog: &Catalog, stored: &StoredPrinter) -> ResolvedPri
         location: stored.location.clone(),
         start_safety: stored.start_safety,
         archived_at: stored.archived_at.clone(),
+        material_slots: stored.material_slots.clone(),
         setup_gaps,
         profile_resolution: ProfileResolution {
             catalog_status: status,

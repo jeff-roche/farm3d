@@ -17,6 +17,7 @@ import type {
   CredentialStoreInfo,
   DiscoveredPrinter,
   LifecycleEligibility,
+  MaterialSlot,
   OverridableField,
   PrinterPatch,
   PrinterProfile,
@@ -199,6 +200,13 @@ const WEB_FALLBACK_SPECS: WebFallbackSpec[] = [
   },
 ];
 
+/** D4/D12: web mode has no Rust repository to insert a real layout, so
+ *  every web-only Printer gets the same single-slot `[Main]` layout
+ *  `create_printer`/batch create default to on the desktop. */
+function defaultWebMaterialSlots(seedId: string): MaterialSlot[] {
+  return [{ id: `slt-web-${seedId}`, position: 0, name: "Main" }];
+}
+
 /** A spec whose vendor/model/variant no longer resolves (a stale seed
  *  after the bundled catalog changes) is skipped rather than crashing the
  *  whole dev environment over it. */
@@ -223,6 +231,7 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         profileDrift: [],
         unknownOverrideKeys: [],
         startSafety: "confirmBedClear",
+        materialSlots: defaultWebMaterialSlots(spec.id),
         setupGaps: [],
         createdAt: "",
         updatedAt: "",
@@ -298,6 +307,7 @@ export async function createPrinter(options: CreatePrinterOptions): Promise<Reso
       unknownOverrideKeys: [],
       location: options.location,
       startSafety: options.startSafety ?? "confirmBedClear",
+      materialSlots: defaultWebMaterialSlots(id),
       setupGaps: options.connection ? [] : ["missingConnection"],
       createdAt: "",
       updatedAt: "",
@@ -662,8 +672,9 @@ export async function createPrintersBatch(
         input.shared.catalogRef.model,
         input.shared.catalogRef.printerVariant,
       );
+      const id = `prn-web-${state.printers.length + created.length + 1}`;
       const resolved: ResolvedPrinter = {
-        id: `prn-web-${state.printers.length + created.length + 1}`,
+        id,
         revision: 1,
         name: row.name,
         notes: "",
@@ -679,6 +690,7 @@ export async function createPrintersBatch(
         unknownOverrideKeys: [],
         location: row.location,
         startSafety: input.shared.startSafety,
+        materialSlots: defaultWebMaterialSlots(id),
         setupGaps: ["missingConnection"],
         createdAt: "",
         updatedAt: "",

@@ -16,6 +16,7 @@ export type { LifecycleAction } from "../generated/contracts/domain/LifecycleAct
 export type { LifecycleBlocker } from "../generated/contracts/domain/LifecycleBlocker";
 export type { LifecycleBlockerCode } from "../generated/contracts/domain/LifecycleBlockerCode";
 export type { LifecycleEligibility } from "../generated/contracts/domain/LifecycleEligibility";
+export type { MaterialSlot } from "../generated/contracts/domain/MaterialSlot";
 export type { ProbeResult } from "../generated/contracts/domain/ProbeResult";
 export type { ProfileDrift } from "../generated/contracts/domain/ProfileDrift";
 export type { ReportedCapabilities } from "../generated/contracts/domain/ReportedCapabilities";
