@@ -153,11 +153,20 @@
   color: var(--f3d-color-danger);
 }
 
+/* Sticky rather than in normal flow: the dialog's own scroll container
+   (`Dialog.module.css` `.content`, `max-height: 85vh; overflow: auto;`) can
+   be shorter than the batch content (rows grid, results list) at compact
+   viewports such as 1024 x 700, which would otherwise push Create/Cancel/
+   Retry below the fold. Pinning the footer keeps it reachable without
+   hunting for a scrollbar. */
 .footer {
+  position: sticky;
+  bottom: 0;
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
-  padding: 0.75rem 0.25rem 0;
+  padding: 0.75rem 0.25rem;
+  background-color: var(--f3d-color-surface-raised);
 }
 
 .footerSpacer {
