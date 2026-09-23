@@ -289,6 +289,13 @@ describe("PrinterSetupWizard — Operate", () => {
     await fireEvent.pointerDown(bedTypeTrigger, { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Textured PEI Plate")).toBeInTheDocument();
   });
+
+  it("labels the catalog's blank bed type as Default, not a blank list item", async () => {
+    await reachOperate();
+    const bedTypeTrigger = screen.getByRole("button", { name: /Bed type/ });
+    await fireEvent.pointerDown(bedTypeTrigger, { pointerType: "mouse", button: 0 });
+    expect(await screen.findByText("Default")).toBeInTheDocument();
+  });
 });
 
 describe("PrinterSetupWizard — Review", () => {
@@ -345,6 +352,36 @@ describe("PrinterSetupWizard — Review", () => {
       await screen.findByText(/Bed width: catalog says 256 mm, the printer reports 220 mm/),
     ).toBeInTheDocument();
     expect(await screen.findByText(/OS keychain/)).toBeInTheDocument();
+  });
+
+  it("drops a stale probe result from Review after the host is edited post-Test", async () => {
+    probeCandidate.mockResolvedValueOnce({
+      kind: "moonraker",
+      hostSoftware: "Moonraker 0.9",
+      firmware: "Klipper v0.12",
+      reportedName: "Bay 1",
+      state: "online",
+      stateMessage: "",
+      reported: { bedWidthMm: 220 },
+    });
+    render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
+    await pickCentauriCarbon();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(probeCandidate).toHaveBeenCalled());
+    await screen.findByText("online");
+
+    // Editing the host after a successful Test invalidates that result --
+    // it described "voron.local", not whatever the host field says now.
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "a-different-host.local" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
+
+    expect(
+      screen.queryByText(/Bed width: catalog says 256 mm, the printer reports 220 mm/),
+    ).not.toBeInTheDocument();
   });
 
   it("Save calls createPrinter once with the assembled options, closes, and fires onCreated", async () => {

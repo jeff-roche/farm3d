@@ -24,6 +24,13 @@ export function bedTypeOptionsFor(current: string): string[] {
   return BED_TYPE_OPTIONS.includes(current) ? BED_TYPE_OPTIONS : [...BED_TYPE_OPTIONS, current];
 }
 
+/** The catalog's own "unspecified" bed type is `""`, shown as "Default" so
+ *  it isn't a blank list item. Shared with `PrinterSetupWizard`'s Operate
+ *  step so the two Selects don't drift on this label. */
+export function bedTypeLabel(value: string): string {
+  return value === "" ? "Default" : value;
+}
+
 function isOverridden(printer: ResolvedPrinter, field: OverridableField): boolean {
   return printer.overriddenFields.includes(field);
 }
@@ -193,12 +200,10 @@ export function PrinterProfilePanel(props: PrinterProfilePanelProps) {
         onRevert={() => void revertField(props.printer.id, "defaultBedType")}
       >
         {/* Raw catalog bed-type values, not human labels — the generator
-            doesn't emit a code->label map in phase 1. The empty string is the
-            catalog's own "unspecified", shown as "Default" so it isn't a blank
-            list item. */}
+            doesn't emit a code->label map in phase 1. */}
         <Select
           options={bedTypeOptions()}
-          optionLabel={(v: string) => (v === "" ? "Default" : v)}
+          optionLabel={bedTypeLabel}
           value={props.printer.profile.defaultBedType}
           placeholder="Default"
           onChange={(v) => void overrideField(props.printer.id, "defaultBedType", v)}

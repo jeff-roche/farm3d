@@ -66,4 +66,25 @@ describe("ConnectionFields", () => {
 
     expect(await screen.findByText(/Could not reach the printer/)).toBeInTheDocument();
   });
+
+  it("clears a verified probe result once the host is edited afterward", async () => {
+    const onTest = vi.fn().mockResolvedValue({
+      kind: "moonraker",
+      hostSoftware: "Moonraker 0.9",
+      firmware: "Klipper v0.12",
+      reportedName: "Voron 2.4",
+      state: "online",
+      stateMessage: "",
+      reported: {},
+    });
+    render(() => <Harness onTest={onTest} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("online")).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "a-different-host.local" } });
+
+    expect(screen.queryByText("online")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Moonraker 0\.9/)).not.toBeInTheDocument();
+  });
 });

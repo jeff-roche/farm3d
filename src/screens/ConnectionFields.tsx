@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, on, Show } from "solid-js";
 import { Button, Chip, Select, TextField } from "../design-system";
 import { discoverPrinters } from "../printers/printer-store";
 import type {
@@ -120,6 +120,23 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
     if (!suggested || kindTouched() || props.value.kind === suggested) return;
     props.onChange({ ...props.value, kind: suggested, port: DEFAULT_PORTS[suggested] ?? props.value.port });
   });
+
+  // A verified `probe`/`probeError` describes the *specific* submission it
+  // was run against — editing any field afterward (host, port, kind, TLS,
+  // credential) invalidates it, or the chip/mismatch list would keep
+  // showing a stale "online" result (or error) for a config the user has
+  // since changed. `previous === undefined` skips the run `on()` always
+  // does at mount, where there's nothing stale to clear yet.
+  createEffect(
+    on(
+      () => props.value,
+      (_current, previous) => {
+        if (previous === undefined) return;
+        setProbe(null);
+        setProbeError(null);
+      },
+    ),
+  );
 
   const mismatches = createMemo(() => {
     const result = probe();

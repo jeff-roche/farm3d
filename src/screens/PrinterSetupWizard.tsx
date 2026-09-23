@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, on, Show } from "solid-js";
 import { Button, Combobox, Dialog, RadioGroup, Select, Stepper, TextField } from "../design-system";
 import { listCatalogModels, listCatalogVariants, previewProfile } from "../printers/printer-catalog";
 import { pickDefaultVariant, stripBrandPrefix, suggestUniqueName } from "../printers/printer-identity";
@@ -11,7 +11,7 @@ import type {
   ResolvedPrinter,
   StartSafety,
 } from "../printers/types";
-import { bedTypeOptionsFor } from "./PrinterProfilePanel";
+import { bedTypeLabel, bedTypeOptionsFor } from "./PrinterProfilePanel";
 import { buildMismatches, ConnectionFields, toSubmission, type ConnectionDraft } from "./ConnectionFields";
 import styles from "./PrinterSetupWizard.module.css";
 
@@ -82,6 +82,18 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
 
   const [connectionDraft, setConnectionDraft] = createSignal<ConnectionDraft>(DEFAULT_CONNECTION_DRAFT);
   const [lastProbe, setLastProbe] = createSignal<ProbeResult | null>(null);
+
+  // Mirrors `ConnectionFields`' own probe invalidation: Review's mismatch
+  // list reads `lastProbe`, which must not keep describing a submission the
+  // user has since edited (e.g. tested host A, then edited to host B before
+  // reaching Review). `previous === undefined` skips the run `on()` always
+  // does at mount.
+  createEffect(
+    on(connectionDraft, (_current, previous) => {
+      if (previous === undefined) return;
+      setLastProbe(null);
+    }),
+  );
 
   const [startSafety, setStartSafety] = createSignal<StartSafety>("confirmBedClear");
   const [bedType, setBedType] = createSignal("");
@@ -377,6 +389,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
             <Select
               label="Bed type"
               options={bedTypeOptionsFor(bedType())}
+              optionLabel={bedTypeLabel}
               value={bedType()}
               onChange={(v) => {
                 setBedTypeTouched(true);
