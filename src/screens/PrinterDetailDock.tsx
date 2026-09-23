@@ -58,28 +58,57 @@ export function PrinterDetailDock(props: PrinterDetailDockProps) {
 
 function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: ResolvedPrinter; overlay: boolean }) {
   const [eligibility, setEligibility] = createSignal<LifecycleEligibility | null>(null);
+  // Distinct from `unarchiveError`: this is a failure to even *check* what's
+  // allowed (the `lifecycleEligibility` query itself), not a failure of an
+  // action the user asked for. Left unexplained, it would otherwise just
+  // read as every lifecycle button being permanently, mysteriously disabled.
+  const [eligibilityError, setEligibilityError] = createSignal<string | null>(null);
   const [unarchiveError, setUnarchiveError] = createSignal<string | null>(null);
+  const [actionPending, setActionPending] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
 
   const archived = () => Boolean(props.printer.archivedAt);
 
   const refreshEligibility = async (id: string) => {
     try {
-      setEligibility(await lifecycleEligibility(id));
-    } catch {
+      const result = await lifecycleEligibility(id);
+      setEligibility(result);
+      setEligibilityError(null);
+    } catch (e) {
       setEligibility(null);
+      setEligibilityError(
+        isCommandError(e)
+          ? `Couldn't check what you can do with this Printer. ${e.message}`
+          : "Couldn't check what you can do with this Printer.",
+      );
     }
   };
 
-  createEffect(on(() => props.printer.id, (id) => {
+  createEffect(on(() => props.printer.id, (id, previousId) => {
+    // `on()` doesn't dedupe by value -- it reruns whenever the tracked
+    // expression's *dependencies* invalidate, which includes every store
+    // push that replaces this Printer's object (e.g. Archive's own
+    // `refreshEligibility`, a Connection save, a rename), not only an
+    // actual Printer-selection change. Without this guard, any such push
+    // while this dock is open would blow away the eligibility state (and
+    // any in-flight `onArchive`/`onUnarchive` refetch's result) with a
+    // fresh, momentarily-null one for the *same* id.
+    if (id === previousId) return;
     setUnarchiveError(null);
     setEligibility(null);
+    setEligibilityError(null);
     void refreshEligibility(id);
   }));
 
   async function onArchive() {
-    await archivePrinter(props.printer.id);
-    await refreshEligibility(props.printer.id);
+    if (actionPending()) return;
+    setActionPending(true);
+    try {
+      await archivePrinter(props.printer.id);
+      await refreshEligibility(props.printer.id);
+    } finally {
+      setActionPending(false);
+    }
   }
 
   /** A `DUPLICATE_HOST` failure (spec D3/D6: an active Printer now owns the
@@ -87,6 +116,8 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
    *  a generic message -- the whole reason `unarchivePrinter` rejects
    *  instead of routing to the banner. */
   async function onUnarchive() {
+    if (actionPending()) return;
+    setActionPending(true);
     setUnarchiveError(null);
     try {
       await unarchivePrinter(props.printer.id);
@@ -105,6 +136,8 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
       } else {
         setUnarchiveError(isCommandError(e) ? e.message : "This Printer could not be unarchived.");
       }
+    } finally {
+      setActionPending(false);
     }
   }
 
@@ -145,7 +178,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                     <Show when={!archived()}>
                       <Button
                         variant="ghost"
-                        disabled={!eligibility()?.canArchive}
+                        disabled={!eligibility()?.canArchive || actionPending()}
                         onClick={() => void onArchive()}
                       >
                         Archive
@@ -154,7 +187,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                     <Show when={archived()}>
                       <Button
                         variant="ghost"
-                        disabled={!eligibility()?.canUnarchive}
+                        disabled={!eligibility()?.canUnarchive || actionPending()}
                         onClick={() => void onUnarchive()}
                       >
                         Unarchive
@@ -166,6 +199,19 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                       </Show>
                     </Show>
                   </div>
+                  <Show when={eligibilityError()}>
+                    {(message) => (
+                      <div class={styles.eligibilityError}>
+                        <p class={styles.error} role="alert">{message()}</p>
+                        <Button
+                          variant="secondary"
+                          onClick={() => void refreshEligibility(props.printer.id)}
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+                  </Show>
                   <Show when={unarchiveError()}>
                     {(message) => <p class={styles.error} role="alert">{message()}</p>}
                   </Show>

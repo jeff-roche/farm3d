@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedPrinter } from "../printers/types";
@@ -190,5 +190,82 @@ describe("PrinterDetailDock", () => {
 
     expect(onDeleted).toHaveBeenCalledWith("prn-1");
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows an inline error with Retry when lifecycleEligibility fails, and recovers on Retry", async () => {
+    lifecycleEligibility.mockReset()
+      .mockRejectedValueOnce({
+        contractVersion: 1,
+        code: "PERSISTENCE_UNAVAILABLE",
+        message: "printers.json is read-only",
+        recovery: ["RETRY"],
+        retryable: true,
+      })
+      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY);
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    expect(await screen.findByText(/Couldn't check what you can do with this Printer\./)).toBeInTheDocument();
+    expect(screen.getByText(/printers\.json is read-only/)).toBeInTheDocument();
+    const archiveButton = screen.getByRole("button", { name: "Archive" });
+    expect(archiveButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Archive" })).not.toBeDisabled());
+    expect(
+      screen.queryByText(/Couldn't check what you can do with this Printer\./),
+    ).not.toBeInTheDocument();
+    expect(lifecycleEligibility).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a stale eligibility error when the selected Printer changes", async () => {
+    lifecycleEligibility.mockReset().mockRejectedValueOnce({
+      contractVersion: 1,
+      code: "PERSISTENCE_UNAVAILABLE",
+      message: "printers.json is read-only",
+      recovery: ["RETRY"],
+      retryable: true,
+    }).mockResolvedValue(ACTIVE_ELIGIBILITY);
+    const [selected, setSelected] = createSignal(printer);
+    render(() => <Show when={selected()}>{(current) => <PrinterDetailDock printer={current()} mode="inline" onClose={vi.fn()} />}</Show>);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+    expect(await screen.findByText(/Couldn't check what you can do with this Printer\./)).toBeInTheDocument();
+
+    setSelected(makePrinter({ id: "prn-2" }));
+
+    await waitFor(() => expect(
+      screen.queryByText(/Couldn't check what you can do with this Printer\./),
+    ).not.toBeInTheDocument());
+  });
+
+  it("guards Archive against double-fire while pending, then reflects the post-archive eligibility once the Printer record updates (Archive → Unarchive/Delete…)", async () => {
+    lifecycleEligibility.mockReset()
+      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY)
+      .mockResolvedValueOnce(ARCHIVED_ELIGIBILITY);
+    let resolveArchive: (() => void) | undefined;
+    archivePrinter.mockImplementation(() => new Promise<void>((resolve) => { resolveArchive = resolve; }));
+
+    const [current, setCurrent] = createSignal(printer);
+    render(() => <PrinterDetailDock printer={current()} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    const archiveButton = await screen.findByRole("button", { name: "Archive" });
+    await waitFor(() => expect(archiveButton).not.toBeDisabled());
+
+    fireEvent.click(archiveButton);
+    await waitFor(() => expect(archiveButton).toBeDisabled());
+    fireEvent.click(archiveButton); // disabled, and onArchive's own in-flight guard: must not fire again
+
+    expect(archivePrinter).toHaveBeenCalledTimes(1);
+
+    // Mirrors what the real store push does once archivePrinter succeeds --
+    // PrinterDashboard re-renders this dock from the freshly archived record.
+    setCurrent({ ...printer, archivedAt: "2026-09-22T00:00:00.000Z" });
+    resolveArchive?.();
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Unarchive" })).not.toBeDisabled());
+    expect(screen.getByRole("button", { name: "Delete…" })).toBeInTheDocument();
   });
 });
