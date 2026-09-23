@@ -1,0 +1,157 @@
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
+import { Button, Dialog, NumberField, RadioGroup, Select, Textarea } from "../design-system";
+import { formatGrams } from "../spools/weight";
+import { recordAmount, spoolState } from "../spools/spool-store";
+import type { AmountConfidence } from "../generated/contracts/domain/AmountConfidence";
+import type { AmountEntry } from "../generated/contracts/domain/AmountEntry";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
+import type { Tare } from "../generated/contracts/domain/Tare";
+import styles from "./RecordAmountDialog.module.css";
+
+export interface RecordAmountDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  spool: SpoolRecord;
+  onRecorded?: (spool: SpoolRecord) => void;
+}
+
+type AmountMode = "net" | "scale";
+
+/** D1: converts a NumberField's grams value (at most one decimal, per its
+ *  `step`) to integer milligrams. Rounds to the nearest tenth of a gram
+ *  first, the same integer-only approach `weight.ts`'s `parseGrams` uses,
+ *  so float artifacts (e.g. 612.3 * 1000) never leak into the mg value. */
+function gramsToMg(grams: number): number {
+  return Math.round(grams * 10) * 100;
+}
+
+const NO_TARE = "__none__";
+
+/** D3/D7: **Net** / **Scale** segmented choice (spec §Components). Net
+ *  records a direct grams value at a chosen confidence; Scale weighs gross
+ *  against a tare and previews the resulting net live, and always records
+ *  as `measured`. Gross-below-tare (D3) is checked client-side against the
+ *  already-loaded tare list before submit is even enabled, since
+ *  `recordAmount` reports failures to the store's banner rather than
+ *  rejecting (unlike `moveSpool`) -- there is no promise rejection here to
+ *  catch and show inline. */
+export function RecordAmountDialog(props: RecordAmountDialogProps) {
+  const [mode, setMode] = createSignal<AmountMode>("net");
+  const [netGrams, setNetGrams] = createSignal<number | undefined>(undefined);
+  const [confidence, setConfidence] = createSignal<AmountConfidence>("measured");
+  const [grossGrams, setGrossGrams] = createSignal<number | undefined>(undefined);
+  const [tareId, setTareId] = createSignal<string>(NO_TARE);
+  const [note, setNote] = createSignal("");
+  const [submitting, setSubmitting] = createSignal(false);
+
+  createEffect(on(() => props.open, (open) => {
+    if (!open) return;
+    setMode("net");
+    setNetGrams(undefined);
+    setConfidence("measured");
+    setGrossGrams(undefined);
+    setTareId(props.spool.tareId ?? NO_TARE);
+    setNote("");
+  }));
+
+  const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
+  const tareLabel = (id: string): string => {
+    if (id === NO_TARE) return "No tare";
+    const tare = spoolState.tares.find((t: Tare) => t.id === id);
+    return tare ? `${tare.name} (${formatGrams(tare.weightMg, 1)})` : id;
+  };
+  const selectedTareMg = createMemo(() => {
+    const tare = spoolState.tares.find((t: Tare) => t.id === tareId());
+    return tare?.weightMg ?? 0;
+  });
+  const netPreviewMg = createMemo<number | null>(() => {
+    const gross = grossGrams();
+    if (gross === undefined) return null;
+    return gramsToMg(gross) - selectedTareMg();
+  });
+  const grossError = createMemo<string | undefined>(() => {
+    const preview = netPreviewMg();
+    if (preview === null) return undefined;
+    return preview < 0 ? "The gross weight is less than the tare." : undefined;
+  });
+
+  const canSubmit = createMemo(() => {
+    if (submitting()) return false;
+    if (mode() === "net") return netGrams() !== undefined && netGrams()! >= 0;
+    return grossGrams() !== undefined && grossGrams()! >= 0 && !grossError();
+  });
+
+  async function onSubmit() {
+    if (!canSubmit()) return;
+    const entry: AmountEntry = mode() === "net"
+      ? { kind: "net", netMg: gramsToMg(netGrams()!), confidence: confidence() }
+      : { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : {}) };
+    setSubmitting(true);
+    try {
+      const result = await recordAmount(props.spool.id, entry, note().trim() || undefined);
+      if (result) {
+        props.onOpenChange(false);
+        props.onRecorded?.(result);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog title="Record amount" open={props.open} onOpenChange={props.onOpenChange}>
+      <div class={styles.body}>
+        <RadioGroup
+          label="Entry method"
+          options={[{ value: "net", label: "Net" }, { value: "scale", label: "Scale" }]}
+          value={mode()}
+          onChange={(v) => setMode(v as AmountMode)}
+        />
+        <Show when={mode() === "net"}>
+          <NumberField
+            label="Net weight (g)"
+            value={netGrams()}
+            onChange={setNetGrams}
+            minValue={0}
+            maxValue={50_000}
+            step={0.1}
+            suffix="g"
+          />
+          <RadioGroup
+            label="Confidence"
+            options={[{ value: "measured", label: "I measured it" }, { value: "estimated", label: "This is an estimate" }]}
+            value={confidence()}
+            onChange={(v) => setConfidence(v as AmountConfidence)}
+          />
+        </Show>
+        <Show when={mode() === "scale"}>
+          <Select
+            label="Tare"
+            options={tareOptions()}
+            value={tareId()}
+            onChange={setTareId}
+            optionLabel={tareLabel}
+          />
+          <NumberField
+            label="Gross weight (g)"
+            value={grossGrams()}
+            onChange={setGrossGrams}
+            minValue={0}
+            maxValue={55_000}
+            step={0.1}
+            suffix="g"
+            error={grossError()}
+          />
+          <Show when={netPreviewMg() !== null}>
+            <p class={styles.preview}>Net: {formatGrams(netPreviewMg()!, 1)}</p>
+          </Show>
+        </Show>
+        <Textarea label="Note (optional)" value={note()} onChange={setNote} rows={2} />
+        <div class={styles.actions}>
+          <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>
+          <Button disabled={!canSubmit()} onClick={() => void onSubmit()}>Record</Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

@@ -68,6 +68,14 @@ vi.mock("./screens/ModelLibrary", () => ({
   ModelLibrary: () => <div>Library</div>,
 }));
 
+vi.mock("./screens/SpoolInventory", () => ({
+  SpoolInventory: () => <div>Spools</div>,
+}));
+
+vi.mock("./spools/spool-store", () => ({
+  spoolState: { spools: [] as { facets: { low: boolean } }[] },
+}));
+
 vi.mock("./screens/PrinterDashboard", () => ({
   PrinterDashboard: (props: {
     store: { hasPrinters: () => boolean; selectedPrinterId: () => string | null };
