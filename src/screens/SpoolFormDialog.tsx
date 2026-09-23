@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
 import { Button, Chip, Dialog, NumberField, RadioGroup, Select, TextField, Textarea } from "../design-system";
+import { isCommandError } from "../ipc/client";
 import { MATERIAL_FAMILIES, materialFamilyLabel } from "../spools/materials";
 import { formatGrams } from "../spools/weight";
 import { createSpool, spoolState, updateSpool } from "../spools/spool-store";
@@ -45,6 +46,16 @@ const DIAMETER_OPTIONS: { value: FilamentDiameter; label: string }[] = [
   { value: "2.85", label: "2.85 mm" },
 ];
 
+/** Every `SpoolFields`/initial-amount field path a Rust `VALIDATION` can
+ *  name (`spools/mod.rs`'s `validate_fields`, `spools/ledger.rs`'s
+ *  `resolve_entry`) that this form has a field with an `error` slot for.
+ *  Anything else (e.g. `entry.tareId` -- the tare `Select` has no error
+ *  slot) falls back to the dialog-level message. */
+const FIELD_ERROR_PATHS = new Set([
+  "manufacturer", "product", "materialOther", "colorName", "colorHex",
+  "nominalMg", "lowThresholdMg", "entry.netMg", "entry.grossMg",
+]);
+
 /** Add/Edit (D2/D3/D7 §Components: `SpoolFormDialog`). Add also collects
  *  the initial amount: a nominal-weight quick pick, defaulting to an
  *  `estimated` Net entry at the nominal weight until "I weighed it"
@@ -73,6 +84,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   const [grossGrams, setGrossGrams] = createSignal<number | undefined>(undefined);
 
   const [submitting, setSubmitting] = createSignal(false);
+  const [dialogError, setDialogError] = createSignal<string | null>(null);
+  const [serverFieldError, setServerFieldError] = createSignal<{ path: string; message: string } | null>(null);
 
   createEffect(on(() => [props.open, props.spool] as const, ([open, spool]) => {
     if (!open) return;
@@ -93,7 +106,13 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
     setMeasuredGrams(undefined);
     setConfidence("measured");
     setGrossGrams(undefined);
+    setDialogError(null);
+    setServerFieldError(null);
   }));
+
+  const serverFieldErrorFor = (path: string): string | undefined => (
+    serverFieldError()?.path === path ? serverFieldError()!.message : undefined
+  );
 
   const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
   const tareLabel = (id: string): string => {
@@ -108,8 +127,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   });
   const grossError = createMemo<string | undefined>(() => {
     const preview = netPreviewMg();
-    if (preview === null) return undefined;
-    return preview < 0 ? "The gross weight is less than the tare." : undefined;
+    if (preview === null) return serverFieldErrorFor("entry.grossMg");
+    return preview < 0 ? "The gross weight is less than the tare." : serverFieldErrorFor("entry.grossMg");
   });
 
   const materialOtherValid = () => family() !== "OTHER" || materialOther().trim().length > 0;
@@ -156,14 +175,22 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   async function onSubmit() {
     if (!canSubmit()) return;
     setSubmitting(true);
+    setDialogError(null);
+    setServerFieldError(null);
     try {
       const fields = buildFields();
       const result = isEdit()
         ? await updateSpool(props.spool!.id, fields)
         : await createSpool(fields, buildInitialAmount(), storageLabel().trim() || undefined);
-      if (result) {
-        props.onOpenChange(false);
-        props.onSaved?.(result);
+      props.onOpenChange(false);
+      props.onSaved?.(result);
+    } catch (e) {
+      if (isCommandError(e) && e.code === "CONFLICT") {
+        setDialogError("This Spool changed since you opened it. It's been reloaded with the current values — check them and try again.");
+      } else if (isCommandError(e) && typeof e.details?.fieldPath === "string" && FIELD_ERROR_PATHS.has(e.details.fieldPath)) {
+        setServerFieldError({ path: e.details.fieldPath, message: e.message });
+      } else {
+        setDialogError(isCommandError(e) ? e.message : "This Spool could not be saved.");
       }
     } finally {
       setSubmitting(false);
@@ -173,8 +200,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   return (
     <Dialog title={isEdit() ? "Edit Spool" : "Add Spool"} open={props.open} onOpenChange={props.onOpenChange}>
       <div class={styles.body}>
-        <TextField label="Manufacturer" value={manufacturer()} onChange={setManufacturer} required />
-        <TextField label="Product (optional)" value={product()} onChange={setProduct} />
+        <TextField label="Manufacturer" value={manufacturer()} onChange={setManufacturer} required error={serverFieldErrorFor("manufacturer")} />
+        <TextField label="Product (optional)" value={product()} onChange={setProduct} error={serverFieldErrorFor("product")} />
         <Select
           label="Material"
           options={MATERIAL_FAMILIES}
@@ -183,10 +210,10 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           optionLabel={materialFamilyLabel}
         />
         <Show when={family() === "OTHER"}>
-          <TextField label="Material (other)" value={materialOther()} onChange={setMaterialOther} required />
+          <TextField label="Material (other)" value={materialOther()} onChange={setMaterialOther} required error={serverFieldErrorFor("materialOther")} />
         </Show>
-        <TextField label="Color name" value={colorName()} onChange={setColorName} required />
-        <TextField label="Color hex (optional)" value={colorHex()} onChange={setColorHex} placeholder="#RRGGBB" />
+        <TextField label="Color name" value={colorName()} onChange={setColorName} required error={serverFieldErrorFor("colorName")} />
+        <TextField label="Color hex (optional)" value={colorHex()} onChange={setColorHex} placeholder="#RRGGBB" error={serverFieldErrorFor("colorHex")} />
         <RadioGroup
           label="Diameter"
           options={DIAMETER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
@@ -216,6 +243,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           maxValue={50_000}
           step={0.1}
           suffix="g"
+          error={serverFieldErrorFor("nominalMg")}
         />
         <NumberField
           label="Low threshold (g)"
@@ -225,6 +253,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           maxValue={50_000}
           step={0.1}
           suffix="g"
+          error={serverFieldErrorFor("lowThresholdMg")}
         />
         <Select
           label="Default tare"
@@ -259,6 +288,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
                   maxValue={50_000}
                   step={0.1}
                   suffix="g"
+                  error={serverFieldErrorFor("entry.netMg")}
                 />
                 <RadioGroup
                   label="Confidence"
@@ -284,6 +314,9 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
               </Show>
             </Show>
           </div>
+        </Show>
+        <Show when={dialogError()}>
+          {(message) => <p class={styles.error} role="alert">{message()}</p>}
         </Show>
         <div class={styles.actions}>
           <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>

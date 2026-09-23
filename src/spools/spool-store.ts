@@ -71,7 +71,16 @@ export function dismissSpoolStoreError(): void {
   setState("error", null);
 }
 
-function reportSpoolError(e: unknown): void {
+/** Exported for non-dialog callers (e.g. `SpoolDetailDock`'s lifecycle menu
+ *  and Unload) that don't render their own inline error UI -- they catch
+ *  their own call's rejection and route it here, the same way this module
+ *  used to do internally before the fix-round-1 ruling made
+ *  `createSpool`/`updateSpool`/`recordAmount`/`setLifecycle`/the tare CRUD
+ *  reject for inline handling (matching `moveSpool`) instead of reporting
+ *  to this banner themselves. A dialog that DOES render its own inline
+ *  error (RecordAmountDialog, SpoolFormDialog, TareManagerDialog) must not
+ *  also call this -- that would show the same failure twice. */
+export function reportSpoolError(e: unknown): void {
   setState("error", isCommandError(e) ? e.message : "The operation could not be completed.");
 }
 
@@ -211,13 +220,18 @@ function applyInventoryEnvelope(envelope: InventoryEnvelope): void {
   }
 }
 
-/** D6's CONFLICT recovery: reloads only the Spools `moveSpool`'s optimistic
- *  step touched, each through the revision guard, and leaves everything
- *  else -- other Spools, tares, `pending`, and this store's own stream
+/** CONFLICT recovery, shared by every rejecting mutation's own CONFLICT
+ *  catch (`moveSpool`, and -- per the fix-round-1 ruling --
+ *  `updateSpool`/`recordAmount`/`setLifecycle` too): reloads only the
+ *  Spools this call's revision guard touched, and leaves everything else
+ *  -- other Spools, tares, `pending`, and this store's own stream
  *  `sequence`/`streamId` bookkeeping -- untouched. A whole-inventory
  *  replace here would regress any other Spool an event settled more
  *  recently than this (`list_spools`) snapshot, and lowering `sequence`
- *  would make the live listener re-apply events it already processed. */
+ *  would make the live listener re-apply events it already processed.
+ *  Every rejecting caller re-reads `expectedRevision` from `state.spools`
+ *  at call time, so a retry after this refetch automatically uses the
+ *  fresh revision without the caller doing anything extra. */
 async function refetchAffectedSpools(affectedIds: string[]): Promise<void> {
   try {
     const snapshot = await command("list_spools");
@@ -228,6 +242,20 @@ async function refetchAffectedSpools(affectedIds: string[]): Promise<void> {
   } catch {
     // Best-effort: the CONFLICT that triggered this is already being
     // rethrown to the caller regardless of whether this refetch lands.
+  }
+}
+
+/** The tare equivalent of `refetchAffectedSpools`, for `updateTare`/
+ *  `deleteTare`'s own CONFLICT catch -- there is no dedicated tare-listing
+ *  command, so this reuses `list_spools`' snapshot (which carries `tares`
+ *  too) and applies only the one tare this call's revision guard touched. */
+async function refetchTare(id: string): Promise<void> {
+  try {
+    const snapshot = await command("list_spools");
+    const fresh = snapshot.tares.find((t) => t.id === id);
+    if (fresh) setState("tares", (list) => list.map((t) => (t.id === id ? fresh : t)));
+  } catch {
+    // Best-effort, same rationale as refetchAffectedSpools above.
   }
 }
 
@@ -462,7 +490,10 @@ function nextWebSpoolNumber(): number {
 function resolveWebAmountEntry(entry: AmountEntry): { mg: number; confidence: AmountConfidence } {
   if (entry.kind === "net") return { mg: entry.netMg, confidence: entry.confidence };
   const tareMg = entry.tareMg ?? state.tares.find((t) => t.id === entry.tareId)?.weightMg ?? 0;
-  if (entry.grossMg < tareMg) throw commandError("VALIDATION", "The gross weight is less than the tare.", { fieldPath: "grossMg" });
+  // "entry.grossMg", not "grossMg": matches the real `record_spool_amount`/
+  // `create_spool` field path (`spools/ledger.rs`'s `resolve_entry`), so a
+  // dialog's field-path-to-field mapping behaves identically in web mode.
+  if (entry.grossMg < tareMg) throw commandError("VALIDATION", "The gross weight is less than the tare.", { fieldPath: "entry.grossMg" });
   return { mg: entry.grossMg - tareMg, confidence: "measured" };
 }
 
@@ -500,37 +531,30 @@ async function webCreateSpool(fields: SpoolFields, initialAmount: AmountEntry, s
   return spool;
 }
 
-/** Single-step create (D2/D3/D7): reports into `state.error` rather than
- *  rejecting -- every call site can `void` it, matching `printer-store`'s
- *  own mutations. */
+/** Single-step create (D2/D3/D7). Rejects for inline handling (fix round
+ *  1 ruling: matches `moveSpool`, not the report-to-banner shape the other
+ *  P2-style mutations used before this fix) -- `SpoolFormDialog` catches
+ *  the rejection and shows a field-level or dialog-level error. */
 export async function createSpool(
   fields: SpoolFields,
   initialAmount: AmountEntry,
   storageLabel?: string,
-): Promise<SpoolRecord | undefined> {
-  if (!desktopAvailable()) {
-    try {
-      return await webCreateSpool(fields, initialAmount, storageLabel);
-    } catch (e) {
-      reportSpoolError(e);
-      return undefined;
-    }
-  }
-  try {
-    const result = await command("create_spool", { fields, initialAmount, storageLabel });
-    upsertSpool(result.spool);
-    for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
-    return result.spool;
-  } catch (e) {
-    reportSpoolError(e);
-    return undefined;
-  }
+): Promise<SpoolRecord> {
+  if (!desktopAvailable()) return webCreateSpool(fields, initialAmount, storageLabel);
+  const result = await command("create_spool", { fields, initialAmount, storageLabel });
+  upsertSpool(result.spool);
+  for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
+  return result.spool;
 }
 
-export async function updateSpool(id: string, patch: SpoolFields): Promise<SpoolRecord | undefined> {
+/** Rejects for inline handling (fix round 1 ruling). A `CONFLICT` also
+ *  refetches this Spool through `list_spools` before rethrowing (the same
+ *  shape `moveSpool` and `recordAmount` use), so a retried submit reads
+ *  the fresh revision automatically. */
+export async function updateSpool(id: string, patch: SpoolFields): Promise<SpoolRecord> {
   if (!desktopAvailable()) {
     const existing = state.spools.find((s) => s.id === id);
-    if (!existing) return undefined;
+    if (!existing) throw commandError("NOT_FOUND", "This Spool no longer exists.");
     const updated: SpoolRecord = {
       ...existing,
       ...patch,
@@ -541,57 +565,56 @@ export async function updateSpool(id: string, patch: SpoolFields): Promise<Spool
     upsertSpool(updated);
     return updated;
   }
+  const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
   try {
-    const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("update_spool", { id, expectedRevision, patch });
     upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
-    reportSpoolError(e);
-    return undefined;
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchAffectedSpools([id]);
+    throw e;
   }
 }
 
-export async function recordAmount(id: string, entry: AmountEntry, note?: string): Promise<SpoolRecord | undefined> {
+/** Rejects for inline handling (fix round 1 ruling) -- `RecordAmountDialog`
+ *  catches the rejection (e.g. a `VALIDATION` on `entry.grossMg` when the
+ *  gross is below the tare, D3) and shows it inline rather than relying on
+ *  the store banner, which would render behind the dialog's own overlay. */
+export async function recordAmount(id: string, entry: AmountEntry, note?: string): Promise<SpoolRecord> {
   if (!desktopAvailable()) {
-    try {
-      const existing = state.spools.find((s) => s.id === id);
-      if (!existing) return undefined;
-      const { mg, confidence } = resolveWebAmountEntry(entry);
-      const updated: SpoolRecord = {
-        ...existing,
-        availability: { currentMg: mg, reservedMg: existing.availability.reservedMg, availableMg: mg - existing.availability.reservedMg },
-        facets: webFacets(existing.lifecycle, mg, existing.lowThresholdMg, confidence, existing.facets.loaded, existing.availability.reservedMg),
-        lastMeasuredAt: new Date().toISOString(),
-        revision: existing.revision + 1,
-        updatedAt: new Date().toISOString(),
-      };
-      upsertSpool(updated);
-      return updated;
-    } catch (e) {
-      reportSpoolError(e);
-      return undefined;
-    }
+    const existing = state.spools.find((s) => s.id === id);
+    if (!existing) throw commandError("NOT_FOUND", "This Spool no longer exists.");
+    const { mg, confidence } = resolveWebAmountEntry(entry);
+    const updated: SpoolRecord = {
+      ...existing,
+      availability: { currentMg: mg, reservedMg: existing.availability.reservedMg, availableMg: mg - existing.availability.reservedMg },
+      facets: webFacets(existing.lifecycle, mg, existing.lowThresholdMg, confidence, existing.facets.loaded, existing.availability.reservedMg),
+      lastMeasuredAt: new Date().toISOString(),
+      revision: existing.revision + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    upsertSpool(updated);
+    return updated;
   }
+  const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
   try {
-    const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("record_spool_amount", { id, expectedRevision, entry, ...(note !== undefined ? { note } : {}) });
     upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
-    reportSpoolError(e);
-    return undefined;
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchAffectedSpools([id]);
+    throw e;
   }
 }
 
 /** Web-only lifecycle approximation (D9). Doesn't enforce the reservation
  *  guards (`SPOOL_RESERVED`) the real command does -- web mode is a
  *  developer convenience, not a reimplementation of those rules. */
-function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?: string): SpoolRecord | undefined {
+function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?: string): SpoolRecord {
   const existing = state.spools.find((s) => s.id === id);
-  if (!existing) return undefined;
+  if (!existing) throw commandError("NOT_FOUND", "This Spool no longer exists.");
   const now = new Date().toISOString();
   let updated: SpoolRecord;
   if (action === "markEmpty") {
@@ -625,74 +648,82 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
   return updated;
 }
 
+/** Rejects for inline handling (fix round 1 ruling). `SpoolDetailDock`'s
+ *  lifecycle menu and Unload are non-dialog callers -- they catch this
+ *  themselves and route the failure to `reportSpoolError` (the banner),
+ *  since they render no inline error UI of their own. */
 export async function setLifecycle(
   id: string,
   action: SpoolLifecycleAction,
   storageLabel?: string,
-): Promise<SpoolRecord | undefined> {
+): Promise<SpoolRecord> {
   if (!desktopAvailable()) return webSetLifecycle(id, action, storageLabel);
+  const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
   try {
-    const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
     const result = await command("set_spool_lifecycle", { id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}) });
     upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;
   } catch (e) {
-    reportSpoolError(e);
-    return undefined;
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchAffectedSpools([id]);
+    throw e;
   }
 }
 
 // --- Tares (D3) --------------------------------------------------------------
 
-export async function createTare(name: string, weightMg: number): Promise<Tare | undefined> {
+/** Rejects for inline handling (fix round 1 ruling) -- `TareManagerDialog`
+ *  catches the rejection (e.g. `VALIDATION` on `name` for a duplicate,
+ *  case-insensitive per D3) and shows it inline. Create has no
+ *  `expectedRevision`, so it has no CONFLICT path. */
+export async function createTare(name: string, weightMg: number): Promise<Tare> {
   if (!desktopAvailable()) {
     const now = new Date().toISOString();
     const tare: Tare = { id: `tar-web-${crypto.randomUUID()}`, revision: 1, name, weightMg, createdAt: now, updatedAt: now };
     setState("tares", (list) => [...list, tare]);
     return tare;
   }
-  try {
-    const { tare } = await command("create_tare", { name, weightMg });
-    setState("tares", (list) => [...list, tare]);
-    return tare;
-  } catch (e) {
-    reportSpoolError(e);
-    return undefined;
-  }
+  const { tare } = await command("create_tare", { name, weightMg });
+  setState("tares", (list) => [...list, tare]);
+  return tare;
 }
 
-export async function updateTare(id: string, name: string, weightMg: number): Promise<Tare | undefined> {
+/** Rejects for inline handling (fix round 1 ruling). A `CONFLICT` refetches
+ *  this tare (through `refetchTare`, `list_spools`' only source for tares)
+ *  before rethrowing, mirroring the Spool mutations' own CONFLICT shape. */
+export async function updateTare(id: string, name: string, weightMg: number): Promise<Tare> {
   if (!desktopAvailable()) {
     const existing = state.tares.find((t) => t.id === id);
-    if (!existing) return undefined;
+    if (!existing) throw commandError("NOT_FOUND", "This tare no longer exists.");
     const updated: Tare = { ...existing, name, weightMg, revision: existing.revision + 1, updatedAt: new Date().toISOString() };
     setState("tares", (list) => list.map((t) => (t.id === id ? updated : t)));
     return updated;
   }
+  const expectedRevision = state.tares.find((t) => t.id === id)?.revision ?? 1;
   try {
-    const expectedRevision = state.tares.find((t) => t.id === id)?.revision ?? 1;
     const { tare } = await command("update_tare", { id, expectedRevision, name, weightMg });
     setState("tares", (list) => list.map((t) => (t.id === tare.id ? tare : t)));
     return tare;
   } catch (e) {
-    reportSpoolError(e);
-    return undefined;
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchTare(id);
+    throw e;
   }
 }
 
+/** Rejects for inline handling (fix round 1 ruling). */
 export async function deleteTare(id: string): Promise<void> {
   if (!desktopAvailable()) {
     setState("tares", (list) => list.filter((t) => t.id !== id));
     setState("spools", (list) => list.map((s) => (s.tareId === id ? { ...s, tareId: undefined } : s)));
     return;
   }
+  const expectedRevision = state.tares.find((t) => t.id === id)?.revision ?? 1;
   try {
-    const expectedRevision = state.tares.find((t) => t.id === id)?.revision ?? 1;
     await command("delete_tare", { id, expectedRevision });
     setState("tares", (list) => list.filter((t) => t.id !== id));
   } catch (e) {
-    reportSpoolError(e);
+    if (isCommandError(e) && e.code === "CONFLICT") await refetchTare(id);
+    throw e;
   }
 }
 

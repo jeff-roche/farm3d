@@ -6,7 +6,7 @@ import type { TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { materialLabel } from "../spools/materials";
 import { formatGrams } from "../spools/weight";
-import { loadHistory, moveSpool, setLifecycle } from "../spools/spool-store";
+import { loadHistory, moveSpool, reportSpoolError, setLifecycle } from "../spools/spool-store";
 import { printers } from "../printers/printer-store";
 import type { ResolvedPrinter } from "../printers/types";
 import type { AmountEvent } from "../generated/contracts/domain/AmountEvent";
@@ -130,6 +130,12 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
     return printer && slot ? `Loaded on ${printer.name} — ${slot.name}` : "Loaded";
   };
 
+  /** Non-dialog caller (spec §Errors and recovery, fix round 1 ruling):
+   *  `moveSpool` already rejects, so this both shows a local inline error
+   *  (contextual, next to Unload) AND routes the same failure to the store
+   *  banner via `reportSpoolError` -- belt and suspenders, so a failure is
+   *  never silently unhandled even if a future refactor drops the local
+   *  message. */
   async function onUnload() {
     setActionError(null);
     try {
@@ -140,24 +146,33 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
       });
     } catch (e) {
       setActionError(isCommandError(e) ? e.message : "This Spool could not be unloaded.");
+      reportSpoolError(e);
     }
+  }
+
+  /** Non-dialog caller (fix round 1 ruling): `setLifecycle` now rejects
+   *  instead of reporting to the banner itself, so every call site must
+   *  catch its own rejection -- this menu renders no inline error UI of
+   *  its own, so it routes straight to `reportSpoolError` (the banner). */
+  function runLifecycleAction(action: Parameters<typeof setLifecycle>[1]): void {
+    setLifecycle(props.spool.id, action).catch(reportSpoolError);
   }
 
   const lifecycleItems = (): DropdownMenuEntry[] => {
     const lifecycle = props.spool.lifecycle;
     if (lifecycle === "active") {
       return [
-        { label: "Mark empty (used up)", onSelect: () => void setLifecycle(props.spool.id, "markEmpty") },
-        { label: "Archive", onSelect: () => void setLifecycle(props.spool.id, "archive") },
+        { label: "Mark empty (used up)", onSelect: () => runLifecycleAction("markEmpty") },
+        { label: "Archive", onSelect: () => runLifecycleAction("archive") },
       ];
     }
     if (lifecycle === "empty") {
       return [
-        { label: "Reactivate", onSelect: () => void setLifecycle(props.spool.id, "reactivate") },
-        { label: "Archive", onSelect: () => void setLifecycle(props.spool.id, "archive") },
+        { label: "Reactivate", onSelect: () => runLifecycleAction("reactivate") },
+        { label: "Archive", onSelect: () => runLifecycleAction("archive") },
       ];
     }
-    return [{ label: "Unarchive", onSelect: () => void setLifecycle(props.spool.id, "unarchive") }];
+    return [{ label: "Unarchive", onSelect: () => runLifecycleAction("unarchive") }];
   };
 
   return (

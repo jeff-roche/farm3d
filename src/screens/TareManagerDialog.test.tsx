@@ -55,4 +55,39 @@ describe("TareManagerDialog", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(deleteTare).toHaveBeenCalledWith("tar-1");
   });
+
+  it("shows a VALIDATION rejection inline under the new tare's name field and stays open", async () => {
+    createTare.mockRejectedValue({
+      contractVersion: 1, code: "VALIDATION", message: "A tare with that name already exists.",
+      recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "name" },
+    });
+    const onOpenChange = vi.fn();
+    render(() => <TareManagerDialog open onOpenChange={onOpenChange} />);
+
+    await fireEvent.input(screen.getByLabelText("New tare name"), { target: { value: "Cardboard" } });
+    await fireEvent.input(screen.getByLabelText("Weight (g)"), { target: { value: "200" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Add tare" }));
+
+    expect(await screen.findByText("A tare with that name already exists.")).toBeInTheDocument();
+    expect(screen.getByLabelText("New tare name")).toHaveAttribute("aria-invalid", "true");
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("shows a dialog-level message and stays open on a rename CONFLICT", async () => {
+    updateTare.mockRejectedValue({
+      contractVersion: 1, code: "CONFLICT", message: "Someone else renamed this tare.",
+      recovery: ["RETRY"], retryable: true,
+    });
+    const onOpenChange = vi.fn();
+    render(() => <TareManagerDialog open onOpenChange={onOpenChange} />);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    await fireEvent.input(screen.getByLabelText("Tare name for Cardboard"), { target: { value: "Cardboard spool" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/reloaded/i);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // Stays in edit mode too -- the rename row's own fields are still shown.
+    expect(screen.getByLabelText("Tare name for Cardboard")).toBeInTheDocument();
+  });
 });

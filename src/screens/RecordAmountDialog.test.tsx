@@ -90,4 +90,45 @@ describe("RecordAmountDialog", () => {
     );
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("shows a VALIDATION rejection inline under the gross field and stays open, even though the client precheck passed", async () => {
+    // Gross (900) is well above the client-known Cardboard tare (200 g), so
+    // the client-side precheck passes -- this rejection can only have come
+    // from an actual submit to Rust (fix round 1 ruling item 2).
+    recordAmount.mockRejectedValue({
+      contractVersion: 1, code: "VALIDATION", message: "The gross weight is less than the tare.",
+      recovery: [], retryable: false, details: { fieldPath: "entry.grossMg" },
+    });
+    const onOpenChange = vi.fn();
+    render(() => (
+      <RecordAmountDialog open onOpenChange={onOpenChange} spool={SPOOL} />
+    ));
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Scale" }));
+    const gross = screen.getByLabelText("Gross weight (g)") as HTMLInputElement;
+    await fireEvent.input(gross, { target: { value: "900" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    expect(await screen.findByText("The gross weight is less than the tare.")).toBeInTheDocument();
+    expect(gross).toHaveAttribute("aria-invalid", "true");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("shows a dialog-level message and stays open on a CONFLICT", async () => {
+    recordAmount.mockRejectedValue({
+      contractVersion: 1, code: "CONFLICT", message: "Someone else changed this Spool.",
+      recovery: ["RETRY"], retryable: true,
+    });
+    const onOpenChange = vi.fn();
+    render(() => (
+      <RecordAmountDialog open onOpenChange={onOpenChange} spool={SPOOL} />
+    ));
+
+    const net = screen.getByLabelText("Net weight (g)") as HTMLInputElement;
+    await fireEvent.input(net, { target: { value: "612" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/reloaded/i);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
 });

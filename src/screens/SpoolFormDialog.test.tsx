@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpoolFormDialog } from "./SpoolFormDialog";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 
 const createSpool = vi.fn();
 const updateSpool = vi.fn();
@@ -81,5 +82,46 @@ describe("SpoolFormDialog", () => {
       undefined,
     );
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("shows a VALIDATION rejection inline under the Manufacturer field and stays open", async () => {
+    createSpool.mockRejectedValue({
+      contractVersion: 1, code: "VALIDATION", message: "That manufacturer name is too long.",
+      recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "manufacturer" },
+    });
+    const onOpenChange = vi.fn();
+    render(() => <SpoolFormDialog open onOpenChange={onOpenChange} />);
+
+    await fillRequiredFields();
+    await fireEvent.click(screen.getByRole("button", { name: "Add Spool" }));
+
+    expect(await screen.findByText("That manufacturer name is too long.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Manufacturer")).toHaveAttribute("aria-invalid", "true");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("shows a dialog-level message and stays open on an Edit CONFLICT", async () => {
+    const spool: SpoolRecord = {
+      id: "spl-1", revision: 3, spoolNumber: 7,
+      manufacturer: "Prusament", product: "PLA", materialFamily: "PLA",
+      colorName: "Black", diameter: "1.75",
+      nominalMg: 1_000_000, lowThresholdMg: 100_000,
+      lifecycle: "active",
+      location: { kind: "storage", storageLabel: null },
+      availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+      createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+    };
+    updateSpool.mockRejectedValue({
+      contractVersion: 1, code: "CONFLICT", message: "Someone else changed this Spool.",
+      recovery: ["RETRY"], retryable: true,
+    });
+    const onOpenChange = vi.fn();
+    render(() => <SpoolFormDialog open onOpenChange={onOpenChange} spool={spool} />);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/reloaded/i);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 });

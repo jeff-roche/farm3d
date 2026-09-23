@@ -40,6 +40,12 @@
   border-top: 1px solid var(--f3d-color-border);
 }
 
+.error {
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-size: var(--f3d-type-body-size);
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

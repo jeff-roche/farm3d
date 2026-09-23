@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import { Button, Dialog, NumberField, RadioGroup, Select, Textarea } from "../design-system";
+import { isCommandError } from "../ipc/client";
 import { formatGrams } from "../spools/weight";
 import { recordAmount, spoolState } from "../spools/spool-store";
 import type { AmountConfidence } from "../generated/contracts/domain/AmountConfidence";
@@ -31,10 +32,12 @@ const NO_TARE = "__none__";
  *  records a direct grams value at a chosen confidence; Scale weighs gross
  *  against a tare and previews the resulting net live, and always records
  *  as `measured`. Gross-below-tare (D3) is checked client-side against the
- *  already-loaded tare list before submit is even enabled, since
- *  `recordAmount` reports failures to the store's banner rather than
- *  rejecting (unlike `moveSpool`) -- there is no promise rejection here to
- *  catch and show inline. */
+ *  already-loaded tare list before submit is even enabled -- a UX nicety
+ *  that catches the common case instantly -- but `recordAmount` itself now
+ *  rejects (fix round 1 ruling), so a `VALIDATION` on `entry.grossMg` that
+ *  only Rust could catch (e.g. a tare edited concurrently) still renders
+ *  inline here rather than being lost to the store banner behind this
+ *  dialog's own overlay. */
 export function RecordAmountDialog(props: RecordAmountDialogProps) {
   const [mode, setMode] = createSignal<AmountMode>("net");
   const [netGrams, setNetGrams] = createSignal<number | undefined>(undefined);
@@ -43,6 +46,8 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
   const [tareId, setTareId] = createSignal<string>(NO_TARE);
   const [note, setNote] = createSignal("");
   const [submitting, setSubmitting] = createSignal(false);
+  const [dialogError, setDialogError] = createSignal<string | null>(null);
+  const [serverFieldError, setServerFieldError] = createSignal<{ path: string; message: string } | null>(null);
 
   createEffect(on(() => props.open, (open) => {
     if (!open) return;
@@ -52,7 +57,13 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
     setGrossGrams(undefined);
     setTareId(props.spool.tareId ?? NO_TARE);
     setNote("");
+    setDialogError(null);
+    setServerFieldError(null);
   }));
+
+  const serverFieldErrorFor = (path: string): string | undefined => (
+    serverFieldError()?.path === path ? serverFieldError()!.message : undefined
+  );
 
   const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
   const tareLabel = (id: string): string => {
@@ -71,8 +82,8 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
   });
   const grossError = createMemo<string | undefined>(() => {
     const preview = netPreviewMg();
-    if (preview === null) return undefined;
-    return preview < 0 ? "The gross weight is less than the tare." : undefined;
+    if (preview === null) return serverFieldErrorFor("entry.grossMg");
+    return preview < 0 ? "The gross weight is less than the tare." : serverFieldErrorFor("entry.grossMg");
   });
 
   const canSubmit = createMemo(() => {
@@ -87,11 +98,19 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
       ? { kind: "net", netMg: gramsToMg(netGrams()!), confidence: confidence() }
       : { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : {}) };
     setSubmitting(true);
+    setDialogError(null);
+    setServerFieldError(null);
     try {
       const result = await recordAmount(props.spool.id, entry, note().trim() || undefined);
-      if (result) {
-        props.onOpenChange(false);
-        props.onRecorded?.(result);
+      props.onOpenChange(false);
+      props.onRecorded?.(result);
+    } catch (e) {
+      if (isCommandError(e) && e.code === "CONFLICT") {
+        setDialogError("This Spool changed since you opened it. It's been reloaded with the current values — check them and try again.");
+      } else if (isCommandError(e) && typeof e.details?.fieldPath === "string" && (e.details.fieldPath === "entry.grossMg" || e.details.fieldPath === "entry.netMg")) {
+        setServerFieldError({ path: e.details.fieldPath, message: e.message });
+      } else {
+        setDialogError(isCommandError(e) ? e.message : "This amount could not be recorded.");
       }
     } finally {
       setSubmitting(false);
@@ -116,6 +135,7 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
             maxValue={50_000}
             step={0.1}
             suffix="g"
+            error={serverFieldErrorFor("entry.netMg")}
           />
           <RadioGroup
             label="Confidence"
@@ -147,6 +167,9 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
           </Show>
         </Show>
         <Textarea label="Note (optional)" value={note()} onChange={setNote} rows={2} />
+        <Show when={dialogError()}>
+          {(message) => <p class={styles.error} role="alert">{message()}</p>}
+        </Show>
         <div class={styles.actions}>
           <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>
           <Button disabled={!canSubmit()} onClick={() => void onSubmit()}>Record</Button>

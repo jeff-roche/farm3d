@@ -696,15 +696,17 @@ describe("web mode", () => {
     expect(spoolState.spools.find((s) => s.id === created!.id)?.tareId).toBeUndefined();
   });
 
-  it("recordAmount rejects a scale entry whose gross is less than its tare", async () => {
-    const { loadInventory, recordAmount, spoolStoreError, spoolState: state } = await import("./spool-store");
+  it("recordAmount rejects a scale entry whose gross is less than its tare, with fieldPath entry.grossMg", async () => {
+    const { loadInventory, recordAmount, spoolState: state } = await import("./spool-store");
     await loadInventory();
     const target = state.spools[0];
 
-    const result = await recordAmount(target.id, { kind: "scale", grossMg: 100, tareMg: 500 });
-
-    expect(result).toBeUndefined();
-    expect(spoolStoreError()).toBeTruthy();
+    // Fix round 1 ruling: rejects for inline handling (matches the real
+    // `record_spool_amount`/`create_spool` field path, `entry.grossMg`,
+    // from `spools/ledger.rs`'s `resolve_entry`) instead of reporting to
+    // the store banner.
+    await expect(recordAmount(target.id, { kind: "scale", grossMg: 100, tareMg: 500 }))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "entry.grossMg" } });
   });
 });
 
@@ -730,23 +732,25 @@ describe("other mutations against the desktop command path", () => {
     expect(spoolState.spools).toEqual([created]);
   });
 
-  it("reports a failed mutation into spoolStoreError rather than rejecting", async () => {
+  it("rejects a failed mutation for inline handling, instead of reporting to spoolStoreError (fix round 1 ruling)", async () => {
     tauriMock.invoke.mockResolvedValue(snapshotResponse(0, [spool()]));
-    const { loadInventory, updateSpool, spoolStoreError, dismissSpoolStoreError } = await import("./spool-store");
+    const { loadInventory, updateSpool, spoolStoreError } = await import("./spool-store");
     await loadInventory();
     tauriMock.invoke.mockRejectedValue({
       contractVersion: 1, code: "VALIDATION", message: "That color name is too long.",
-      recovery: ["EDIT_FIELDS"], retryable: false,
+      recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "colorName" },
     });
 
-    const result = await updateSpool("spl-1", {
+    await expect(updateSpool("spl-1", {
       manufacturer: "Test Co", materialFamily: "PLA", colorName: "Blue",
       diameter: "1.75", nominalMg: 1_000_000, lowThresholdMg: 100_000,
+    })).rejects.toMatchObject({
+      code: "VALIDATION", message: "That color name is too long.", details: { fieldPath: "colorName" },
     });
 
-    expect(result).toBeUndefined();
-    expect(spoolStoreError()).toBe("That color name is too long.");
-    dismissSpoolStoreError();
+    // Unlike moveSpool's CONFLICT path (which is expected to refetch), a
+    // plain VALIDATION never touches the store's own banner state -- the
+    // dialog that called this is the one showing it inline.
     expect(spoolStoreError()).toBeNull();
   });
 
@@ -791,5 +795,158 @@ describe("other mutations against the desktop command path", () => {
 
     expect(tauriMock.invoke).toHaveBeenCalledWith("spool_history", { contractVersion: 1, spoolId: "spl-1" });
     expect(result).toEqual(history);
+  });
+});
+
+// Fix round 1 ruling: updateSpool/recordAmount/setLifecycle reject for
+// inline handling, the same as moveSpool -- and, like moveSpool, a
+// CONFLICT refetches the affected Spool through list_spools before
+// rethrowing, so a retried call (which re-reads expectedRevision from
+// spoolState.spools at call time) automatically uses the fresh revision.
+describe("updateSpool/recordAmount/setLifecycle: CONFLICT recovery", () => {
+  function conflictError(message = "Someone else changed it first.") {
+    return {
+      contractVersion: 1, code: "CONFLICT", message,
+      recovery: ["RETRY"], retryable: true,
+      details: { entityId: "spl-1", expectedRevision: 1, currentRevision: 2 },
+    };
+  }
+
+  it("updateSpool refetches the Spool through list_spools before rethrowing", async () => {
+    const original = spool({ id: "spl-1", revision: 1 });
+    const refetched = { ...original, revision: 2, colorName: "Refetched" };
+    let listSpoolsCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") {
+        listSpoolsCalls += 1;
+        return Promise.resolve(snapshotResponse(0, [listSpoolsCalls === 1 ? original : refetched]));
+      }
+      if (command === "update_spool") return Promise.reject(conflictError());
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, updateSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(updateSpool("spl-1", {
+      manufacturer: original.manufacturer, materialFamily: original.materialFamily, colorName: "New color",
+      diameter: original.diameter, nominalMg: original.nominalMg, lowThresholdMg: original.lowThresholdMg,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(listSpoolsCalls).toBe(2);
+    expect(spoolState.spools).toEqual([refetched]);
+  });
+
+  it("recordAmount refetches the Spool through list_spools before rethrowing", async () => {
+    const original = spool({ id: "spl-1", revision: 1 });
+    const refetched = { ...original, revision: 2, availability: { currentMg: 700_000, reservedMg: 0, availableMg: 700_000 } };
+    let listSpoolsCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") {
+        listSpoolsCalls += 1;
+        return Promise.resolve(snapshotResponse(0, [listSpoolsCalls === 1 ? original : refetched]));
+      }
+      if (command === "record_spool_amount") return Promise.reject(conflictError());
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, recordAmount, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(recordAmount("spl-1", { kind: "net", netMg: 500_000, confidence: "measured" }))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(listSpoolsCalls).toBe(2);
+    expect(spoolState.spools).toEqual([refetched]);
+  });
+
+  it("setLifecycle refetches the Spool through list_spools before rethrowing", async () => {
+    const original = spool({ id: "spl-1", revision: 1 });
+    const refetched = { ...original, revision: 2, lifecycle: "empty" as const };
+    let listSpoolsCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") {
+        listSpoolsCalls += 1;
+        return Promise.resolve(snapshotResponse(0, [listSpoolsCalls === 1 ? original : refetched]));
+      }
+      if (command === "set_spool_lifecycle") return Promise.reject(conflictError());
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { loadInventory, setLifecycle, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(setLifecycle("spl-1", "markEmpty")).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(listSpoolsCalls).toBe(2);
+    expect(spoolState.spools).toEqual([refetched]);
+  });
+});
+
+describe("tare mutations: rejection and CONFLICT recovery", () => {
+  const originalTare = {
+    id: "tar-1", revision: 1, name: "Cardboard", weightMg: 200_000,
+    createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+  };
+
+  it("createTare rejects a duplicate name for inline handling", async () => {
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [], [originalTare]));
+      if (command === "create_tare") {
+        return Promise.reject({
+          contractVersion: 1, code: "VALIDATION", message: "A tare with that name already exists.",
+          recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "name" },
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, createTare } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(createTare("Cardboard", 200_000))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "name" } });
+  });
+
+  it("updateTare refetches the tare through list_spools before rethrowing on CONFLICT", async () => {
+    const refetchedTare = { ...originalTare, revision: 2, name: "Refetched" };
+    let listSpoolsCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") {
+        listSpoolsCalls += 1;
+        return Promise.resolve(snapshotResponse(0, [], listSpoolsCalls === 1 ? [originalTare] : [refetchedTare]));
+      }
+      if (command === "update_tare") {
+        return Promise.reject({
+          contractVersion: 1, code: "CONFLICT", message: "Someone else renamed it first.",
+          recovery: ["RETRY"], retryable: true,
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, updateTare, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(updateTare("tar-1", "New name", 210_000)).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(listSpoolsCalls).toBe(2);
+    expect(spoolState.tares).toEqual([refetchedTare]);
+  });
+
+  it("deleteTare rejects for inline handling instead of reporting to spoolStoreError", async () => {
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [], [originalTare]));
+      if (command === "delete_tare") {
+        return Promise.reject({
+          contractVersion: 1, code: "INTERNAL", message: "The tare could not be deleted.",
+          recovery: [], retryable: false,
+        });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, deleteTare, spoolStoreError } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(deleteTare("tar-1")).rejects.toMatchObject({ code: "INTERNAL" });
+    expect(spoolStoreError()).toBeNull();
   });
 });
