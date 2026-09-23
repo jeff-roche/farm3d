@@ -122,7 +122,9 @@ pub async fn supervise_printer<R: tauri::Runtime>(
             }
         },
     };
-    manager.start(printer.id.clone(), config, secret, facts).await;
+    manager
+        .start(printer.id.clone(), config, secret, facts)
+        .await;
     SupervisionOutcome::Started
 }
 
@@ -385,12 +387,10 @@ mod tests {
         printer.connection = Some(moonraker_config(Some("farm3d/credential/present")));
 
         let outcome = supervise_printer(&manager, &credentials, &catalog, &printer).await;
-        let called = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            factory_called_rx.recv(),
-        )
-        .await
-        .expect("the connection factory should be invoked promptly");
+        let called =
+            tokio::time::timeout(std::time::Duration::from_secs(2), factory_called_rx.recv())
+                .await
+                .expect("the connection factory should be invoked promptly");
 
         assert_eq!(outcome, SupervisionOutcome::Started);
         assert!(called.is_some());

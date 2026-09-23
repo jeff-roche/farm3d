@@ -117,8 +117,7 @@ pub fn evaluate(
     for source in blocker_sources() {
         blockers.extend(source.blockers(printer, tx)?);
     }
-    let blocks =
-        |action: LifecycleAction| blockers.iter().any(|blocker| blocker.action == action);
+    let blocks = |action: LifecycleAction| blockers.iter().any(|blocker| blocker.action == action);
     Ok(LifecycleEligibility {
         can_archive: !blocks(LifecycleAction::Archive),
         can_unarchive: !blocks(LifecycleAction::Unarchive),

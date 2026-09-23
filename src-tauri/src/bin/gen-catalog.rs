@@ -9,10 +9,15 @@ const DEFAULT_TAG: &str = "v2.4.2";
 const REPO_URL: &str = "https://github.com/OrcaSlicer/OrcaSlicer.git";
 
 fn main() {
-    let tag = env::args().nth(1).unwrap_or_else(|| DEFAULT_TAG.to_string());
+    let tag = env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_TAG.to_string());
     let tmp = env::temp_dir().join(format!("farm3d-gen-catalog-{}", std::process::id()));
 
-    println!("Sparse-cloning OrcaSlicer at {tag} into {}...", tmp.display());
+    println!(
+        "Sparse-cloning OrcaSlicer at {tag} into {}...",
+        tmp.display()
+    );
     run(Command::new("git").args([
         "clone",
         "--depth",
@@ -36,7 +41,10 @@ fn main() {
     println!("Ingesting {}...", profiles_dir.display());
     let models = ingest_profiles_dir(&profiles_dir).expect("ingestion failed");
     let variant_count: usize = models.iter().map(|m| m.variants.len()).sum();
-    println!("Ingested {} models / {variant_count} variants", models.len());
+    println!(
+        "Ingested {} models / {variant_count} variants",
+        models.len()
+    );
 
     let catalog = Catalog {
         generated_at: now_utc_rfc3339(),
@@ -50,8 +58,7 @@ fn main() {
         models,
     };
 
-    let out_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
+    let out_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/printer-catalog.json");
     fs::create_dir_all(out_path.parent().unwrap()).expect("could not create resources dir");
     let json = serde_json::to_string_pretty(&catalog).expect("could not serialize catalog");
     fs::write(&out_path, json).expect("could not write catalog");

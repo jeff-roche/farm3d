@@ -52,9 +52,7 @@ pub struct CreateOutcome {
 /// `create_printer` and `update_printer`.
 pub fn validate_name(name: &str) -> Result<String, CommandError> {
     let trimmed = name.trim();
-    if trimmed.is_empty()
-        || trimmed.chars().count() > 128
-        || trimmed.chars().any(char::is_control)
+    if trimmed.is_empty() || trimmed.chars().count() > 128 || trimmed.chars().any(char::is_control)
     {
         return Err(CommandError::validation_at(
             "name",
@@ -95,7 +93,11 @@ pub fn validate_location(value: Option<&str>) -> Result<Option<String>, CommandE
 /// which has no Printer id to attach. Every other detail
 /// (code/message/recovery/retryable, and `adapterKind` on a protocol error)
 /// is unchanged either way.
-pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&str>) -> CommandError {
+pub fn probe_error(
+    error: ConnectionError,
+    adapter_kind: &str,
+    entity: Option<&str>,
+) -> CommandError {
     let (code, message, recovery, retryable) = match error {
         ConnectionError::Unreachable(_) => (
             ErrorCode::PrinterUnreachable,
@@ -106,7 +108,10 @@ pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&s
         ConnectionError::Auth(_) => (
             ErrorCode::AuthenticationFailed,
             "The Printer rejected the credential.",
-            vec![RecoveryCode::CheckCredentials, RecoveryCode::ReenterCredential],
+            vec![
+                RecoveryCode::CheckCredentials,
+                RecoveryCode::ReenterCredential,
+            ],
             false,
         ),
         ConnectionError::Protocol(_) => (
@@ -123,7 +128,9 @@ pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&s
         ),
     };
     match entity {
-        Some(id) => CommandError::safe_network(code, message, recovery, retryable, id, adapter_kind),
+        Some(id) => {
+            CommandError::safe_network(code, message, recovery, retryable, id, adapter_kind)
+        }
         None => {
             let mut details = std::collections::BTreeMap::new();
             if code == ErrorCode::ProtocolError {
@@ -140,7 +147,11 @@ pub fn probe_error(error: ConnectionError, adapter_kind: &str, entity: Option<&s
                 retryable,
                 correlation_id: None,
                 field_errors: None,
-                details: if details.is_empty() { None } else { Some(details) },
+                details: if details.is_empty() {
+                    None
+                } else {
+                    Some(details)
+                },
             }
         }
     }
@@ -279,7 +290,11 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         repository
             .enqueue_credential_cleanup(&reference, None, "provisional")
             .map_err(|error| CommandError::from_repository(error.into()))?;
-        if services.credentials.set(&reference, secret.as_str()).is_err() {
+        if services
+            .credentials
+            .set(&reference, secret.as_str())
+            .is_err()
+        {
             return Err(CommandError::credential_unavailable(
                 match services.credentials.kind() {
                     CredentialStoreKind::Keychain => "keychain",
@@ -320,7 +335,8 @@ pub async fn create_printer_with<R: tauri::Runtime>(
             // still there, still unreferenced by any Printer. Try to clean
             // it — and the secret it names — up right away; if that also
             // fails, the row is left for startup cleanup to retry.
-            let _ = retry_pending_credential_cleanup(&services.storage, services.credentials.as_ref());
+            let _ =
+                retry_pending_credential_cleanup(&services.storage, services.credentials.as_ref());
             return Err(CommandError::from_repository(error));
         }
     };

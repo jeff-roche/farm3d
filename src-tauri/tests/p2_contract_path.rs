@@ -24,7 +24,11 @@ use farm3d_lib::RuntimeServices;
 use serde_json::json;
 use tauri::Listener;
 
-fn storage() -> (tempfile::TempDir, farm3d_lib::persistence::MetadataRootLease, Arc<Storage>) {
+fn storage() -> (
+    tempfile::TempDir,
+    farm3d_lib::persistence::MetadataRootLease,
+    Arc<Storage>,
+) {
     let (temp, lease, storage, _database) = common::storage();
     (temp, lease, storage)
 }
@@ -36,7 +40,10 @@ fn storage() -> (tempfile::TempDir, farm3d_lib::persistence::MetadataRootLease, 
 fn recording_factory(
     storage: Arc<Storage>,
 ) -> (
-    impl Fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>
+    impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
         + Send
         + Sync
         + 'static,
@@ -93,7 +100,6 @@ fn runtime(
         factory,
     )
 }
-
 
 // --- 1. `probe_connection` has no side effects -----------------------------
 
@@ -310,9 +316,9 @@ fn create_printer_with_connection_and_credential_starts_supervision_after_commit
 
     let printer = &response["data"]["printer"];
     let credential_ref = printer["connection"]["credentialRef"].as_str().unwrap();
-    let uuid_part = credential_ref.strip_prefix("farm3d/credential/").expect(
-        "credentialRef must be farm3d/credential/<uuid>",
-    );
+    let uuid_part = credential_ref
+        .strip_prefix("farm3d/credential/")
+        .expect("credentialRef must be farm3d/credential/<uuid>");
     assert!(uuid::Uuid::parse_str(uuid_part).is_ok());
     assert_eq!(
         services.credentials.get(credential_ref).unwrap().as_deref(),

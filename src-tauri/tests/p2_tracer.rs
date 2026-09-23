@@ -79,7 +79,10 @@ fn factory(
 /// happens for every non-archived Printer, connected or not; see the fix
 /// this test received in review).
 fn recording_factory() -> (
-    impl Fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>
+    impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
         + Send
         + Sync
         + 'static,
@@ -206,7 +209,10 @@ fn the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart() {
     let bay_a_2_id = r2["printer"]["id"].as_str().unwrap().to_string();
 
     let r3 = row_by_id("r3");
-    assert_eq!(r3["outcome"], "createdSetupIncomplete", "r3 (no connection): {r3}");
+    assert_eq!(
+        r3["outcome"], "createdSetupIncomplete",
+        "r3 (no connection): {r3}"
+    );
     let bay_b_1_id = r3["printer"]["id"].as_str().unwrap().to_string();
 
     let r4 = row_by_id("r4");
@@ -267,7 +273,11 @@ fn the_tracer_creates_a_batch_archives_one_printer_and_survives_a_restart() {
 
     let listed = invoke(&webview, "list_printers", json!({"contractVersion": 1})).unwrap();
     let rows = listed["data"].as_array().unwrap().clone();
-    assert_eq!(rows.len(), 6, "all six Printers must still be listed: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        6,
+        "all six Printers must still be listed: {rows:?}"
+    );
 
     let archived_row = printer_row(&rows, &bay_a_1_id);
     assert_eq!(archived_row["name"], json!("Bay A 1"));

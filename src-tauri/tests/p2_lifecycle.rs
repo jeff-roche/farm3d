@@ -120,7 +120,10 @@ fn a_printer(id: &str, connection: Option<ConnectionConfig>) -> StoredPrinter {
 /// is all these tests need: whether the factory was *called*, not what it
 /// returns.
 fn recording_factory() -> (
-    impl Fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>
+    impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
         + Send
         + Sync
         + 'static,
@@ -343,9 +346,7 @@ fn after_archiving_a_restart_never_supervises_the_archived_printer_but_keeps_it_
     // *same* storage, driven through the same restore path `lib.rs` uses at
     // startup.
     let (restart_factory, restart_calls) = recording_factory();
-    let restart_app = mock_builder()
-        .build(mock_context(noop_assets()))
-        .unwrap();
+    let restart_app = mock_builder().build(mock_context(noop_assets())).unwrap();
     let restart_manager = Arc::new(ConnectionManager::with_clock_and_factory(
         restart_app.handle().clone(),
         Arc::new(StatusRepository::new(Arc::clone(&storage))),
@@ -485,7 +486,10 @@ fn clearing_the_connection_of_an_archived_printer_publishes_no_status() {
     let (_app, webview, manager, services) =
         runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
     let printer = PrinterRepository::new(Arc::clone(&storage))
-        .create(a_printer("printer-a", Some(moonraker_config("voron.local", None))))
+        .create(a_printer(
+            "printer-a",
+            Some(moonraker_config("voron.local", None)),
+        ))
         .unwrap();
     tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_printer(
         &manager,
@@ -530,7 +534,10 @@ fn supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing() {
         runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
     let repository = PrinterRepository::new(Arc::clone(&storage));
     let stale = repository
-        .create(a_printer("printer-a", Some(moonraker_config("voron.local", None))))
+        .create(a_printer(
+            "printer-a",
+            Some(moonraker_config("voron.local", None)),
+        ))
         .unwrap();
     // An interleaved archive commits after the caller captured `stale`.
     repository.archive(&stale.id, stale.revision).unwrap();

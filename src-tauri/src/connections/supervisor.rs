@@ -1613,7 +1613,10 @@ mod tests {
             "forget must not touch the snapshot row"
         );
         let backfill = manager.status_backfill();
-        assert!(backfill.statuses.iter().all(|row| row.printer_id != "prn-1"));
+        assert!(backfill
+            .statuses
+            .iter()
+            .all(|row| row.printer_id != "prn-1"));
     }
 
     #[test]

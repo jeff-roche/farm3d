@@ -227,7 +227,11 @@ impl PrinterRepository {
     /// supervision and the Monitor's default view once archived, but keeps
     /// its Connection and data. Blocked when the Printer is already
     /// archived.
-    pub fn archive(&self, id: &str, expected_revision: i64) -> Result<StoredPrinter, RepositoryError> {
+    pub fn archive(
+        &self,
+        id: &str,
+        expected_revision: i64,
+    ) -> Result<StoredPrinter, RepositoryError> {
         self.transition(id, expected_revision, LifecycleAction::Archive, |printer| {
             printer.archived_at = Some(crate::printers::now_rfc3339());
         })
