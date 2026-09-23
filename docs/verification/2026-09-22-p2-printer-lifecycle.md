@@ -2,12 +2,12 @@
 
 **Date:** 2026-09-22
 **Platform:** Linux
-**Validated source:** `95803f9` (`feat: explain Printers archived for
-sharing a host`), the last code commit on `feature/p2-printer-lifecycle`,
+**Validated source:** `a0735e5` (`feat: let users remove a Printer's
+stored credentials`), the last code commit on `feature/p2-printer-lifecycle`,
 after the final whole-branch review fix wave and the PR follow-ups (see
 "Final review fix wave" and "PR follow-ups" below). The original
 verification pass ran against `97b27d9`; every command below was re-run
-against `95803f9`.
+against `a0735e5`.
 Covers Tasks 1–12 (P2 in full).
 
 ## Automated evidence
@@ -15,7 +15,7 @@ Covers Tasks 1–12 (P2 in full).
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully. |
-| `just test` | Passed: 32 files, 325 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
+| `just test` | Passed: 32 files, 329 tests. The runner emitted five existing jsdom `Window.scrollTo()` notices; it exited 0. |
 | `source "$HOME/.cargo/env" && just test-rust` | Passed: 255 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, **1 `p2_tracer`**, and 3 `snapshot` tests. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) — the frontend's generated contracts already match the Rust side. |
 
@@ -319,7 +319,7 @@ smaller accuracy fixes. All were fixed in `67fd705` (backend) and
 
 ## PR follow-ups
 
-Two follow-ups left open by the final review were done on the PR, each
+Two follow-ups left open by the final review, plus one requested change, were done on the PR, each
 with a covering test first seen failing:
 
 1. **Import supervised its in-memory copy of the Printers.** If an archive
@@ -339,6 +339,16 @@ with a covering test first seen failing:
    `p2_migration.rs::duplicate_host_migration_archives_are_listed_for_the_ui`,
    the three archive-notice tests in `printer-store.test.ts`, and
    `App.test.tsx` ("reads duplicate-host archives…").
+
+3. **A stored credential could not be removed without removing the whole
+   Connection.** The Connection tab now shows "Remove credentials" when a
+   key is stored. A confirmation dialog then resubmits the *saved*
+   Connection (ignoring unsaved edits) with `credential: ""`, which
+   `set_printer_connection` already treated as "clear". The Connection is
+   kept, and because its settings don't change, no replacement probe runs.
+   If the removal fails, the dialog stays open and shows the error.
+   Tests: the "Remove credentials" block in
+   `PrinterConnectionPanel.test.tsx`.
 
 The command inventory is now 30 (`f1_contract_path.rs`,
 `f1_residual_acceptance.rs`).
