@@ -59,6 +59,27 @@ export interface ConnectionDraft {
   credential: string;
 }
 
+/** Whether `next` describes a materially different submission than
+ *  `previous` — i.e. whether a probe run against `previous` is now stale.
+ *  kind/host/port/useTls always matter. `credential` only counts as a
+ *  change when it becomes a *new, non-blank* value (a freshly typed key) —
+ *  a blank credential means "unset"/"leave the stored key alone" (see
+ *  `toSubmission`), and `PrinterConnectionPanel` resets the field back to
+ *  `""` after every Save (success or failure) purely to stop echoing a
+ *  typed secret, not because the connection changed. Without this
+ *  exception, that post-Save reset would itself invalidate a probe that's
+ *  still perfectly valid. Shared by `ConnectionFields`' own probe state and
+ *  `PrinterSetupWizard`'s `lastProbe`, so the two can't drift on this
+ *  rule. */
+export function connectionDraftChanged(previous: ConnectionDraft, next: ConnectionDraft): boolean {
+  if (previous.kind !== next.kind) return true;
+  if (previous.host !== next.host) return true;
+  if (previous.port !== next.port) return true;
+  if (previous.useTls !== next.useTls) return true;
+  if (next.credential !== "" && next.credential !== previous.credential) return true;
+  return false;
+}
+
 /** `create`: a brand-new Printer with no stored credential yet — a blank
  *  credential means "no credential at all", so it is omitted from the
  *  submission. `edit`: a Printer that may already have a stored credential
@@ -122,16 +143,16 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
   });
 
   // A verified `probe`/`probeError` describes the *specific* submission it
-  // was run against — editing any field afterward (host, port, kind, TLS,
-  // credential) invalidates it, or the chip/mismatch list would keep
-  // showing a stale "online" result (or error) for a config the user has
-  // since changed. `previous === undefined` skips the run `on()` always
-  // does at mount, where there's nothing stale to clear yet.
+  // was run against — a materially different draft afterward (per
+  // `connectionDraftChanged`) invalidates it, or the chip/mismatch list
+  // would keep showing a stale "online" result (or error) for a config the
+  // user has since changed. `previous === undefined` skips the run `on()`
+  // always does at mount, where there's nothing stale to clear yet.
   createEffect(
     on(
       () => props.value,
-      (_current, previous) => {
-        if (previous === undefined) return;
+      (current, previous) => {
+        if (previous === undefined || !connectionDraftChanged(previous, current)) return;
         setProbe(null);
         setProbeError(null);
       },

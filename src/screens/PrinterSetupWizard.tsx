@@ -12,7 +12,13 @@ import type {
   StartSafety,
 } from "../printers/types";
 import { bedTypeLabel, bedTypeOptionsFor } from "./PrinterProfilePanel";
-import { buildMismatches, ConnectionFields, toSubmission, type ConnectionDraft } from "./ConnectionFields";
+import {
+  buildMismatches,
+  ConnectionFields,
+  connectionDraftChanged,
+  toSubmission,
+  type ConnectionDraft,
+} from "./ConnectionFields";
 import styles from "./PrinterSetupWizard.module.css";
 
 const STEP_ORDER = ["identify", "connect", "operate", "review"] as const;
@@ -83,14 +89,15 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
   const [connectionDraft, setConnectionDraft] = createSignal<ConnectionDraft>(DEFAULT_CONNECTION_DRAFT);
   const [lastProbe, setLastProbe] = createSignal<ProbeResult | null>(null);
 
-  // Mirrors `ConnectionFields`' own probe invalidation: Review's mismatch
-  // list reads `lastProbe`, which must not keep describing a submission the
-  // user has since edited (e.g. tested host A, then edited to host B before
-  // reaching Review). `previous === undefined` skips the run `on()` always
-  // does at mount.
+  // Mirrors `ConnectionFields`' own probe invalidation (shared
+  // `connectionDraftChanged` rule): Review's mismatch list reads
+  // `lastProbe`, which must not keep describing a submission the user has
+  // since materially edited (e.g. tested host A, then edited to host B
+  // before reaching Review). `previous === undefined` skips the run `on()`
+  // always does at mount.
   createEffect(
-    on(connectionDraft, (_current, previous) => {
-      if (previous === undefined) return;
+    on(connectionDraft, (current, previous) => {
+      if (previous === undefined || !connectionDraftChanged(previous, current)) return;
       setLastProbe(null);
     }),
   );

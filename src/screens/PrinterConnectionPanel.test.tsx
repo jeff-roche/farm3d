@@ -122,6 +122,30 @@ describe("PrinterConnectionPanel", () => {
     expect(await screen.findByText(/Could not reach the printer/)).toBeInTheDocument();
   });
 
+  it("keeps a verified Test result visible after a Save that didn't edit the connection", async () => {
+    testConnection.mockResolvedValueOnce({
+      kind: "moonraker",
+      hostSoftware: "Moonraker 0.9",
+      firmware: "Klipper v0.12",
+      reportedName: "Bay 1",
+      state: "online",
+      stateMessage: "",
+      reported: {},
+    });
+    render(() => <PrinterConnectionPanel printer={printer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("online")).toBeInTheDocument();
+
+    // Save's own `finally` resets the (already-blank) credential field back
+    // to "" -- that reset must not read as an edit that invalidates the
+    // just-verified probe.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(setConnection).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText("online")).toBeInTheDocument();
+  });
+
   it("shows which credential store is live", async () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     expect(await screen.findByText(/OS keychain/)).toBeInTheDocument();
