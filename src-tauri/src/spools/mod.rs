@@ -9,9 +9,11 @@
 //! gram<->milligram conversion and range constants `validate_fields` checks
 //! against.
 
+pub mod events;
 pub mod ledger;
 pub mod movement;
 pub mod repository;
+pub mod reservations;
 pub mod tares;
 pub mod weight;
 

@@ -164,8 +164,7 @@ pub fn insert_spool(
     // Scale entry's `tareId` (already resolved into `snapshot` above) never
     // sets or changes it.
     let tare_id = fields.tare_id.clone();
-    let last_measured_at =
-        matches!(confidence, AmountConfidence::Measured).then(|| now.clone());
+    let last_measured_at = matches!(confidence, AmountConfidence::Measured).then(|| now.clone());
 
     let stored = StoredSpool {
         id: id.clone(),
@@ -289,7 +288,9 @@ pub fn check_and_bump_revision(
 /// D5's blank-to-`None` storage label rule (mirrors
 /// `SpoolFields::normalize`'s optional-text handling), plus the migration's
 /// 1-64 char length CHECK.
-pub(crate) fn normalize_storage_label(label: Option<&str>) -> Result<Option<String>, RepositoryError> {
+pub(crate) fn normalize_storage_label(
+    label: Option<&str>,
+) -> Result<Option<String>, RepositoryError> {
     let Some(label) = label else {
         return Ok(None);
     };
@@ -303,6 +304,21 @@ pub(crate) fn normalize_storage_label(label: Option<&str>) -> Result<Option<Stri
         });
     }
     Ok(Some(trimmed.to_string()))
+}
+
+/// D8's per-Spool sum of `spool_reservations` in `{active, unresolved}` —
+/// the same state filter [`list_spools`]'s batched JOIN sums across every
+/// Spool at once, extracted here so `spools::reservations` (Task 4) doesn't
+/// duplicate it for a single Spool (`reserve`'s availability check,
+/// `availability` itself).
+pub(crate) fn reserved_mg(tx: &Transaction<'_>, spool_id: &str) -> Result<i64, StorageError> {
+    tx.query_row(
+        "SELECT COALESCE(SUM(amount_mg), 0) FROM spool_reservations
+         WHERE spool_id = ?1 AND state IN ('active', 'unresolved')",
+        [spool_id],
+        |row| row.get(0),
+    )
+    .map_err(StorageError::from)
 }
 
 /// D9's derivation from a [`StoredSpool`] row plus its join results
@@ -373,7 +389,8 @@ fn decode_stored(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSpool> {
         spool_number: row.get(2)?,
         manufacturer: row.get(3)?,
         product: row.get(4)?,
-        material_family: decode_enum(&material_family_text).map_err(|error| from_sql_error(5, error))?,
+        material_family: decode_enum(&material_family_text)
+            .map_err(|error| from_sql_error(5, error))?,
         material_other: row.get(6)?,
         color_name: row.get(7)?,
         color_hex: row.get(8)?,
