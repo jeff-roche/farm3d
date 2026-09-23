@@ -11,6 +11,7 @@ use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVe
 use crate::persistence::Storage;
 use crate::printers::commands::{OperationWarning, PrinterMutationResult};
 use crate::printers::create::probe_submission;
+use crate::printers::host_identity::canonical_host_identity;
 use crate::printers::repository::PrinterRepository;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -312,6 +313,20 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
             existing.revision,
         ));
     }
+    // D3: reject a host another active Printer owns BEFORE probing or
+    // writing any secret (same precheck as `create_printer_with`). An
+    // archived Printer holds no host (D6), so it is not checked here; the
+    // repository write still enforces the invariant on commit.
+    if existing.archived_at.is_none() {
+        if let Some(identity) = canonical_host_identity(&submission.host, submission.port) {
+            if let Some(conflicting) = repository
+                .find_active_by_host_identity(&identity, Some(&id))
+                .map_err(storage_command_error)?
+            {
+                return Err(CommandError::duplicate_host(&conflicting));
+            }
+        }
+    }
     let previous_credential_ref = existing
         .connection
         .as_ref()
@@ -389,8 +404,9 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     let updated = committed.printer;
     let _reconciliation = services.manager.reconciliation_guard().await;
     let mut warnings = Vec::new();
-    if crate::printers::setup::supervise_printer(
+    if crate::printers::setup::supervise_persisted(
         &services.manager,
+        &services.storage,
         services.credentials.as_ref(),
         &services.catalog,
         &updated,
@@ -454,12 +470,39 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
     .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    let (facts, _) = crate::printers::setup::derive_setup_facts(&updated, &services.catalog);
-    if !services
-        .manager
-        .clear_connection(&id, facts.profile_resolved)
-        .await
-    {
+    // Reconcile against the PERSISTED row (a concurrent archive/delete/set
+    // may have committed since ours). D6: an archived Printer never gets a
+    // live status — drop its snapshot and publish removal instead.
+    let current = repository
+        .get(&id)
+        .ok()
+        .unwrap_or_else(|| Some(updated.clone()));
+    let graceful = match current {
+        None => services.manager.stop(&id).await,
+        Some(current) if current.archived_at.is_some() => {
+            services.manager.discard_connection(&id).await
+        }
+        Some(current) if current.connection.is_some() => !matches!(
+            crate::printers::setup::supervise_printer(
+                &services.manager,
+                services.credentials.as_ref(),
+                &services.catalog,
+                &current,
+            )
+            .await,
+            crate::printers::setup::SupervisionOutcome::Archived(false)
+                | crate::printers::setup::SupervisionOutcome::Deleted(false)
+        ),
+        Some(current) => {
+            let (facts, _) =
+                crate::printers::setup::derive_setup_facts(&current, &services.catalog);
+            services
+                .manager
+                .clear_connection(&id, facts.profile_resolved)
+                .await
+        }
+    };
+    if !graceful {
         warnings.push(OperationWarning::supervisor(&id));
     }
     if let Some(reference) = old.as_deref() {

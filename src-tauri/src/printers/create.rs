@@ -20,7 +20,7 @@ use crate::contracts::command::{
 use crate::contracts::ContractVersion;
 use crate::printers::commands::OperationWarning;
 use crate::printers::repository::PrinterRepository;
-use crate::printers::setup::{supervise_printer, SupervisionOutcome};
+use crate::printers::setup::{supervise_persisted, SupervisionOutcome};
 use crate::printers::{
     CatalogRef, LastKnownGood, PrinterProfileOverrides, StartSafety, StoredPrinter,
 };
@@ -327,8 +327,9 @@ pub async fn create_printer_with<R: tauri::Runtime>(
 
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    if supervise_printer(
+    if supervise_persisted(
         &services.manager,
+        &services.storage,
         services.credentials.as_ref(),
         &services.catalog,
         &stored,

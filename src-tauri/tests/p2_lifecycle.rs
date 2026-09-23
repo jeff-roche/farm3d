@@ -191,6 +191,7 @@ fn runtime(
             farm3d_lib::printers::commands::archive_printer,
             farm3d_lib::printers::commands::unarchive_printer,
             farm3d_lib::printers::commands::delete_printer,
+            farm3d_lib::connections::commands::clear_printer_connection,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -475,4 +476,96 @@ fn deleting_an_archived_printer_succeeds_and_removes_its_credential() {
         .unwrap()
         .is_none());
     assert_eq!(services.credentials.get(CREDENTIAL_REF).unwrap(), None);
+}
+
+#[test]
+fn clearing_the_connection_of_an_archived_printer_publishes_no_status() {
+    let (_temp, _lease, storage) = storage();
+    let (factory, calls) = recording_factory();
+    let (_app, webview, manager, services) =
+        runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
+    let printer = PrinterRepository::new(Arc::clone(&storage))
+        .create(a_printer("printer-a", Some(moonraker_config("voron.local", None))))
+        .unwrap();
+    tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_printer(
+        &manager,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &printer,
+    ));
+    expect_a_call(&calls);
+    let archived = invoke(
+        &webview,
+        "archive_printer",
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+    )
+    .unwrap();
+    let archived_revision = archived["data"]["printer"]["revision"].as_i64().unwrap();
+
+    let cleared = invoke(
+        &webview,
+        "clear_printer_connection",
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": archived_revision}),
+    )
+    .unwrap();
+
+    assert_eq!(cleared["data"]["printer"]["connection"], json!(null));
+    assert!(
+        !manager.statuses().contains_key(&printer.id),
+        "an archived Printer must not get a live status from clearing its Connection"
+    );
+    assert!(!manager
+        .status_backfill()
+        .statuses
+        .iter()
+        .any(|row| row.printer_id == printer.id));
+    expect_no_call(&calls);
+}
+
+#[test]
+fn supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing() {
+    let (_temp, _lease, storage) = storage();
+    let (factory, calls) = recording_factory();
+    let (_app, _webview, manager, services) =
+        runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let stale = repository
+        .create(a_printer("printer-a", Some(moonraker_config("voron.local", None))))
+        .unwrap();
+    // An interleaved archive commits after the caller captured `stale`.
+    repository.archive(&stale.id, stale.revision).unwrap();
+
+    tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(
+        &manager,
+        &storage,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &stale,
+    ));
+
+    expect_no_call(&calls);
+    assert!(!manager.statuses().contains_key(&stale.id));
+}
+
+#[test]
+fn supervising_the_persisted_state_of_a_deleted_printer_removes_its_status() {
+    let (_temp, _lease, storage) = storage();
+    let (factory, calls) = recording_factory();
+    let (_app, _webview, manager, services) =
+        runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let stale = repository.create(a_printer("printer-a", None)).unwrap();
+    repository.archive(&stale.id, stale.revision).unwrap();
+    repository.delete(&stale.id, stale.revision + 1).unwrap();
+
+    tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(
+        &manager,
+        &storage,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &stale,
+    ));
+
+    expect_no_call(&calls);
+    assert!(!manager.statuses().contains_key(&stale.id));
 }

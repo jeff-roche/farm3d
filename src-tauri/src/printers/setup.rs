@@ -12,7 +12,10 @@ use crate::connections::credentials::CredentialBackend;
 use crate::connections::supervisor::{ConnectionManager, PrinterSetupFacts};
 use crate::connections::MOONRAKER_KIND;
 
+use super::repository::PrinterRepository;
 use super::StoredPrinter;
+use crate::persistence::Storage;
+use std::sync::Arc;
 
 /// The ordered, possibly-empty reasons a Printer's setup is incomplete. See
 /// spec D4.
@@ -73,6 +76,9 @@ pub enum SupervisionOutcome {
     /// `archive_printer`) can surface `OperationWarning::supervisor` when it
     /// wasn't.
     Archived(bool),
+    /// The Printer no longer exists (a concurrent delete); its supervision
+    /// was stopped. Carries whether the stop was graceful.
+    Deleted(bool),
 }
 
 /// The one path every call site uses to bring a Printer's live supervision
@@ -118,6 +124,26 @@ pub async fn supervise_printer<R: tauri::Runtime>(
     };
     manager.start(printer.id.clone(), config, secret, facts).await;
     SupervisionOutcome::Started
+}
+
+/// `supervise_printer` over the Printer's PERSISTED row rather than the
+/// caller's in-memory copy. Call it while holding the manager's
+/// reconciliation guard, after the caller's own commit: an archive,
+/// unarchive, delete, or Connection change that committed in between is
+/// then honored instead of being undone by supervising a stale snapshot.
+/// If the row cannot be read, `fallback` (the caller's copy) is used.
+pub async fn supervise_persisted<R: tauri::Runtime>(
+    manager: &ConnectionManager<R>,
+    storage: &Arc<Storage>,
+    credentials: &dyn CredentialBackend,
+    catalog: &Catalog,
+    fallback: &StoredPrinter,
+) -> SupervisionOutcome {
+    match PrinterRepository::new(Arc::clone(storage)).get(&fallback.id) {
+        Ok(Some(current)) => supervise_printer(manager, credentials, catalog, &current).await,
+        Ok(None) => SupervisionOutcome::Deleted(manager.stop(&fallback.id).await),
+        Err(_) => supervise_printer(manager, credentials, catalog, fallback).await,
+    }
 }
 
 #[cfg(test)]

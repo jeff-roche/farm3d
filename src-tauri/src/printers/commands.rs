@@ -253,18 +253,20 @@ pub async fn archive_printer<R: tauri::Runtime>(
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    if let crate::printers::setup::SupervisionOutcome::Archived(graceful) =
-        crate::printers::setup::supervise_printer(
-            &services.manager,
-            services.credentials.as_ref(),
-            &services.catalog,
-            &archived,
-        )
-        .await
+    match crate::printers::setup::supervise_persisted(
+        &services.manager,
+        &services.storage,
+        services.credentials.as_ref(),
+        &services.catalog,
+        &archived,
+    )
+    .await
     {
-        if !graceful {
+        crate::printers::setup::SupervisionOutcome::Archived(false)
+        | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
             warnings.push(OperationWarning::supervisor(&id));
         }
+        _ => {}
     }
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
@@ -288,8 +290,9 @@ pub async fn unarchive_printer<R: tauri::Runtime>(
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
-    if crate::printers::setup::supervise_printer(
+    if crate::printers::setup::supervise_persisted(
         &services.manager,
+        &services.storage,
         services.credentials.as_ref(),
         &services.catalog,
         &unarchived,

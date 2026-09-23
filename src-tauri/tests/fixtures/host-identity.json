@@ -4,5 +4,7 @@
   { "host": "[FE80::0001]", "port": 7125, "expected": "[fe80::1]:7125" },
   { "host": "fe80::1", "port": 7125, "expected": "[fe80::1]:7125" },
   { "host": "", "port": 7125, "expected": null },
-  { "host": "voron-a", "port": 7125, "expected": "voron-a:7125" }
+  { "host": "voron-a", "port": 7125, "expected": "voron-a:7125" },
+  { "host": "::ffff:192.168.1.1", "port": 7125, "expected": "[::ffff:192.168.1.1]:7125" },
+  { "host": "[::FFFF:C0A8:0101]", "port": 7125, "expected": "[::ffff:192.168.1.1]:7125" }
 ]

@@ -256,19 +256,13 @@ impl StatusMap {
         Some(envelope)
     }
 
-    /// Drops any retained status/hydration entry without bumping the epoch
-    /// or publishing anything — the state half of `publish_removed`,
-    /// factored out so `ConnectionManager::forget` can be described purely
-    /// in terms of it plus a publish.
-    fn remove(&self, id: &str) {
+    /// Drops any retained status/hydration entry, bumps the epoch, and
+    /// builds the removal envelope — all under one lock, so no concurrent
+    /// publish can land between the drop and the epoch bump.
+    fn publish_removed(&self, id: &str) -> PrinterStatusEvent {
         let mut state = self.state.lock().expect("status map lock");
         state.values.remove(id);
         state.hydrated.remove(id);
-    }
-
-    fn publish_removed(&self, id: &str) -> PrinterStatusEvent {
-        self.remove(id);
-        let mut state = self.state.lock().expect("status map lock");
         let epoch = state.epochs.entry(id.to_string()).or_default();
         *epoch = epoch.saturating_add(1);
         next_envelope(
@@ -812,14 +806,29 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         self.stop(printer_id).await
     }
 
-    pub async fn clear_connection(&self, printer_id: &str, profile_resolved: bool) -> bool {
-        let graceful = self.stop_task_and_wait(printer_id).await;
+    fn delete_telemetry_snapshot(&self, printer_id: &str) {
         if let Err(error) = self.repository.delete(printer_id) {
             eprintln!("farm3d: cannot clear telemetry cache: {error}");
             self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         } else {
             self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         }
+    }
+
+    /// `clear_connection` for an archived Printer (D6): stops any task and
+    /// drops the telemetry snapshot like `clear_connection`, but publishes
+    /// removal instead of a live Offline/Setup-incomplete status.
+    pub async fn discard_connection(&self, printer_id: &str) -> bool {
+        let graceful = self.stop_task_and_wait(printer_id).await;
+        self.delete_telemetry_snapshot(printer_id);
+        self.clear_cache_warnings_for(printer_id);
+        self.publish_removed(printer_id);
+        graceful
+    }
+
+    pub async fn clear_connection(&self, printer_id: &str, profile_resolved: bool) -> bool {
+        let graceful = self.stop_task_and_wait(printer_id).await;
+        self.delete_telemetry_snapshot(printer_id);
         let now = self.now();
         let mut next = status_from_parts(
             ConnectionState::Offline,

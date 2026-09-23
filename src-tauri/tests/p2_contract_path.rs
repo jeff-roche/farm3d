@@ -656,6 +656,85 @@ fn first_time_set_printer_connection_never_probes() {
     );
 }
 
+// --- 9b. `set_printer_connection` to another active Printer's host --------
+
+fn a_connected_printer(id: &str, host: &str) -> farm3d_lib::printers::StoredPrinter {
+    let mut printer = a_stored_printer(id);
+    printer.connection = Some(ConnectionConfig {
+        kind: MOONRAKER_KIND.to_string(),
+        host: host.to_string(),
+        port: 7125,
+        use_tls: false,
+        credential_ref: None,
+    });
+    printer
+}
+
+fn assert_duplicate_host_rejected_before_probe_and_secret(existing_host: Option<&str>) {
+    let (_temp, _lease, storage) = storage();
+    let credentials_dir = tempfile::tempdir().unwrap();
+    let (factory, calls) = recording_factory(Arc::clone(&storage));
+    let (_app, webview, _manager, _services) = runtime(
+        Arc::clone(&storage),
+        Arc::new(a_catalog()),
+        credentials_dir.path().to_path_buf(),
+        factory,
+    );
+    let repository = PrinterRepository::new(Arc::clone(&storage));
+    let owner = repository
+        .create(a_connected_printer("printer-owner", "ok.local"))
+        .unwrap();
+    let target = match existing_host {
+        Some(host) => repository.create(a_connected_printer("printer-b", host)),
+        None => repository.create(a_stored_printer("printer-b")),
+    }
+    .unwrap();
+    let before_credentials = credentials_dir_snapshot(credentials_dir.path());
+    let before_pending = pending_cleanup_count(&storage);
+
+    let error = invoke(
+        &webview,
+        "set_printer_connection",
+        json!({
+            "contractVersion": 1,
+            "id": target.id,
+            "expectedRevision": target.revision,
+            "submission": {
+                "kind": "moonraker",
+                "host": "OK.local",
+                "port": 7125,
+                "useTls": false,
+                "credential": "s3cret-FIXTURE",
+            },
+        }),
+    )
+    .unwrap_err();
+
+    assert_eq!(error["code"], "DUPLICATE_HOST");
+    assert_eq!(error["details"]["conflictingPrinterId"], json!(owner.id));
+    assert!(
+        calls.recv_timeout(Duration::from_millis(300)).is_err(),
+        "a duplicate host must be rejected before any probe"
+    );
+    assert_eq!(
+        credentials_dir_snapshot(credentials_dir.path()),
+        before_credentials,
+        "no credential may be written for a rejected duplicate host"
+    );
+    assert_eq!(pending_cleanup_count(&storage), before_pending);
+    assert_eq!(repository.get(&target.id).unwrap().unwrap(), target);
+}
+
+#[test]
+fn first_time_set_printer_connection_to_a_taken_host_is_duplicate_host_without_writing_a_secret() {
+    assert_duplicate_host_rejected_before_probe_and_secret(None);
+}
+
+#[test]
+fn replacing_a_connection_with_a_taken_host_is_duplicate_host_without_probing() {
+    assert_duplicate_host_rejected_before_probe_and_secret(Some("other.local"));
+}
+
 // --- 10. `update_printer` location/startSafety ------------------------------
 
 #[test]

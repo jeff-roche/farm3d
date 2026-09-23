@@ -12,6 +12,19 @@
 const IPV4_PATTERN =
   /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
 
+/** The URL parser renders an IPv4-mapped IPv6 address in hex
+ *  (`[::ffff:c0a8:101]`), but Rust's `Ipv6Addr` Display uses the dotted
+ *  form (`[::ffff:192.168.1.1]`); rewrite to match Rust. */
+const IPV4_MAPPED_HEX = /^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/;
+
+function ipv4MappedDotted(bracketed: string): string {
+  const match = IPV4_MAPPED_HEX.exec(bracketed);
+  if (!match) return bracketed;
+  const high = parseInt(match[1], 16);
+  const low = parseInt(match[2], 16);
+  return `[::ffff:${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}]`;
+}
+
 /**
  * Builds the canonical `host:port` identity for a Connection, or `null`
  * when `host` is empty once trimmed. See spec D2 for the algorithm; the
@@ -40,7 +53,7 @@ export function canonicalHostIdentity(host: string, port: number): string | null
     return `${stripped}:${port}`;
   }
   try {
-    const canonical = new URL(`http://[${stripped}]`).hostname;
+    const canonical = ipv4MappedDotted(new URL(`http://[${stripped}]`).hostname);
     // 6. `canonical` already carries its own `[...]` brackets.
     return `${canonical}:${port}`;
   } catch {
