@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use farm3d_lib::connections::supervisor::STATUS_EVENT;
 use farm3d_lib::connections::{ConnectionConfig, PrinterConnection};
+use farm3d_lib::library::content::ContentFailurePoint;
 use farm3d_lib::library::links::WatchPolicy;
 use farm3d_lib::library::selection::SelectionPurpose;
 use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
@@ -578,6 +579,49 @@ fn check_linked_sources_returns_only_changed_models_without_a_watcher() {
         running.ok("check_linked_sources", json!({ "modelIds": [second_id] })),
         json!([])
     );
+}
+
+#[test]
+fn a_failed_check_does_not_stop_check_linked_sources_checking_the_rest() {
+    let host = Host::new();
+    let first = host.source("one/a.stl", &fixture("cube-binary.stl"));
+    let second = host.source("two/b.stl", &fixture("cube-ascii.stl"));
+    let running = host.start(WatchPolicy::PollOnly {
+        interval: Duration::from_secs(3600),
+    });
+    let first_id = model_id(&running.import_linked(&first));
+    let second_id = model_id(&running.import_linked(&second));
+
+    // farm3d's own store fails while capturing the first Model's change.
+    fs::write(&first, fixture("cube-binary-solid-header.stl")).unwrap();
+    fs::write(&second, fixture("cube-for-slicers.stl")).unwrap();
+    running
+        .services
+        .library
+        .content
+        .inject_failure_once(ContentFailurePoint::AfterPlacementBeforeCommit);
+    let changed = running.ok(
+        "check_linked_sources",
+        json!({ "modelIds": [first_id, second_id] }),
+    );
+    let changed = changed.as_array().unwrap();
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert_eq!(changed[0]["id"], second_id.as_str());
+    assert_eq!(running.record(&first_id)["currentRevision"]["sequence"], 1);
+
+    // The failed Model is picked up by the next check.
+    let changed = running.ok("check_linked_sources", json!({ "modelIds": [first_id] }));
+    assert_eq!(changed[0]["id"], first_id.as_str(), "{changed}");
+
+    // When every check fails there is nothing to return, so the error is.
+    fs::write(&first, fixture("cube-ascii.stl")).unwrap();
+    running
+        .services
+        .library
+        .content
+        .inject_failure_once(ContentFailurePoint::AfterPlacementBeforeCommit);
+    let error = running.err("check_linked_sources", json!({ "modelIds": [first_id] }));
+    assert_eq!(error["code"], "PERSISTENCE_UNAVAILABLE", "{error}");
 }
 
 // --- 8. Watch registration failure ---------------------------------------------

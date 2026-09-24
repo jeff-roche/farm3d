@@ -1044,6 +1044,11 @@ impl<R: Runtime> LinkSupervisor<R> {
     /// `check_linked_sources`: checks `model_ids` (every linked Model when
     /// `None`) now, one at a time, and returns the records of those that
     /// changed. Unknown and managed Models are skipped.
+    ///
+    /// A check that fails on farm3d's side is logged by Model id and the
+    /// rest still run. The result lists only changed records, so it has no
+    /// room for failures: they are returned as the error only when every
+    /// check failed, since then the list would falsely read as "unchanged".
     pub async fn check(
         &self,
         model_ids: Option<Vec<String>>,
@@ -1061,10 +1066,24 @@ impl<R: Runtime> LinkSupervisor<R> {
                 .map(|(id, _)| id)
                 .collect(),
         };
+        let checked = ids.len();
         let mut changed = Vec::new();
+        let mut failures = Vec::new();
         for id in ids {
-            if let Some(record) = self.run_check(&id).await?.record {
-                changed.push(record);
+            match self.run_check(&id).await {
+                Ok(applied) => changed.extend(applied.record),
+                Err(error) => {
+                    eprintln!(
+                        "farm3d: checking linked Model {id} failed: {}",
+                        error.message
+                    );
+                    failures.push(error);
+                }
+            }
+        }
+        if failures.len() == checked {
+            if let Some(error) = failures.into_iter().next() {
+                return Err(error);
             }
         }
         Ok(changed)
