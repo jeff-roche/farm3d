@@ -28,7 +28,7 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -931,6 +931,8 @@ pub struct LinkSupervisor<R: Runtime> {
     retrying: Mutex<HashSet<String>>,
     /// One lock per Model, so its checks run one at a time.
     gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Checks spawned by [`Self::schedule`] that have not finished.
+    scheduled: AtomicUsize,
     fail_next_native_watch: AtomicBool,
     reconciled: AtomicBool,
 }
@@ -958,6 +960,7 @@ impl<R: Runtime> LinkSupervisor<R> {
             queued: Mutex::default(),
             retrying: Mutex::default(),
             gates: Mutex::default(),
+            scheduled: AtomicUsize::new(0),
             fail_next_native_watch: AtomicBool::new(false),
             reconciled: AtomicBool::new(false),
         });
@@ -1200,10 +1203,11 @@ impl<R: Runtime> LinkSupervisor<R> {
     }
 
     /// Queues a check of `model_id`, unless one is already waiting.
-    fn schedule(&self, model_id: &str) {
+    pub(crate) fn schedule(&self, model_id: &str) {
         if !lock(&self.queued).insert(model_id.to_string()) {
             return;
         }
+        self.scheduled.fetch_add(1, Ordering::SeqCst);
         let this = self.this.clone();
         let id = model_id.to_string();
         tauri::async_runtime::spawn(async move {
@@ -1214,8 +1218,16 @@ impl<R: Runtime> LinkSupervisor<R> {
                         error.message
                     );
                 }
+                supervisor.scheduled.fetch_sub(1, Ordering::SeqCst);
             }
         });
+    }
+
+    /// Test hook: whether a check queued by a watch event, a registration,
+    /// or a moved watch has yet to finish.
+    #[doc(hidden)]
+    pub fn has_scheduled_checks(&self) -> bool {
+        self.scheduled.load(Ordering::SeqCst) > 0
     }
 
     /// Checks `model_id` under its gate, publishes what changed, then moves

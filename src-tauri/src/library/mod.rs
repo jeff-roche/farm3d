@@ -131,8 +131,10 @@ impl<R: tauri::Runtime> LibraryServices<R> {
     }
 
     /// D13/D15/D16: starts following a linked Model's source after its
-    /// import or Locate commits (P14). Does nothing while no supervisor is
-    /// running.
+    /// import or Locate commits (P14), and schedules a check of it: the
+    /// source may have changed after it was staged and before the watch
+    /// existed, and no watch event would report that. Does nothing while
+    /// no supervisor is running.
     ///
     /// Returns `WATCH_UNAVAILABLE` when the source's folder could not be
     /// watched natively and fell back to polling (or to no watch at all).
@@ -140,6 +142,7 @@ impl<R: tauri::Runtime> LibraryServices<R> {
     pub fn follow_link(&self, model_id: &str, linked_path: &Path) -> Option<ImportWarning> {
         let links = self.links.get()?;
         let mode = links.register(model_id, linked_path);
+        links.schedule(model_id);
         match mode {
             WatchMode::Watching => None,
             _ if links.is_poll_only() => None,

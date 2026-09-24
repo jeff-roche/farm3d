@@ -182,8 +182,9 @@ impl Running {
             .selection_id
     }
 
-    /// Imports `path` as a linked Model named by its file stem, then clears
-    /// the recorded events, so waits see only what follows the import.
+    /// Imports `path` as a linked Model named by its file stem, waits for
+    /// the check its registration schedules, then clears the recorded
+    /// events, so waits see only what follows the import.
     /// Returns the item result.
     fn import_linked(&self, path: &Path) -> Value {
         let selection_id = self.register(SelectionPurpose::Import, path);
@@ -207,8 +208,18 @@ impl Running {
         );
         let item = result["items"][0].clone();
         assert_eq!(item["outcome"], "imported", "{item}");
+        self.wait_for_scheduled_checks();
         self.clear_events();
         item
+    }
+
+    /// Waits for the checks already scheduled (the one each import or
+    /// Locate schedules, say) to finish, so an edit that follows can only
+    /// be seen by what the test does next.
+    fn wait_for_scheduled_checks(&self) {
+        wait_for("scheduled checks to finish", || {
+            (!self.links().has_scheduled_checks()).then_some(())
+        });
     }
 
     fn links(&self) -> &farm3d_lib::library::LinkSupervisor<MockRuntime> {
@@ -317,6 +328,60 @@ fn a_linked_model_survives_a_restart_and_an_edit_while_stopped_is_captured() {
     assert_eq!(record["revisionCount"], 2);
     assert_eq!(record["currentRevision"]["origin"], "linkedChange");
     assert_eq!(restarted.count(&id, "library.revision.created"), 1);
+}
+
+#[test]
+fn an_edit_between_staging_and_registration_is_captured_by_the_first_check() {
+    let host = Host::new();
+    let path = host.source("proj/part.stl", &fixture("cube-binary.stl"));
+    // No poll or watch event will fire: only the check that registration
+    // schedules can see the edit.
+    let running = host.start(WatchPolicy::PollOnly {
+        interval: Duration::from_secs(3600),
+    });
+    let selection_id = running.register(SelectionPurpose::Import, &path);
+    running.ok(
+        "inspect_import_selection",
+        json!({ "selectionId": selection_id }),
+    );
+
+    let pause = running
+        .services
+        .library
+        .content
+        .pause_before_placement_once();
+    let webview = running.webview.clone();
+    let body = json!({
+        "contractVersion": 1,
+        "selectionId": selection_id,
+        "operationId": "op-1",
+        "items": [{
+            "fileIndex": 0,
+            "name": "part",
+            "projectIds": [],
+            "storageMode": "linked",
+            "acknowledgeUnsupported": false,
+        }],
+    });
+    let importing = std::thread::spawn(move || invoke(&webview, "import_models", body));
+    pause.wait_until_reached();
+    fs::write(&path, fixture("cube-ascii.stl")).unwrap();
+    pause.release();
+    let result = importing.join().unwrap().unwrap()["data"].clone();
+    let item = &result["items"][0];
+    assert_eq!(item["outcome"], "imported", "{item}");
+    let id = model_id(item);
+    assert_eq!(item["model"]["currentRevision"]["sequence"], 1);
+
+    let record = wait_for("the edit to be captured", || {
+        let record = running.record(&id);
+        (record["currentRevision"]["sequence"] == 2).then_some(record)
+    });
+    assert_eq!(record["currentRevision"]["origin"], "linkedChange");
+    assert_eq!(
+        record["currentRevision"]["sha256"],
+        sha256(&fixture("cube-ascii.stl")).as_str()
+    );
 }
 
 // --- 2. Atomic save ------------------------------------------------------------
