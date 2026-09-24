@@ -1,8 +1,10 @@
 .stage {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
+  position: relative;
+  margin: 0;
+  height: 9rem;
   overflow: hidden;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
   background-color: var(--f3d-color-bg);
   perspective: 650px;
   perspective-origin: 50% 100%;
@@ -41,4 +43,23 @@
   transform-origin: 50% 100%;
   mask-image: linear-gradient(to top, black 0%, black 55%, transparent 94%);
   -webkit-mask-image: linear-gradient(to top, black 0%, black 55%, transparent 94%);
+}
+
+.caption {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.25rem 0.375rem;
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface);
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.name {
+  color: var(--f3d-color-text);
 }

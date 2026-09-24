@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod connections;
 pub mod contracts;
 pub mod document_io;
+pub mod library;
 pub mod persistence;
 pub mod printers;
 pub mod settings;
@@ -16,6 +17,12 @@ use connections::commands::{
     set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use library::commands::{
+    cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
+    delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
+    library_content_info, list_library, list_model_revisions, locate_linked_source,
+    pick_model_files, rename_project, set_model_projects, update_model,
+};
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
     archive_printer, create_printer, delete_printer, export_printers, import_printers,
@@ -44,6 +51,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     /// D11's availability signal: one `InventoryChange` per committed
     /// inventory write. P7's evaluator subscribes; P3 has only tests.
     pub inventory_changes: tokio::sync::broadcast::Sender<spools::events::InventoryChange>,
+    /// P4: the content store, Library stream, selections, and picker.
+    pub library: Arc<library::LibraryServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -72,7 +81,15 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
         manager: Arc<ConnectionManager<R>>,
         documents: Arc<dyn document_io::DocumentIo>,
     ) -> Self {
+        let content = Arc::new(
+            library::content::ContentStore::open(storage.paths().content_root())
+                .expect("content store"),
+        );
         Self {
+            library: Arc::new(library::LibraryServices::new(
+                content,
+                Arc::new(library::selection::CancelledModelFileIo),
+            )),
             storage,
             catalog,
             manager,
@@ -88,7 +105,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 41] = [
+pub const COMMAND_NAMES: [&str; 58] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -130,6 +147,23 @@ pub const COMMAND_NAMES: [&str; 41] = [
     "create_tare",
     "update_tare",
     "delete_tare",
+    "pick_model_files",
+    "inspect_import_selection",
+    "cancel_import_selection",
+    "import_models",
+    "list_library",
+    "create_project",
+    "rename_project",
+    "delete_project",
+    "update_model",
+    "set_model_projects",
+    "delete_model",
+    "list_model_revisions",
+    "get_revision_thumbnail",
+    "library_content_info",
+    "check_linked_sources",
+    "locate_linked_source",
+    "convert_model_to_managed",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -148,6 +182,29 @@ pub fn restore_persisted_connections<R: tauri::Runtime>(
         ));
     }
     Ok(())
+}
+
+/// P4 D15: starts the Library's link supervisor for `services` and, in the
+/// background, its startup pass over every linked Model. Never blocks.
+/// `build_runtime_services` calls it on every successful start, including a
+/// bootstrap retry; tests call it the same way. A second call for the same
+/// services does nothing.
+pub fn start_library_runtime<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    app: &tauri::AppHandle<R>,
+    policy: library::links::WatchPolicy,
+) {
+    let supervisor = library::links::LinkSupervisor::start(
+        Arc::downgrade(&services.library),
+        Arc::clone(&services.storage),
+        app.clone(),
+        policy,
+    );
+    if services.library.links.set(Arc::clone(&supervisor)).is_err() {
+        supervisor.shutdown();
+        return;
+    }
+    tauri::async_runtime::spawn(async move { supervisor.reconcile_all().await });
 }
 
 enum StartupFailure {
@@ -218,6 +275,12 @@ fn build_runtime_services<R: tauri::Runtime>(
     settings::repository::SettingsRepository::new(Arc::clone(&storage))
         .ensure_default()
         .map_err(startup_error)?;
+    // P4 D4: reconcile the content store before any command is served.
+    let content = Arc::new(
+        library::content::ContentStore::open(storage.paths().content_root())
+            .map_err(startup_error)?,
+    );
+    content.startup_sweep(&storage).map_err(startup_error)?;
 
     let resource_path = app
         .path()
@@ -268,7 +331,7 @@ fn build_runtime_services<R: tauri::Runtime>(
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?
         .take()
         .ok_or_else(|| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
-    Ok(RuntimeServices {
+    let services = RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
         manager,
@@ -276,8 +339,14 @@ fn build_runtime_services<R: tauri::Runtime>(
         credentials: credential_store,
         inventory_stream: spools::events::InventoryStream::default(),
         inventory_changes: inventory_changes(),
+        library: Arc::new(library::LibraryServices::new(
+            content,
+            Arc::new(library::selection::NativeModelFileIo::new(app.clone())),
+        )),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
-    })
+    };
+    start_library_runtime(&services, app, library::links::WatchPolicy::native());
+    Ok(services)
 }
 
 #[cfg(test)]
@@ -357,10 +426,30 @@ mod tests {
     }
 }
 
+/// P4 D7: a file drop on the window becomes an import selection. Runs off
+/// the event loop; a drop before bootstrap is ready is ignored.
+fn handle_window_drop<R: tauri::Runtime>(app: tauri::AppHandle<R>, paths: Vec<std::path::PathBuf>) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(bootstrap) = app.try_state::<bootstrap::BootstrapState<RuntimeServices<R>>>()
+        else {
+            return;
+        };
+        if let Ok(services) = bootstrap.ready() {
+            library::selection::handle_drop(&app, &services.library, paths);
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+            {
+                handle_window_drop(webview.app_handle().clone(), paths.clone());
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let retained_lease = Arc::new(std::sync::Mutex::new(None));
@@ -430,6 +519,23 @@ pub fn run() {
             create_tare,
             update_tare,
             delete_tare,
+            pick_model_files,
+            inspect_import_selection,
+            cancel_import_selection,
+            import_models,
+            list_library,
+            create_project,
+            rename_project,
+            delete_project,
+            update_model,
+            set_model_projects,
+            delete_model,
+            list_model_revisions,
+            get_revision_thumbnail,
+            library_content_info,
+            check_linked_sources,
+            locate_linked_source,
+            convert_model_to_managed,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

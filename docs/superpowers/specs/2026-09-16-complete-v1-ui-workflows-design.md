@@ -41,7 +41,7 @@ those three activities rather than becoming competing dashboards.
   adapters exist.
 - Configurable Printer-card density and grouping.
 - Managed and linked Library Models.
-- Organizational Project folders.
+- Organizational Project groupings.
 - STL, 3MF, and pre-sliced G-code inputs.
 - Operational slicing presets with an interface that can deepen later.
 - Per-Queue-Entry manual, recommended, or automatic dispatch.
@@ -56,8 +56,8 @@ those three activities rather than becoming competing dashboards.
 
 - Multiple users, accounts, permissions, or remote Farm access.
 - Mobile or web administration.
-- Customer orders, due dates, fulfillment, or billing. Projects are folders,
-  not orders.
+- Customer orders, due dates, fulfillment, or billing. Projects are
+  organizational groupings, not orders.
 - Cloud synchronization or hosted notifications.
 - Webhooks and messaging integrations.
 - Serial/USB Printer Connections.
@@ -324,8 +324,9 @@ did not take effect.
 
 ### Projects and Models
 
-Projects are organizational folders only. They carry no quantities, deadlines,
-priority, or fulfillment status. Models may remain Unfiled.
+Projects are organizational groupings only. A Model may belong to any number
+of Projects, or none (Unfiled). They carry no quantities, deadlines, priority,
+or fulfillment status.
 
 The Library workspace has:
 

@@ -1,0 +1,19 @@
+/* The DataTable wrapper scrolls horizontally; the pane only has to let it
+   shrink below its content width instead of widening the workspace. */
+.pane {
+  min-width: 0;
+  padding: 0.75rem;
+}
+
+.pane table {
+  min-width: 48rem;
+}
+
+.name {
+  color: var(--f3d-color-text);
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--f3d-color-text-muted);
+}

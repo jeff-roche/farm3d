@@ -1,8 +1,9 @@
-//! Fixtures shared by the P2 integration tests (`p2_contract_path.rs`,
-//! `p2_batch.rs`): a leased temp `Storage`, a one-variant catalog, a
-//! fixed-outcome fake `PrinterConnection`, and a mock-runtime builder that
-//! wires a test-controlled connection factory and credential directory into
-//! `RuntimeServices`.
+//! Fixtures shared by the integration tests (`p2_contract_path.rs`,
+//! `p2_batch.rs`, `p4_import.rs`, and others): a leased temp `Storage`, a
+//! one-variant catalog, a fixed-outcome fake `PrinterConnection`, a fake
+//! Library file picker, and a mock-runtime builder that wires a
+//! test-controlled connection factory, credential directory, and (for the
+//! Library) picker into `RuntimeServices`.
 //!
 //! Each test crate uses a different subset, hence the `dead_code` allow.
 #![allow(dead_code)]
@@ -21,6 +22,8 @@ use farm3d_lib::connections::{
 };
 use farm3d_lib::contracts::command::CommandError;
 use farm3d_lib::document_io::{DocumentIo, DocumentKind};
+use farm3d_lib::library::selection::{ModelFileIo, SelectionPurpose};
+use farm3d_lib::library::LibraryServices;
 use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
 use farm3d_lib::printers::{CatalogRef, StoredPrinter};
 use farm3d_lib::RuntimeServices;
@@ -44,6 +47,18 @@ impl DocumentIo for UnusedDocuments {
     }
     fn atomic_write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), CommandError> {
         Err(CommandError::internal())
+    }
+}
+
+/// A `ModelFileIo` whose picker always returns `picks` (`None` is a
+/// cancelled dialog), so tests never open a native dialog.
+pub struct FakeModelFileIo {
+    pub picks: Option<Vec<PathBuf>>,
+}
+
+impl ModelFileIo for FakeModelFileIo {
+    fn pick_files(&self, _purpose: SelectionPurpose) -> Result<Option<Vec<PathBuf>>, CommandError> {
+        Ok(self.picks.clone())
     }
 }
 
@@ -223,6 +238,63 @@ pub fn runtime(
     Arc<ConnectionManager<MockRuntime>>,
     Arc<RuntimeServices<MockRuntime>>,
 ) {
+    runtime_customized(handler, storage, catalog, credentials_dir, factory, |_| {})
+}
+
+/// [`runtime`], with the Library's native picker replaced by `file_io`.
+pub fn runtime_with_file_io(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    file_io: Arc<dyn ModelFileIo>,
+) -> (
+    tauri::App<MockRuntime>,
+    tauri::WebviewWindow<MockRuntime>,
+    Arc<ConnectionManager<MockRuntime>>,
+    Arc<RuntimeServices<MockRuntime>>,
+) {
+    runtime_customized(
+        handler,
+        storage,
+        catalog,
+        credentials_dir,
+        factory,
+        move |services| {
+            services.library = Arc::new(LibraryServices::new(
+                Arc::clone(&services.library.content),
+                file_io,
+            ));
+        },
+    )
+}
+
+fn runtime_customized(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    customize: impl FnOnce(&mut RuntimeServices<MockRuntime>),
+) -> (
+    tauri::App<MockRuntime>,
+    tauri::WebviewWindow<MockRuntime>,
+    Arc<ConnectionManager<MockRuntime>>,
+    Arc<RuntimeServices<MockRuntime>>,
+) {
     let app = mock_builder()
         .invoke_handler(handler)
         .build(mock_context(noop_assets()))
@@ -241,6 +313,7 @@ pub fn runtime(
         documents,
     );
     services.credentials = Arc::new(CredentialStore::file_backed(credentials_dir));
+    customize(&mut services);
     let services = Arc::new(services);
     app.manage(BootstrapState::ready_with(Arc::clone(&services)));
     let webview = WebviewWindowBuilder::new(&app, "main", Default::default())

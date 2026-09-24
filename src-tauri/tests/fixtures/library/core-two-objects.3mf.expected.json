@@ -1,0 +1,15 @@
+{
+  "format": "3mf",
+  "unit": "millimeter",
+  "title": "farm3d core two objects",
+  "objectCount": 2,
+  "buildItemCount": 2,
+  "triangleCount": 24,
+  "boundsMm": { "min": [5, 0, 0], "max": [30, 15, 10] },
+  "plates": [],
+  "requiredExtensions": [],
+  "unsupported": [],
+  "thumbnails": [
+    { "format": "png", "width": 2, "height": 2, "part": "Metadata/thumbnail.png" }
+  ]
+}

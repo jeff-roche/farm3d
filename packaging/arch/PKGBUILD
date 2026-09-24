@@ -1,0 +1,73 @@
+# Maintainer: jeff-roche
+#
+# farm3d-bin: repackages the .deb produced by `just package` into a pacman
+# package. Tauri 2.11's bundler (linuxdeploy-based) has no pacman target —
+# it only produces .deb, .rpm and an AppImage — so this PKGBUILD unpacks
+# the already-built .deb's data.tar.* rather than compiling anything.
+#
+# Build:
+#   just package        # produces src-tauri/target/release/bundle/deb/*.deb
+#   just package-arch    # stages that .deb next to this file and runs
+#                         # `updpkgsums && makepkg -f`
+#
+# Or manually, from this directory: copy/symlink the built .deb here, then
+# run `updpkgsums && makepkg -f`. Never run `makepkg -si` here — nothing in
+# this workflow should install the package automatically.
+pkgname=farm3d-bin
+# Tracks the top-level "version" field in ../../src-tauri/tauri.conf.json
+# (also mirrored in src-tauri/Cargo.toml) — that's the field Tauri's
+# bundler uses for the .deb's filename (farm3d_<version>_amd64.deb),
+# confirmed against the actual built artifact. Bump this alongside that
+# field; `source` below is pinned to the resulting filename, so a stale
+# pkgver here will fail loudly (makepkg won't find the source file)
+# instead of silently repackaging the wrong version.
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="An app for 3D print farm management (Tauri desktop app)"
+arch=('x86_64')
+url="https://github.com/jeff-roche/farm3d"
+# The repo publishes no LICENSE file and GitHub reports licenseInfo: null
+# for it, so there is no license to name here — 'custom' is the Arch
+# convention for "no SPDX-recognized license", not a guess at one.
+license=('custom')
+provides=('farm3d')
+conflicts=('farm3d')
+# Mapped from the .deb's own control file:
+#   Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+# read with `ar x farm3d_*.deb && tar -xf control.tar.* control` and
+# verified against the real file rather than assumed. No
+# libayatana-appindicator dependency: the app has no tray icon, and
+# `readelf -d` on usr/bin/farm3d shows no appindicator NEEDED entry. No
+# explicit openssl dependency either: libcrypto.so.3 shows up in `ldd`'s
+# resolved output, but it is not a direct NEEDED entry of the farm3d
+# binary (only libwebkit2gtk, libgtk-3 and friends are) — it's pulled in
+# transitively through webkit2gtk-4.1's own package dependencies, which
+# pacman already resolves.
+depends=('webkit2gtk-4.1' 'gtk3')
+# The .deb was built with NO_STRIP=1 (see the justfile's `package` recipe)
+# because linuxdeploy's bundled strip can't parse modern ELF sections such
+# as .relr.dyn; disable makepkg's own strip pass too so it doesn't hit the
+# same failure re-stripping the same binary.
+options=('!strip')
+source=("farm3d_${pkgver}_amd64.deb")
+# The .deb is a local build artifact staged by `just package-arch`
+# immediately before this runs, not something fetched over the network —
+# there's nothing to pin against tampering in transit. `just package-arch`
+# runs `updpkgsums` to (re)compute this against whatever was just staged,
+# since a rebuilt .deb's contents legitimately change between builds.
+sha256sums=('f2de46a562233a2f1f51927ac03baedaec0c0bdf10ae7aad55ad86b435935fb0')
+
+package() {
+  cd "$srcdir"
+  ar x "farm3d_${pkgver}_amd64.deb"
+  local datatar
+  datatar=$(ls data.tar.* 2>/dev/null | head -n1)
+  if [ -z "$datatar" ]; then
+    echo "error: no data.tar.* found inside the .deb" >&2
+    return 1
+  fi
+  # The .deb's data.tar.* already lays files out under usr/ exactly as
+  # they belong under $pkgdir (bin, lib/farm3d resources, .desktop file,
+  # hicolor icons) — extract it as-is rather than re-deriving the layout.
+  tar -xpf "$datatar" -C "$pkgdir"
+}

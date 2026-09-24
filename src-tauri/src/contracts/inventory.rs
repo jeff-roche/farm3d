@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 41] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 58] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -173,9 +173,78 @@ contracts![
     ("create_tare", "CreateTareRequest", "CreateTareResult"),
     ("update_tare", "UpdateTareRequest", "UpdateTareResult"),
     ("delete_tare", "DeleteTareRequest", "DeleteTareResult"),
+    (
+        "pick_model_files",
+        "PickModelFilesRequest",
+        "PickModelFilesResult"
+    ),
+    (
+        "inspect_import_selection",
+        "InspectImportSelectionRequest",
+        "InspectImportSelectionResult"
+    ),
+    (
+        "cancel_import_selection",
+        "CancelImportSelectionRequest",
+        "CancelImportSelectionResult"
+    ),
+    ("import_models", "ImportModelsRequest", "ImportModelsResult"),
+    ("list_library", "ListLibraryRequest", "ListLibraryResult"),
+    (
+        "create_project",
+        "CreateProjectRequest",
+        "CreateProjectResult"
+    ),
+    (
+        "rename_project",
+        "RenameProjectRequest",
+        "RenameProjectResult"
+    ),
+    (
+        "delete_project",
+        "DeleteProjectRequest",
+        "DeleteProjectResult"
+    ),
+    ("update_model", "UpdateModelRequest", "UpdateModelResult"),
+    (
+        "set_model_projects",
+        "SetModelProjectsRequest",
+        "SetModelProjectsResult"
+    ),
+    ("delete_model", "DeleteModelRequest", "DeleteModelResult"),
+    (
+        "list_model_revisions",
+        "ListModelRevisionsRequest",
+        "ListModelRevisionsResult"
+    ),
+    (
+        "get_revision_thumbnail",
+        "GetRevisionThumbnailRequest",
+        "GetRevisionThumbnailResult"
+    ),
+    (
+        "library_content_info",
+        "LibraryContentInfoRequest",
+        "LibraryContentInfoResult"
+    ),
+    (
+        "check_linked_sources",
+        "CheckLinkedSourcesRequest",
+        "CheckLinkedSourcesResult"
+    ),
+    (
+        "locate_linked_source",
+        "LocateLinkedSourceRequest",
+        "LocateLinkedSourceResult"
+    ),
+    (
+        "convert_model_to_managed",
+        "ConvertModelToManagedRequest",
+        "ConvertModelToManagedResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 41] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 58] {
     &COMMAND_CONTRACTS
 }
 
@@ -279,7 +348,41 @@ export type CreateTareResult = CommandSuccess<TareMutationResult>;
 export type UpdateTareRequest = ContractRequest & { id: string; expectedRevision: number; name: string; weightMg: number };
 export type UpdateTareResult = CommandSuccess<TareMutationResult>;
 export type DeleteTareRequest = ContractRequest & { id: string; expectedRevision: number };
-export type DeleteTareResult = CommandSuccess<TareMutationResult>;"#.to_string()
+export type DeleteTareResult = CommandSuccess<TareMutationResult>;
+export type PickModelFilesRequest = ContractRequest & { purpose: SelectionPurpose };
+export type PickModelFilesResult = CommandSuccess<ImportSelectionSummary | null>;
+export type InspectImportSelectionRequest = ContractRequest & { selectionId: string };
+export type InspectImportSelectionResult = CommandSuccess<ImportInspection>;
+export type CancelImportSelectionRequest = ContractRequest & { selectionId: string };
+export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;
+export type ImportModelsRequest = ContractRequest & { selectionId: string; operationId: string; items: ImportItemRequest[] };
+export type ImportModelsResult = CommandSuccess<ImportModelsData>;
+export type ListLibraryRequest = NoArgsRequest;
+export type ListLibraryResult = CommandSuccess<LibrarySnapshot>;
+export type CreateProjectRequest = ContractRequest & { name: string };
+export type CreateProjectResult = CommandSuccess<ProjectMutationResult>;
+export type RenameProjectRequest = ContractRequest & { id: string; expectedRevision: number; name: string };
+export type RenameProjectResult = CommandSuccess<ProjectMutationResult>;
+export type DeleteProjectRequest = ContractRequest & { id: string; expectedRevision: number };
+export type DeleteProjectResult = CommandSuccess<DeleteProjectData>;
+export type UpdateModelRequest = ContractRequest & { id: string; expectedRevision: number; patch: ModelPatch };
+export type UpdateModelResult = CommandSuccess<ModelMutationResult>;
+export type SetModelProjectsRequest = ContractRequest & { modelId: string; expectedRevision: number; add: string[]; remove: string[] };
+export type SetModelProjectsResult = CommandSuccess<ModelMutationResult>;
+export type DeleteModelRequest = ContractRequest & { id: string; expectedRevision: number };
+export type DeleteModelResult = CommandSuccess<DeleteModelData>;
+export type ListModelRevisionsRequest = ContractRequest & { modelId: string };
+export type ListModelRevisionsResult = CommandSuccess<ModelSourceRevisionRecord[]>;
+export type GetRevisionThumbnailRequest = ContractRequest & { revisionId: string };
+export type GetRevisionThumbnailResult = CommandSuccess<RevisionThumbnail | null>;
+export type LibraryContentInfoRequest = NoArgsRequest;
+export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;
+export type CheckLinkedSourcesRequest = ContractRequest & { modelIds?: string[] };
+export type CheckLinkedSourcesResult = CommandSuccess<ModelRecord[]>;
+export type LocateLinkedSourceRequest = ContractRequest & { modelId: string; expectedRevision: number; selectionId: string; fileIndex: number; acceptDifferentContent: boolean };
+export type LocateLinkedSourceResult = CommandSuccess<ModelMutationResult>;
+export type ConvertModelToManagedRequest = ContractRequest & { modelId: string; expectedRevision: number };
+export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -334,6 +437,22 @@ export type DeleteTareResult = CommandSuccess<TareMutationResult>;"#.to_string()
         visitor.visit::<crate::spools::commands::MoveSpoolResult>();
         visitor.visit::<crate::spools::lifecycle::SpoolLifecycleAction>();
         visitor.visit::<crate::spools::commands::TareMutationResult>();
+        visitor.visit::<crate::library::selection::SelectionPurpose>();
+        visitor.visit::<crate::library::selection::ImportSelectionSummary>();
+        visitor.visit::<crate::library::inspection::ImportInspection>();
+        visitor.visit::<crate::library::selection::CancelImportSelectionData>();
+        visitor.visit::<crate::library::import::ImportItemRequest>();
+        visitor.visit::<crate::library::import::ImportModelsResult>();
+        visitor.visit::<crate::library::commands::LibrarySnapshot>();
+        visitor.visit::<crate::library::commands::ProjectMutationResult>();
+        visitor.visit::<crate::library::commands::DeleteProjectResult>();
+        visitor.visit::<crate::library::commands::ModelPatch>();
+        visitor.visit::<crate::library::commands::ModelMutationResult>();
+        visitor.visit::<crate::library::commands::DeleteModelResult>();
+        visitor.visit::<crate::library::ModelSourceRevisionRecord>();
+        visitor.visit::<crate::library::commands::RevisionThumbnail>();
+        visitor.visit::<crate::library::commands::LibraryContentInfo>();
+        visitor.visit::<crate::library::ModelRecord>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

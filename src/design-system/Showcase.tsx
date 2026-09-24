@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { IconLayoutGrid, IconLayoutList } from "@tabler/icons-solidjs";
 import {
   useTheme,
   Panel,
@@ -28,6 +29,8 @@ import {
   DataTable,
   Timeline,
   ColorSwatch,
+  FileDropSurface,
+  SegmentedControl,
   type DataTableColumn,
   type DataTableSort,
 } from ".";
@@ -40,8 +43,11 @@ export function Showcase() {
   const [switched, setSwitched] = createSignal(false);
   const [sliderValue, setSliderValue] = createSignal(40);
   const [radioValue, setRadioValue] = createSignal("b");
+  const [projects, setProjects] = createSignal(["Brackets"]);
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
+  const [dropActive, setDropActive] = createSignal(false);
+  const [viewMode, setViewMode] = createSignal<"grid" | "list">("grid");
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
   const [textareaValue, setTextareaValue] = createSignal("");
 
@@ -165,6 +171,14 @@ export function Showcase() {
               { label: "Elegoo", options: ["Centauri Carbon", "Neptune 4"] },
               { label: "Prusa", options: ["MK4", "CORE One"] },
             ]}
+          />
+          <Combobox
+            multiple
+            label="Projects (multiple)"
+            placeholder={projects().length === 0 ? "Unfiled" : undefined}
+            options={["Brackets", "Calibration", "Enclosure parts"]}
+            value={projects()}
+            onChange={setProjects}
           />
         </div>
       </Panel>
@@ -414,6 +428,36 @@ export function Showcase() {
             Farm Green (sm)
           </div>
         </div>
+      </Panel>
+
+      <Panel title="FileDropSurface">
+        <div class={styles.column}>
+          <FileDropSurface
+            label="Import models"
+            hint="Drag files here, or choose files to import."
+            active={dropActive()}
+            onChoose={() => setDropActive((value) => !value)}
+          />
+          <FileDropSurface
+            label="Import models (disabled)"
+            disabled
+            disabledReason="An import is already running."
+            active={false}
+            onChoose={() => {}}
+          />
+        </div>
+      </Panel>
+
+      <Panel title="SegmentedControl">
+        <SegmentedControl
+          label="View"
+          value={viewMode()}
+          onChange={setViewMode}
+          options={[
+            { value: "grid", label: "Grid", icon: <IconLayoutGrid size={14} /> },
+            { value: "list", label: "List", icon: <IconLayoutList size={14} /> },
+          ]}
+        />
       </Panel>
     </div>
   );

@@ -1,0 +1,17 @@
+{
+  "format": "gcode",
+  "producer": { "name": "Cura_SteamEngine", "version": "5.8.0" },
+  "claims": [
+    { "key": "FLAVOR", "value": "Marlin", "line": 1 },
+    { "key": "TIME", "value": "1234", "line": 2 },
+    { "key": "Filament used", "value": "1.2m", "line": 3 },
+    { "key": "Layer height", "value": "0.2", "line": 4 }
+  ],
+  "trusted": false,
+  "lineCount": 25,
+  "commandCount": 20,
+  "toolsUsed": [],
+  "relativePositioningSeen": false,
+  "relativeExtrusionSeen": false,
+  "thumbnails": []
+}

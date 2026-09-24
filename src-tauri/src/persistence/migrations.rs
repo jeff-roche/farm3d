@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use super::error::StorageError;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// A migration-specific Rust step, run in the same exclusive transaction
 /// right after its SQL. Only 0003 uses this: `host_identity` backfill needs
@@ -17,7 +17,7 @@ struct Migration {
     post: Option<MigrationPostStep>,
 }
 
-const MIGRATIONS: [Migration; 4] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         name: "0001_foundation",
@@ -41,6 +41,12 @@ const MIGRATIONS: [Migration; 4] = [
         name: "0004_p3_spools_material_slots",
         sql: include_str!("../../migrations/0004_p3_spools_material_slots.sql"),
         post: Some(backfill_main_slots),
+    },
+    Migration {
+        version: 5,
+        name: "0005_p4_library",
+        sql: include_str!("../../migrations/0005_p4_library.sql"),
+        post: None,
     },
 ];
 

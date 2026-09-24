@@ -1,0 +1,7 @@
+{
+  "format": "stl",
+  "encoding": "ascii",
+  "triangleCount": 12,
+  "boundsMm": { "min": [0, 0, 0], "max": [10, 10, 10] },
+  "unitsAssumed": true
+}

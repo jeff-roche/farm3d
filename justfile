@@ -18,6 +18,10 @@ test-rust:
 gen-contracts:
     cargo test --locked --manifest-path src-tauri/Cargo.toml --test export_contracts regenerate_contracts -- --ignored --exact
 
+# Regenerate the generated Library format fixtures (never the *.expected.json oracles)
+gen-library-fixtures:
+    cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
+
 # Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
 gen-catalog tag="v2.4.2":
     cargo run --manifest-path src-tauri/Cargo.toml --features catalog-generator --bin gen-catalog -- {{ tag }}
@@ -40,6 +44,23 @@ package:
     rm -rf src-tauri/target/release/bundle
     NO_STRIP=1 npm run tauri build
     scripts/assert-package-contents.sh
+
+# Build an Arch Linux package (.pkg.tar.zst) by repackaging the .deb from
+# `just package` — it does not run `just package` itself, since that's a
+# slow full app rebuild and this recipe would otherwise trigger it as a
+# surprising side effect every time; it fails with a clear message instead.
+package-arch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    deb=$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -n1 || true)
+    if [ -z "${deb:-}" ]; then
+        echo "error: no .deb in src-tauri/target/release/bundle/deb/ — run 'just package' first (it's slow, so this recipe won't run it for you)" >&2
+        exit 1
+    fi
+    cp "$deb" packaging/arch/
+    cd packaging/arch
+    updpkgsums
+    makepkg -f
 
 # Run the frontend test suite
 test:

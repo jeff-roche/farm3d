@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { Portal } from "solid-js/web";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DataTable, type DataTableColumn } from "./DataTable";
@@ -109,6 +110,65 @@ describe("DataTable", () => {
     await fireEvent.keyDown(nameHeaderButton, { key: "ArrowDown" });
     expect(screen.getByRole("row", { name: /Alpha/ }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("handles keys only on the table or its own rows: controls in a cell and portaled menus keep theirs", async () => {
+    const onActivate = vi.fn();
+    const onMenu = vi.fn();
+    function TableWithControls() {
+      const [selectedId, setSelectedId] = createSignal<string | null>("a");
+      return (
+        <DataTable
+          label="Rows"
+          rows={rows}
+          rowId={(row) => row.id}
+          columns={[
+            ...columns,
+            {
+              id: "actions",
+              header: "Actions",
+              cell: (row) => (
+                <>
+                  <button type="button" onClick={onMenu}>Edit {row.name}</button>
+                  <span role="button" tabIndex={0} aria-haspopup="menu">Menu {row.name}</span>
+                  <input aria-label={`Note ${row.name}`} />
+                  <div role="menu" tabIndex={-1} aria-label={`Inline menu ${row.name}`} />
+                  <Portal>
+                    <div role="menu" tabIndex={-1} aria-label={`Portaled menu ${row.name}`} />
+                  </Portal>
+                </>
+              ),
+            },
+          ]}
+          selectedId={selectedId()}
+          onSelect={setSelectedId}
+          onActivate={onActivate}
+        />
+      );
+    }
+    render(() => <TableWithControls />);
+    const alpha = () => screen.getByRole("row", { name: /Alpha/ });
+
+    for (const control of [
+      screen.getByRole("button", { name: "Edit Alpha" }),
+      screen.getByRole("button", { name: "Menu Alpha" }),
+      screen.getByRole("textbox", { name: "Note Alpha" }),
+      screen.getByRole("menu", { name: "Inline menu Alpha" }),
+      // Opened menu content lives in a portal, but Solid's delegated
+      // keydown still bubbles from it to the table.
+      screen.getByRole("menu", { name: "Portaled menu Alpha" }),
+    ]) {
+      await fireEvent.keyDown(control, { key: "Enter" });
+      await fireEvent.keyDown(control, { key: "ArrowDown" });
+      await fireEvent.keyDown(control, { key: "End" });
+    }
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(alpha().getAttribute("aria-selected")).toBe("true");
+
+    await fireEvent.keyDown(alpha(), { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledWith("a");
+    await fireEvent.keyDown(alpha(), { key: "ArrowDown" });
+    expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("is itself tabbable when nothing is selected, and selects+focuses the first row on ArrowDown", async () => {

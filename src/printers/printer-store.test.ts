@@ -381,11 +381,17 @@ describe("printer-store", () => {
       expect(unlisten).toHaveBeenCalledOnce();
     });
 
-    it("ignores an inventory event sharing the channel rather than treating its streamId as this stream restarting", async () => {
-      // D11: Spool/Material Slot events ride the same "farm3d-event-v1"
-      // channel on their own inventory streamId/sequence. Forwarding one to
-      // printer-status-store's reconciliation would look like an unknown
-      // stream appearing and force a needless resync/backfill.
+    it.each([
+      { label: "an inventory", type: "spool.changed", streamId: "stream-inventory", subject: { kind: "spool", id: "spl-1" }, payload: { type: "spoolChanged" } },
+      { label: "an inventory", type: "printer.slots.changed", streamId: "stream-inventory", subject: { kind: "printer", id: "prn-1" }, payload: { type: "printerSlotsChanged" } },
+      { label: "a Library", type: "library.model.changed", streamId: "stream-library", subject: { kind: "model", id: "mdl-1" }, payload: { id: "mdl-1", revision: 2 } },
+    ])("ignores $label $type event sharing the channel rather than treating its streamId as this stream restarting", async (foreign) => {
+      // D11/D17: Spool/Material Slot and Library events ride the same
+      // "farm3d-event-v1" channel on their own streamId/sequence.
+      // Forwarding one to printer-status-store's reconciliation would look
+      // like an unknown stream appearing and force a needless
+      // resync/backfill. `printer.slots.changed` is why the filter is
+      // `printer.status.`, never the bare `printer.` prefix.
       let handler!: (event: { payload: unknown }) => void;
       eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
         handler = cb;
@@ -395,7 +401,7 @@ describe("printer-store", () => {
         contractVersion: 1,
         data: command === "list_printers" ? [structuredClone(A_PRINTER_RECORD)] : { streamId: "stream-a", snapshotSequence: 0, statuses: [] },
       }));
-      const { loadPrinters, printerStatusSyncState, startStatusListener } = await import("./printer-store");
+      const { loadPrinters, printers, printerStatusSyncState, startStatusListener } = await import("./printer-store");
       await loadPrinters();
       await startStatusListener();
       expect(printerStatusSyncState()).toBe("current");
@@ -404,18 +410,34 @@ describe("printer-store", () => {
       handler({
         payload: {
           contractVersion: 1,
-          streamId: "stream-inventory",
+          streamId: foreign.streamId,
           sequence: 3,
-          eventId: "inv-1",
+          eventId: "foreign-1",
           occurredAt: "2026-09-23T00:00:00Z",
-          type: "spool.changed",
-          subject: { kind: "spool", id: "spl-1" },
-          payload: { type: "spoolChanged" },
+          type: foreign.type,
+          subject: foreign.subject,
+          payload: foreign.payload,
         },
       });
 
       expect(printerStatusSyncState()).toBe("current");
       expect(tauriMock.invoke).not.toHaveBeenCalledWith("printer_statuses", expect.anything());
+
+      // The status stream itself still applies after the foreign event.
+      handler({
+        payload: {
+          contractVersion: 1,
+          streamId: "stream-a",
+          sequence: 1,
+          eventId: "status-1",
+          occurredAt: "2026-09-23T00:00:01Z",
+          type: "printer.status.changed",
+          subject: { kind: "printer", id: "prn-1" },
+          payload: { type: "changed", status: printerStatus("online") },
+        },
+      });
+      expect(printers()[0].runtimeStatus).toEqual(printerStatus("online"));
+      expect(printerStatusSyncState()).toBe("current");
     });
 
     it("rejects listener startup errors with a user-safe message", async () => {

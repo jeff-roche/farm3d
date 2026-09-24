@@ -19,6 +19,8 @@ import { SeverityMarker } from "./SeverityMarker";
 import { PrinterRoster } from "./PrinterRoster";
 import { Stepper, type StepperStep } from "./Stepper";
 import { Textarea } from "./Textarea";
+import { FileDropSurface } from "./FileDropSurface";
+import { SegmentedControl } from "./SegmentedControl";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -116,8 +118,26 @@ describe("Chip", () => {
     await fireEvent.click(screen.getByText("Tag"));
     expect(onSelectedChange).toHaveBeenCalledWith(true);
 
-    await fireEvent.click(screen.getByLabelText("Remove"));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove Tag" }));
     expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onSelectedChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes the remove control a native button in the tab order, labelled with the chip's text", () => {
+    render(() => (
+      <>
+        <Chip onRemove={() => {}}>Brackets</Chip>
+        <Chip onRemove={() => {}}>Calibration</Chip>
+      </>
+    ));
+    const remove = screen.getByRole("button", { name: "Remove Brackets" });
+    expect(remove.tagName).toBe("BUTTON");
+    expect(remove).toHaveAttribute("type", "button");
+    expect(remove.tabIndex).toBe(0);
+    expect(screen.getByRole("button", { name: "Remove Calibration" })).toBeInTheDocument();
+    // Never nested inside the chip's own toggle button.
+    expect(remove.closest("button:not([aria-labelledby])")).toBeNull();
+    expect(screen.getByRole("button", { name: "Brackets" })).toBeInTheDocument();
   });
 });
 
@@ -181,6 +201,47 @@ describe("Combobox", () => {
     await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Elegoo")).toBeInTheDocument();
     expect(await screen.findByText("Prusa")).toBeInTheDocument();
+  });
+
+  it("with `multiple`, adds options to the value array, keeps the list open, and removes a chosen option", async () => {
+    const [value, setValue] = createSignal<string[]>(["Prusa MK4"]);
+    const onChange = vi.fn((next: string[]) => setValue(next));
+    render(() => (
+      <Combobox
+        multiple
+        label="Printers"
+        options={["Elegoo Centauri Carbon", "Prusa MK4", "Voron 2.4"]}
+        value={value()}
+        onChange={onChange}
+      />
+    ));
+    // The chosen value is shown as a removable token beside the input.
+    expect(screen.getByRole("button", { name: "Remove Prusa MK4" })).toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: /show suggestions/i });
+    await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("option", { name: "Voron 2.4" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenLastCalledWith(["Prusa MK4", "Voron 2.4"]);
+    // A multi-select stays open for the next pick, and marks what's chosen.
+    const voron = screen.getByRole("option", { name: "Voron 2.4" });
+    expect(voron).toHaveAttribute("aria-selected", "true");
+
+    await fireEvent.pointerUp(screen.getByRole("option", { name: "Prusa MK4" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenLastCalledWith(["Voron 2.4"]);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Remove Voron 2.4" }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("with `multiple`, puts each token's remove button in the tab order", () => {
+    render(() => (
+      <Combobox multiple label="Printers" options={["Prusa MK4", "Voron 2.4"]} value={["Prusa MK4", "Voron 2.4"]} />
+    ));
+    for (const name of ["Remove Prusa MK4", "Remove Voron 2.4"]) {
+      const remove = screen.getByRole("button", { name });
+      expect(remove.tagName).toBe("BUTTON");
+      expect(remove.tabIndex).toBe(0);
+    }
   });
 
   it("suppresses an option's mousedown default so it never steals focus from the input", async () => {
@@ -513,5 +574,158 @@ describe("Textarea", () => {
 
     expect(screen.getByText("Notes are required")).toBeInTheDocument();
     expect(screen.getByLabelText("Notes")).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("FileDropSurface", () => {
+  it("renders a region with the given accessible label", () => {
+    render(() => <FileDropSurface active={false} label="Import models" onChoose={vi.fn()} />);
+
+    expect(screen.getByRole("region", { name: "Import models" })).toBeInTheDocument();
+  });
+
+  it("calls onChoose when the Choose files… button is clicked, via a native button", async () => {
+    const onChoose = vi.fn();
+    render(() => <FileDropSurface active={false} label="Import models" onChoose={onChoose} />);
+
+    const button = screen.getByRole("button", { name: "Choose files…" }) as HTMLButtonElement;
+    expect(button.tagName).toBe("BUTTON");
+    expect(button).toHaveAttribute("type", "button");
+
+    await fireEvent.click(button);
+    expect(onChoose).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets data-active when active", () => {
+    render(() => <FileDropSurface active label="Import models" onChoose={vi.fn()} />);
+
+    expect(screen.getByRole("region")).toHaveAttribute("data-active");
+  });
+
+  it("disables the button and shows the disabled reason as visible text", () => {
+    render(() => (
+      <FileDropSurface
+        active={false}
+        disabled
+        disabledReason="Import already running"
+        label="Import models"
+        onChoose={vi.fn()}
+      />
+    ));
+
+    const button = screen.getByRole("button", { name: "Choose files…" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText("Import already running")).toBeVisible();
+  });
+});
+
+describe("SegmentedControl", () => {
+  it("renders a labelled group with each option's visible label", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    expect(screen.getByRole("radiogroup", { name: "View" })).toBeInTheDocument();
+    expect(screen.getByText("Grid")).toBeInTheDocument();
+    expect(screen.getByText("List")).toBeInTheDocument();
+  });
+
+  it("renders the option label as visible text even when an icon is supplied", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid", icon: <svg aria-hidden="true" /> },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const label = screen.getByText("Grid");
+    expect(label).toBeVisible();
+  });
+
+  it("marks the selected option with data-checked and updates it on selection", async () => {
+    function Harness() {
+      const [value, setValue] = createSignal<"grid" | "list">("grid");
+      return (
+        <SegmentedControl
+          label="View"
+          value={value()}
+          options={[
+            { value: "grid", label: "Grid" },
+            { value: "list", label: "List" },
+          ]}
+          onChange={setValue}
+        />
+      );
+    }
+    render(() => <Harness />);
+
+    expect(screen.getByText("Grid").closest("[role='group']")).toHaveAttribute("data-checked");
+    expect(screen.getByText("List").closest("[role='group']")).not.toHaveAttribute(
+      "data-checked",
+    );
+
+    await fireEvent.click(screen.getByText("List"));
+
+    expect(screen.getByText("List").closest("[role='group']")).toHaveAttribute("data-checked");
+    expect(screen.getByText("Grid").closest("[role='group']")).not.toHaveAttribute(
+      "data-checked",
+    );
+  });
+
+  it("renders each option as a native radio input sharing one name, so arrow-key and Space navigation between options is native browser behavior (not a hand-rolled keydown handler)", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const inputs = document.querySelectorAll('input[type="radio"]');
+    expect(inputs).toHaveLength(2);
+    const names = new Set(Array.from(inputs).map((input) => (input as HTMLInputElement).name));
+    expect(names.size).toBe(1);
+  });
+
+  it("focuses a segment's real input, immediately followed by its visible label — the DOM state the adjacent-sibling :focus-visible focus-ring CSS keys on", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const listInput = document.querySelector('input[value="list"]') as HTMLInputElement;
+    const listLabel = screen.getByText("List");
+
+    // The focus-ring rule is `.input:focus-visible + .itemLabel`: it only
+    // works if the real (Kobalte-rendered) input is focusable and is the
+    // label's immediately preceding sibling.
+    expect(listInput.nextElementSibling).toBe(listLabel);
+
+    listInput.focus();
+    expect(document.activeElement).toBe(listInput);
   });
 });

@@ -4,9 +4,19 @@ import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
-import { ModelLibrary, type Model } from "./screens/ModelLibrary";
+import { LibraryWorkspace } from "./screens/LibraryWorkspace";
 import { SpoolInventory } from "./screens/SpoolInventory";
 import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
+import { desktopAvailable } from "./ipc/client";
+import {
+  cancelSelection,
+  library,
+  onSelectionDropped,
+  pickFiles,
+  reportLibraryError,
+  startLibrary,
+} from "./library/library-store";
+import type { ImportSelectionSummary } from "./library/types";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -31,11 +41,6 @@ import {
   serializeNavigationTarget,
   type NavigationDestination,
 } from "./navigation/navigation-store";
-
-const MODELS: Model[] = [
-  { id: "benchy", name: "Benchy_v3.gcode", addedAt: "2 days ago" },
-  { id: "bracket", name: "mount_bracket.stl", addedAt: "1 week ago" },
-];
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -72,12 +77,23 @@ function App() {
     return (destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
   };
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
-  const navigationContext = () => ({
+  // Until the Library's first load settles, a Library selection is pending,
+  // not unavailable: counting it as available keeps the "no longer
+  // available" banner away, and the reconcile after `startLibrary`
+  // resolves decides for real.
+  const libraryPending = () => library.status() === "idle" || library.status() === "loading";
+  const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
     availableDestinations: ["monitor", "library", "spools"] as NavigationDestination[],
-    availableIds: [...printers().map((printer) => printer.id), ...spoolState.spools.map((spool) => spool.id)],
+    availableIds: [
+      ...printers().map((printer) => printer.id),
+      ...spoolState.spools.map((spool) => spool.id),
+      ...library.projects().map((project) => project.id),
+      ...library.models().map((model) => model.id),
+      ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
+    ],
   });
   const reconcileNavigation = () => {
-    navigation.navigate(navigation.target(), navigationContext());
+    navigation.navigate(navigation.target(), navigationContext(navigation.target()));
     const target = navigation.target();
     monitorStore()?.setSelectedPrinterId(
       navigation.availability() === "available" && target.destination === "monitor" && target.selection?.kind === "printer"
@@ -86,15 +102,68 @@ function App() {
     );
   };
   const navigate = (target: Parameters<typeof navigation.navigate>[0]) => {
-    navigation.navigate(target, navigationContext());
+    navigation.navigate(target, navigationContext(target));
     reconcileNavigation();
     window.location.hash = serializeNavigationTarget(target).slice(1);
   };
   const setActive = (destination: ScreenId) => navigate({ version: 1, destination });
 
+  // The import dialog's selection, from the picker or a window drop (D7).
+  const [importSelection, setImportSelection] = createSignal<ImportSelectionSummary | null>(null);
+  // A file drag is over the window: only the hover highlight. Rust observes
+  // the drop itself and announces it as `library.selection.dropped`.
+  const [dropActive, setDropActive] = createSignal(false);
+  // A drop that arrived while an import was open; the open dialog says so.
+  const [dropRefused, setDropRefused] = createSignal(false);
+  const openImport = (selection: ImportSelectionSummary | null) => {
+    setDropRefused(false);
+    setImportSelection(selection);
+  };
+  const startImport = () => {
+    void pickFiles("import").then((selection) => {
+      if (selection) openImport(selection);
+    }).catch(reportLibraryError);
+  };
+  const openDroppedSelection = (selection: ImportSelectionSummary) => {
+    if (importSelection()) {
+      // One import at a time: a drop onto an open import dialog is refused,
+      // its staging released, and the dialog says why.
+      void cancelSelection(selection.selectionId).catch(reportLibraryError);
+      setDropRefused(true);
+      return;
+    }
+    navigate({ version: 1, destination: "library" });
+    openImport(selection);
+  };
+
+  onMount(() => {
+    const stopDropped = onSelectionDropped(openDroppedSelection);
+    let stopDrag: (() => void) | undefined;
+    let dragDisposed = false;
+    if (desktopAvailable()) {
+      // Loaded on demand: the webview API pulls in the whole window module,
+      // which web mode never needs.
+      void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        setDropActive(event.payload.type === "enter" || event.payload.type === "over");
+      })).then((unlisten) => {
+        if (dragDisposed) unlisten();
+        else stopDrag = unlisten;
+      }).catch(() => {
+        // Without the listener there is no drag highlight; dropping still
+        // works, since Rust observes the drop itself.
+      });
+    }
+    onCleanup(() => {
+      dragDisposed = true;
+      stopDrag?.();
+      stopDropped();
+    });
+  });
+
   onMount(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let disposeLibrary: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -130,6 +199,17 @@ function App() {
         void ensureInventoryLoaded().then(() => {
           if (!disposed && generation === startupGeneration) reconcileNavigation();
         });
+        // Same for a Library deep link. `startLibrary` is idempotent, so a
+        // startup retry replaces the previous listener; a start that a
+        // retry or unmount has overtaken disposes its own.
+        void startLibrary().then((dispose) => {
+          if (disposed || generation !== startupGeneration) {
+            dispose();
+            return;
+          }
+          disposeLibrary = dispose;
+          reconcileNavigation();
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -155,6 +235,7 @@ function App() {
       disposed = true;
       retryStartup = undefined;
       unlisten?.();
+      disposeLibrary?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });
@@ -226,7 +307,14 @@ function App() {
         fallback={
           <Switch>
             <Match when={active() === "library"}>
-              <ModelLibrary models={MODELS} compatiblePrinterNames={printers().map((p) => p.name)} />
+              <LibraryWorkspace
+                navigate={navigate}
+                onImport={startImport}
+                importSelection={importSelection()}
+                onImportClose={() => openImport(null)}
+                dropActive={dropActive()}
+                dropRefused={dropRefused()}
+              />
             </Match>
             <Match when={active() === "spools"}>
               <SpoolInventory />

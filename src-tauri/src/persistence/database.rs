@@ -149,6 +149,13 @@ impl Storage {
         })
     }
 
+    /// P4: lets `library::content::ContentStore` reach `content_root` (and
+    /// any other storage path) without duplicating `StoragePaths`'
+    /// construction/validation logic.
+    pub fn paths(&self) -> &StoragePaths {
+        &self.paths
+    }
+
     #[doc(hidden)]
     pub fn inject_failure_once(&self, point: FailurePoint) {
         match point {
@@ -344,7 +351,9 @@ fn configure_connection(connection: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn normalize_absolute(path: &Path) -> Result<PathBuf, StorageError> {
+/// An absolute path with `.` and `..` resolved lexically (no symlink
+/// resolution). A relative path, or `..` above the root, is `PathCollision`.
+pub(crate) fn normalize_absolute(path: &Path) -> Result<PathBuf, StorageError> {
     if !path.is_absolute() {
         return Err(StorageError::PathCollision);
     }
@@ -376,7 +385,10 @@ pub(super) fn classify_lock_error(error: std::fs::TryLockError) -> StorageError 
     }
 }
 
-fn create_contained_directory(base: &Path, relative: &Path) -> Result<PathBuf, StorageError> {
+pub(crate) fn create_contained_directory(
+    base: &Path,
+    relative: &Path,
+) -> Result<PathBuf, StorageError> {
     let mut candidate = base.to_path_buf();
     for component in relative.components() {
         candidate.push(component);
@@ -386,7 +398,19 @@ fn create_contained_directory(base: &Path, relative: &Path) -> Result<PathBuf, S
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&candidate)?;
+                match fs::create_dir(&candidate) {
+                    Ok(()) => {}
+                    // Another thread created it between the check and the
+                    // create (two files of one import staging at once).
+                    // Re-check what is there now.
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = fs::symlink_metadata(&candidate)?;
+                        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                            return Err(StorageError::PathCollision);
+                        }
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
             Err(error) => return Err(error.into()),
         }

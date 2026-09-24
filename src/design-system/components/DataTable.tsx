@@ -63,12 +63,16 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
   };
 
   const handleKeyDown: JSX.EventHandler<HTMLTableElement, KeyboardEvent> = (event) => {
-    // Row navigation only — a header's sort button lives in `<thead>` and
-    // handles its own Enter/Space via native button activation; without
-    // this guard, arrow keys and Enter on a focused header would also move
-    // row selection / re-fire onActivate.
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("thead")) return;
+    // Row navigation only: keys pressed on the table itself or on one of
+    // its own body rows. Anything else -- a header's sort button, a control
+    // inside a cell, or content a cell portals elsewhere (a menu, a
+    // listbox), whose delegated keydown still bubbles here -- handles its
+    // own keys. Without this, ArrowDown in an open row menu would move the
+    // row selection and pull focus out of the menu.
+    if (event.defaultPrevented) return;
+    const target = event.target;
+    const onOwnRow = target instanceof HTMLTableRowElement && [...rowRefs.values()].includes(target);
+    if (target !== event.currentTarget && !onOwnRow) return;
 
     const ids = rowIds();
     if (ids.length === 0) return;

@@ -1,0 +1,25 @@
+{
+  "format": "3mf",
+  "unit": "millimeter",
+  "producer": "PrusaSlicer-2.9.6",
+  "title": "prusa-project",
+  "objectCount": 1,
+  "buildItemCount": 1,
+  "triangleCount": 12,
+  "boundsMm": { "min": [0, 0, 0], "max": [10, 10, 10] },
+  "plates": [],
+  "requiredExtensions": [],
+  "unsupported": [
+    {
+      "code": "SLICER_METADATA",
+      "part": "Metadata/Prusa_Slicer_wipe_tower_information.xml",
+      "detail": "Slicer metadata"
+    },
+    {
+      "code": "SLICER_SETTINGS",
+      "part": "Metadata/Slic3r_PE_model.config",
+      "detail": "Slicer settings"
+    }
+  ],
+  "thumbnails": []
+}

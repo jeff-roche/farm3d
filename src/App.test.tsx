@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal, type JSX } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,9 +66,80 @@ vi.mock("./screens/AppShell", () => ({
   ),
 }));
 
-vi.mock("./screens/ModelLibrary", () => ({
-  ModelLibrary: () => <div>Library</div>,
+vi.mock("./screens/LibraryWorkspace", () => ({
+  LibraryWorkspace: (props: {
+    onImport?: () => void;
+    onImportClose?: () => void;
+    importSelection?: { selectionId: string } | null;
+    dropActive?: boolean;
+    dropRefused?: boolean;
+  }) => (
+    <div>
+      <output aria-label="Drop refused">{String(props.dropRefused ?? false)}</output>
+      <p>Library workspace</p>
+      <output aria-label="Import selection">{props.importSelection?.selectionId ?? "none"}</output>
+      <output aria-label="Drop active">{String(props.dropActive ?? false)}</output>
+      <button onClick={() => props.onImport?.()}>Import…</button>
+      <button onClick={() => props.onImportClose?.()}>Close import</button>
+    </div>
+  ),
 }));
+
+const desktop = vi.hoisted(() => ({ available: true }));
+vi.mock("./ipc/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ipc/client")>()),
+  desktopAvailable: () => desktop.available,
+}));
+
+type DragPayload = { type: "enter" | "over" | "drop" | "leave" };
+const webview = vi.hoisted(() => ({
+  handler: undefined as undefined | ((event: { payload: DragPayload }) => void),
+  unlisten: vi.fn(),
+  onDragDropEvent: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ onDragDropEvent: webview.onDragDropEvent }),
+}));
+
+/** `vi.resetModules` gives each test a fresh navigation store, so read the
+ *  one this test's App imported. */
+async function importAppAndNavigation() {
+  const { default: App } = await import("./App");
+  const { navigation } = await import("./navigation/navigation-store");
+  return { App, navigation };
+}
+
+type Summary = { selectionId: string; purpose: "import"; files: { fileIndex: number; fileName: string; sizeBytes: number | null }[] };
+const libraryStore = vi.hoisted(() => ({
+  startLibrary: vi.fn(),
+  dispose: vi.fn(),
+  pickFiles: vi.fn(),
+  cancelSelection: vi.fn(),
+  reportLibraryError: vi.fn(),
+  dropped: undefined as undefined | ((summary: Summary) => void),
+  stopDropped: vi.fn(),
+  onSelectionDropped: vi.fn(),
+  load: undefined as undefined | (() => void),
+  reset: undefined as undefined | (() => void),
+}));
+vi.mock("./library/library-store", async () => {
+  const { createStore } = await import("solid-js/store");
+  const [state, setState] = createStore({
+    projects: [] as { id: string }[],
+    models: [] as { id: string }[],
+    status: "idle" as "idle" | "loading" | "ready",
+  });
+  libraryStore.reset = () => setState({ projects: [], models: [], status: "idle" });
+  libraryStore.load = () => setState({ projects: [{ id: "prj-brackets" }], models: [{ id: "mdl-bracket" }], status: "ready" });
+  return {
+    library: { projects: () => state.projects, models: () => state.models, status: () => state.status },
+    startLibrary: libraryStore.startLibrary,
+    pickFiles: libraryStore.pickFiles,
+    cancelSelection: libraryStore.cancelSelection,
+    reportLibraryError: libraryStore.reportLibraryError,
+    onSelectionDropped: libraryStore.onSelectionDropped,
+  };
+});
 
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
@@ -169,7 +240,33 @@ beforeEach(() => {
   window.location.hash = "";
   inventory.reset?.();
   inventory.ensureInventoryLoaded.mockReset().mockImplementation(async () => inventory.onLoad?.());
+  libraryStore.reset?.();
+  libraryStore.dispose.mockReset();
+  libraryStore.startLibrary.mockReset().mockImplementation(async () => {
+    libraryStore.load?.();
+    return libraryStore.dispose;
+  });
+  libraryStore.pickFiles.mockReset().mockResolvedValue(null);
+  libraryStore.cancelSelection.mockReset().mockResolvedValue(undefined);
+  libraryStore.reportLibraryError.mockReset();
+  libraryStore.stopDropped.mockReset();
+  libraryStore.dropped = undefined;
+  libraryStore.onSelectionDropped.mockReset().mockImplementation((handler: (summary: Summary) => void) => {
+    libraryStore.dropped = handler;
+    return libraryStore.stopDropped;
+  });
+  desktop.available = true;
+  webview.handler = undefined;
+  webview.unlisten.mockReset();
+  webview.onDragDropEvent.mockReset().mockImplementation(async (handler: (event: { payload: DragPayload }) => void) => {
+    webview.handler = handler;
+    return webview.unlisten;
+  });
 });
+
+function summary(selectionId: string): Summary {
+  return { selectionId, purpose: "import", files: [{ fileIndex: 0, fileName: "cube.stl", sizeBytes: 684 }] };
+}
 
 afterEach(() => {
   cleanup();
@@ -249,6 +346,90 @@ describe("App", () => {
     await waitFor(() => expect(inventory.ensureInventoryLoaded).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0));
     expect(screen.getByRole("heading", { name: "Spools" })).toBeInTheDocument();
+  });
+
+  it("starts the Library after Printers load and disposes it on unmount", async () => {
+    const callOrder: string[] = [];
+    appState.loadPrinters.mockImplementation(async () => {
+      callOrder.push("loadPrinters");
+      appState.printers = [PRINTER];
+    });
+    libraryStore.startLibrary.mockImplementation(async () => {
+      callOrder.push("startLibrary");
+      return libraryStore.dispose;
+    });
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["loadPrinters", "startLibrary"]);
+    unmount();
+    expect(libraryStore.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("lists the Library as an available destination", async () => {
+    window.location.hash = "#nav=v1/library";
+    const { default: App } = await import("./App");
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    expect(screen.queryByText("Library is not available in this version.")).toBeNull();
+  });
+
+  it("resolves a cold-launch Model deep link once the Library has loaded", async () => {
+    window.location.hash = "#nav=v1/library/model/mdl-bracket";
+    let finishLoad: (() => void) | undefined;
+    libraryStore.startLibrary.mockImplementation(() => new Promise((resolve) => {
+      finishLoad = () => {
+        libraryStore.load?.();
+        resolve(libraryStore.dispose);
+      };
+    }));
+    const { App, navigation } = await importAppAndNavigation();
+    // Let the hash assignment's own hashchange land before mounting, so
+    // only the post-load reconcile can resolve the selection.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    // Pending, not unavailable, while the Library loads: no banner.
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+    finishLoad?.();
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-bracket" });
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+    expect(screen.getByText("Library workspace")).toBeInTheDocument();
+  });
+
+  it("resolves a cold-launch Project deep link once the Library has loaded", async () => {
+    window.location.hash = "#nav=v1/library/project/prj-brackets";
+    const { App, navigation } = await importAppAndNavigation();
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(navigation.target().selection).toEqual({ kind: "project", id: "prj-brackets" });
+  });
+
+  it("shows the no-longer-available banner for an unknown Model id, once the Library has loaded", async () => {
+    window.location.hash = "#nav=v1/library/model/mdl-gone";
+    let finishLoad: (() => void) | undefined;
+    libraryStore.startLibrary.mockImplementation(() => new Promise((resolve) => {
+      finishLoad = () => {
+        libraryStore.load?.();
+        resolve(libraryStore.dispose);
+      };
+    }));
+    const { App, navigation } = await importAppAndNavigation();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+    finishLoad?.();
+    await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
+    expect(navigation.availability()).toBe("selectionUnavailable");
   });
 
   it("shows listener startup failure as a recoverable banner", async () => {
@@ -355,6 +536,96 @@ describe("App", () => {
     await screen.findByRole("alert");
     await screen.getByRole("button", { name: "Retry startup" }).click();
     await waitFor(() => expect(callOrder).toEqual(["loadSettings", "loadSettings", "loadPrinters", "listen"]));
+  });
+
+  describe("importing Models", () => {
+    it("Import… opens the picker, and only a selection opens the import dialog", async () => {
+      window.location.hash = "#nav=v1/library";
+      const { default: App } = await import("./App");
+      render(() => <App />);
+      const importButton = await screen.findByRole("button", { name: "Import…" });
+
+      await fireEvent.click(importButton);
+      expect(libraryStore.pickFiles).toHaveBeenCalledWith("import");
+      await Promise.resolve();
+      expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("none");
+
+      libraryStore.pickFiles.mockResolvedValueOnce(summary("sel-picked"));
+      await fireEvent.click(importButton);
+      await waitFor(() => expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("sel-picked"));
+
+      await fireEvent.click(screen.getByRole("button", { name: "Close import" }));
+      expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("none");
+    });
+
+    it("reports a picker failure to the Library banner", async () => {
+      window.location.hash = "#nav=v1/library";
+      const failure = { contractVersion: 1, code: "INTERNAL", message: "The file picker failed.", recovery: [], retryable: false };
+      libraryStore.pickFiles.mockRejectedValue(failure);
+      const { default: App } = await import("./App");
+      render(() => <App />);
+
+      await fireEvent.click(await screen.findByRole("button", { name: "Import…" }));
+      await waitFor(() => expect(libraryStore.reportLibraryError).toHaveBeenCalledWith(failure));
+    });
+
+    it("a dropped selection navigates to the Library and opens the import dialog", async () => {
+      const { default: App } = await import("./App");
+      render(() => <App />);
+      await screen.findByText("Persisted Printers are visible");
+      await waitFor(() => expect(libraryStore.dropped).toBeDefined());
+
+      libraryStore.dropped!(summary("sel-dropped"));
+      expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+      expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("sel-dropped");
+    });
+
+    it("cancels a second drop while an import is already open", async () => {
+      window.location.hash = "#nav=v1/library";
+      const { default: App } = await import("./App");
+      render(() => <App />);
+      await waitFor(() => expect(libraryStore.dropped).toBeDefined());
+
+      libraryStore.dropped!(summary("sel-first"));
+      libraryStore.dropped!(summary("sel-second"));
+      expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("sel-first");
+      expect(libraryStore.cancelSelection).toHaveBeenCalledWith("sel-second");
+      // The open dialog says why, until it closes.
+      expect(screen.getByRole("status", { name: "Drop refused" })).toHaveTextContent("true");
+      await fireEvent.click(screen.getByRole("button", { name: "Close import" }));
+      expect(screen.getByRole("status", { name: "Drop refused" })).toHaveTextContent("false");
+    });
+
+    it("drag enter and leave toggle the drop highlight", async () => {
+      window.location.hash = "#nav=v1/library";
+      const { default: App } = await import("./App");
+      const { unmount } = render(() => <App />);
+      await waitFor(() => expect(webview.onDragDropEvent).toHaveBeenCalledOnce());
+      const active = await screen.findByRole("status", { name: "Drop active" });
+
+      webview.handler!({ payload: { type: "enter" } });
+      expect(active).toHaveTextContent("true");
+      webview.handler!({ payload: { type: "over" } });
+      expect(active).toHaveTextContent("true");
+      webview.handler!({ payload: { type: "leave" } });
+      expect(active).toHaveTextContent("false");
+      webview.handler!({ payload: { type: "enter" } });
+      webview.handler!({ payload: { type: "drop" } });
+      expect(active).toHaveTextContent("false");
+
+      unmount();
+      expect(webview.unlisten).toHaveBeenCalledOnce();
+      expect(libraryStore.stopDropped).toHaveBeenCalledOnce();
+    });
+
+    it("registers no drag listener in web mode", async () => {
+      desktop.available = false;
+      window.location.hash = "#nav=v1/library";
+      const { default: App } = await import("./App");
+      render(() => <App />);
+      await screen.findByText("Library workspace");
+      expect(webview.onDragDropEvent).not.toHaveBeenCalled();
+    });
   });
 
   it("disposes a listener that resolves after App unmounts", async () => {
