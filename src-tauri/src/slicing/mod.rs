@@ -364,9 +364,9 @@ pub enum ClaimedEstimateSource {
 }
 
 /// D12: the estimates parsed from the G-code farm3d produced. Each is
-/// `null` when its claim is missing. An external revision's estimates are
-/// all `null`: its file's values are [`ClaimedEstimates`], never copied
-/// here.
+/// `null` when its claim is missing. Only farm3d revisions have them: an
+/// external revision's `estimates` is `null`, and its file's values are
+/// [`ClaimedEstimates`], never copied here.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/SliceEstimates.ts")]
@@ -468,7 +468,8 @@ pub struct SliceRevisionSummary {
     #[ts(optional)]
     pub plate: Option<SlicePlateRef>,
     pub target_label: String,
-    pub estimates: SliceEstimates,
+    /// `null` for an external revision (D12).
+    pub estimates: Option<SliceEstimates>,
     pub facts: SliceFacts,
     pub requires_manual_printer_selection: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

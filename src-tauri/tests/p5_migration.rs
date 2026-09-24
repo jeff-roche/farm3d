@@ -47,7 +47,7 @@ fn migrated() -> (tempfile::TempDir, rusqlite::Connection) {
 /// A v5-only database (migrations 1-5) at `paths.database()`.
 fn v5_database(paths: &StoragePaths) -> rusqlite::Connection {
     let mut connection = rusqlite::Connection::open(paths.database()).expect("v5 database");
-    apply_through(&mut connection, CURRENT_SCHEMA_VERSION - 1).expect("v5 migrations");
+    apply_through(&mut connection, 5).expect("v5 migrations");
     connection
 }
 
@@ -335,7 +335,7 @@ fn upgrading_v5_to_v6_keeps_every_existing_row_and_survives_a_restart() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("versions");
-    assert_eq!(versions, (CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION));
+    assert_eq!(versions, (6, 6));
 }
 
 /// 3a. `slicer_runtime_config` is a singleton with a positive revision and
@@ -739,21 +739,19 @@ fn a_crash_before_commit_leaves_the_database_unchanged_at_v5() {
         )
         .expect("operations sql");
 
-    let error = apply_through_failing_before_commit(&mut connection, CURRENT_SCHEMA_VERSION)
+    let error = apply_through_failing_before_commit(&mut connection, 6)
         .expect_err("the injected failure must surface");
     assert!(matches!(error, StorageError::MigrationFailed));
 
     assert_eq!(
         count(&connection, "SELECT user_version FROM pragma_user_version"),
-        CURRENT_SCHEMA_VERSION - 1,
+        5,
         "the schema version must roll back to v5"
     );
     assert_eq!(
         count(
             &connection,
-            &format!(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = {CURRENT_SCHEMA_VERSION}"
-            )
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 6"
         ),
         0,
         "no v6 ledger row may survive the rollback"

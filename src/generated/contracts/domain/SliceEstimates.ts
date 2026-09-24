@@ -3,8 +3,8 @@ import type { SliceEstimateSource } from "./SliceEstimateSource";
 
 /**
  * D12: the estimates parsed from the G-code farm3d produced. Each is
- * `null` when its claim is missing. An external revision's estimates are
- * all `null`: its file's values are [`ClaimedEstimates`], never copied
- * here.
+ * `null` when its claim is missing. Only farm3d revisions have them: an
+ * external revision's `estimates` is `null`, and its file's values are
+ * [`ClaimedEstimates`], never copied here.
  */
 export type SliceEstimates = { printSeconds: number | null, filamentGrams: number | null, filamentMm: number | null, layerCount: number | null, maxZMm: number | null, source: SliceEstimateSource, };

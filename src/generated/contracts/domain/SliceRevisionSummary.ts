@@ -8,4 +8,8 @@ import type { SliceRuntimeInfo } from "./SliceRuntimeInfo";
 /**
  * A Slice Revision as lists show it.
  */
-export type SliceRevisionSummary = { id: string, kind: SliceRevisionKind, modelId: string, sourceRevisionId: string, sourceRevisionSequence: number, plate?: SlicePlateRef, targetLabel: string, estimates: SliceEstimates, facts: SliceFacts, requiresManualPrinterSelection: boolean, runtime?: SliceRuntimeInfo, createdAt: string, };
+export type SliceRevisionSummary = { id: string, kind: SliceRevisionKind, modelId: string, sourceRevisionId: string, sourceRevisionSequence: number, plate?: SlicePlateRef, targetLabel: string,
+/**
+ * `null` for an external revision (D12).
+ */
+estimates: SliceEstimates | null, facts: SliceFacts, requiresManualPrinterSelection: boolean, runtime?: SliceRuntimeInfo, createdAt: string, };

@@ -598,7 +598,8 @@ pub struct NewExternalRevision {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredEstimates {
-    estimates: SliceEstimates,
+    /// `null` for an external revision.
+    estimates: Option<SliceEstimates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_estimates: Option<ClaimedEstimates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -639,7 +640,7 @@ pub fn insert_farm3d_revision(
     let (model_id, _, _) = source_for(tx, &revision.source_revision_id, SliceRevisionKind::Farm3d)?;
     let facts = revision.facts.facts();
     let estimates = StoredEstimates {
-        estimates: revision.estimates.clone(),
+        estimates: Some(revision.estimates.clone()),
         claimed_estimates: None,
         producer: None,
     };
@@ -687,7 +688,7 @@ pub fn insert_external_revision(
     )?;
     let facts = revision.facts.facts();
     let estimates = StoredEstimates {
-        estimates: SliceEstimates::none(),
+        estimates: None,
         claimed_estimates: Some(revision.claimed_estimates.clone()),
         producer: revision.producer.clone(),
     };
@@ -1662,7 +1663,7 @@ mod tests {
         assert_eq!(summary.source_revision_sequence, 1);
         assert_eq!(summary.plate, Some(new.plate.clone()));
         assert_eq!(summary.target_label, "Elegoo Centauri Carbon 0.4 nozzle");
-        assert_eq!(summary.estimates, new.estimates);
+        assert_eq!(summary.estimates, Some(new.estimates.clone()));
         assert_eq!(&summary.facts, new.facts.facts());
         assert!(!summary.requires_manual_printer_selection);
         assert_eq!(summary.runtime, Some(new.runtime.clone()));
@@ -1735,11 +1736,7 @@ mod tests {
         assert_eq!(summary.model_id, "mdl-gcode");
         assert_eq!(summary.plate, None);
         assert_eq!(summary.runtime, None);
-        assert_eq!(
-            summary.estimates,
-            SliceEstimates::none(),
-            "claims are never estimates"
-        );
+        assert_eq!(summary.estimates, None, "claims are never estimates");
         assert!(summary.requires_manual_printer_selection);
         assert_eq!(&summary.facts, new.facts.facts());
         assert_eq!(summary.target_label, "Elegoo Centauri Carbon 0.4 nozzle");
@@ -1822,6 +1819,11 @@ mod tests {
             gcode.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
             ["slr-ext"]
         );
+        assert_eq!(
+            gcode[0].estimates, None,
+            "an external revision has no estimates"
+        );
+        assert!(stl.iter().all(|summary| summary.estimates.is_some()));
         let missing = storage
             .read(|c| Ok(load_revision(c, "slr-none")))
             .expect("read")

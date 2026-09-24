@@ -14,4 +14,8 @@ import type { SliceRuntimeInfo } from "./SliceRuntimeInfo";
  * the file's own claims and producer (external only), and the input
  * blobs (farm3d only).
  */
-export type SliceRevisionRecord = { target?: SliceRevisionTarget, claimedEstimates?: ClaimedEstimates, producer?: Producer, blobs: Array<SliceRevisionBlob>, id: string, kind: SliceRevisionKind, modelId: string, sourceRevisionId: string, sourceRevisionSequence: number, plate?: SlicePlateRef, targetLabel: string, estimates: SliceEstimates, facts: SliceFacts, requiresManualPrinterSelection: boolean, runtime?: SliceRuntimeInfo, createdAt: string, };
+export type SliceRevisionRecord = { target?: SliceRevisionTarget, claimedEstimates?: ClaimedEstimates, producer?: Producer, blobs: Array<SliceRevisionBlob>, id: string, kind: SliceRevisionKind, modelId: string, sourceRevisionId: string, sourceRevisionSequence: number, plate?: SlicePlateRef, targetLabel: string,
+/**
+ * `null` for an external revision (D12).
+ */
+estimates: SliceEstimates | null, facts: SliceFacts, requiresManualPrinterSelection: boolean, runtime?: SliceRuntimeInfo, createdAt: string, };
