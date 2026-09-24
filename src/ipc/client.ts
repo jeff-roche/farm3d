@@ -53,6 +53,35 @@ type CommandMap = {
   create_tare: [Contracts.CreateTareRequest, Contracts.CreateTareResult];
   update_tare: [Contracts.UpdateTareRequest, Contracts.UpdateTareResult];
   delete_tare: [Contracts.DeleteTareRequest, Contracts.DeleteTareResult];
+  pick_model_files: [Contracts.PickModelFilesRequest, Contracts.PickModelFilesResult];
+  inspect_import_selection: [
+    Contracts.InspectImportSelectionRequest,
+    Contracts.InspectImportSelectionResult,
+  ];
+  cancel_import_selection: [
+    Contracts.CancelImportSelectionRequest,
+    Contracts.CancelImportSelectionResult,
+  ];
+  import_models: [Contracts.ImportModelsRequest, Contracts.ImportModelsResult];
+  list_library: [Contracts.ListLibraryRequest, Contracts.ListLibraryResult];
+  create_project: [Contracts.CreateProjectRequest, Contracts.CreateProjectResult];
+  rename_project: [Contracts.RenameProjectRequest, Contracts.RenameProjectResult];
+  delete_project: [Contracts.DeleteProjectRequest, Contracts.DeleteProjectResult];
+  update_model: [Contracts.UpdateModelRequest, Contracts.UpdateModelResult];
+  set_model_projects: [Contracts.SetModelProjectsRequest, Contracts.SetModelProjectsResult];
+  delete_model: [Contracts.DeleteModelRequest, Contracts.DeleteModelResult];
+  list_model_revisions: [Contracts.ListModelRevisionsRequest, Contracts.ListModelRevisionsResult];
+  get_revision_thumbnail: [
+    Contracts.GetRevisionThumbnailRequest,
+    Contracts.GetRevisionThumbnailResult,
+  ];
+  library_content_info: [Contracts.LibraryContentInfoRequest, Contracts.LibraryContentInfoResult];
+  check_linked_sources: [Contracts.CheckLinkedSourcesRequest, Contracts.CheckLinkedSourcesResult];
+  locate_linked_source: [Contracts.LocateLinkedSourceRequest, Contracts.LocateLinkedSourceResult];
+  convert_model_to_managed: [
+    Contracts.ConvertModelToManagedRequest,
+    Contracts.ConvertModelToManagedResult,
+  ];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;
