@@ -47,14 +47,25 @@ const DIAMETER_OPTIONS: { value: FilamentDiameter; label: string }[] = [
 ];
 
 /** Every `SpoolFields`/initial-amount field path a Rust `VALIDATION` can
- *  name (`spools/mod.rs`'s `validate_fields`, `spools/ledger.rs`'s
- *  `resolve_entry`) that this form has a field with an `error` slot for.
- *  Anything else (e.g. `entry.tareId` -- the tare `Select` has no error
- *  slot) falls back to the dialog-level message. */
+ *  name (`spools/mod.rs`'s `validate_fields`, `spools/repository.rs`'s
+ *  `validate_tare_reference`, `spools/ledger.rs`'s `resolve_entry`) that
+ *  this form shows inline next to a field. Anything else (e.g.
+ *  `entry.tareId` -- the initial-amount tare choice has no error slot of
+ *  its own) falls back to the dialog-level message. */
 const FIELD_ERROR_PATHS = new Set([
   "manufacturer", "product", "materialOther", "colorName", "colorHex",
-  "nominalMg", "lowThresholdMg", "notes", "entry.netMg", "entry.grossMg",
+  "nominalMg", "lowThresholdMg", "notes", "tareId", "entry.netMg", "entry.grossMg",
 ]);
+
+/** Task 3 fix: the desktop `notes` `VALIDATION` carries the same generic
+ *  message every field-level `RepositoryError::Validation` maps to
+ *  (`contracts/command.rs`'s `validation_at`), not a notes-specific one --
+ *  so the 2000-character cap must be spelled out here rather than relying
+ *  on the server's own text, which web mode's `validateNotesCap` already
+ *  does happen to match. Keeps web and desktop showing the same text. */
+function serverFieldErrorMessage(fieldPath: string, message: string): string {
+  return fieldPath === "notes" ? "Notes must be at most 2000 characters." : message;
+}
 
 /** Add/Edit (D2/D3/D7 §Components: `SpoolFormDialog`). Add also collects
  *  the initial amount: a nominal-weight quick pick, defaulting to an
@@ -143,6 +154,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
     // gross-below-tare condition, so it clears the same server error the
     // gross field does.
     clearServerFieldError("entry.grossMg");
+    clearServerFieldError("tareId");
   };
 
   const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
@@ -224,7 +236,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
       if (isCommandError(e) && e.code === "CONFLICT") {
         setDialogError("This Spool changed since you opened it. It's been reloaded with the current values — check them and try again.");
       } else if (isCommandError(e) && typeof e.details?.fieldPath === "string" && FIELD_ERROR_PATHS.has(e.details.fieldPath)) {
-        setServerFieldError({ path: e.details.fieldPath, message: e.message });
+        const path = e.details.fieldPath;
+        setServerFieldError({ path, message: serverFieldErrorMessage(path, e.message) });
       } else {
         setDialogError(isCommandError(e) ? e.message : "This Spool could not be saved.");
       }
@@ -298,6 +311,9 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           onChange={onTareIdChange}
           optionLabel={tareLabel}
         />
+        <Show when={serverFieldErrorFor("tareId")}>
+          {(message) => <p class={styles.fieldError}>{message()}</p>}
+        </Show>
         <Show when={!isEdit()}>
           <TextField label="Storage label (optional)" value={storageLabel()} onChange={setStorageLabel} />
         </Show>

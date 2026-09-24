@@ -57,6 +57,23 @@ export function registerWebDispositionApplier(applier: WebDispositionApplier): v
   webDispositionApplier = applier;
 }
 
+/** Fix (Task 3, web fixture honesty): `spool-store.ts` registers this (same
+ *  seam/cycle rationale as `registerWebSpoolLookup` above) to be told when a
+ *  web-mode `loadPrinters()` finishes, so it can (re-)apply
+ *  `syncWebPrinterOccupancy` once Printers actually exist. Makes the two
+ *  stores' independent mount-time loads order-independent: whichever of
+ *  `spool-store.ts`'s `loadInventory` (called eagerly by `SpoolInventory`
+ *  on mount) or this module's `loadPrinters` (called by `App`'s startup
+ *  sequence) settles *last* is the one that ends up applying a correct
+ *  sync -- the other's own sync attempt, run too early, simply no-ops
+ *  (`syncWebPrinterOccupancy` returns early when the Printer isn't known
+ *  yet). Never registered/called in desktop mode. */
+let webPrintersLoaded: (() => void) | undefined;
+
+export function registerWebPrintersLoaded(callback: () => void): void {
+  webPrintersLoaded = callback;
+}
+
 function webCommandError(code: CommandError["code"], message: string): CommandError {
   return { contractVersion: 1, code, message, recovery: [], retryable: false };
 }
@@ -323,6 +340,7 @@ export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
   if (!desktopAvailable()) {
     setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, retryable: false });
+    webPrintersLoaded?.();
     return;
   }
   try {

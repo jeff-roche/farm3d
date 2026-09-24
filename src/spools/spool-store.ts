@@ -3,6 +3,7 @@ import { command, desktopAvailable, isCommandError, retryOnTransportFailure } fr
 import {
   printers as printerRecords,
   registerWebDispositionApplier,
+  registerWebPrintersLoaded,
   registerWebSpoolLookup,
   spliceResolved,
   WEB_FIXTURE_EQUIPPED_PRINTER_ID,
@@ -276,6 +277,18 @@ function syncWebPrinterOccupancy(printerId: string): void {
   spliceResolved({ ...printer, materialSlots });
 }
 
+/** Fix (Task 3, web fixture honesty): covers the cold-deep-link order --
+ *  `loadInventory` (called eagerly by `SpoolInventory` on mount) settling
+ *  before `printer-store.ts`'s own web `loadPrinters` has resolved. That
+ *  call's own `syncWebPrinterOccupancy` below no-ops (the Printer doesn't
+ *  exist yet); this re-runs it once `loadPrinters` finally does, but only
+ *  if the inventory itself has already loaded -- otherwise there is
+ *  nothing yet to sync from, and `loadInventory`'s own call handles the
+ *  (more common) reverse order once it runs. */
+registerWebPrintersLoaded(() => {
+  if (state.loaded) syncWebPrinterOccupancy(WEB_FIXTURE_EQUIPPED_PRINTER_ID);
+});
+
 /** Subscribes to the inventory stream, then backfills through `list_spools`
  *  -- the same listen-before-backfill order `printer-status-store` uses, so
  *  no event between subscribing and the snapshot arriving is missed. Events
@@ -514,6 +527,20 @@ function validateNotesCap(notes: string | undefined): void {
   }
 }
 
+/** D3 web parity: a Spool's default `tareId` must name an existing tare --
+ *  the same `VALIDATION`/`tareId` rejection `validate_tare_reference`
+ *  (`spools/repository.rs`) gives the desktop path (an unknown id would
+ *  otherwise just silently fail to resolve a tare's weight later). Web-only:
+ *  the desktop path never re-derives this -- it trusts the command's own
+ *  rejection. Uses the same generic message Rust's `RepositoryError::
+ *  Validation` maps to (`contracts/command.rs`'s `validation_at`), so a
+ *  dialog showing it inline looks identical in both modes. */
+function validateTareReference(tareId: string | undefined): void {
+  if (tareId !== undefined && !state.tares.some((t) => t.id === tareId)) {
+    throw commandError("VALIDATION", "The submitted value is invalid.", { fieldPath: "tareId" });
+  }
+}
+
 /** Resolves a scale/net amount entry to milligrams. Web-only: the desktop
  *  path never computes this itself -- `record_spool_amount`/`create_spool`
  *  do (D3/D7). */
@@ -555,6 +582,7 @@ function webFacets(
 
 async function webCreateSpool(fields: SpoolFields, initialAmount: AmountEntry, storageLabel?: string): Promise<SpoolRecord> {
   validateNotesCap(fields.notes);
+  validateTareReference(fields.tareId);
   const { mg, confidence } = resolveWebAmountEntry(initialAmount);
   const now = new Date().toISOString();
   const spool: SpoolRecord = {
@@ -599,6 +627,7 @@ export async function updateSpool(id: string, patch: SpoolFields): Promise<Spool
     const existing = state.spools.find((s) => s.id === id);
     if (!existing) throw commandError("NOT_FOUND", "This Spool no longer exists.");
     validateNotesCap(patch.notes);
+    validateTareReference(patch.tareId);
     const updated: SpoolRecord = {
       ...existing,
       ...patch,

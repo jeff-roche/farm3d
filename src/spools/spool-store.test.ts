@@ -789,6 +789,27 @@ describe("web mode", () => {
     expect(spoolState.spools.find((s) => s.id === stored.id)?.location).toEqual({ kind: "storage", storageLabel: "Moved" });
   });
 
+  it("syncs Printer occupancy once Printers resolve, even when loadInventory settled first (cold deep-link race)", async () => {
+    stubWebCatalog();
+    const printerStore = await import("../printers/printer-store");
+    const { loadInventory, spoolState } = await import("./spool-store");
+
+    // A cold deep link into Spools mounts `SpoolInventory`, which calls
+    // `loadInventory()` on its own -- independent of (and, here, ahead of)
+    // `App`'s own startup sequence, which hasn't called `loadPrinters()` yet.
+    await loadInventory();
+    const loaded = spoolState.spools.find((s) => s.facets.loaded)!;
+    expect(loaded.location.kind).toBe("slot");
+    const slotId = loaded.location.kind === "slot" ? loaded.location.slotId : "";
+    // Nothing for the sync to apply to yet -- printer-store hasn't loaded.
+    expect(printerStore.printers()).toHaveLength(0);
+
+    await printerStore.loadPrinters();
+
+    const printer = printerStore.printers().find((p) => p.id === printerStore.WEB_FIXTURE_EQUIPPED_PRINTER_ID)!;
+    expect(printer.materialSlots.find((s) => s.id === slotId)?.occupantSpoolId).toBe(loaded.id);
+  });
+
   it("applies archive dispositions to the web fixture so a Printer with loaded Spools can be archived (D10)", async () => {
     stubWebCatalog();
     const printerStore = await import("../printers/printer-store");
@@ -911,6 +932,30 @@ describe("web mode", () => {
     const target = state.spools[0];
     await expect(updateSpool(target.id, { ...baseFields, notes: "x".repeat(2001) }))
       .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "notes" } });
+  });
+
+  it("rejects an unknown default tareId on create and update, matching the desktop's VALIDATION/tareId", async () => {
+    const { loadInventory, createSpool, updateSpool, spoolState: state } = await import("./spool-store");
+    await loadInventory();
+
+    const baseFields = {
+      manufacturer: "Test Co", materialFamily: "PLA" as const, colorName: "Blue",
+      diameter: "1.75" as const, nominalMg: 1_000_000, lowThresholdMg: 100_000,
+    };
+    const initialAmount = { kind: "net" as const, netMg: 1_000_000, confidence: "estimated" as const };
+
+    await expect(createSpool(
+      { ...baseFields, tareId: "tar-does-not-exist" },
+      initialAmount,
+    )).rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "tareId" } });
+
+    const target = state.spools[0];
+    await expect(updateSpool(target.id, { ...baseFields, tareId: "tar-does-not-exist" }))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "tareId" } });
+
+    // A real tare id is still accepted.
+    const created = await createSpool({ ...baseFields, tareId: state.tares[0].id }, initialAmount);
+    expect(created?.tareId).toBe(state.tares[0].id);
   });
 
   it("recordAmount rejects a scale entry whose gross is less than its tare, with fieldPath entry.grossMg", async () => {

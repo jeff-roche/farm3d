@@ -100,9 +100,13 @@ describe("SpoolFormDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
-  it("shows a VALIDATION rejection inline under the Notes field and stays open", async () => {
+  it("shows a VALIDATION rejection inline under the Notes field and stays open, with the cap always spelled out", async () => {
+    // The real desktop backend rejects an over-length `notes` with the same
+    // generic message `RepositoryError::Validation` maps to for every field
+    // (`contracts/command.rs`'s `validation_at`) -- not a notes-specific
+    // one. The dialog must show the friendly cap text regardless.
     createSpool.mockRejectedValue({
-      contractVersion: 1, code: "VALIDATION", message: "Notes must be at most 2000 characters.",
+      contractVersion: 1, code: "VALIDATION", message: "The submitted value is invalid.",
       recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "notes" },
     });
     const onOpenChange = vi.fn();
@@ -112,7 +116,24 @@ describe("SpoolFormDialog", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Add Spool" }));
 
     expect(await screen.findByText("Notes must be at most 2000 characters.")).toBeInTheDocument();
+    expect(screen.queryByText("The submitted value is invalid.")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Notes (optional)")).toHaveAttribute("aria-invalid", "true");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("shows a VALIDATION rejection on an unknown default tareId under the tare field and stays open", async () => {
+    createSpool.mockRejectedValue({
+      contractVersion: 1, code: "VALIDATION", message: "The submitted value is invalid.",
+      recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "tareId" },
+    });
+    const onOpenChange = vi.fn();
+    render(() => <SpoolFormDialog open onOpenChange={onOpenChange} />);
+
+    await fillRequiredFields();
+    await fireEvent.click(screen.getByRole("button", { name: "Add Spool" }));
+
+    expect(await screen.findByText("The submitted value is invalid.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
