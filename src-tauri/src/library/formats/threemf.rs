@@ -69,6 +69,14 @@ pub(crate) struct ZipLimits {
     pub max_entry_bytes: u64,
     pub max_ratio: u64,
     pub max_event_bytes: u64,
+    /// Build items plus components across every model part. Past this the
+    /// inspection is refused: dropping some would misreport bounds.
+    pub max_placements: usize,
+    /// `<object>` elements across every model part, likewise refused.
+    pub max_objects: usize,
+    /// Plates, object ids per plate, per-object setting keys, and paint
+    /// attributes per part are only listed, so past this they're truncated.
+    pub max_listed: usize,
 }
 
 impl ZipLimits {
@@ -78,6 +86,9 @@ impl ZipLimits {
         max_entry_bytes: 2 << 30,
         max_ratio: 1_000,
         max_event_bytes: 16 << 20,
+        max_placements: 1_000_000,
+        max_objects: 1_000_000,
+        max_listed: super::gcode::MAX_LISTED,
     };
 }
 
@@ -126,6 +137,7 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
         cancel,
         limits,
         total_read: 0,
+        counts: Counts::default(),
     };
 
     if !package.has(CONTENT_TYPES) {
@@ -137,7 +149,7 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
     let start_part = package.start_part()?;
     let start_rels = rels_part_for(&start_part);
     if package.has(&start_rels) {
-        package.relationships(&start_rels, parent_dir(&start_part))?;
+        package.model_relationship(&start_rels, parent_dir(&start_part))?;
     }
 
     // The start part, then every part a component or build item names.
@@ -663,6 +675,7 @@ struct Package<'a, R> {
     cancel: &'a CancelFlag,
     limits: &'a ZipLimits,
     total_read: u64,
+    counts: Counts,
 }
 
 impl<R: Read + Seek> Package<'_, R> {
@@ -708,20 +721,25 @@ impl<R: Read + Seek> Package<'_, R> {
         }
     }
 
-    /// Every `(Target, Type)` in a relationships part, with each target
-    /// normalised against `base_dir`.
-    fn relationships(
+    /// The first `3dmodel` relationship target in a relationships part.
+    /// Every target is normalised against `base_dir`, so one that escapes
+    /// the package is refused, but none is kept: a part can hold any number.
+    fn model_relationship(
         &mut self,
         name: &str,
         base_dir: &str,
-    ) -> Result<Vec<(String, String)>, InspectError> {
-        let mut found = Vec::new();
+    ) -> Result<Option<String>, InspectError> {
+        let mut found = None;
         self.parse(name, |event| {
             if let Event::Start(element) | Event::Empty(element) = event {
                 if element.local_name().as_ref() == "Relationship" {
                     let target = attribute(&element, "Target", name)?.unwrap_or_default();
-                    let kind = attribute(&element, "Type", name)?.unwrap_or_default();
-                    found.push((normalize_part_path(base_dir, &target)?, kind));
+                    let target = normalize_part_path(base_dir, &target)?;
+                    if found.is_none()
+                        && attribute(&element, "Type", name)?.as_deref() == Some(MODEL_REL)
+                    {
+                        found = Some(target);
+                    }
                 }
             }
             Ok(())
@@ -736,10 +754,7 @@ impl<R: Read + Seek> Package<'_, R> {
             return Err(no_model());
         }
         let start = self
-            .relationships(ROOT_RELS, "")?
-            .into_iter()
-            .find(|(_, kind)| kind == MODEL_REL)
-            .map(|(target, _)| target)
+            .model_relationship(ROOT_RELS, "")?
             .ok_or_else(no_model)?;
         if self.has(&start) {
             Ok(start)
@@ -749,13 +764,15 @@ impl<R: Read + Seek> Package<'_, R> {
     }
 
     fn model_part(&mut self, name: &str, is_start: bool) -> Result<ModelPart, InspectError> {
-        let mut parser = ModelParser::new(name, is_start);
+        let mut parser = ModelParser::new(name, is_start, self.limits, self.counts);
         self.parse(name, |event| parser.event(event))?;
+        self.counts = parser.counts;
         Ok(parser.part)
     }
 
     /// Plates and per-object setting keys from `model_settings.config`.
     fn model_settings(&mut self) -> Result<(Vec<Plate>, BTreeSet<String>), InspectError> {
+        let max_listed = self.limits.max_listed;
         let mut plates = Vec::new();
         let mut per_object_keys = BTreeSet::new();
         let mut object_depth = 0usize;
@@ -784,8 +801,9 @@ impl<R: Read + Seek> Package<'_, R> {
             };
             match element.local_name().as_ref() {
                 "object" if is_start => object_depth += 1,
+                // Plates past the listing cap are read but not kept.
                 "plate" if is_start => {
-                    plate = Some(Plate {
+                    plate = (plates.len() < max_listed).then(|| Plate {
                         index: 0,
                         name: None,
                         object_ids: Vec::new(),
@@ -798,12 +816,12 @@ impl<R: Read + Seek> Package<'_, R> {
                     let value = attribute(element, "value", MODEL_SETTINGS)?.unwrap_or_default();
                     let value = value.trim();
                     if object_depth > 0 {
-                        if key != "name" {
+                        if key != "name" && per_object_keys.len() < max_listed {
                             per_object_keys.insert(key);
                         }
                     } else if let Some(plate) = &mut plate {
                         match (in_instance, key.as_str()) {
-                            (true, "object_id") => {
+                            (true, "object_id") if plate.object_ids.len() < max_listed => {
                                 if let Ok(id) = value.parse() {
                                     plate.object_ids.push(id);
                                 }
@@ -930,16 +948,25 @@ struct ModelPart {
 }
 
 impl ModelPart {
-    fn referenced_parts(&self) -> Vec<String> {
+    /// Each part a component or build item names, once.
+    fn referenced_parts(&self) -> BTreeSet<String> {
         let components = self.objects.values().flat_map(|shape| match shape {
             Shape::Components(list) => list.as_slice(),
             Shape::Mesh { .. } => &[],
         });
-        components
+        let names: BTreeSet<&str> = components
             .chain(&self.build)
-            .map(|placement| placement.part.clone())
-            .collect()
+            .map(|placement| placement.part.as_str())
+            .collect();
+        names.into_iter().map(str::to_string).collect()
     }
+}
+
+/// Build items plus components, and objects, seen so far in the package.
+#[derive(Clone, Copy, Debug, Default)]
+struct Counts {
+    placements: usize,
+    objects: usize,
 }
 
 struct ObjectInProgress {
@@ -951,6 +978,8 @@ struct ObjectInProgress {
 
 struct ModelParser {
     name: String,
+    limits: ZipLimits,
+    counts: Counts,
     base_dir: String,
     is_start: bool,
     depth: usize,
@@ -963,9 +992,11 @@ struct ModelParser {
 }
 
 impl ModelParser {
-    fn new(name: &str, is_start: bool) -> Self {
+    fn new(name: &str, is_start: bool, limits: &ZipLimits, counts: Counts) -> Self {
         Self {
             name: name.to_string(),
+            limits: *limits,
+            counts,
             base_dir: parent_dir(name).to_string(),
             is_start,
             depth: 0,
@@ -1045,6 +1076,13 @@ impl ModelParser {
                 if self.object.is_some() {
                     return Err(malformed(&self.name));
                 }
+                self.counts.objects += 1;
+                if self.counts.objects > self.limits.max_objects {
+                    return Err(limit_exceeded(format!(
+                        "it has more than {} objects",
+                        self.limits.max_objects
+                    )));
+                }
                 self.part.object_count += 1;
                 self.object = Some(ObjectInProgress {
                     id: self.id_attribute(element, "id")?,
@@ -1070,7 +1108,9 @@ impl ModelParser {
                     let attribute = attribute.map_err(|_| malformed(&self.name))?;
                     if PAINT_ATTRIBUTES.contains(&attribute.key.local_name().as_ref()) {
                         let qualified: &str = attribute.key.as_ref();
-                        if !self.part.paint.contains(qualified) {
+                        if !self.part.paint.contains(qualified)
+                            && self.part.paint.len() < self.limits.max_listed
+                        {
                             self.part.paint.insert(qualified.to_string());
                         }
                     }
@@ -1082,6 +1122,7 @@ impl ModelParser {
                 }
             }
             "component" => {
+                self.count_placement()?;
                 let placement = self.placement(element)?;
                 if let Some(object) = &mut self.object {
                     object
@@ -1092,10 +1133,22 @@ impl ModelParser {
             }
             "build" => self.in_build = has_body,
             "item" if self.in_build => {
+                self.count_placement()?;
                 let placement = self.placement(element)?;
                 self.part.build.push(placement);
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn count_placement(&mut self) -> Result<(), InspectError> {
+        self.counts.placements += 1;
+        if self.counts.placements > self.limits.max_placements {
+            return Err(limit_exceeded(format!(
+                "it has more than {} build items and components",
+                self.limits.max_placements
+            )));
         }
         Ok(())
     }
@@ -2111,5 +2164,178 @@ mod tests {
         // 3,000 + 1 ASCII bytes, then as many 2-byte `é` as fit whole.
         assert_eq!(kept.len(), MAX_METADATA_BYTES - 1);
         assert!(kept.starts_with(&format!("{}&é", "t".repeat(3000))));
+    }
+
+    // --- Per-element collection bounds (final review I1) ----------------------
+
+    fn listing_limits(max_listed: usize) -> ZipLimits {
+        ZipLimits {
+            max_listed,
+            ..ZipLimits::SPEC
+        }
+    }
+
+    #[test]
+    fn the_build_item_and_component_count_limit_is_enforced() {
+        let limits = ZipLimits {
+            max_placements: 3,
+            ..ZipLimits::SPEC
+        };
+        let items = "<item objectid=\"1\"/>".repeat(4);
+        let xml = single_cube_model("", "").replace(
+            "<build><item objectid=\"1\"/></build>",
+            &format!("<build>{items}</build>"),
+        );
+        let reason = invalid_reason(inspect_with(core_package(xml, vec![]), &limits));
+        assert!(reason.contains("safety limit"), "{reason}");
+        assert!(reason.contains("build items and components"), "{reason}");
+
+        // Components count toward the same cap: 2 components + 2 items.
+        let components = "<component objectid=\"1\"/>".repeat(2);
+        let xml = single_cube_model(
+            "",
+            "",
+        )
+        .replace(
+            "</resources>",
+            &format!(
+                "<object id=\"2\" type=\"model\"><components>{components}</components></object></resources>"
+            ),
+        )
+        .replace(
+            "<build><item objectid=\"1\"/></build>",
+            "<build><item objectid=\"2\"/><item objectid=\"2\"/></build>",
+        );
+        let reason = invalid_reason(inspect_with(core_package(xml, vec![]), &limits));
+        assert!(reason.contains("build items and components"), "{reason}");
+    }
+
+    #[test]
+    fn the_object_count_limit_is_enforced() {
+        let limits = ZipLimits {
+            max_objects: 2,
+            ..ZipLimits::SPEC
+        };
+        let extra = "<object id=\"7\" type=\"model\"/><object id=\"8\" type=\"model\"/>";
+        let xml = single_cube_model("", extra);
+        let reason = invalid_reason(inspect_with(core_package(xml, vec![]), &limits));
+        assert!(reason.contains("safety limit"), "{reason}");
+        assert!(reason.contains("objects"), "{reason}");
+    }
+
+    fn plate_settings(plates: usize, ids_per_plate: usize, object_keys: &[&str]) -> Vec<u8> {
+        let mut xml =
+            String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><config><object id=\"1\">");
+        for key in object_keys {
+            xml.push_str(&format!("<metadata key=\"{key}\" value=\"1\"/>"));
+        }
+        xml.push_str("</object>");
+        for plate in 1..=plates {
+            xml.push_str(&format!(
+                "<plate><metadata key=\"plater_id\" value=\"{plate}\"/>"
+            ));
+            for id in 1..=ids_per_plate {
+                xml.push_str(&format!(
+                    "<model_instance><metadata key=\"object_id\" value=\"{id}\"/></model_instance>"
+                ));
+            }
+            xml.push_str("</plate>");
+        }
+        xml.push_str("</config>");
+        xml.into_bytes()
+    }
+
+    #[test]
+    fn plates_and_their_object_ids_are_listed_up_to_the_cap() {
+        let bytes = core_package(
+            single_cube_model("", ""),
+            vec![("Metadata/model_settings.config", plate_settings(3, 3, &[]))],
+        );
+        let (inspection, _, _) = inspect_with(bytes, &listing_limits(2)).unwrap();
+        assert_eq!(
+            inspection.plates,
+            vec![
+                Plate {
+                    index: 1,
+                    name: None,
+                    object_ids: vec![1, 2]
+                },
+                Plate {
+                    index: 2,
+                    name: None,
+                    object_ids: vec![1, 2]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn per_object_setting_keys_are_listed_up_to_the_cap() {
+        let bytes = core_package(
+            single_cube_model("", ""),
+            vec![(
+                "Metadata/model_settings.config",
+                plate_settings(0, 0, &["a_key", "b_key", "c_key"]),
+            )],
+        );
+        let (inspection, _, _) = inspect_with(bytes, &listing_limits(2)).unwrap();
+        let details: Vec<_> = inspection
+            .unsupported
+            .iter()
+            .filter(|entry| entry.code == UnsupportedCode::PerObjectSettings)
+            .map(|entry| entry.detail.as_str())
+            .collect();
+        assert_eq!(details, vec!["Per-object settings: a_key, b_key"]);
+    }
+
+    #[test]
+    fn paint_attributes_are_listed_up_to_the_cap() {
+        let xml = model(
+            "",
+            &format!(
+                "<resources><object id=\"1\" type=\"model\">{}</object></resources>\
+                 <build><item objectid=\"1\"/></build>",
+                cube_mesh(" paint_color=\"4\" paint_seam=\"1\" paint_supports=\"2\"")
+            ),
+        );
+        let (inspection, _, _) =
+            inspect_with(core_package(xml, vec![]), &listing_limits(2)).unwrap();
+        let paint = inspection
+            .unsupported
+            .iter()
+            .filter(|entry| entry.code == UnsupportedCode::Paint)
+            .count();
+        assert_eq!(paint, 2);
+    }
+
+    #[test]
+    fn referenced_parts_are_deduplicated() {
+        let items = "<item objectid=\"1\" p:path=\"/3D/Objects/o.model\"/>".repeat(5);
+        let xml = model(
+            &format!(" xmlns:p=\"{PRODUCTION_NS}\""),
+            &format!("<resources/><build>{items}</build>"),
+        );
+        let mut parser = ModelParser::new(
+            "3D/3dmodel.model",
+            true,
+            &ZipLimits::SPEC,
+            Counts::default(),
+        );
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Eof => break,
+                event => parser.event(event).unwrap(),
+            }
+        }
+        assert_eq!(parser.part.build.len(), 5);
+        assert_eq!(
+            parser
+                .part
+                .referenced_parts()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["3D/Objects/o.model".to_string()]
+        );
     }
 }
