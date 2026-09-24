@@ -242,7 +242,7 @@ pub enum ContentFailurePoint {
     TruncateStagedOnce = 4,
 }
 
-type BeforeRestatHook = Box<dyn FnOnce(&Path) + Send>;
+type SourceHook = Box<dyn FnOnce(&Path) + Send>;
 
 /// Test-only barrier (S3, S5, S6): holds one `stage_from_path` call after
 /// its first chunk is written, or one `place_and_commit_unless_cancelled`
@@ -272,7 +272,8 @@ pub struct ContentStore {
     placement: Mutex<()>,
     max_bytes: u64,
     failures: AtomicU8,
-    before_restat: Mutex<Option<BeforeRestatHook>>,
+    before_open: Mutex<Option<SourceHook>>,
+    before_restat: Mutex<Option<SourceHook>>,
     pause: Mutex<Option<Arc<StagePause>>>,
     placement_pause: Mutex<Option<Arc<StagePause>>>,
 }
@@ -291,6 +292,7 @@ impl ContentStore {
             placement: Mutex::new(()),
             max_bytes: MAX_SOURCE_BYTES,
             failures: AtomicU8::new(0),
+            before_open: Mutex::new(None),
             before_restat: Mutex::new(None),
             pause: Mutex::new(None),
             placement_pause: Mutex::new(None),
@@ -313,8 +315,16 @@ impl ContentStore {
     /// Test hook (S3): runs `hook` with the source path once, in the next
     /// `stage_from_path`, between the copy and the re-stat.
     #[doc(hidden)]
-    pub fn before_restat_once(&self, hook: BeforeRestatHook) {
+    pub fn before_restat_once(&self, hook: SourceHook) {
         *lock_ignoring_poison(&self.before_restat) = Some(hook);
+    }
+
+    /// Test hook (S3): runs `hook` with the source path once, in the next
+    /// `stage_from_path`, after its first stat and before it opens the
+    /// source, where a swap can land.
+    #[doc(hidden)]
+    pub fn before_open_once(&self, hook: SourceHook) {
+        *lock_ignoring_poison(&self.before_open) = Some(hook);
     }
 
     /// Test hook (S3, S5, S6): pauses the next `stage_from_path` after its
@@ -350,16 +360,18 @@ impl ContentStore {
         cancel: &CancelFlag,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<StagedFile, ContentError> {
-        let before =
-            fs::metadata(source).map_err(|error| ContentError::Unreadable(error.kind()))?;
-        if !before.is_file() {
-            return Err(ContentError::NotAFile);
+        // The path is checked first so a device or FIFO is never opened in
+        // the usual case, then the handle is checked, since the path can be
+        // swapped between the two. `before` is the opened file's own stat.
+        let unreadable = |error: io::Error| ContentError::Unreadable(error.kind());
+        let first = fs::metadata(source).map_err(unreadable)?;
+        check_source(&first, self.max_bytes)?;
+        if let Some(hook) = lock_ignoring_poison(&self.before_open).take() {
+            hook(source);
         }
-        if before.len() > self.max_bytes {
-            return Err(ContentError::TooLarge);
-        }
-        let mut reader =
-            File::open(source).map_err(|error| ContentError::Unreadable(error.kind()))?;
+        let mut reader = open_source(source).map_err(unreadable)?;
+        let before = reader.metadata().map_err(unreadable)?;
+        check_source(&before, self.max_bytes)?;
         let path = self
             .staging_directory(staging_key)?
             .join(format!("{file_index}{PART_SUFFIX}"));
@@ -989,6 +1001,33 @@ fn create_staged_file(path: &Path) -> Result<File, ContentError> {
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     options.open(path).map_err(|_| ContentError::Io)
+}
+
+/// `NotAFile` unless `metadata` is a regular file; `TooLarge` past
+/// `max_bytes`.
+fn check_source(metadata: &fs::Metadata, max_bytes: u64) -> Result<(), ContentError> {
+    if !metadata.is_file() {
+        return Err(ContentError::NotAFile);
+    }
+    if metadata.len() > max_bytes {
+        return Err(ContentError::TooLarge);
+    }
+    Ok(())
+}
+
+/// Opens a source (following symlinks) without waiting: on Unix with
+/// `O_NONBLOCK`, so a path swapped for a FIFO opens at once, to be refused
+/// as not a regular file, instead of blocking until a writer appears.
+/// `O_NONBLOCK` does not change reads of a regular file.
+fn open_source(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    options.open(path)
 }
 
 fn open_no_follow(path: &Path) -> io::Result<File> {

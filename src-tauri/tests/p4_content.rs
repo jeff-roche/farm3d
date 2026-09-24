@@ -221,6 +221,46 @@ fn a_source_changed_between_copy_and_restat_is_rejected_and_unstaged() {
     assert!(fixture.staging_entries("sel-changed").is_empty());
 }
 
+/// Final review: a source swapped for a FIFO between the first stat and
+/// the open must be refused, not opened with a blocking read that would
+/// pin a linked Model's check gate until restart.
+#[cfg(unix)]
+#[test]
+fn a_source_swapped_for_a_fifo_before_open_is_not_a_file_and_does_not_block() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let fixture = Fixture::new();
+    let store = Arc::new(fixture.store());
+    let source = fixture.source("model.stl", &pattern(1024));
+    store.before_open_once(Box::new(|path: &Path| {
+        fs::remove_file(path).expect("remove source");
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .expect("mkfifo");
+        assert!(status.success(), "mkfifo failed");
+    }));
+
+    let (sent, received) = mpsc::channel();
+    let staging = {
+        let (store, source) = (Arc::clone(&store), source.clone());
+        std::thread::spawn(move || {
+            let _ = sent.send(stage(&store, &source, "sel-fifo", 0));
+        })
+    };
+    let Ok(result) = received.recv_timeout(Duration::from_secs(5)) else {
+        // Open the FIFO's other end so the stuck open returns and the
+        // thread can finish, then fail.
+        let _ = fs::OpenOptions::new().write(true).open(&source);
+        let _ = staging.join();
+        panic!("staging blocked opening a FIFO");
+    };
+    staging.join().expect("staging thread");
+    assert!(matches!(result, Err(ContentError::NotAFile)), "{result:?}");
+    assert!(fixture.staging_entries("sel-fifo").is_empty());
+}
+
 // 3.
 #[test]
 fn an_oversized_source_is_too_large_before_any_read() {
