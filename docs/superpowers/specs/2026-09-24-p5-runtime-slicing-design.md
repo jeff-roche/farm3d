@@ -755,7 +755,7 @@ CREATE TABLE slice_revisions (
   runtime_json TEXT CHECK (runtime_json IS NULL OR json_valid(runtime_json)),
   created_at TEXT NOT NULL,
   CHECK (
-    (kind = 'farm3d' AND plate_key IS NOT NULL AND plate_index >= 1 AND runtime_json IS NOT NULL)
+    (kind = 'farm3d' AND plate_key IS NOT NULL AND plate_index IS NOT NULL AND plate_index >= 1 AND runtime_json IS NOT NULL)
     OR (kind = 'external' AND plate_key IS NULL AND plate_index IS NULL AND plate_name IS NULL AND runtime_json IS NULL)
   )
 ) STRICT;
