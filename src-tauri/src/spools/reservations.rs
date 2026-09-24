@@ -78,6 +78,9 @@ pub enum ReservationError {
     InvalidTransition {
         from: ReservationState,
     },
+    /// `reserve` with `amount_mg <= 0` (D8: `amount_mg > 0`), or `consume`
+    /// with `used_mg < 0`.
+    InvalidAmount,
     /// No reservation (or, for `reserve`, no Spool) with that id.
     NotFound,
     Storage(StorageError),
@@ -95,13 +98,13 @@ impl From<rusqlite::Error> for ReservationError {
     }
 }
 
-/// `ledger::append` (used by [`consume`]) returns `RepositoryError`, which
-/// carries a few variants that can never actually occur once a Spool has
-/// already been loaded in the same transaction (`Validation` on an
-/// out-of-range `afterMg`, which [`consume`]'s own clamp to `0..=currentMg`
-/// rules out; `NotFound` on the `UPDATE spools` inside `append`, which the
-/// prior `load_spool` here already ruled out). Both collapse to
-/// `Storage(OperationFailed)` rather than being reachable in practice.
+/// `ledger::append` (used by [`consume`]) and `repository::load_spool`
+/// return `RepositoryError`. `Storage` passes through unchanged. Every other
+/// variant collapses to `Storage(OperationFailed)`, which loses its detail.
+/// [`consume`]'s guards make them unlikely: it rejects a negative `used_mg`
+/// and clamps `afterMg` to `0..=currentMg`, so `append` should not reject
+/// the amount, and it loads the Spool first, so `append`'s own `NotFound`
+/// should not occur. Nothing here enforces that beyond those guards.
 impl From<RepositoryError> for ReservationError {
     fn from(error: RepositoryError) -> Self {
         match error {
@@ -151,7 +154,8 @@ fn load_reservation(
 }
 
 /// D8: reserves `amount_mg` against `spool_id`'s current availability.
-/// Fails with [`ReservationError::SpoolNotReservable`] unless the Spool is
+/// Fails with [`ReservationError::InvalidAmount`] unless `amount_mg > 0`,
+/// with [`ReservationError::SpoolNotReservable`] unless the Spool is
 /// `active`, and with [`ReservationError::InsufficientAvailable`] when
 /// `amount_mg` exceeds `availableMg` (`currentMg` minus every other `active`
 /// /`unresolved` reservation on the Spool). Returns the new reservation's
@@ -163,6 +167,9 @@ pub fn reserve(
     amount_mg: i64,
     operation_id: &str,
 ) -> Result<String, ReservationError> {
+    if amount_mg <= 0 {
+        return Err(ReservationError::InvalidAmount);
+    }
     let spool = repository::load_spool(tx, spool_id)?.ok_or(ReservationError::NotFound)?;
     if spool.lifecycle != SpoolLifecycle::Active {
         return Err(ReservationError::SpoolNotReservable {
@@ -240,14 +247,18 @@ pub fn mark_unresolved(tx: &Transaction<'_>, reservation_id: &str) -> Result<(),
 /// directly). `afterMg = max(0, currentMg - used_mg)`; when that clamps,
 /// the shortfall is recorded in the row's `note` (appended after any
 /// caller-supplied `note`). `used_mg` may differ from the reservation's own
-/// `amount_mg`. Any current state other than `active`/`unresolved` is
-/// [`ReservationError::InvalidTransition`].
+/// `amount_mg`, but a negative `used_mg` is
+/// [`ReservationError::InvalidAmount`]. Any current state other than
+/// `active`/`unresolved` is [`ReservationError::InvalidTransition`].
 pub fn consume(
     tx: &Transaction<'_>,
     reservation_id: &str,
     used_mg: i64,
     note: Option<&str>,
 ) -> Result<AmountEvent, ReservationError> {
+    if used_mg < 0 {
+        return Err(ReservationError::InvalidAmount);
+    }
     let reservation = load_reservation(tx, reservation_id)?;
     if !matches!(
         reservation.state,

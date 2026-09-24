@@ -351,3 +351,53 @@ fn a_reservation_inside_a_failing_transaction_leaves_no_row() {
     );
     assert_eq!(availability(&storage, &spool_id).available_mg, 1_000_000);
 }
+
+/// `reserve` rejects a zero or negative amount (D8: `amount_mg > 0`) with
+/// `InvalidAmount`, before touching the table.
+#[test]
+fn reserving_a_zero_or_negative_amount_is_rejected() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+
+    for amount_mg in [0, -1, -500_000] {
+        let error = call(&storage, |tx| {
+            reservations::reserve(tx, &spool_id, &job("job-1"), amount_mg, "op-1")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, ReservationError::InvalidAmount),
+            "{amount_mg}: {error:?}"
+        );
+    }
+    assert_eq!(availability(&storage, &spool_id).reserved_mg, 0);
+}
+
+/// `consume` rejects a negative `used_mg` with `InvalidAmount`, leaving the
+/// reservation `active` and the ledger untouched. Zero is allowed (a Job
+/// that used nothing).
+#[test]
+fn consuming_a_negative_amount_is_rejected_but_zero_is_allowed() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 300_000, "op-1")
+    })
+    .unwrap();
+
+    let error = call(&storage, |tx| {
+        reservations::consume(tx, &reservation_id, -1, None)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, ReservationError::InvalidAmount),
+        "{error:?}"
+    );
+    assert_eq!(current_mg(&storage, &spool_id), 1_000_000);
+    assert_eq!(availability(&storage, &spool_id).reserved_mg, 300_000);
+
+    let event = call(&storage, |tx| {
+        reservations::consume(tx, &reservation_id, 0, None)
+    })
+    .unwrap();
+    assert_eq!(event.after_mg, 1_000_000);
+}

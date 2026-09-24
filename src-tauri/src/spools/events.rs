@@ -7,9 +7,10 @@
 //! `list_spools` reports as `snapshotSequence`. The frontend listens before
 //! it backfills and drops events at or below that sequence.
 //!
-//! [`publish`] is the only emitter. Commands call it after their write
-//! returns `Ok`, never inside the transaction, and never for an idempotent
-//! replay (D11: events and the broadcast fire after commit only).
+//! [`publish`] and [`publish_ids`] are the only emitters. Commands call one
+//! after their write returns `Ok`, never inside the transaction, and never
+//! for an idempotent replay (D11: events and the broadcast fire after
+//! commit only).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -179,6 +180,25 @@ pub fn publish<R: tauri::Runtime>(
     if spools.is_empty() && printers.is_empty() {
         return;
     }
+    emit_records(app, services, spools, printers);
+    broadcast(
+        services,
+        spools.iter().map(|spool| spool.id.clone()).collect(),
+        printers
+            .iter()
+            .map(|printer| printer.printer_id.clone())
+            .collect(),
+    );
+}
+
+/// The record-bearing events of [`publish`], in its order, with no
+/// broadcast.
+fn emit_records<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    services: &crate::RuntimeServices<R>,
+    spools: &[SpoolRecord],
+    printers: &[PrinterSlots],
+) {
     let stream = &services.inventory_stream;
     {
         let _ordered = stream
@@ -219,21 +239,28 @@ pub fn publish<R: tauri::Runtime>(
             let _ = app.emit(STATUS_EVENT, event);
         }
     }
+}
+
+/// Sends one [`InventoryChange`] (D11's availability signal for P7).
+fn broadcast<R: tauri::Runtime>(
+    services: &crate::RuntimeServices<R>,
+    spool_ids: Vec<String>,
+    printer_ids: Vec<String>,
+) {
     // Having no subscriber is not an error: P7's evaluator doesn't exist yet.
     let _ = services.inventory_changes.send(InventoryChange {
-        spool_ids: spools.iter().map(|spool| spool.id.clone()).collect(),
-        printer_ids: printers
-            .iter()
-            .map(|printer| printer.printer_id.clone())
-            .collect(),
+        spool_ids,
+        printer_ids,
     });
 }
 
 /// [`publish`] for callers that know only ids: the Printer commands, whose
 /// transaction lives in `PrinterRepository`. Reads the committed records
-/// first. If that read fails, nothing is published: the write has already
-/// committed, so the command still succeeds, and the frontend's next
-/// backfill recovers the state.
+/// first. If that read fails, the record-bearing events are skipped (the
+/// write has already committed, so the command still succeeds, and the
+/// frontend's next backfill recovers the state), but the
+/// [`InventoryChange`] broadcast still goes out from the ids, so P7's
+/// evaluator never misses a committed change.
 pub fn publish_ids<R: tauri::Runtime>(
     app: &AppHandle<R>,
     services: &crate::RuntimeServices<R>,
@@ -248,8 +275,9 @@ pub fn publish_ids<R: tauri::Runtime>(
         .read(|connection| Ok(read_committed(connection, spool_ids, printer_ids)))
         .and_then(|inner| inner);
     if let Ok((spools, printers)) = read {
-        publish(app, services, &spools, &printers);
+        emit_records(app, services, &spools, &printers);
     }
+    broadcast(services, spool_ids.to_vec(), printer_ids.to_vec());
 }
 
 fn read_committed(

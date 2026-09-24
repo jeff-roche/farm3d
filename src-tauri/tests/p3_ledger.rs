@@ -454,3 +454,58 @@ fn update_spool_fields_replaces_editable_fields_and_checks_revision() {
         .unwrap_err();
     assert!(matches!(stale, RepositoryError::Conflict { .. }));
 }
+
+/// An unknown `fields.tareId` is `Validation{field_path: "tareId"}` on both
+/// insert and update, not the foreign-key failure it would otherwise be
+/// (which surfaces as `PERSISTENCE_UNAVAILABLE`). Nothing is written.
+#[test]
+fn an_unknown_default_tare_id_is_a_validation_error_on_insert_and_update() {
+    let (_temp, _lease, storage, _db) = storage();
+    let entry = AmountEntry::Net {
+        net_mg: 1_000_000,
+        confidence: AmountConfidence::Estimated,
+    };
+    let mut bad = valid_fields();
+    bad.tare_id = Some("tar-missing".to_string());
+
+    let error = storage
+        .write_repo(|tx| repository::insert_spool(tx, &bad, &entry, None))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RepositoryError::Validation {
+                field_path: "tareId"
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(storage.write(repository::list_spools).unwrap().is_empty());
+
+    let spool = storage
+        .write_repo(|tx| repository::insert_spool(tx, &valid_fields(), &entry, None))
+        .unwrap();
+    let error = storage
+        .write_repo(|tx| repository::update_spool_fields(tx, &spool.id, spool.revision, &bad))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RepositoryError::Validation {
+                field_path: "tareId"
+            }
+        ),
+        "{error:?}"
+    );
+
+    // A real tare id is accepted.
+    let tare = storage
+        .write_repo(|tx| tares::create(tx, "Cardboard", 200_000))
+        .unwrap();
+    let mut good = valid_fields();
+    good.tare_id = Some(tare.id.clone());
+    let updated = storage
+        .write_repo(|tx| repository::update_spool_fields(tx, &spool.id, spool.revision, &good))
+        .unwrap();
+    assert_eq!(updated.tare_id.as_deref(), Some(tare.id.as_str()));
+}

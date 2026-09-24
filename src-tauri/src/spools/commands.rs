@@ -494,7 +494,8 @@ pub fn debug_seed_reservation<R: tauri::Runtime>(
     mutate_spool(&app, &services, |tx| {
         reservations::reserve(tx, &spool_id, &holder, amount_mg, &operation_id).map_err(
             |error| match error {
-                ReservationError::InsufficientAvailable { .. } => RepositoryError::Validation {
+                ReservationError::InsufficientAvailable { .. }
+                | ReservationError::InvalidAmount => RepositoryError::Validation {
                     field_path: "amountMg",
                 },
                 ReservationError::SpoolNotReservable { .. } => RepositoryError::Validation {

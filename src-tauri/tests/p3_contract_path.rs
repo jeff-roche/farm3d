@@ -27,7 +27,7 @@ struct Env {
     _temp: tempfile::TempDir,
     _lease: MetadataRootLease,
     storage: Arc<Storage>,
-    _app: tauri::App<MockRuntime>,
+    app: tauri::App<MockRuntime>,
     webview: tauri::WebviewWindow<MockRuntime>,
     services: Arc<RuntimeServices<MockRuntime>>,
     events: Arc<Mutex<Vec<Value>>>,
@@ -79,7 +79,7 @@ fn env() -> Env {
         _temp: temp,
         _lease: lease,
         storage,
-        _app: app,
+        app,
         webview,
         services,
         events,
@@ -733,6 +733,35 @@ fn slot_layout_create_with_loads_and_archive_emit_inventory_events_after_commit(
     assert_eq!(
         change.spool_ids,
         vec![a["id"].as_str().unwrap().to_string()]
+    );
+}
+
+/// `publish_ids` still broadcasts the ids when the post-commit record read
+/// fails (here, an id with no row): P7's evaluator reloads from ids, so it
+/// must not miss a committed change. Only the record-bearing events are
+/// skipped.
+#[test]
+fn publish_ids_broadcasts_the_ids_even_when_the_record_read_fails() {
+    let env = env();
+    env.take_events();
+    let mut changes = env.services.inventory_changes.subscribe();
+    let spool_ids = vec!["spl-missing".to_string()];
+    let printer_ids = vec!["prn-missing".to_string()];
+
+    farm3d_lib::spools::events::publish_ids(
+        env.app.handle(),
+        &env.services,
+        &spool_ids,
+        &printer_ids,
+    );
+
+    assert!(env.take_events().is_empty());
+    assert_eq!(
+        changes.try_recv().unwrap(),
+        InventoryChange {
+            spool_ids,
+            printer_ids,
+        }
     );
 }
 

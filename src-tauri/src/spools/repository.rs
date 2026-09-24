@@ -12,6 +12,7 @@ use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
 
 use super::ledger::{self, AmountEntry, AmountEventKind};
+use super::tares;
 use super::{
     decode_enum, encode_enum, validate_fields, AmountConfidence, Availability, FilamentDiameter,
     MaterialFamily, SpoolFacets, SpoolFields, SpoolLifecycle, SpoolLocation, SpoolRecord,
@@ -181,6 +182,23 @@ fn query_records<P: rusqlite::Params>(
     Ok(rows)
 }
 
+/// D3: a Spool's default `tareId` must name an existing tare. Checked here,
+/// not left to the foreign key, so an unknown id is `VALIDATION` on
+/// `tareId` rather than a database failure (`PERSISTENCE_UNAVAILABLE`).
+fn validate_tare_reference(
+    tx: &Transaction<'_>,
+    fields: &SpoolFields,
+) -> Result<(), RepositoryError> {
+    if let Some(tare_id) = &fields.tare_id {
+        if tares::get(tx, tare_id)?.is_none() {
+            return Err(RepositoryError::Validation {
+                field_path: "tareId",
+            });
+        }
+    }
+    Ok(())
+}
+
 /// D1-D9: normalizes and validates `fields`, resolves `initial` (D3/D7's
 /// scale math via `ledger::resolve_entry`), allocates the next
 /// `spoolNumber` (D9: `MAX(spoolNumber) + 1`, inside this same
@@ -197,6 +215,7 @@ pub fn insert_spool(
     let mut fields = fields.clone();
     fields.normalize();
     validate_fields(&fields)?;
+    validate_tare_reference(tx, &fields)?;
     let storage_label = normalize_storage_label(storage_label)?;
 
     let (after_mg, confidence, snapshot) = ledger::resolve_entry(tx, initial)?;
@@ -273,6 +292,7 @@ pub fn update_spool_fields(
     let mut fields = patch.clone();
     fields.normalize();
     validate_fields(&fields)?;
+    validate_tare_reference(tx, &fields)?;
 
     let mut spool = load_spool(tx, id)?.ok_or_else(|| RepositoryError::NotFound {
         entity_id: id.to_string(),
