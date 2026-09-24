@@ -1,10 +1,13 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
+import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
 import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
+import type { SpoolDispositionInput } from "../generated/contracts/domain/SpoolDispositionInput";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { JsonValue } from "../generated/contracts/command/JsonValue";
 import type { PrintersExportOutcome } from "../generated/contracts/command/PrintersExportOutcome";
 import type { PrintersImportOutcome } from "../generated/contracts/command/PrintersImportOutcome";
@@ -16,15 +19,68 @@ import type {
   CreatePrinterOptions,
   CredentialStoreInfo,
   DiscoveredPrinter,
+  LifecycleBlocker,
   LifecycleEligibility,
+  MaterialSlot,
   OverridableField,
   PrinterPatch,
   PrinterProfile,
   PrinterStatus,
   ProbeResult,
   ResolvedPrinter,
+  SlotSpec,
 } from "./types";
 import { resolvePrinterRecord } from "./types";
+
+/** P3 D10 (finding B): printer-store can't import `spool-store.ts` without
+ *  a real import cycle (it already imports this module). `spool-store.ts`
+ *  pushes a lookup in here instead, once, at its own module init -- so web
+ *  mode's `lifecycleEligibility`/`archivePrinter` can resolve a slot's
+ *  `occupantSpoolId` to the real `SpoolRecord` without either module
+ *  importing the other's runtime values. `undefined` (spool-store never
+ *  loaded, e.g. a printer-store-only test) means "no Spool data available",
+ *  not "no Spools loaded" -- callers treat that as an empty `loadedSpools`. */
+let webSpoolLookup: ((spoolId: string) => SpoolRecord | undefined) | undefined;
+
+export function registerWebSpoolLookup(lookup: (spoolId: string) => SpoolRecord | undefined): void {
+  webSpoolLookup = lookup;
+}
+
+/** D10 in web mode: `spool-store.ts` registers this (the same seam as
+ *  `registerWebSpoolLookup`, for the same import-cycle reason) so a web
+ *  `archivePrinter` can move each loaded Spool off the Printer through that
+ *  store's own web move/mark-empty paths before archiving. */
+type WebDispositionApplier = (printerId: string, dispositions: SpoolDispositionInput[]) => Promise<void>;
+let webDispositionApplier: WebDispositionApplier | undefined;
+
+export function registerWebDispositionApplier(applier: WebDispositionApplier): void {
+  webDispositionApplier = applier;
+}
+
+/** Fix (Task 3, web fixture honesty): `spool-store.ts` registers this (same
+ *  seam/cycle rationale as `registerWebSpoolLookup` above) to be told when a
+ *  web-mode `loadPrinters()` finishes, so it can (re-)apply
+ *  `syncWebPrinterOccupancy` once Printers actually exist. Makes the two
+ *  stores' independent mount-time loads order-independent: whichever of
+ *  `spool-store.ts`'s `loadInventory` (called eagerly by `SpoolInventory`
+ *  on mount) or this module's `loadPrinters` (called by `App`'s startup
+ *  sequence) settles *last* is the one that ends up applying a correct
+ *  sync -- the other's own sync attempt, run too early, simply no-ops
+ *  (`syncWebPrinterOccupancy` returns early when the Printer isn't known
+ *  yet). Never registered/called in desktop mode. */
+let webPrintersLoaded: (() => void) | undefined;
+
+export function registerWebPrintersLoaded(callback: () => void): void {
+  webPrintersLoaded = callback;
+}
+
+function webCommandError(code: CommandError["code"], message: string): CommandError {
+  return { contractVersion: 1, code, message, recovery: [], retryable: false };
+}
+
+function hasLoadedSlot(printerId: string): boolean {
+  return Boolean(state.printers.find((p) => p.id === printerId)?.materialSlots.some((slot) => slot.occupantSpoolId !== undefined));
+}
 
 interface PrinterStoreState {
   printers: ResolvedPrinter[];
@@ -199,6 +255,53 @@ const WEB_FALLBACK_SPECS: WebFallbackSpec[] = [
   },
 ];
 
+/** D4/D12: web mode has no Rust repository to insert a real layout, so
+ *  every web-only Printer gets the same single-slot `[Main]` layout
+ *  `create_printer`/batch create default to on the desktop. */
+function defaultWebMaterialSlots(seedId: string): MaterialSlot[] {
+  return [{ id: `slt-web-${seedId}`, position: 0, name: "Main" }];
+}
+
+/** D4/D12 web fixture: the one seed Printer wired with more than the
+ *  default single slot, so `spools/web-fixtures.ts` has a multi-slot
+ *  Printer to load a Spool onto. Exported so that module (and its tests)
+ *  reference the same ids rather than duplicating them. */
+export const WEB_FIXTURE_EQUIPPED_PRINTER_ID = "prn-web-cc-1";
+const WEB_FIXTURE_EQUIPPED_SLOTS: MaterialSlot[] = [
+  { id: "slt-web-cc1-1", position: 0, name: "Slot 1", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-2", position: 1, name: "Slot 2", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-3", position: 2, name: "Slot 3", feederLabel: "AMS 1" },
+  { id: "slt-web-cc1-4", position: 3, name: "Slot 4", feederLabel: "AMS 1" },
+];
+export const WEB_FIXTURE_EQUIPPED_SLOT_ID = WEB_FIXTURE_EQUIPPED_SLOTS[0].id;
+
+function webMaterialSlotsFor(seedId: string): MaterialSlot[] {
+  return seedId === WEB_FIXTURE_EQUIPPED_PRINTER_ID ? WEB_FIXTURE_EQUIPPED_SLOTS : defaultWebMaterialSlots(seedId);
+}
+
+/** D12's `slotLayout`/`initialLoads` in web mode: a best-effort mirror of
+ *  what `create_printer` does in one transaction on the desktop. It marks
+ *  the loaded slots' `occupantSpoolId` locally, but (unlike the real
+ *  command) cannot also update the loaded Spools' own `location` --
+ *  `spool-store.ts` owns that state and there's no create-time seam into it
+ *  from here. Not exercised by web-fixtures.ts, which loads its one Spool
+ *  by placing it directly rather than through `createPrinter`. */
+function webMaterialSlotsFromOptions(id: string, options: CreatePrinterOptions): MaterialSlot[] {
+  const base: MaterialSlot[] = options.slotLayout && options.slotLayout.length > 0
+    ? options.slotLayout.map((slot, index) => ({
+        id: slot.id ?? `slt-web-${id}-${index}`,
+        position: index,
+        name: slot.name,
+        ...(slot.feederLabel !== undefined ? { feederLabel: slot.feederLabel } : {}),
+      }))
+    : defaultWebMaterialSlots(id);
+  if (!options.initialLoads || options.initialLoads.length === 0) return base;
+  return base.map((slot, index) => {
+    const load = options.initialLoads!.find((entry) => entry.slotIndex === index);
+    return load ? { ...slot, occupantSpoolId: load.spoolId } : slot;
+  });
+}
+
 /** A spec whose vendor/model/variant no longer resolves (a stale seed
  *  after the bundled catalog changes) is skipped rather than crashing the
  *  whole dev environment over it. */
@@ -223,6 +326,7 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
         profileDrift: [],
         unknownOverrideKeys: [],
         startSafety: "confirmBedClear",
+        materialSlots: webMaterialSlotsFor(spec.id),
         setupGaps: [],
         createdAt: "",
         updatedAt: "",
@@ -236,6 +340,7 @@ export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
   if (!desktopAvailable()) {
     setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, retryable: false });
+    webPrintersLoaded?.();
     return;
   }
   try {
@@ -258,11 +363,19 @@ export async function loadPrinters(): Promise<void> {
  *  printer. Solid's store merges an object at a path (absent keys are left
  *  alone) so this already held, but it held by accident of that merge; carried
  *  forward explicitly here, and pinned by a test, so it stays true. */
-function spliceResolved(resolved: ResolvedPrinter): void {
+/** Exported for `spools/spool-store.ts` (kept a separate store from this
+ *  one, per the P3 design) to hand back the `PrinterRecord`s a Spool
+ *  mutation or move returns, and to patch a Printer's occupancy after a web
+ *  fixture move. */
+export function spliceResolved(resolved: ResolvedPrinter): void {
   setState(
     "printers",
     (p) => p.id === resolved.id,
-    (previous) => ({ ...resolved, runtimeStatus: previous.runtimeStatus }),
+    // An older revision is a late response the store has already moved
+    // past (the same guard the Spool store applies); keep what's there.
+    (previous) => previous.revision > resolved.revision
+      ? previous
+      : { ...resolved, runtimeStatus: previous.runtimeStatus },
   );
 }
 
@@ -298,6 +411,7 @@ export async function createPrinter(options: CreatePrinterOptions): Promise<Reso
       unknownOverrideKeys: [],
       location: options.location,
       startSafety: options.startSafety ?? "confirmBedClear",
+      materialSlots: webMaterialSlotsFromOptions(id, options),
       setupGaps: options.connection ? [] : ["missingConnection"],
       createdAt: "",
       updatedAt: "",
@@ -346,6 +460,59 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
   } catch (e) {
     reportError(e);
   }
+}
+
+/** D12: sets a Printer's Material Slot layout (array order is the new
+ *  order; an entry without an `id` creates a slot; a live slot missing from
+ *  the array is soft-removed). Rejects rather than reporting into the
+ *  banner: the Setup tab's Material Slots editor shows `SLOT_OCCUPIED`
+ *  (`details: { slotId, spoolId }`, "Unload first") and `VALIDATION` inline,
+ *  and reloads on `CONFLICT`. */
+export async function setSlotLayout(printerId: string, slots: SlotSpec[]): Promise<ResolvedPrinter> {
+  if (!desktopAvailable()) {
+    const current = state.printers.find((p) => p.id === printerId);
+    if (!current) throw webCommandError("NOT_FOUND", "This Printer no longer exists.");
+    const existingById = new Map(current.materialSlots.map((slot) => [slot.id, slot]));
+    const kept = new Set(slots.flatMap((slot) => (slot.id !== undefined ? [slot.id] : [])));
+    const removedOccupied = current.materialSlots.find((slot) => !kept.has(slot.id) && slot.occupantSpoolId !== undefined);
+    if (removedOccupied) {
+      throw {
+        ...webCommandError("SLOT_OCCUPIED", `Unload the Spool in ${removedOccupied.name} before removing it.`),
+        details: { slotId: removedOccupied.id, spoolId: removedOccupied.occupantSpoolId! },
+      } satisfies CommandError;
+    }
+    const materialSlots: MaterialSlot[] = slots.map((slot, index) => {
+      const existing = slot.id !== undefined ? existingById.get(slot.id) : undefined;
+      return {
+        id: existing?.id ?? `slt-web-${printerId}-${crypto.randomUUID()}`,
+        position: index,
+        name: slot.name,
+        ...(slot.feederLabel !== undefined ? { feederLabel: slot.feederLabel } : {}),
+        ...(existing?.occupantSpoolId !== undefined ? { occupantSpoolId: existing.occupantSpoolId } : {}),
+      };
+    });
+    const updated: ResolvedPrinter = { ...current, materialSlots };
+    spliceResolved(updated);
+    return updated;
+  }
+  const { printer } = await command("set_material_slot_layout", {
+    printerId,
+    expectedRevision: state.printers.find((p) => p.id === printerId)?.revision ?? 1,
+    slots,
+  });
+  const resolved = resolvePrinterRecord(printer);
+  spliceResolved(resolved);
+  return resolved;
+}
+
+/** `CONFLICT` recovery for one Printer (P2's "reload and retry"): there's
+ *  no single-Printer read command, so this re-reads `list_printers` and
+ *  splices in just this Printer -- keeping its live `runtimeStatus` and
+ *  leaving every other row alone. Rejects for its caller to report. */
+export async function reloadPrinter(id: string): Promise<void> {
+  if (!desktopAvailable()) return;
+  const fresh = (await command("list_printers")).find((record) => record.id === id);
+  if (fresh) spliceResolved(resolvePrinterRecord(fresh));
 }
 
 export type RemovePrinterResult = { ok: true } | { ok: false; message: string };
@@ -511,7 +678,17 @@ export async function startStatusListener(): Promise<() => void> {
     const { listen } = await import("@tauri-apps/api/event");
     const store = createPrinterStatusStore({
       printerIds: () => state.printers.map((printer) => printer.id),
-      listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => handler(event.payload)),
+      // "farm3d-event-v1" is shared with the inventory stream (D11): a Spool
+      // or Material Slot event has its own, unrelated `streamId`/`sequence`,
+      // and must never reach this store's reconciliation, which otherwise
+      // treats an unrecognized `streamId` as its own stream restarting.
+      // `printer-status-store`'s own `receive` already discards any type
+      // that isn't `printer.status.*` before touching that state, but this
+      // filters it one step earlier too, so the two streams stay visibly
+      // separate at this seam as well.
+      listen: async (handler) => listen<StatusEvent>("farm3d-event-v1", (event) => {
+        if (event.payload.type.startsWith("printer.status.")) handler(event.payload);
+      }),
       backfill: () => command("printer_statuses"),
       onStatus: applyStatus,
       onStatusRemoved: removeStatus,
@@ -662,8 +839,9 @@ export async function createPrintersBatch(
         input.shared.catalogRef.model,
         input.shared.catalogRef.printerVariant,
       );
+      const id = `prn-web-${state.printers.length + created.length + 1}`;
       const resolved: ResolvedPrinter = {
-        id: `prn-web-${state.printers.length + created.length + 1}`,
+        id,
         revision: 1,
         name: row.name,
         notes: "",
@@ -679,6 +857,7 @@ export async function createPrintersBatch(
         unknownOverrideKeys: [],
         location: row.location,
         startSafety: input.shared.startSafety,
+        materialSlots: webMaterialSlotsFromOptions(id, { name: row.name, catalogRef: input.shared.catalogRef, slotLayout: input.shared.slotLayout }),
         setupGaps: ["missingConnection"],
         createdAt: "",
         updatedAt: "",
@@ -714,20 +893,41 @@ export async function cancelBatch(batchId: string): Promise<void> {
   }
 }
 
-export async function archivePrinter(id: string): Promise<void> {
+/** `dispositions` says where each loaded Spool goes (spec D10); it must
+ *  cover every Spool in `lifecycleEligibility(id).loadedSpools`, and is
+ *  empty for a Printer with nothing loaded. Each call sends a fresh
+ *  `operationId`, and a transport failure is retried once with that same
+ *  id (`retryOnTransportFailure`).
+ *
+ *  Rejects rather than reporting into the banner (Task 11 ruling):
+ *  `ArchivePrinterDialog` shows a disposition's `CONFLICT` inline on the
+ *  affected row and stays open. A caller with no inline surface (the Setup
+ *  tab's plain Archive) catches and routes to `reportError` itself.
+ *
+ *  Web mode has no transaction to apply the dispositions atomically, so it
+ *  hands them to the applier `spool-store.ts` registers (its own web
+ *  move/mark-empty paths), then archives only if every slot really is
+ *  empty afterwards -- a web session can never leave a Spool loaded on an
+ *  archived Printer (D10). */
+export async function archivePrinter(id: string, dispositions: SpoolDispositionInput[] = []): Promise<void> {
   if (!desktopAvailable()) {
+    if (hasLoadedSlot(id) && dispositions.length > 0 && webDispositionApplier) {
+      await webDispositionApplier(id, dispositions);
+    }
+    if (hasLoadedSlot(id)) {
+      throw webCommandError("LIFECYCLE_BLOCKED", "Unload every Spool before archiving this Printer.");
+    }
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
   }
-  try {
-    const { printer } = await command("archive_printer", {
-      id,
-      expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
-    });
-    spliceResolved(resolvePrinterRecord(printer));
-  } catch (e) {
-    reportError(e);
-  }
+  const request = {
+    id,
+    expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+    operationId: crypto.randomUUID(),
+    spoolDispositions: dispositions,
+  };
+  const { printer } = await retryOnTransportFailure(() => command("archive_printer", request));
+  spliceResolved(resolvePrinterRecord(printer));
 }
 
 /** Rejects rather than reporting into the banner: unarchiving re-checks the
@@ -753,28 +953,50 @@ export async function unarchivePrinter(id: string): Promise<void> {
  *  blockers inline next to the Archive/Unarchive/Delete actions they
  *  explain. In web mode this derives the same shape locally from
  *  `archivedAt` (spec D7's P2 blocker source: `NOT_ARCHIVED`/
- *  `ALREADY_ARCHIVED`), since there is no backend to ask. */
+ *  `ALREADY_ARCHIVED`), since there is no backend to ask.
+ *
+ *  Fix round 2 (finding B, load-bearing for Task 11): also derives the
+ *  `SPOOLS_LOADED` archive blocker and the real `loadedSpools` the desktop
+ *  path gets from Rust (D10) -- Task 11's archive dialog reads
+ *  `loadedSpools` to prompt for dispositions, and a web session with a
+ *  Spool loaded must see the same shape, not silently claim `canArchive`.
+ *  Resolves each occupied slot's `occupantSpoolId` through
+ *  `webSpoolLookup` (registered by `spool-store.ts`, see above) rather than
+ *  importing that module directly, to avoid a real import cycle -- an
+ *  unregistered lookup (spool-store never loaded) resolves to no Spools
+ *  found, same as an empty inventory would. */
 export async function lifecycleEligibility(id: string): Promise<LifecycleEligibility> {
   if (!desktopAvailable()) {
-    const archived = Boolean(state.printers.find((printer) => printer.id === id)?.archivedAt);
-    return archived
-      ? {
-          canArchive: false,
-          canUnarchive: true,
-          canDelete: true,
-          blockers: [
-            { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
-          ],
-        }
-      : {
-          canArchive: true,
-          canUnarchive: false,
-          canDelete: false,
-          blockers: [
-            { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
-            { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
-          ],
-        };
+    const printer = state.printers.find((printer) => printer.id === id);
+    const archived = Boolean(printer?.archivedAt);
+    if (archived) {
+      return {
+        canArchive: false,
+        canUnarchive: true,
+        canDelete: true,
+        blockers: [
+          { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
+        ],
+        loadedSpools: [],
+      };
+    }
+    const loadedSpools: SpoolRecord[] = (printer?.materialSlots ?? [])
+      .map((slot) => slot.occupantSpoolId)
+      .filter((spoolId): spoolId is string => spoolId !== undefined)
+      .map((spoolId) => webSpoolLookup?.(spoolId))
+      .filter((spool): spool is SpoolRecord => spool !== undefined);
+    const blockers: LifecycleBlocker[] = [
+      { action: "delete", code: "NOT_ARCHIVED", message: "Archive this Printer before deleting it." },
+      { action: "unarchive", code: "NOT_ARCHIVED", message: "This Printer is not archived." },
+    ];
+    if (loadedSpools.length > 0) {
+      blockers.push({
+        action: "archive",
+        code: "SPOOLS_LOADED",
+        message: "Unload every Spool before archiving this Printer.",
+      });
+    }
+    return { canArchive: loadedSpools.length === 0, canUnarchive: false, canDelete: false, blockers, loadedSpools };
   }
   return command("printer_lifecycle_eligibility", { id });
 }

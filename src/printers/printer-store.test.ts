@@ -272,6 +272,26 @@ describe("printer-store", () => {
       expect(printers()[0].runtimeStatus?.error).toBe("Could not reach the printer");
     });
 
+    it("spliceResolved keeps the existing record when the incoming one has an older revision", async () => {
+      // A late response (e.g. a move result racing an inventory event) must
+      // not roll a Printer back to a revision the store has already moved
+      // past -- the same guard the Spool store applies.
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [{ ...structuredClone(A_PRINTER_RECORD), revision: 3, name: "Current" }] });
+      const { loadPrinters, spliceResolved, printers } = await import("./printer-store");
+      await loadPrinters();
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 2, name: "Stale" } as never);
+      expect(printers()[0].revision).toBe(3);
+      expect(printers()[0].name).toBe("Current");
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 3, name: "Same revision" } as never);
+      expect(printers()[0].name).toBe("Same revision");
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 4, name: "Newer" } as never);
+      expect(printers()[0].revision).toBe(4);
+      expect(printers()[0].name).toBe("Newer");
+    });
+
     it("applies a printer-status event straight off the Rust event channel", async () => {
       // Pins the seam between supervisor.rs's STATUS_EVENT/StatusEvent and
       // this module's own `listen(...)` string and payload shape. Both sides
@@ -361,6 +381,43 @@ describe("printer-store", () => {
       expect(unlisten).toHaveBeenCalledOnce();
     });
 
+    it("ignores an inventory event sharing the channel rather than treating its streamId as this stream restarting", async () => {
+      // D11: Spool/Material Slot events ride the same "farm3d-event-v1"
+      // channel on their own inventory streamId/sequence. Forwarding one to
+      // printer-status-store's reconciliation would look like an unknown
+      // stream appearing and force a needless resync/backfill.
+      let handler!: (event: { payload: unknown }) => void;
+      eventMock.listen.mockImplementation((_name: string, cb: typeof handler) => {
+        handler = cb;
+        return Promise.resolve(vi.fn());
+      });
+      tauriMock.invoke.mockImplementation((command: string) => Promise.resolve({
+        contractVersion: 1,
+        data: command === "list_printers" ? [structuredClone(A_PRINTER_RECORD)] : { streamId: "stream-a", snapshotSequence: 0, statuses: [] },
+      }));
+      const { loadPrinters, printerStatusSyncState, startStatusListener } = await import("./printer-store");
+      await loadPrinters();
+      await startStatusListener();
+      expect(printerStatusSyncState()).toBe("current");
+      tauriMock.invoke.mockClear();
+
+      handler({
+        payload: {
+          contractVersion: 1,
+          streamId: "stream-inventory",
+          sequence: 3,
+          eventId: "inv-1",
+          occurredAt: "2026-09-23T00:00:00Z",
+          type: "spool.changed",
+          subject: { kind: "spool", id: "spl-1" },
+          payload: { type: "spoolChanged" },
+        },
+      });
+
+      expect(printerStatusSyncState()).toBe("current");
+      expect(tauriMock.invoke).not.toHaveBeenCalledWith("printer_statuses", expect.anything());
+    });
+
     it("rejects listener startup errors with a user-safe message", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       eventMock.listen.mockRejectedValue(new Error("socket token leaked"));
@@ -406,6 +463,43 @@ describe("printer-store", () => {
       expect(printers()).toEqual([A_RESOLVED_PRINTER]);
     });
 
+    it("createPrinter forwards slotLayout and initialLoads to the command untouched", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
+      const { loadPrinters, createPrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
+
+      const options = {
+        name: "Centauri Carbon — Bay 1",
+        catalogRef: A_RESOLVED_PRINTER.catalogRef,
+        slotLayout: [{ name: "Slot 1" }, { name: "Slot 2", feederLabel: "AMS 1" }],
+        initialLoads: [{ slotIndex: 0, spoolId: "spl-1", expectedSpoolRevision: 1 }],
+      };
+      await createPrinter(options);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("create_printer", { contractVersion: 1, ...options });
+    });
+
+    it("setSlotLayout sends the layout and splices in the result", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [structuredClone(A_PRINTER_RECORD)] });
+      const { loadPrinters, setSlotLayout, printers } = await import("./printer-store");
+      await loadPrinters();
+      const relaidOut = {
+        ...structuredClone(A_PRINTER_RECORD),
+        materialSlots: [{ id: "slt-new", position: 0, name: "Slot A" }],
+      };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: relaidOut, warnings: [] } });
+
+      const slots = [{ name: "Slot A" }];
+      const result = await setSlotLayout("prn-1", slots);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("set_material_slot_layout", {
+        contractVersion: 1, printerId: "prn-1", expectedRevision: 1, slots,
+      });
+      expect(result?.materialSlots).toEqual([{ id: "slt-new", position: 0, name: "Slot A" }]);
+      expect(printers()[0].materialSlots).toEqual([{ id: "slt-new", position: 0, name: "Slot A" }]);
+    });
+
     it("createPrintersBatch merges every returned printer into the store and returns the output unchanged", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [] });
       const { loadPrinters, createPrintersBatch, printers } = await import("./printer-store");
@@ -441,10 +535,109 @@ describe("printer-store", () => {
       const archivedRecord = { ...structuredClone(A_PRINTER_RECORD), archivedAt: "2026-09-22T00:00:00.000Z" };
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: archivedRecord, warnings: [] } });
 
+      const dispositions = [
+        { spoolId: "spl-1", expectedSpoolRevision: 2, disposition: { kind: "storage" as const, storageLabel: "Shelf" } },
+      ];
+      await archivePrinter("prn-1", dispositions);
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("archive_printer", {
+        contractVersion: 1,
+        id: "prn-1",
+        expectedRevision: 1,
+        operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        spoolDispositions: dispositions,
+      });
+      expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+    });
+
+    it("archivePrinter sends no dispositions and a fresh operationId by default", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { printer: A_PRINTER_RECORD, warnings: [] } });
+
+      await archivePrinter("prn-1");
       await archivePrinter("prn-1");
 
-      expect(tauriMock.invoke).toHaveBeenCalledWith("archive_printer", { contractVersion: 1, id: "prn-1", expectedRevision: 1 });
+      const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer");
+      expect(calls.map(([, args]) => args.spoolDispositions)).toEqual([[], []]);
+      expect(calls[0][1].operationId).not.toBe(calls[1][1].operationId);
+    });
+
+    it("archivePrinter retries a transport failure once with the same operationId", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      const archivedRecord = { ...structuredClone(A_PRINTER_RECORD), archivedAt: "2026-09-22T00:00:00.000Z" };
+      tauriMock.invoke
+        .mockRejectedValueOnce(new Error("IPC channel closed"))
+        .mockResolvedValueOnce({ contractVersion: 1, data: { printer: archivedRecord, warnings: [] } });
+
+      await archivePrinter("prn-1");
+
+      const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer");
+      expect(calls).toHaveLength(2);
+      expect(calls[1][1].operationId).toBe(calls[0][1].operationId);
       expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+    });
+
+    it("archivePrinter never retries a CommandError", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "LIFECYCLE_BLOCKED", message: "Unload every Spool first.",
+        recovery: [], retryable: false,
+      });
+
+      await expect(archivePrinter("prn-1")).rejects.toMatchObject({ code: "LIFECYCLE_BLOCKED" });
+
+      expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer")).toHaveLength(1);
+    });
+
+    it("archivePrinter rejects on error (e.g. a disposition CONFLICT) for inline handling instead of routing to the banner", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter, printerStoreError, printers } = await import("./printer-store");
+      await loadPrinters();
+      const failure = {
+        contractVersion: 1, code: "CONFLICT", message: "Another Spool already occupies that slot.",
+        recovery: [], retryable: false, details: { slotId: "slt-9", currentOccupantSpoolId: "spl-7" },
+      };
+      tauriMock.invoke.mockRejectedValue(failure);
+
+      await expect(archivePrinter("prn-1", [])).rejects.toEqual(failure);
+
+      expect(printerStoreError()).toBeNull();
+      expect(printers()[0].archivedAt).toBeUndefined();
+    });
+
+    it("reloadPrinter refreshes one Printer from list_printers, keeping its live runtimeStatus", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, reloadPrinter, applyStatus, printers } = await import("./printer-store");
+      await loadPrinters();
+      applyStatus("prn-1", printerStatus("online"));
+      const fresher = { ...structuredClone(A_PRINTER_RECORD), revision: 4, materialSlots: [{ id: "slt-x", position: 0, name: "Fresh" }] };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [fresher] });
+
+      await reloadPrinter("prn-1");
+
+      expect(printers()[0].revision).toBe(4);
+      expect(printers()[0].materialSlots).toEqual([{ id: "slt-x", position: 0, name: "Fresh" }]);
+      expect(printers()[0].runtimeStatus?.connectionState).toBe("online");
+    });
+
+    it("setSlotLayout rejects SLOT_OCCUPIED for inline handling instead of routing to the banner", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, setSlotLayout, printerStoreError } = await import("./printer-store");
+      await loadPrinters();
+      const failure = {
+        contractVersion: 1, code: "SLOT_OCCUPIED", message: "Unload the Spool first.",
+        recovery: [], retryable: false, details: { slotId: "slt-1", spoolId: "spl-1" },
+      };
+      tauriMock.invoke.mockRejectedValue(failure);
+
+      await expect(setSlotLayout("prn-1", [{ name: "Other" }])).rejects.toEqual(failure);
+      expect(printerStoreError()).toBeNull();
     });
 
     it("unarchivePrinter rejects on error (e.g. DUPLICATE_HOST) instead of routing to the banner", async () => {
@@ -581,6 +774,56 @@ describe("printer-store", () => {
       expect(tauriMock.invoke).not.toHaveBeenCalled();
     });
 
+    it("equips one web fixture Printer (a Centauri Carbon) with a 4-slot layout", async () => {
+      // spool-store.ts's web fixture needs a multi-slot Printer to load a
+      // Spool onto; every other web fixture Printer keeps the single
+      // default "Main" slot.
+      const { loadPrinters, printers, WEB_FIXTURE_EQUIPPED_PRINTER_ID } = await import("./printer-store");
+      await loadPrinters();
+
+      const equipped = printers().find((p) => p.id === WEB_FIXTURE_EQUIPPED_PRINTER_ID)!;
+      expect(equipped.materialSlots).toHaveLength(4);
+      expect(equipped.materialSlots.map((slot) => slot.position)).toEqual([0, 1, 2, 3]);
+      expect(new Set(equipped.materialSlots.map((slot) => slot.id)).size).toBe(4);
+
+      const others = printers().filter((p) => p.id !== WEB_FIXTURE_EQUIPPED_PRINTER_ID);
+      expect(others.length).toBeGreaterThan(0);
+      for (const printer of others) expect(printer.materialSlots).toHaveLength(1);
+    });
+
+    it("createPrinter honors a custom slotLayout and initialLoads locally", async () => {
+      const { loadPrinters, createPrinter } = await import("./printer-store");
+      await loadPrinters();
+
+      const created = await createPrinter({
+        name: "Bay 9",
+        catalogRef: { vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle", modelId: "MK4", printerVariant: "0.4" },
+        slotLayout: [{ name: "Slot 1" }, { name: "Slot 2" }],
+        initialLoads: [{ slotIndex: 1, spoolId: "spl-loaded", expectedSpoolRevision: 1 }],
+      });
+
+      expect(created?.materialSlots.map((slot) => slot.name)).toEqual(["Slot 1", "Slot 2"]);
+      expect(created?.materialSlots[0].occupantSpoolId).toBeUndefined();
+      expect(created?.materialSlots[1].occupantSpoolId).toBe("spl-loaded");
+    });
+
+    it("setSlotLayout updates a web Printer's layout locally, keeping existing slot ids and occupants", async () => {
+      const { loadPrinters, printers, setSlotLayout } = await import("./printer-store");
+      await loadPrinters();
+      const printer = printers()[0];
+      const originalSlotId = printer.materialSlots[0].id;
+
+      const updated = await setSlotLayout(printer.id, [
+        { id: originalSlotId, name: "Renamed" },
+        { name: "New slot" },
+      ]);
+
+      expect(updated?.materialSlots[0]).toEqual({ id: originalSlotId, position: 0, name: "Renamed" });
+      expect(updated?.materialSlots[1].name).toBe("New slot");
+      expect(updated?.materialSlots[1].id).not.toBe(originalSlotId);
+      expect(printers().find((p) => p.id === printer.id)?.materialSlots).toEqual(updated?.materialSlots);
+    });
+
     it("overrideField and revertField are no-ops -- no per-field override machinery to resolve against in web mode", async () => {
       const { loadPrinters, printers, overrideField, revertField } = await import("./printer-store");
       await loadPrinters();
@@ -677,6 +920,26 @@ describe("printer-store", () => {
       expect(store.printers()).toHaveLength(before + 1);
     });
 
+    it("createPrintersBatch gives each web row its own copy of shared.slotLayout (D12)", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const output = await store.createPrintersBatch({
+        batchId: "b-layout",
+        shared: {
+          catalogRef: { vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle", modelId: "MK4", printerVariant: "0.4" },
+          startSafety: "confirmBedClear",
+          slotLayout: [{ name: "Left" }, { name: "Right", feederLabel: "MMU" }],
+        },
+        probe: false,
+        rows: [{ rowId: "r1", name: "A" }, { rowId: "r2", name: "B" }],
+      });
+
+      const [a, b] = output.rows.map((row) => row.printer!);
+      expect(a.materialSlots.map((slot) => [slot.name, slot.feederLabel])).toEqual([["Left", undefined], ["Right", "MMU"]]);
+      expect(b.materialSlots.map((slot) => slot.name)).toEqual(["Left", "Right"]);
+      expect(a.materialSlots[0].id).not.toBe(b.materialSlots[0].id);
+    });
+
     it("createPrintersBatch returns createdSetupIncomplete for valid rows, with local records", async () => {
       const store = await import("./printer-store");
       await store.loadPrinters();
@@ -726,6 +989,91 @@ describe("printer-store", () => {
 
       expect(tauriMock.invoke).not.toHaveBeenCalled();
       expect(store.printers().find((p) => p.id === id)?.archivedAt).toBeTruthy();
+    });
+
+    it("archivePrinter rejects (LIFECYCLE_BLOCKED) for a web Printer with a loaded Spool and no dispositions, leaving it active (D10)", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const printer = store.printers()[0];
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
+      });
+
+      await expect(store.archivePrinter(printer.id)).rejects.toMatchObject({ code: "LIFECYCLE_BLOCKED" });
+
+      expect(store.printerStoreError()).toBeNull();
+      expect(store.printers().find((p) => p.id === printer.id)?.archivedAt).toBeFalsy();
+    });
+
+    it("archivePrinter applies web dispositions through the registered applier, then archives (D10)", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const printer = store.printers()[0];
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
+      });
+      const dispositions = [
+        { spoolId: "spl-loaded", expectedSpoolRevision: 1, disposition: { kind: "storage" as const, storageLabel: "Shelf" } },
+      ];
+      const applier = vi.fn(async () => {
+        // What spool-store's real applier does: the Spool leaves the slot.
+        const current = store.printers().find((p) => p.id === printer.id)!;
+        store.spliceResolved({ ...current, materialSlots: [{ ...current.materialSlots[0], occupantSpoolId: undefined }] });
+      });
+      store.registerWebDispositionApplier(applier);
+
+      await store.archivePrinter(printer.id, dispositions);
+
+      expect(applier).toHaveBeenCalledWith(printer.id, dispositions);
+      expect(store.printers().find((p) => p.id === printer.id)?.archivedAt).toBeTruthy();
+    });
+
+    it("lifecycleEligibility returns the real loadedSpools and a SPOOLS_LOADED blocker for a web Printer with an occupied slot (fix round 2, finding B)", async () => {
+      const store = await import("./printer-store");
+      await store.loadPrinters();
+      const printer = store.printers()[0];
+
+      // No Spool data registered yet (spool-store.ts never loaded in this
+      // test) -- an occupied slot with no resolvable Spool contributes
+      // nothing to `loadedSpools`, and the Printer is otherwise eligible.
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-unregistered" }],
+      });
+      const unregistered = await store.lifecycleEligibility(printer.id);
+      expect(unregistered.loadedSpools).toEqual([]);
+      expect(unregistered.canArchive).toBe(true);
+      expect(unregistered.blockers.some((b) => b.code === "SPOOLS_LOADED")).toBe(false);
+
+      // Registering a lookup (mirroring what spool-store.ts does at its own
+      // module init) lets a loaded Spool resolve for real.
+      const loadedSpool = { id: "spl-loaded", revision: 1 } as unknown as import("../generated/contracts/domain/SpoolRecord").SpoolRecord;
+      store.registerWebSpoolLookup((spoolId) => (spoolId === "spl-loaded" ? loadedSpool : undefined));
+      store.spliceResolved({
+        ...printer,
+        materialSlots: [{ ...printer.materialSlots[0], occupantSpoolId: "spl-loaded" }],
+      });
+
+      const eligibility = await store.lifecycleEligibility(printer.id);
+      expect(eligibility.loadedSpools).toEqual([loadedSpool]);
+      expect(eligibility.canArchive).toBe(false);
+      expect(eligibility.blockers).toContainEqual({
+        action: "archive", code: "SPOOLS_LOADED", message: "Unload every Spool before archiving this Printer.",
+      });
+      // The NOT_ARCHIVED blockers for delete/unarchive still apply alongside it.
+      expect(eligibility.blockers.some((b) => b.code === "NOT_ARCHIVED" && b.action === "delete")).toBe(true);
+
+      // An archived Printer still reports its own shape, unaffected by any
+      // loaded Spool (mirrors P2's ALREADY_ARCHIVED branch).
+      store.spliceResolved({ ...printer, archivedAt: new Date().toISOString(), materialSlots: printer.materialSlots });
+      const archivedEligibility = await store.lifecycleEligibility(printer.id);
+      expect(archivedEligibility.canArchive).toBe(false);
+      expect(archivedEligibility.loadedSpools).toEqual([]);
+      expect(archivedEligibility.blockers).toEqual([
+        { action: "archive", code: "ALREADY_ARCHIVED", message: "This Printer is already archived." },
+      ]);
     });
   });
 });

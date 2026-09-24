@@ -57,6 +57,16 @@ pub struct StoredPrinter {
     /// Monitor's default view.
     #[serde(default)]
     pub archived_at: Option<String>,
+    /// D4/D12: this Printer's live Material Slot layout, in position order.
+    /// Never a `printers` table column — `PrinterRepository` fills it with a
+    /// separate query per read (global constraints clarification 1), and
+    /// every write path (`create`/`update`/`transition`/`set_connection`/
+    /// `replace_all`) re-populates it before returning. Legacy JSON helpers
+    /// and a schemaVersion 1/2 Printers-import document both default it to
+    /// empty; import replaces an empty layout with
+    /// `spools::slots::default_layout()` (Task 5).
+    #[serde(default)]
+    pub material_slots: Vec<crate::spools::MaterialSlot>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]

@@ -12,6 +12,7 @@ use crate::persistence::SnapshotKind;
 use super::create::{validate_location, validate_name, CreatePrinterOptions};
 use super::repository::PrinterRepository;
 use super::{CatalogRef, PrinterPatch};
+use crate::spools::slots::{InitialLoad, SlotSpec};
 
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -122,7 +123,7 @@ pub fn list_printers<R: tauri::Runtime>(
 
 #[tauri::command]
 pub async fn create_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     name: String,
@@ -131,6 +132,8 @@ pub async fn create_printer<R: tauri::Runtime>(
     start_safety: Option<super::StartSafety>,
     default_bed_type: Option<String>,
     connection: Option<crate::connections::commands::ConnectionSubmission>,
+    slot_layout: Option<Vec<SlotSpec>>,
+    initial_loads: Option<Vec<InitialLoad>>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
@@ -150,6 +153,11 @@ pub async fn create_printer<R: tauri::Runtime>(
         };
         (config, secret)
     });
+    let loaded_spool_ids: Vec<String> = initial_loads
+        .iter()
+        .flatten()
+        .map(|load| load.spool_id.clone())
+        .collect();
     let outcome = super::create::create_printer_with(
         &services,
         CreatePrinterOptions {
@@ -159,13 +167,53 @@ pub async fn create_printer<R: tauri::Runtime>(
             start_safety: start_safety.unwrap_or_default(),
             default_bed_type,
             connection,
+            slot_layout: slot_layout.unwrap_or_else(crate::spools::slots::default_layout),
+            initial_loads: initial_loads.unwrap_or_default(),
         },
     )
     .await?;
+    // D11: initial loads moved Spools into the new Printer's slots.
+    if !loaded_spool_ids.is_empty() {
+        crate::spools::events::publish_ids(
+            &app,
+            &services,
+            &loaded_spool_ids,
+            std::slice::from_ref(&outcome.printer.id),
+        );
+    }
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
     }))
+}
+
+/// D4/D12: sets a Printer's Material Slot layout (reorder/rename/add/remove
+/// an empty slot), then emits `printer.slots.changed` (D11). No Spool
+/// moves: removing an occupied slot is `SLOT_OCCUPIED`.
+#[tauri::command]
+pub fn set_material_slot_layout<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    printer_id: String,
+    expected_revision: i64,
+    slots: Vec<SlotSpec>,
+) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let updated = PrinterRepository::new(Arc::clone(&services.storage))
+        .set_material_slot_layout(&printer_id, expected_revision, &slots)
+        .map_err(CommandError::from_repository)?;
+    crate::spools::events::publish(
+        &app,
+        &services,
+        &[],
+        &[crate::spools::events::PrinterSlots::from(&updated)],
+    );
+    Ok(mutation(crate::catalog::resolve::resolve_printer(
+        &services.catalog,
+        &updated,
+    )))
 }
 
 #[tauri::command]
@@ -249,40 +297,62 @@ pub fn list_duplicate_host_archives<R: tauri::Runtime>(
         .map_err(|error| CommandError::from_repository(error.into()))
 }
 
-/// D6: moves a Printer into the archived state. Order matters: the
-/// repository write commits first, then the supervisor is stopped under the
-/// reconciliation guard — never the other way around, or the supervisor
-/// could reconnect against a Connection the archive just excluded from
-/// supervision.
+/// D6/P3 D10: moves a Printer into the archived state, relocating each
+/// loaded Spool per `spool_dispositions` in the same transaction. Order
+/// matters: the repository write commits first, then the supervisor is
+/// stopped under the reconciliation guard — never the other way around, or
+/// the supervisor could reconnect against a Connection the archive just
+/// excluded from supervision.
 #[tauri::command]
 pub async fn archive_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     expected_revision: i64,
     id: String,
+    operation_id: String,
+    spool_dispositions: Vec<crate::spools::dispositions::SpoolDispositionInput>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let archived = PrinterRepository::new(Arc::clone(&services.storage))
-        .archive(&id, expected_revision)
+    let (archived, relocation) = PrinterRepository::new(Arc::clone(&services.storage))
+        .archive_with_outcome(&id, expected_revision, &operation_id, &spool_dispositions)
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
-    let _reconciliation = services.manager.reconciliation_guard().await;
-    match crate::printers::setup::supervise_persisted(
-        &services.manager,
-        &services.storage,
-        services.credentials.as_ref(),
-        &services.catalog,
-        &archived,
-    )
-    .await
-    {
-        crate::printers::setup::SupervisionOutcome::Archived(false)
-        | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
-            warnings.push(OperationWarning::supervisor(&id));
+    // A replay writes nothing (D-operations-ledger), so it must publish
+    // nothing either -- including the supervisor's own
+    // `printer.status.removed`, which `supervise_persisted` would otherwise
+    // re-publish unconditionally (`supervise_printer`'s `manager.stop()`
+    // for an already-archived Printer). The first, non-replay call already
+    // stopped supervision; a restart before any replay would too
+    // (`restore_persisted_connections` reconciles every stored Printer,
+    // archived or not, at startup), so skipping this is safe, not just
+    // event-quiet.
+    if !relocation.replayed {
+        let _reconciliation = services.manager.reconciliation_guard().await;
+        match crate::printers::setup::supervise_persisted(
+            &services.manager,
+            &services.storage,
+            services.credentials.as_ref(),
+            &services.catalog,
+            &archived,
+        )
+        .await
+        {
+            crate::printers::setup::SupervisionOutcome::Archived(false)
+            | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
+                warnings.push(OperationWarning::supervisor(&id));
+            }
+            _ => {}
         }
-        _ => {}
+        // D11, after the P2 order above: the Spools the dispositions
+        // relocated, and every Printer whose slots changed.
+        crate::spools::events::publish_ids(
+            &app,
+            &services,
+            &relocation.spool_ids,
+            &relocation.printer_ids,
+        );
     }
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
@@ -605,7 +675,7 @@ pub async fn export_printers<R: tauri::Runtime>(
         .map(export_printer)
         .collect::<Result<Vec<_>, _>>()?;
     let bytes = serde_json::to_vec_pretty(&ExportPrintersDocument {
-        schema_version: 2,
+        schema_version: 3,
         exported_at: &exported_at,
         printers: &exported,
     })
@@ -709,9 +779,32 @@ pub async fn import_printers<R: tauri::Runtime>(
     let old_records = PrinterRepository::new(Arc::clone(&services.storage))
         .list()
         .map_err(|error| CommandError::from_repository(error.into()))?;
+    // D12: a v1/v2 document (or a v3 Printer that omitted `materialSlots`)
+    // gets the default `[Main]` layout; a non-empty v3 layout is recreated
+    // with fresh slot ids inside `replace_all`'s transaction.
+    let layouts: std::collections::HashMap<String, Vec<SlotSpec>> = document
+        .printers
+        .iter()
+        .filter(|printer| !printer.material_slots.is_empty())
+        .map(|printer| {
+            let layout = printer
+                .material_slots
+                .iter()
+                .map(|slot| SlotSpec {
+                    id: None,
+                    name: slot.name.clone(),
+                    feeder_label: slot.feeder_label.clone(),
+                })
+                .collect();
+            (printer.id.clone(), layout)
+        })
+        .collect();
     let stored = crate::connections::commands::with_credential_coordination(|| {
-        PrinterRepository::new(Arc::clone(&services.storage))
-            .replace_all(&expected, document.printers)
+        PrinterRepository::new(Arc::clone(&services.storage)).replace_all(
+            &expected,
+            document.printers,
+            &layouts,
+        )
     })
     .map_err(CommandError::from_repository)?;
     services.documents.after_printers_commit();
@@ -782,6 +875,24 @@ fn export_printer(printer: &super::StoredPrinter) -> Result<serde_json::Value, C
     object
         .entry("connection")
         .or_insert(serde_json::Value::Null);
+    // D12: schemaVersion 3's materialSlots carries no id/position/occupancy
+    // — only name/feederLabel, in position order (the array's own order IS
+    // the position; `printer.material_slots` is already position-ordered).
+    let reduced_slots: Vec<serde_json::Value> = printer
+        .material_slots
+        .iter()
+        .map(|slot| {
+            let mut entry = serde_json::json!({ "name": slot.name });
+            if let Some(label) = &slot.feeder_label {
+                entry["feederLabel"] = serde_json::json!(label);
+            }
+            entry
+        })
+        .collect();
+    object.insert(
+        "materialSlots".to_string(),
+        serde_json::Value::Array(reduced_slots),
+    );
     Ok(value)
 }
 
@@ -827,11 +938,13 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 2 {
+    if version > 3 {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 && version != 2 {
-        return Err(CommandError::validation("schemaVersion must be 1 or 2."));
+    if version != 1 && version != 2 && version != 3 {
+        return Err(CommandError::validation(
+            "schemaVersion must be 1, 2, or 3.",
+        ));
     }
     let rows = root
         .get("printers")
@@ -858,6 +971,10 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         "location",
         "startSafety",
         "archivedAt",
+        // P3 (schemaVersion 3, D12): optional; absent (v1/v2) or empty (a
+        // v3 Printer that omitted it) both fall back to
+        // `slots::default_layout()` in `import_printers` below.
+        "materialSlots",
     ];
     for row in rows {
         let object = row
@@ -968,7 +1085,7 @@ mod import_export_tests {
 
     #[test]
     fn printer_import_rejects_future_schema_duplicate_ids_and_secret_fields() {
-        let future = br#"{"schemaVersion":3,"exportedAt":"x","printers":[]}"#;
+        let future = br#"{"schemaVersion":4,"exportedAt":"x","printers":[]}"#;
         assert_eq!(
             parse_printers_document(future).unwrap_err().code,
             ErrorCode::UnsupportedSchemaVersion

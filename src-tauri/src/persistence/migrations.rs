@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use super::error::StorageError;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 /// A migration-specific Rust step, run in the same exclusive transaction
 /// right after its SQL. Only 0003 uses this: `host_identity` backfill needs
@@ -17,7 +17,7 @@ struct Migration {
     post: Option<MigrationPostStep>,
 }
 
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 4] = [
     Migration {
         version: 1,
         name: "0001_foundation",
@@ -35,6 +35,12 @@ const MIGRATIONS: [Migration; 3] = [
         name: "0003_p2_printer_lifecycle",
         sql: include_str!("../../migrations/0003_p2_printer_lifecycle.sql"),
         post: Some(backfill_host_identity),
+    },
+    Migration {
+        version: 4,
+        name: "0004_p3_spools_material_slots",
+        sql: include_str!("../../migrations/0004_p3_spools_material_slots.sql"),
+        post: Some(backfill_main_slots),
     },
 ];
 
@@ -241,6 +247,34 @@ fn backfill_host_identity(transaction: &Transaction<'_>) -> Result<(), StorageEr
                 rusqlite::params![id, identity],
             )?;
         }
+    }
+
+    Ok(())
+}
+
+/// Rust post-step for the 0004 migration (D4/D12): every existing Printer,
+/// archived ones included, gets one live `Main` slot at position 0. See
+/// "Migration 0004" in the P3 design spec and Step 3 of the task-1 brief.
+/// `create_printer`/batch create (Task 5) use the same default layout going
+/// forward; this only backfills Printers that predate Material Slots.
+fn backfill_main_slots(transaction: &Transaction<'_>) -> Result<(), StorageError> {
+    let printer_ids: Vec<String> = {
+        let mut statement =
+            transaction.prepare("SELECT id FROM printers ORDER BY created_at, CAST(id AS BLOB)")?;
+        let ids = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
+
+    let now = crate::printers::now_rfc3339();
+    for printer_id in printer_ids {
+        let slot_id = format!("slt-{}", uuid::Uuid::new_v4());
+        transaction.execute(
+            "INSERT INTO material_slots(id, printer_id, position, name, created_at)
+             VALUES (?1, ?2, 0, 'Main', ?3)",
+            rusqlite::params![slot_id, printer_id, now],
+        )?;
     }
 
     Ok(())

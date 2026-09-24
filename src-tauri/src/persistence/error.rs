@@ -97,10 +97,31 @@ pub enum RepositoryError {
     DuplicateHost {
         conflicting_printer_id: String,
     },
+    /// P3 D6 step 3: a slot's current occupant isn't the one the move
+    /// expected (`expectedOccupantSpoolId`). `None` means the slot is empty.
+    OccupancyConflict {
+        slot_id: String,
+        current_occupant_spool_id: Option<String>,
+    },
+    /// P3 Task 5: `set_material_slot_layout` tried to soft-remove a slot
+    /// that still has a Spool loaded. The UI offers "Unload first".
+    SlotOccupied {
+        slot_id: String,
+        spool_id: String,
+    },
     /// D7: `archive`/`unarchive`/`delete` is blocked by the Printer's
     /// current lifecycle state (or, in a later phase, other work that still
     /// depends on it). See `crate::printers::lifecycle::evaluate`.
     LifecycleBlocked(Vec<LifecycleBlocker>),
+    /// P3 D6: the `operationId` is already in the operations ledger for a
+    /// different request (another kind of operation, or different fields).
+    /// Nothing was written. `VALIDATION` on `operationId`.
+    OperationIdReused,
+    /// P3: `PrinterRepository::replace_all` (the Printers-import path)
+    /// refuses to run while any Spool is loaded into a slot — see
+    /// `spools::repository::any_loaded`'s doc comment for why. `VALIDATION`
+    /// on `printers`, with a message telling the user to unload first.
+    SpoolsLoadedForImport,
     Storage(StorageError),
 }
 

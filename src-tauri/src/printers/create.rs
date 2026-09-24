@@ -24,12 +24,13 @@ use crate::printers::setup::{supervise_persisted, SupervisionOutcome};
 use crate::printers::{
     CatalogRef, LastKnownGood, PrinterProfileOverrides, StartSafety, StoredPrinter,
 };
+use crate::spools::slots::{InitialLoad, SlotSpec};
 use crate::RuntimeServices;
 
 use super::host_identity::canonical_host_identity;
 
-/// What `create_printer` (and, in a later task, the batch-create path) both
-/// build before handing off to [`create_printer_with`].
+/// What `create_printer` and the batch-create path both build before
+/// handing off to [`create_printer_with`].
 pub struct CreatePrinterOptions {
     pub name: String,
     pub catalog_ref: CatalogRef,
@@ -40,6 +41,14 @@ pub struct CreatePrinterOptions {
     /// carries a `credential_ref`; one is minted only once the secret (if
     /// any) is durably written.
     pub connection: Option<(ConnectionConfig, Option<Zeroizing<String>>)>,
+    /// D4/D12: the new Printer's Material Slot layout. Copied at creation —
+    /// there is no shared/batch layout entity (D12, user decision 3).
+    pub slot_layout: Vec<SlotSpec>,
+    /// D12: Spools to load into `slot_layout` positions in the same create
+    /// transaction as the layout insert, sharing one generated
+    /// `operationId`. Always empty for batch create (D12: "batch never
+    /// loads Spools").
+    pub initial_loads: Vec<InitialLoad>,
 }
 
 pub struct CreateOutcome {
@@ -230,6 +239,40 @@ pub async fn create_printer_with<R: tauri::Runtime>(
 ) -> Result<CreateOutcome, CommandError> {
     let name = validate_name(&options.name)?;
     let location = validate_location(options.location.as_deref())?;
+
+    // D12: each initial load must be an active Spool currently in storage
+    // (see `spools::repository::is_loadable_from_storage`'s doc comment).
+    // Checked here, above the credential-coordinator lock and before any
+    // credential-store write, so a rejection never leaves a provisional
+    // credential row to clean up — unlike a check placed after the lock is
+    // taken, whose `Err` return would skip straight past
+    // `retry_pending_credential_cleanup` (see the `drop(_guard)` /
+    // `create_result` handling below).
+    for (index, load) in options.initial_loads.iter().enumerate() {
+        if load.slot_index >= options.slot_layout.len() {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].slotIndex"),
+                "slotIndex must reference an entry of slotLayout.",
+            ));
+        }
+        let eligible = services
+            .storage
+            .read_transaction(|tx| {
+                Ok(crate::spools::repository::is_loadable_from_storage(
+                    tx,
+                    &load.spool_id,
+                ))
+            })
+            .and_then(|inner| inner)
+            .map_err(|error| CommandError::from_repository(error.into()))?;
+        if !eligible {
+            return Err(CommandError::validation_at(
+                format!("initialLoads[{index}].spoolId"),
+                "The Spool must be active and currently in storage.",
+            ));
+        }
+    }
+
     let (variant, _) = resolve_catalog_ref(&services.catalog, &options.catalog_ref);
     let variant = variant.ok_or_else(|| {
         CommandError::validation_at("catalogRef", "The Printer Profile could not be resolved.")
@@ -319,11 +362,19 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         location,
         start_safety: options.start_safety,
         archived_at: None,
+        // Filled by `create_with_layout` before it returns — see that
+        // method's doc comment.
+        material_slots: Vec::new(),
         created_at: String::new(),
         updated_at: String::new(),
     };
 
-    let create_result = repository.create_in(printer, provisional_reference.as_deref());
+    let create_result = repository.create_with_layout(
+        printer,
+        provisional_reference.as_deref(),
+        &options.slot_layout,
+        &options.initial_loads,
+    );
     // Drop the coordinator lock before any further credential-store call —
     // `retry_pending_credential_cleanup` (below, on the error path) takes
     // the SAME lock itself, and it is not reentrant.

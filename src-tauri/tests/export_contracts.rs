@@ -52,6 +52,23 @@ use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
 };
+use farm3d_lib::spools::commands::{
+    InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
+};
+use farm3d_lib::spools::dispositions::{SpoolDisposition, SpoolDispositionInput};
+use farm3d_lib::spools::events::{InventoryEvent, InventoryEventPayload, InventoryEventType};
+use farm3d_lib::spools::ledger::{AmountEntry, AmountEvent, AmountEventKind};
+use farm3d_lib::spools::lifecycle::SpoolLifecycleAction;
+use farm3d_lib::spools::movement::{
+    MoveDestination, MovementReason, SpoolLocationSnapshot, SpoolMovement,
+};
+use farm3d_lib::spools::reservations::{Reservation, ReservationHolder, ReservationState};
+use farm3d_lib::spools::slots::SlotSpec;
+use farm3d_lib::spools::tares::Tare;
+use farm3d_lib::spools::{
+    AmountConfidence, Availability, FilamentDiameter, MaterialFamily, MaterialSlot, SpoolFacets,
+    SpoolFields, SpoolLifecycle, SpoolLocation, SpoolRecord,
+};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use ts_rs::{Config, ExportError, TypeVisitor, TS};
@@ -234,6 +251,8 @@ fn export_registry() -> Vec<Export> {
         export::<ProfileResolution>(),
         export::<LastKnownGood>(),
         export::<ResolvedPrinter>(),
+        export::<MaterialSlot>(),
+        export::<SlotSpec>(),
         export::<PrinterPatch>(),
         export::<StartSafety>(),
         export::<SetupGap>(),
@@ -241,6 +260,37 @@ fn export_registry() -> Vec<Export> {
         export::<LifecycleBlockerCode>(),
         export::<LifecycleBlocker>(),
         export::<LifecycleEligibility>(),
+        export::<SpoolRecord>(),
+        export::<MaterialFamily>(),
+        export::<FilamentDiameter>(),
+        export::<AmountConfidence>(),
+        export::<SpoolLifecycle>(),
+        export::<SpoolLocation>(),
+        export::<Availability>(),
+        export::<SpoolFacets>(),
+        export::<SpoolDisposition>(),
+        export::<SpoolDispositionInput>(),
+        export::<SpoolFields>(),
+        export::<SpoolLifecycleAction>(),
+        export::<AmountEntry>(),
+        export::<AmountEventKind>(),
+        export::<AmountEvent>(),
+        export::<Tare>(),
+        export::<MoveDestination>(),
+        export::<MovementReason>(),
+        export::<SpoolLocationSnapshot>(),
+        export::<SpoolMovement>(),
+        export::<ReservationHolder>(),
+        export::<ReservationState>(),
+        export::<Reservation>(),
+        export::<InventorySnapshot>(),
+        export::<SpoolHistory>(),
+        export::<SpoolMutationResult>(),
+        export::<MoveSpoolResult>(),
+        export::<TareMutationResult>(),
+        export::<InventoryEventType>(),
+        export::<InventoryEventPayload>(),
+        export::<InventoryEvent>(),
         export::<CatalogModelSummary>(),
         export::<CatalogVariantSummary>(),
         export::<CatalogInfo>(),
@@ -875,7 +925,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));

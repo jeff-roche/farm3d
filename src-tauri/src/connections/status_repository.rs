@@ -459,7 +459,7 @@ mod tests {
             .expect("test printer");
         // D6: delete is guarded — a Printer must be archived first.
         let archived = PrinterRepository::new(Arc::clone(&storage))
-            .archive("prn-1", printer.revision)
+            .archive("prn-1", printer.revision, "op-archive", &[])
             .expect("archive printer");
 
         PrinterRepository::new(storage)

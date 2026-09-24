@@ -2,6 +2,7 @@ import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord"
 import type { CatalogRef } from "../generated/contracts/domain/CatalogRef";
 import type { ConnectionSubmission } from "../generated/contracts/domain/ConnectionSubmission";
 import type { PrinterStatus } from "../generated/contracts/domain/PrinterStatus";
+import type { SlotSpec } from "../generated/contracts/domain/SlotSpec";
 import type { StartSafety } from "../generated/contracts/domain/StartSafety";
 
 export type { BedShape } from "../generated/contracts/domain/BedShape";
@@ -16,9 +17,11 @@ export type { LifecycleAction } from "../generated/contracts/domain/LifecycleAct
 export type { LifecycleBlocker } from "../generated/contracts/domain/LifecycleBlocker";
 export type { LifecycleBlockerCode } from "../generated/contracts/domain/LifecycleBlockerCode";
 export type { LifecycleEligibility } from "../generated/contracts/domain/LifecycleEligibility";
+export type { MaterialSlot } from "../generated/contracts/domain/MaterialSlot";
 export type { ProbeResult } from "../generated/contracts/domain/ProbeResult";
 export type { ProfileDrift } from "../generated/contracts/domain/ProfileDrift";
 export type { ReportedCapabilities } from "../generated/contracts/domain/ReportedCapabilities";
+export type { SlotSpec } from "../generated/contracts/domain/SlotSpec";
 export type { PrinterProfile } from "../generated/contracts/domain/PrinterProfile";
 export type { PrinterStatus } from "../generated/contracts/domain/PrinterStatus";
 export type { PrinterStatusEventPayload } from "../generated/contracts/domain/PrinterStatusEventPayload";
@@ -40,6 +43,12 @@ export interface CreatePrinterOptions {
   startSafety?: StartSafety;
   defaultBedType?: string;
   connection?: ConnectionSubmission;
+  /** D12: the Material Slot layout to create with, defaulting server-side
+   *  (and in the web fallback) to a single "Main" slot when omitted. */
+  slotLayout?: SlotSpec[];
+  /** D12: Spools to load into slots by index, in the same create
+   *  transaction. Each Spool must already be `active` and in storage. */
+  initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[];
 }
 
 /** Presentation-only live state layered over the generated durable wire record. */

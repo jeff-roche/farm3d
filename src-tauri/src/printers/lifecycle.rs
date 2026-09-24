@@ -4,18 +4,23 @@
 //! `evaluate` is the single source of truth every lifecycle command (and the
 //! `printer_lifecycle_eligibility` query) runs through, always inside the
 //! same transaction as any write it gates — so the check and the write it
-//! guards never observe different data. P2 registers only
-//! `ArchiveStateBlockers`; P3, P7, and P8 register their own
-//! `LifecycleBlockerSource`s without this module changing.
+//! guards never observe different data. P2 registers
+//! `ArchiveStateBlockers`; P3 adds `spools::lifecycle_blockers::
+//! LoadedSpoolBlockers`, and P7/P8 register their own
+//! `LifecycleBlockerSource`s the same way.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::persistence::StorageError;
+use crate::spools::lifecycle_blockers::LoadedSpoolBlockers;
+use crate::spools::SpoolRecord;
 
 use super::StoredPrinter;
 
-/// A lifecycle action a Printer can be moved through.
+/// A lifecycle action a Printer can be moved through. `MarkEmpty` is
+/// Spool-only (P3 D9): it never appears in a Printer's eligibility, only in
+/// the `SPOOL_RESERVED` blocker a Spool's `markEmpty` action can fail with.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/LifecycleAction.ts")]
@@ -23,10 +28,13 @@ pub enum LifecycleAction {
     Archive,
     Unarchive,
     Delete,
+    MarkEmpty,
 }
 
-/// Why a `LifecycleAction` is currently blocked. P2 only ever produces
-/// `NotArchived`/`AlreadyArchived`; later phases add variants (spec D7).
+/// Why a `LifecycleAction` is currently blocked. P2 produces
+/// `NotArchived`/`AlreadyArchived`; P3 adds `SpoolsLoaded` (a Printer still
+/// holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
+/// has open reservations, D8).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(
@@ -36,6 +44,8 @@ pub enum LifecycleAction {
 pub enum LifecycleBlockerCode {
     NotArchived,
     AlreadyArchived,
+    SpoolsLoaded,
+    SpoolReserved,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -55,6 +65,9 @@ pub struct LifecycleEligibility {
     pub can_unarchive: bool,
     pub can_delete: bool,
     pub blockers: Vec<LifecycleBlocker>,
+    /// P3 D10: the Spools loaded in this Printer's slots, so the archive
+    /// dialog can ask for their dispositions without a second call.
+    pub loaded_spools: Vec<SpoolRecord>,
 }
 
 /// One source of `LifecycleBlocker`s, consulted by `evaluate` inside the
@@ -101,10 +114,10 @@ impl LifecycleBlockerSource for ArchiveStateBlockers {
     }
 }
 
-/// P2's blocker sources, in the order their blockers should be reported.
+/// Every blocker source, in the order their blockers should be reported.
 /// Later phases append here rather than changing anything above.
 pub fn blocker_sources() -> &'static [&'static dyn LifecycleBlockerSource] {
-    &[&ArchiveStateBlockers]
+    &[&ArchiveStateBlockers, &LoadedSpoolBlockers]
 }
 
 /// The single derivation of a Printer's lifecycle eligibility. Always run
@@ -123,6 +136,7 @@ pub fn evaluate(
         can_unarchive: !blocks(LifecycleAction::Unarchive),
         can_delete: !blocks(LifecycleAction::Delete),
         blockers,
+        loaded_spools: crate::spools::repository::loaded_on_printer(tx, &printer.id)?,
     })
 }
 

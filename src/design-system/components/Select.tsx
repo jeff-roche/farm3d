@@ -13,6 +13,7 @@ export interface SelectProps<T> {
   optionLabel?: (option: T) => string;
   placeholder?: string;
   disabled?: boolean;
+  error?: string;
   class?: string;
 }
 
@@ -33,6 +34,7 @@ export function Select<T>(props: SelectProps<T>) {
       onChange={(v) => v !== null && props.onChange?.(v)}
       placeholder={props.placeholder}
       disabled={props.disabled}
+      validationState={props.error ? "invalid" : "valid"}
       itemComponent={(itemProps) => (
         <KSelect.Item item={itemProps.item} class={styles.item}>
           <KSelect.ItemLabel>{toLabel(itemProps.item.rawValue)}</KSelect.ItemLabel>
@@ -51,6 +53,11 @@ export function Select<T>(props: SelectProps<T>) {
           <KSelect.Listbox class={styles.listbox} />
         </KSelect.Content>
       </KSelect.Portal>
+      {props.error && (
+        <KSelect.ErrorMessage class={styles.errorMessage}>
+          {props.error}
+        </KSelect.ErrorMessage>
+      )}
     </KSelect>
   );
 }

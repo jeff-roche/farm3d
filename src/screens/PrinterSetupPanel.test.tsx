@@ -5,6 +5,15 @@ import type { ResolvedPrinter } from "../printers/types";
 import { PrinterSetupPanel } from "./PrinterSetupPanel";
 
 const updatePrinter = vi.fn();
+// PrinterSetupWizard (imported for START_SAFETY_OPTIONS) now pulls in the
+// Spool store through its Equip step.
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
 vi.mock("../printers/printer-store", () => ({
   updatePrinter: (...args: unknown[]) => updatePrinter(...args),
   rebindPrinter: vi.fn(),
@@ -17,7 +26,7 @@ const printer: ResolvedPrinter = {
   id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
   catalogRef: { vendor: "Bambu Lab", model: "X1 Carbon", variant: "X1 Carbon 0.4", modelId: "x1", printerVariant: "0.4" },
   catalogStatus: "ok", modelLabel: "X1 Carbon", variantLabel: "X1 Carbon 0.4", overriddenFields: [], inherited: {},
-  profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", setupGaps: [], createdAt: "", updatedAt: "",
+  profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", materialSlots: [{ id: "slt-main", position: 0, name: "Main" }], setupGaps: [], createdAt: "", updatedAt: "",
   profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 0, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
 };
 

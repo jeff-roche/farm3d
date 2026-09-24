@@ -3,8 +3,16 @@ import type { JsonValue } from "../command/JsonValue";
 import type { CatalogRef } from "./CatalogRef";
 import type { ConnectionConfig } from "./ConnectionConfig";
 import type { LastKnownGood } from "./LastKnownGood";
+import type { MaterialSlot } from "./MaterialSlot";
 import type { ProfileResolution } from "./ProfileResolution";
 import type { SetupGap } from "./SetupGap";
 import type { StartSafety } from "./StartSafety";
 
-export type PrinterRecord = { id: string, revision: number, name: string, catalogRef: CatalogRef, notes: string, overrides: { [key in string]: JsonValue }, lastKnownGood?: LastKnownGood, connection?: ConnectionConfig, location?: string, startSafety: StartSafety, archivedAt?: string, setupGaps: Array<SetupGap>, profileResolution: ProfileResolution, createdAt: string, updatedAt: string, };
+export type PrinterRecord = { id: string, revision: number, name: string, catalogRef: CatalogRef, notes: string, overrides: { [key in string]: JsonValue }, lastKnownGood?: LastKnownGood, connection?: ConnectionConfig, location?: string, startSafety: StartSafety, archivedAt?: string,
+/**
+ * D4/D12: this Printer's live Material Slot layout, in position order.
+ * Copied verbatim from `StoredPrinter::material_slots` — never derived
+ * here, since occupancy is persisted truth, not something a pure
+ * resolver could compute.
+ */
+materialSlots: Array<MaterialSlot>, setupGaps: Array<SetupGap>, profileResolution: ProfileResolution, createdAt: string, updatedAt: string, };

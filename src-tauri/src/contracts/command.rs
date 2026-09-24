@@ -302,6 +302,7 @@ pub enum ErrorCode {
     Internal,
     DuplicateHost,
     LifecycleBlocked,
+    SlotOccupied,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -462,6 +463,40 @@ impl CommandError {
         error
     }
 
+    /// P3 D6 step 3: the destination slot's occupant changed since the
+    /// client read it. `currentOccupantSpoolId` is `null` for an empty slot.
+    pub fn occupancy_conflict(slot_id: &str, current_occupant_spool_id: Option<&str>) -> Self {
+        let mut error = Self::conflict("The slot changed; reload and try again.");
+        error.details = Some(BTreeMap::from([
+            ("slotId".to_string(), JsonValue::String(slot_id.to_string())),
+            (
+                "currentOccupantSpoolId".to_string(),
+                current_occupant_spool_id
+                    .map_or(JsonValue::Null(()), |id| JsonValue::String(id.to_string())),
+            ),
+        ]));
+        error
+    }
+
+    /// P3 Task 5: `set_material_slot_layout` tried to soft-remove a slot
+    /// that still has a Spool loaded. The UI offers "Unload first".
+    pub fn slot_occupied(slot_id: &str, spool_id: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::SlotOccupied,
+            "This slot still has a Spool loaded. Unload it first.",
+            vec![RecoveryCode::EditFields],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("slotId".to_string(), JsonValue::String(slot_id.to_string())),
+            (
+                "spoolId".to_string(),
+                JsonValue::String(spool_id.to_string()),
+            ),
+        ]));
+        error
+    }
+
     pub fn set_conflict(expected_count: usize, current_count: usize) -> Self {
         let mut error = Self::conflict("Printers changed; reload and try again.");
         error.details = Some(BTreeMap::from([
@@ -590,17 +625,25 @@ impl CommandError {
         error
     }
 
-    /// D7: an action (e.g. delete) is blocked by other work that still
-    /// depends on this Printer.
-    pub fn lifecycle_blocked(blockers: serde_json::Value) -> Self {
+    /// D7: an action (a Printer's archive/delete, or a Spool's archive/
+    /// mark empty) is blocked. The message lists every blocker's own
+    /// message, so it reads right whichever entity was blocked.
+    pub fn lifecycle_blocked(blockers: &[crate::printers::lifecycle::LifecycleBlocker]) -> Self {
+        let reasons = blockers
+            .iter()
+            .map(|blocker| blocker.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         let mut error = Self::typed(
             ErrorCode::LifecycleBlocked,
-            "This Printer cannot be changed while other work depends on it.",
+            format!("This action is blocked: {reasons}"),
             vec![],
             false,
         );
-        let blockers =
-            JsonValue::from_serde_value(blockers).unwrap_or_else(|_| JsonValue::Array(Vec::new()));
+        let blockers = serde_json::to_value(blockers)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
         error.details = Some(BTreeMap::from([("blockers".to_string(), blockers)]));
         error
     }
@@ -708,6 +751,9 @@ impl CommandError {
             RepositoryError::Validation { field_path } => {
                 Self::validation_at(field_path, "The submitted value is invalid.")
             }
+            RepositoryError::SpoolsLoadedForImport => {
+                Self::validation_at("printers", "Unload every Spool before importing Printers.")
+            }
             RepositoryError::NotFound { entity_id } => Self::not_found(entity_id),
             RepositoryError::Conflict {
                 entity_id,
@@ -721,8 +767,17 @@ impl CommandError {
             RepositoryError::DuplicateHost {
                 conflicting_printer_id,
             } => Self::duplicate_host(&conflicting_printer_id),
-            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(
-                serde_json::to_value(&blockers).unwrap_or_else(|_| serde_json::json!([])),
+            RepositoryError::OccupancyConflict {
+                slot_id,
+                current_occupant_spool_id,
+            } => Self::occupancy_conflict(&slot_id, current_occupant_spool_id.as_deref()),
+            RepositoryError::SlotOccupied { slot_id, spool_id } => {
+                Self::slot_occupied(&slot_id, &spool_id)
+            }
+            RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(&blockers),
+            RepositoryError::OperationIdReused => Self::validation_at(
+                "operationId",
+                "operationId was already used for a different request",
             ),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
@@ -775,6 +830,30 @@ mod tests {
         assert!(details.contains_key("expectedRevision"));
         assert!(details.contains_key("currentRevision"));
 
+        let occupancy = CommandError::from_repository(RepositoryError::OccupancyConflict {
+            slot_id: "slt-a".to_string(),
+            current_occupant_spool_id: Some("spl-a".to_string()),
+        });
+        assert_eq!(occupancy.code, ErrorCode::Conflict);
+        let details = occupancy.details.unwrap();
+        assert_eq!(details.len(), 2);
+        assert_eq!(
+            details.get("slotId"),
+            Some(&JsonValue::String("slt-a".to_string()))
+        );
+        assert_eq!(
+            details.get("currentOccupantSpoolId"),
+            Some(&JsonValue::String("spl-a".to_string()))
+        );
+        let empty_slot = CommandError::from_repository(RepositoryError::OccupancyConflict {
+            slot_id: "slt-a".to_string(),
+            current_occupant_spool_id: None,
+        });
+        assert_eq!(
+            empty_slot.details.unwrap().get("currentOccupantSpoolId"),
+            Some(&JsonValue::Null(()))
+        );
+
         let corrupt =
             CommandError::from_repository(RepositoryError::Storage(StorageError::CorruptData {
                 source_name: "database",
@@ -790,6 +869,20 @@ mod tests {
         assert_eq!(unavailable.code, ErrorCode::PersistenceUnavailable);
         assert!(unavailable.retryable);
         assert_eq!(unavailable.recovery, vec![RecoveryCode::Retry]);
+
+        // `SpoolsLoadedForImport` is a typed variant, not a magic-string
+        // `Validation { field_path: "printers" }` match, but it still maps
+        // to the same user-visible `CommandError`.
+        let spools_loaded = CommandError::from_repository(RepositoryError::SpoolsLoadedForImport);
+        assert_eq!(spools_loaded.code, ErrorCode::Validation);
+        assert_eq!(
+            spools_loaded.message,
+            "Unload every Spool before importing Printers."
+        );
+        assert_eq!(
+            spools_loaded.details.unwrap().get("fieldPath"),
+            Some(&JsonValue::String("printers".to_string()))
+        );
 
         let duplicate_host = CommandError::from_repository(RepositoryError::DuplicateHost {
             conflicting_printer_id: "printer-a".to_string(),
@@ -816,15 +909,23 @@ mod tests {
 
     #[test]
     fn lifecycle_blocked_carries_its_blockers_and_is_never_retryable() {
-        let error = CommandError::lifecycle_blocked(serde_json::json!(["setup-incomplete"]));
+        use crate::printers::lifecycle::{LifecycleAction, LifecycleBlocker, LifecycleBlockerCode};
+        let error = CommandError::lifecycle_blocked(&[LifecycleBlocker {
+            action: LifecycleAction::MarkEmpty,
+            code: LifecycleBlockerCode::SpoolReserved,
+            message: "This Spool is reserved.".to_string(),
+        }]);
         assert_eq!(error.code, ErrorCode::LifecycleBlocked);
+        assert_eq!(
+            error.message,
+            "This action is blocked: This Spool is reserved."
+        );
         assert!(!error.retryable);
         assert!(error.recovery.is_empty());
-        assert_eq!(
-            error.details.unwrap().get("blockers"),
-            Some(&JsonValue::Array(vec![JsonValue::String(
-                "setup-incomplete".to_string()
-            )]))
-        );
+        let blockers = error.details.unwrap().remove("blockers").unwrap();
+        let JsonValue::Array(blockers) = blockers else {
+            panic!("blockers must be an array");
+        };
+        assert_eq!(blockers.len(), 1);
     }
 }

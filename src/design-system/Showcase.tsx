@@ -25,6 +25,11 @@ import {
   PrinterRoster,
   Stepper,
   Textarea,
+  DataTable,
+  Timeline,
+  ColorSwatch,
+  type DataTableColumn,
+  type DataTableSort,
 } from ".";
 import styles from "./Showcase.module.css";
 
@@ -39,6 +44,46 @@ export function Showcase() {
   const [numberValue, setNumberValue] = createSignal(120);
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
   const [textareaValue, setTextareaValue] = createSignal("");
+
+  interface ShowcaseSpool {
+    id: string;
+    number: number;
+    material: string;
+    colorHex: string | null;
+    colorName: string;
+    remainingG: number;
+  }
+
+  const spoolRows: ShowcaseSpool[] = [
+    { id: "1", number: 7, material: "PETG", colorHex: "#1c1c1c", colorName: "Black", remainingG: 842 },
+    { id: "2", number: 12, material: "PLA", colorHex: "#2f7a3c", colorName: "Farm Green", remainingG: 210 },
+    { id: "3", number: 3, material: "ABS", colorHex: null, colorName: "Unknown", remainingG: 1180 },
+  ];
+
+  const spoolColumns: DataTableColumn<ShowcaseSpool>[] = [
+    { id: "number", header: "#", cell: (row) => `#${row.number}`, sortValue: (row) => row.number, width: "3rem" },
+    { id: "material", header: "Material", cell: (row) => row.material, sortValue: (row) => row.material },
+    {
+      id: "color",
+      header: "Color",
+      cell: (row) => (
+        <span style={{ display: "inline-flex", "align-items": "center", gap: "0.375rem" }}>
+          <ColorSwatch hex={row.colorHex} name={row.colorName} size="sm" />
+          {row.colorName}
+        </span>
+      ),
+    },
+    {
+      id: "remaining",
+      header: "Remaining",
+      cell: (row) => `${row.remainingG} g`,
+      sortValue: (row) => row.remainingG,
+      align: "end",
+    },
+  ];
+
+  const [spoolSelectedId, setSpoolSelectedId] = createSignal<string | null>("1");
+  const [spoolSort, setSpoolSort] = createSignal<DataTableSort | undefined>(undefined);
 
   return (
     <div class={styles.page}>
@@ -105,7 +150,10 @@ export function Showcase() {
       </Panel>
 
       <Panel title="Select">
-        <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
+        <div class={styles.column}>
+          <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
+          <Select label="With error" options={["Apple", "Banana", "Cherry"]} error="That option no longer exists." />
+        </div>
       </Panel>
 
       <Panel title="Combobox">
@@ -304,6 +352,67 @@ export function Showcase() {
             onChange={() => {}}
             errorMessage="Notes are required"
           />
+        </div>
+      </Panel>
+
+      <Panel title="DataTable">
+        <div class={styles.column}>
+          <DataTable
+            label="Spools"
+            rows={spoolRows}
+            rowId={(row) => row.id}
+            columns={spoolColumns}
+            selectedId={spoolSelectedId()}
+            onSelect={setSpoolSelectedId}
+            onActivate={(id) => console.log("activate", id)}
+            sort={spoolSort()}
+            onSortChange={setSpoolSort}
+          />
+          <DataTable
+            label="Empty spools"
+            rows={[]}
+            rowId={(row: ShowcaseSpool) => row.id}
+            columns={spoolColumns}
+            empty={<span>No Spools yet — Add Spool</span>}
+          />
+        </div>
+      </Panel>
+
+      <Panel title="Timeline">
+        <Timeline
+          label="Spool history"
+          items={[
+            { id: "1", at: "2026-09-22T14:05:00Z", title: "Loaded into Atlas, slot 1" },
+            {
+              id: "2",
+              at: "2026-09-21T09:30:00Z",
+              title: "Recorded amount",
+              detail: <span>842 g remaining (est.)</span>,
+              marker: "muted",
+            },
+            { id: "3", at: "2026-09-18T11:00:00Z", title: "Moved to storage: Shelf B" },
+          ]}
+        />
+      </Panel>
+
+      <Panel title="ColorSwatch">
+        <div class={styles.column}>
+          <div class={styles.row}>
+            <ColorSwatch hex="#1c1c1c" name="Black" />
+            Black
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex="#2f7a3c" name="Farm Green" />
+            Farm Green
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex={null} name="Unknown" />
+            Unknown
+          </div>
+          <div class={styles.row}>
+            <ColorSwatch hex="#2f7a3c" name="Farm Green" size="sm" />
+            Farm Green (sm)
+          </div>
         </div>
       </Panel>
     </div>

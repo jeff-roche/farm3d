@@ -5,7 +5,9 @@ mod migrations;
 pub mod snapshot;
 pub mod validation;
 
-pub use database::{FailurePoint, MetadataRootLease, Storage, StoragePaths};
+pub use database::{
+    take_transaction_failure, FailurePoint, MetadataRootLease, Storage, StoragePaths,
+};
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
 pub use migrations::CURRENT_SCHEMA_VERSION;
@@ -194,7 +196,7 @@ mod tests {
             })
             .expect("schema state");
 
-        assert_eq!(state, (3_i64, 0_i64));
+        assert_eq!(state, (4_i64, 0_i64));
     }
 
     #[test]
@@ -244,7 +246,7 @@ mod tests {
             })
             .expect("migrated state");
 
-        assert_eq!(state.0, 3_i64);
+        assert_eq!(state.0, 4_i64);
         assert_eq!(
             state.1,
             (
@@ -274,7 +276,7 @@ mod tests {
             })
             .expect("migration count");
 
-        assert_eq!(migration_count, 3_i64);
+        assert_eq!(migration_count, 4_i64);
     }
 
     #[test]
@@ -492,7 +494,7 @@ mod tests {
         drop(Storage::open(paths.clone(), &lease).expect("first open"));
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
-            .execute_batch("PRAGMA user_version = 4")
+            .execute_batch("PRAGMA user_version = 5")
             .expect("future version");
         drop(connection);
 
@@ -1168,15 +1170,31 @@ mod tests {
             (names, all_tables_are_strict),
             (
                 vec![
+                    ("index", "material_slots_live_name"),
+                    ("index", "material_slots_live_position"),
                     ("index", "migration_warnings_dedup"),
                     ("index", "printers_active_host_identity"),
+                    ("index", "spool_movements_operation"),
+                    ("index", "spool_movements_spool"),
+                    ("index", "spool_reservations_open"),
+                    ("index", "spool_tares_name"),
+                    ("index", "spools_slot_occupancy"),
                     ("table", "legacy_imports"),
+                    ("table", "material_slots"),
                     ("table", "migration_warnings"),
+                    ("table", "operations"),
                     ("table", "pending_credential_cleanup"),
                     ("table", "printer_status_snapshots"),
                     ("table", "printers"),
                     ("table", "schema_migrations"),
                     ("table", "settings"),
+                    ("table", "spool_amount_events"),
+                    ("table", "spool_movements"),
+                    ("table", "spool_reservations"),
+                    ("table", "spool_tares"),
+                    ("table", "spools"),
+                    ("trigger", "spool_amount_events_no_delete"),
+                    ("trigger", "spool_amount_events_no_update"),
                 ],
                 true,
             )
@@ -1230,6 +1248,13 @@ mod tests {
             ),
             ("legacy_imports", "imported_rows", "INTEGER", 1, None, 0),
             ("legacy_imports", "completed_at", "TEXT", 1, None, 0),
+            ("material_slots", "id", "TEXT", 1, None, 1),
+            ("material_slots", "printer_id", "TEXT", 1, None, 0),
+            ("material_slots", "position", "INTEGER", 1, None, 0),
+            ("material_slots", "name", "TEXT", 1, None, 0),
+            ("material_slots", "feeder_label", "TEXT", 0, None, 0),
+            ("material_slots", "removed_at", "TEXT", 0, None, 0),
+            ("material_slots", "created_at", "TEXT", 1, None, 0),
             ("migration_warnings", "id", "TEXT", 1, None, 1),
             ("migration_warnings", "code", "TEXT", 1, None, 0),
             ("migration_warnings", "source_name", "TEXT", 0, None, 0),
@@ -1237,6 +1262,10 @@ mod tests {
             ("migration_warnings", "message", "TEXT", 1, None, 0),
             ("migration_warnings", "details_json", "TEXT", 1, None, 0),
             ("migration_warnings", "created_at", "TEXT", 1, None, 0),
+            ("operations", "id", "TEXT", 1, None, 1),
+            ("operations", "kind", "TEXT", 1, None, 0),
+            ("operations", "request_digest", "TEXT", 1, None, 0),
+            ("operations", "created_at", "TEXT", 1, None, 0),
             (
                 "pending_credential_cleanup",
                 "credential_ref",
@@ -1360,6 +1389,79 @@ mod tests {
                 Some("'comfortable'"),
                 0,
             ),
+            ("spool_amount_events", "id", "TEXT", 1, None, 1),
+            ("spool_amount_events", "spool_id", "TEXT", 1, None, 0),
+            ("spool_amount_events", "sequence", "INTEGER", 1, None, 0),
+            ("spool_amount_events", "kind", "TEXT", 1, None, 0),
+            ("spool_amount_events", "before_mg", "INTEGER", 0, None, 0),
+            ("spool_amount_events", "after_mg", "INTEGER", 1, None, 0),
+            (
+                "spool_amount_events",
+                "confidence_after",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("spool_amount_events", "gross_mg", "INTEGER", 0, None, 0),
+            ("spool_amount_events", "tare_mg", "INTEGER", 0, None, 0),
+            ("spool_amount_events", "reservation_id", "TEXT", 0, None, 0),
+            ("spool_amount_events", "note", "TEXT", 0, None, 0),
+            ("spool_amount_events", "occurred_at", "TEXT", 1, None, 0),
+            ("spool_movements", "id", "TEXT", 1, None, 1),
+            ("spool_movements", "operation_id", "TEXT", 1, None, 0),
+            ("spool_movements", "spool_id", "TEXT", 1, None, 0),
+            ("spool_movements", "reason", "TEXT", 1, None, 0),
+            ("spool_movements", "from_slot_id", "TEXT", 0, None, 0),
+            ("spool_movements", "from_storage_label", "TEXT", 0, None, 0),
+            ("spool_movements", "to_slot_id", "TEXT", 0, None, 0),
+            ("spool_movements", "to_storage_label", "TEXT", 0, None, 0),
+            ("spool_movements", "occurred_at", "TEXT", 1, None, 0),
+            ("spool_reservations", "id", "TEXT", 1, None, 1),
+            ("spool_reservations", "spool_id", "TEXT", 1, None, 0),
+            ("spool_reservations", "holder_kind", "TEXT", 1, None, 0),
+            ("spool_reservations", "holder_id", "TEXT", 1, None, 0),
+            ("spool_reservations", "amount_mg", "INTEGER", 1, None, 0),
+            ("spool_reservations", "state", "TEXT", 1, None, 0),
+            ("spool_reservations", "operation_id", "TEXT", 1, None, 0),
+            ("spool_reservations", "created_at", "TEXT", 1, None, 0),
+            ("spool_reservations", "settled_at", "TEXT", 0, None, 0),
+            ("spool_tares", "id", "TEXT", 1, None, 1),
+            ("spool_tares", "revision", "INTEGER", 1, None, 0),
+            ("spool_tares", "name", "TEXT", 1, None, 0),
+            ("spool_tares", "weight_mg", "INTEGER", 1, None, 0),
+            ("spool_tares", "created_at", "TEXT", 1, None, 0),
+            ("spool_tares", "updated_at", "TEXT", 1, None, 0),
+            ("spools", "id", "TEXT", 1, None, 1),
+            ("spools", "revision", "INTEGER", 1, None, 0),
+            ("spools", "spool_number", "INTEGER", 1, None, 0),
+            ("spools", "manufacturer", "TEXT", 1, None, 0),
+            ("spools", "product", "TEXT", 0, None, 0),
+            ("spools", "material_family", "TEXT", 1, None, 0),
+            ("spools", "material_other", "TEXT", 0, None, 0),
+            ("spools", "color_name", "TEXT", 1, None, 0),
+            ("spools", "color_hex", "TEXT", 0, None, 0),
+            ("spools", "diameter", "TEXT", 1, None, 0),
+            ("spools", "nominal_mg", "INTEGER", 1, None, 0),
+            ("spools", "current_mg", "INTEGER", 1, None, 0),
+            ("spools", "confidence", "TEXT", 1, None, 0),
+            (
+                "spools",
+                "low_threshold_mg",
+                "INTEGER",
+                1,
+                Some("100000"),
+                0,
+            ),
+            ("spools", "tare_id", "TEXT", 0, None, 0),
+            ("spools", "lifecycle", "TEXT", 1, None, 0),
+            ("spools", "archived_from", "TEXT", 0, None, 0),
+            ("spools", "slot_id", "TEXT", 0, None, 0),
+            ("spools", "storage_label", "TEXT", 0, None, 0),
+            ("spools", "last_measured_at", "TEXT", 0, None, 0),
+            ("spools", "notes", "TEXT", 0, None, 0),
+            ("spools", "created_at", "TEXT", 1, None, 0),
+            ("spools", "updated_at", "TEXT", 1, None, 0),
         ];
         let actual: Vec<_> = columns
             .iter()
@@ -1383,10 +1485,13 @@ mod tests {
     }
 
     #[test]
-    fn printers_schema_has_no_batch_or_later_domain_columns() {
+    fn printers_schema_has_no_job_or_queue_columns() {
         // Pins the printers columns to exactly the P1 baseline plus P2's
-        // lifecycle/host-identity columns (0003) — a guard against a later
-        // phase's columns (e.g. batch setup) landing early.
+        // lifecycle/host-identity columns (0003). P3 (0004) adds its own
+        // tables (material_slots, spools, ...) without touching printers at
+        // all, which the two schema-inventory pin tests above already
+        // guard — this one is a forward guard against a later phase's Job
+        // or Queue columns landing on `printers` early.
         let (_temp, _paths, _lease, storage) = open_storage();
 
         let columns = storage
@@ -1673,7 +1778,7 @@ mod tests {
             .expect("snapshot");
         let connection = rusqlite::Connection::open(snapshot.path()).expect("snapshot database");
         connection
-            .execute_batch("PRAGMA user_version = 4")
+            .execute_batch("PRAGMA user_version = 5")
             .expect("future schema");
         drop(connection);
 

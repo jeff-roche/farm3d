@@ -28,3 +28,11 @@ export { SeverityMarker, type SeverityMarkerProps } from "./SeverityMarker";
 export { PrinterRoster, type PrinterRosterProps, type PrinterRosterEntry } from "./PrinterRoster";
 export { Stepper, type StepperProps, type StepperStep } from "./Stepper";
 export { Textarea, type TextareaProps } from "./Textarea";
+export {
+  DataTable,
+  type DataTableProps,
+  type DataTableColumn,
+  type DataTableSort,
+} from "./DataTable";
+export { Timeline, type TimelineProps, type TimelineItem } from "./Timeline";
+export { ColorSwatch, type ColorSwatchProps } from "./ColorSwatch";

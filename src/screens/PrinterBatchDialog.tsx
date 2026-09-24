@@ -45,6 +45,7 @@ import type {
 import { BatchRowsTable } from "./BatchRowsTable";
 import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
 import { KINDS, toSubmission } from "./ConnectionFields";
+import { defaultSlotDrafts, MaterialSlotsEditor, slotDraftsValid, toSlotSpecs } from "./MaterialSlotsEditor";
 import { bedTypeLabel, bedTypeOptionsFor } from "./PrinterProfilePanel";
 import { START_SAFETY_OPTIONS } from "./PrinterSetupWizard";
 import styles from "./PrinterBatchDialog.module.css";
@@ -128,6 +129,9 @@ export interface PrinterBatchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existingPrinters: ResolvedPrinter[];
+  /** Results' Equip on a created row: called with its Printer id once the
+   *  dialog has closed, to open that Printer's Setup tab at Material Slots. */
+  onEquip?: (printerId: string) => void;
 }
 
 /** Batch Printer setup (spec "PrinterBatchDialog", D1, D9–D14): Shared →
@@ -141,6 +145,8 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   const [startSafety, setStartSafety] = createSignal<StartSafety>("confirmBedClear");
   const [bedType, setBedType] = createSignal("");
   const [bedTypeTouched, setBedTypeTouched] = createSignal(false);
+  // D12: copied into every row as its own layout; batch never loads Spools.
+  const [slots, setSlots] = createSignal(defaultSlotDrafts());
   createEffect(() => {
     const p = picker.preview();
     if (!p || bedTypeTouched()) return;
@@ -173,6 +179,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   const [runningBatchId, setRunningBatchId] = createSignal<string | null>(null);
   const [batchError, setBatchError] = createSignal<string | null>(null);
   const [confirmOpen, setConfirmOpen] = createSignal(false);
+  const [pendingEquip, setPendingEquip] = createSignal<string | null>(null);
   const [store] = createResource(credentialStoreInfo);
   // Created rows whose reconnection probe failed: each may be saved
   // unverified with its own "Save anyway". Cleared per row as soon as that
@@ -196,6 +203,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setStartSafety("confirmBedClear");
     setBedType("");
     setBedTypeTouched(false);
+    setSlots(defaultSlotDrafts());
     setRows([]);
     setQuantity("1");
     setPattern("");
@@ -215,6 +223,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setRunningBatchId(null);
     setBatchError(null);
     setConfirmOpen(false);
+    setPendingEquip(null);
     setUnverified(new Set<string>());
   }
 
@@ -346,6 +355,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
       catalogRef,
       startSafety: startSafety(),
       ...(bedType() !== catalogDefault ? { defaultBedType: bedType() } : {}),
+      slotLayout: toSlotSpecs(slots()),
     };
   }
 
@@ -485,21 +495,34 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
 
   // ---- Closing ---------------------------------------------------------
 
+  function close() {
+    const equip = pendingEquip();
+    props.onOpenChange(false);
+    if (equip) props.onEquip?.(equip);
+  }
+
   function requestClose() {
     if (busy() || hasFailedRows()) setConfirmOpen(true);
-    else props.onOpenChange(false);
+    else close();
   }
 
   function confirmClose() {
     cancelRunning();
     setConfirmOpen(false);
-    props.onOpenChange(false);
+    close();
+  }
+
+  /** Leaving for a Printer's Setup tab is a close like any other, so it
+   *  still asks first when unfinished rows would lose their input. */
+  function equip(printerId: string) {
+    setPendingEquip(printerId);
+    requestClose();
   }
 
   // ---- Navigation ------------------------------------------------------
 
   const canLeave = (id: StepId) => {
-    if (id === "shared") return !!picker.catalogRef();
+    if (id === "shared") return !!picker.catalogRef() && slotDraftsValid(slots());
     if (id === "rows") return rowsValid();
     return true;
   };
@@ -577,6 +600,15 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 value={startSafety()}
                 onChange={(value) => setStartSafety(value as StartSafety)}
               />
+              <section class={styles.section} aria-label="Material slots for every Printer">
+                <span class={styles.sectionTitle}>Material Slots</span>
+                <MaterialSlotsEditor
+                  mode="layout"
+                  slots={slots()}
+                  onChange={setSlots}
+                  multiMaterialHint={picker.preview()?.supportsMultiFilament ?? false}
+                />
+              </section>
             </div>
           </Show>
 
@@ -814,6 +846,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 pending={pending()}
                 unverified={unverified()}
                 onSaveAnyway={(rowId) => void saveAnyway(rowId)}
+                onEquip={props.onEquip ? equip : undefined}
               />
             </div>
           </Show>
@@ -865,7 +898,14 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
         </div>
       </Dialog>
 
-      <Dialog title="Close batch setup?" open={confirmOpen()} onOpenChange={setConfirmOpen}>
+      <Dialog
+        title="Close batch setup?"
+        open={confirmOpen()}
+        onOpenChange={(open) => {
+          setConfirmOpen(open);
+          if (!open) setPendingEquip(null);
+        }}
+      >
         <p class={styles.note}>
           {busy()
             ? "Rows that haven't been created yet will be cancelled, and their input discarded."
@@ -873,7 +913,13 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
         </p>
         <div class={styles.footer}>
           <div class={styles.footerSpacer} />
-          <Button variant="secondary" onClick={() => setConfirmOpen(false)}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setConfirmOpen(false);
+              setPendingEquip(null);
+            }}
+          >
             Keep editing
           </Button>
           <Button variant="danger" onClick={confirmClose}>

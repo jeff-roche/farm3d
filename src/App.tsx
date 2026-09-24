@@ -1,10 +1,12 @@
 // src/App.tsx
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./monitor/monitor-store";
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
+import { SpoolInventory } from "./screens/SpoolInventory";
+import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -65,11 +67,14 @@ function App() {
   const [isFirstRun, setIsFirstRun] = createSignal(false);
   let retryStartup: (() => void) | undefined;
   const active = () => navigation.target().destination;
-  const shellActive = () => (active() === "library" ? "library" : "monitor") satisfies ScreenId;
+  const shellActive = () => {
+    const destination = active();
+    return (destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
+  };
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
   const navigationContext = () => ({
-    availableDestinations: ["monitor", "library"] as NavigationDestination[],
-    availableIds: printers().map((printer) => printer.id),
+    availableDestinations: ["monitor", "library", "spools"] as NavigationDestination[],
+    availableIds: [...printers().map((printer) => printer.id), ...spoolState.spools.map((spool) => spool.id)],
   });
   const reconcileNavigation = () => {
     navigation.navigate(navigation.target(), navigationContext());
@@ -119,6 +124,12 @@ function App() {
           persistPreferences: (next) => updateSettings(next),
         }));
         reconcileNavigation();
+        // The low-Spool badge and a cold-launch Spool deep link both need
+        // the inventory; re-check navigation once it has loaded, since a
+        // Spool id isn't known until then.
+        void ensureInventoryLoaded().then(() => {
+          if (!disposed && generation === startupGeneration) reconcileNavigation();
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -157,6 +168,7 @@ function App() {
       operationalRosters={shell().operationalRosters}
       adapterHealth={shell().adapterHealth}
       lastLiveEventAt={shell().lastLiveEventAt}
+      lowSpoolCount={spoolState.spools.filter((spool) => spool.facets.low).length}
     >
       <Show when={printerStoreError()}>
         {(message) => (
@@ -212,9 +224,14 @@ function App() {
       <Show
         when={navigation.availability() !== "destinationUnavailable" && active() === "monitor"}
         fallback={
-          <Show when={active() === "library"}>
-            <ModelLibrary models={MODELS} compatiblePrinterNames={printers().map((p) => p.name)} />
-          </Show>
+          <Switch>
+            <Match when={active() === "library"}>
+              <ModelLibrary models={MODELS} compatiblePrinterNames={printers().map((p) => p.name)} />
+            </Match>
+            <Match when={active() === "spools"}>
+              <SpoolInventory />
+            </Match>
+          </Switch>
         }
       >
         <Show when={monitorStore()}>

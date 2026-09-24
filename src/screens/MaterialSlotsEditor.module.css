@@ -1,0 +1,55 @@
+.section { display: flex; flex-direction: column; gap: 0.5rem; }
+.title {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  text-transform: uppercase;
+}
+.title:focus-visible { outline: 2px solid var(--f3d-color-focus-ring); outline-offset: 2px; }
+
+.editor { display: flex; flex-direction: column; gap: 0.5rem; }
+.hint, .muted {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+.error { margin: 0; color: var(--f3d-color-danger); font-size: var(--f3d-type-body-size); }
+
+.list { display: flex; flex-direction: column; gap: 0.375rem; margin: 0; padding: 0; list-style: none; }
+
+/* Two lines per slot so it fits the 22rem dock: name and feeder, then
+   everything else under them. */
+.row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.25rem 0.375rem;
+  align-items: start;
+  padding: 0.375rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface);
+}
+.position {
+  padding-top: 0.375rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  text-align: right;
+}
+.wide { grid-column: 2 / -1; min-width: 0; }
+
+.occupancy, .picker, .rowActions, .footer { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.picker { align-items: flex-end; }
+.occupant {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-right: auto;
+  color: var(--f3d-color-text);
+  font-size: var(--f3d-type-body-small-size);
+}
+.occupancy > .muted { margin-right: auto; }

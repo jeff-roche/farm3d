@@ -30,6 +30,13 @@ vi.mock("../printers/printer-catalog", () => ({
   }),
 }));
 
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
 const createPrintersBatch = vi.hoisted(() => vi.fn());
 const cancelBatch = vi.hoisted(() => vi.fn());
 const setConnection = vi.hoisted(() => vi.fn());
@@ -79,8 +86,8 @@ function existingPrinter(name: string, host?: string): ResolvedPrinter {
   } as unknown as ResolvedPrinter;
 }
 
-function renderDialog(existingPrinters: ResolvedPrinter[] = [], onOpenChange = vi.fn()) {
-  render(() => <PrinterBatchDialog open onOpenChange={onOpenChange} existingPrinters={existingPrinters} />);
+function renderDialog(existingPrinters: ResolvedPrinter[] = [], onOpenChange = vi.fn(), onEquip = vi.fn()) {
+  render(() => <PrinterBatchDialog open onOpenChange={onOpenChange} existingPrinters={existingPrinters} onEquip={onEquip} />);
   return onOpenChange;
 }
 
@@ -178,6 +185,40 @@ describe("PrinterBatchDialog — Shared step", () => {
     expect(nextButton().disabled).toBe(false);
     fireEvent.click(nextButton());
     expect(stepItem("Rows").getAttribute("aria-current")).toBe("step");
+  });
+});
+
+describe("PrinterBatchDialog — Shared slot layout", () => {
+  it("edits the shared slot layout (with the multi-material hint) and sends it as shared.slotLayout", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    expect(screen.getByLabelText("Name for slot 1")).toHaveValue("Main");
+    expect(screen.getByText(/This model can feed more than one material/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add slot" }));
+    fireEvent.input(screen.getByLabelText("Feeder label for slot 2"), { target: { value: "AMS 1" } });
+    // Batch never loads Spools (D12, user decision 3).
+    expect(screen.queryByRole("button", { name: /Load into/ })).not.toBeInTheDocument();
+
+    fireEvent.click(nextButton());
+    await screen.findByLabelText("Name pattern");
+    generate("3", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton());
+    await screen.findByLabelText("Shared credential");
+    fireEvent.click(nextButton());
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    expect(input.shared.slotLayout).toEqual([{ name: "Main" }, { name: "Slot 2", feederLabel: "AMS 1" }]);
+  });
+
+  it("blocks Next while a slot name is duplicated", async () => {
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("button", { name: "Add slot" }));
+    fireEvent.input(screen.getByLabelText("Name for slot 2"), { target: { value: "main" } });
+    expect(nextButton().disabled).toBe(true);
   });
 });
 
@@ -335,7 +376,7 @@ describe("PrinterBatchDialog — Review & results", () => {
     const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
     expect(input).toEqual({
       batchId: expect.any(String),
-      shared: { catalogRef: CENTAURI_CATALOG_REF, startSafety: "confirmBedClear" },
+      shared: { catalogRef: CENTAURI_CATALOG_REF, startSafety: "confirmBedClear", slotLayout: [{ name: "Main" }] },
       probe: true,
       rows: [
         { rowId: expect.any(String), name: "Voron 01", location: "Bay A" },
@@ -598,6 +639,56 @@ describe("PrinterBatchDialog — Review & results", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText("The database is unavailable")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Name for row 1")).toHaveValue("Voron 01"));
+  });
+});
+
+describe("PrinterBatchDialog — Equip", () => {
+  it("offers Equip only on created rows; it closes the dialog and asks to open that Printer's Material Slots", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => {
+      const [a, b, c] = input.rows;
+      return {
+        batchId: input.batchId,
+        rows: [
+          result(a.rowId, "created", { printer: record("prn-1") }),
+          result(b.rowId, "createdSetupIncomplete", { printer: record("prn-2") }),
+          result(c.rowId, "cancelled"),
+        ],
+      };
+    });
+    const onOpenChange = vi.fn();
+    const onEquip = vi.fn();
+    renderDialog([], onOpenChange, onEquip);
+    await toReviewStep();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByRole("button", { name: "Equip Voron 01" });
+
+    expect(screen.getByRole("button", { name: "Equip Voron 02" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Equip Voron 03" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Equip Voron 02" }));
+    // A cancelled row counts as unfinished, so closing asks first.
+    fireEvent.click(await screen.findByRole("button", { name: "Close anyway" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onEquip).toHaveBeenCalledWith("prn-2");
+  });
+
+  it("Equip closes straight away when nothing is left unfinished", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: input.rows.map((row, i) => result(row.rowId, "created", { printer: record(`prn-${i + 1}`) })),
+    }));
+    const onOpenChange = vi.fn();
+    const onEquip = vi.fn();
+    renderDialog([], onOpenChange, onEquip);
+    await toReviewStep();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await screen.findByRole("button", { name: "Done" }); // the batch has settled
+    fireEvent.click(screen.getByRole("button", { name: "Equip Voron 01" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onEquip).toHaveBeenCalledWith("prn-1");
   });
 });
 

@@ -301,7 +301,7 @@ fn archiving_a_connected_printer_stops_supervision_and_preserves_the_connection_
     let response = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
 
@@ -338,7 +338,7 @@ fn after_archiving_a_restart_never_supervises_the_archived_printer_but_keeps_it_
     invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
 
@@ -393,7 +393,7 @@ fn unarchiving_restarts_supervision() {
     let archived = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
     let archived_revision = archived["data"]["printer"]["revision"].as_i64().unwrap();
@@ -423,7 +423,7 @@ fn unarchiving_into_a_reclaimed_host_fails_with_duplicate_host() {
     let archived = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer_a.id, "expectedRevision": printer_a.revision}),
+        json!({"contractVersion": 1, "id": printer_a.id, "expectedRevision": printer_a.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
     let archived_revision = archived["data"]["printer"]["revision"].as_i64().unwrap();
@@ -460,7 +460,7 @@ fn deleting_an_archived_printer_succeeds_and_removes_its_credential() {
     let archived = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
     let archived_revision = archived["data"]["printer"]["revision"].as_i64().unwrap();
@@ -501,7 +501,7 @@ fn clearing_the_connection_of_an_archived_printer_publishes_no_status() {
     let archived = invoke(
         &webview,
         "archive_printer",
-        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision}),
+        json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "operationId": "op-archive", "spoolDispositions": []}),
     )
     .unwrap();
     let archived_revision = archived["data"]["printer"]["revision"].as_i64().unwrap();
@@ -540,7 +540,9 @@ fn supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing() {
         ))
         .unwrap();
     // An interleaved archive commits after the caller captured `stale`.
-    repository.archive(&stale.id, stale.revision).unwrap();
+    repository
+        .archive(&stale.id, stale.revision, "op-archive", &[])
+        .unwrap();
 
     tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(
         &manager,
@@ -562,7 +564,9 @@ fn supervising_the_persisted_state_of_a_deleted_printer_removes_its_status() {
         runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
     let repository = PrinterRepository::new(Arc::clone(&storage));
     let stale = repository.create(a_printer("printer-a", None)).unwrap();
-    repository.archive(&stale.id, stale.revision).unwrap();
+    repository
+        .archive(&stale.id, stale.revision, "op-archive", &[])
+        .unwrap();
     repository.delete(&stale.id, stale.revision + 1).unwrap();
 
     tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(

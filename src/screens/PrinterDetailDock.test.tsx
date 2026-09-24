@@ -16,6 +16,27 @@ vi.mock("./PrinterSetupPanel", () => ({
   PrinterSetupPanel: () => <div>Identity setup</div>,
 }));
 
+vi.mock("./MaterialSlotsEditor", () => ({
+  MATERIAL_SLOTS_ANCHOR_ID: "printer-setup-material-slots",
+  MaterialSlotsSection: () => (
+    <section id="printer-setup-material-slots"><h3 tabIndex={-1}>Material Slots</h3></section>
+  ),
+}));
+
+vi.mock("./ArchivePrinterDialog", () => ({
+  ArchivePrinterDialog: (props: { open: boolean; loadedSpools: unknown[] }) => (
+    <Show when={props.open}><p>Archive dialog for {props.loadedSpools.length} Spool(s)</p></Show>
+  ),
+}));
+
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
+const reportError = vi.hoisted(() => vi.fn());
 const archivePrinter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const unarchivePrinter = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const lifecycleEligibility = vi.hoisted(() => vi.fn());
@@ -25,6 +46,7 @@ vi.mock("../printers/printer-store", () => ({
   unarchivePrinter,
   lifecycleEligibility,
   printers: printersMock,
+  reportError,
 }));
 
 vi.mock("./DeletePrinterDialog", () => ({
@@ -46,6 +68,7 @@ const ACTIVE_ELIGIBILITY = {
     { action: "delete" as const, code: "NOT_ARCHIVED" as const, message: "Archive this Printer before deleting it." },
     { action: "unarchive" as const, code: "NOT_ARCHIVED" as const, message: "This Printer is not archived." },
   ],
+  loadedSpools: [],
 };
 
 const ARCHIVED_ELIGIBILITY = {
@@ -55,6 +78,7 @@ const ARCHIVED_ELIGIBILITY = {
   blockers: [
     { action: "archive" as const, code: "ALREADY_ARCHIVED" as const, message: "This Printer is already archived." },
   ],
+  loadedSpools: [],
 };
 
 function makePrinter(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
@@ -62,7 +86,7 @@ function makePrinter(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter 
     id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
     catalogRef: { vendor: "Bambu Lab", model: "X1 Carbon", variant: "X1 Carbon 0.4", modelId: "x1", printerVariant: "0.4" },
     catalogStatus: "ok", modelLabel: "X1 Carbon", variantLabel: "X1 Carbon 0.4", overriddenFields: [], inherited: {},
-    profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", setupGaps: [], createdAt: "", updatedAt: "",
+    profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", materialSlots: [{ id: "slt-main", position: 0, name: "Main" }], setupGaps: [], createdAt: "", updatedAt: "",
     profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 0, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
     runtimeStatus: {
       connectionState: "online", telemetry: { hostActivity: "idle", nozzleTempC: 210, nozzleTargetC: 210 },
@@ -244,7 +268,8 @@ describe("PrinterDetailDock", () => {
 
   it("guards Archive against double-fire while pending, then reflects the post-archive eligibility once the Printer record updates (Archive → Unarchive/Delete…)", async () => {
     lifecycleEligibility.mockReset()
-      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY)
+      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY) // on open
+      .mockResolvedValueOnce(ACTIVE_ELIGIBILITY) // Archive re-checks before acting
       .mockResolvedValueOnce(ARCHIVED_ELIGIBILITY);
     let resolveArchive: (() => void) | undefined;
     archivePrinter.mockImplementation(() => new Promise<void>((resolve) => { resolveArchive = resolve; }));
@@ -314,5 +339,74 @@ describe("PrinterDetailDock", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(lifecycleEligibility).toHaveBeenCalledTimes(1);
+  });
+  it("shows the Material Slots section on the Setup tab", async () => {
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+    expect(screen.getByRole("heading", { name: "Material Slots" })).toBeInTheDocument();
+  });
+
+  it("opens the Setup tab at Material Slots when asked to (batch Equip)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      render(() => (
+        <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} focusRequest={{ printerId: "prn-1", section: "materialSlots" }} />
+      ));
+      expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+      vi.runAllTimers();
+      expect(document.activeElement).toBe(screen.getAllByRole("heading", { name: "Material Slots" }).find((h) => h.tagName === "H3" && h.closest("#printer-setup-material-slots")));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("with loaded Spools, Archive re-checks eligibility and opens the disposition dialog instead of archiving", async () => {
+    const loaded = { id: "spl-7", spoolNumber: 7 };
+    lifecycleEligibility.mockReset().mockResolvedValue({
+      ...ACTIVE_ELIGIBILITY,
+      canArchive: false,
+      blockers: [...ACTIVE_ELIGIBILITY.blockers, { action: "archive", code: "SPOOLS_LOADED", message: "Unload every Spool before archiving this Printer." }],
+      loadedSpools: [loaded],
+    });
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    const archiveButton = await screen.findByRole("button", { name: "Archive" });
+    await waitFor(() => expect(archiveButton).not.toBeDisabled());
+    fireEvent.click(archiveButton);
+
+    expect(await screen.findByText("Archive dialog for 1 Spool(s)")).toBeInTheDocument();
+    expect(lifecycleEligibility).toHaveBeenCalledTimes(2);
+    expect(archivePrinter).not.toHaveBeenCalled();
+  });
+
+  it("keeps Archive disabled when a blocker other than loaded Spools applies", async () => {
+    lifecycleEligibility.mockReset().mockResolvedValue({
+      ...ACTIVE_ELIGIBILITY,
+      canArchive: false,
+      blockers: [
+        { action: "archive", code: "SPOOLS_LOADED", message: "Unload every Spool before archiving this Printer." },
+        { action: "archive", code: "SPOOL_RESERVED", message: "A loaded Spool is reserved for a Job." },
+      ],
+      loadedSpools: [{ id: "spl-7", spoolNumber: 7 }],
+    });
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    expect(await screen.findByText("A loaded Spool is reserved for a Job.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  });
+
+  it("routes a failed plain archive to the store banner", async () => {
+    const failure = { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "read-only", recovery: [], retryable: true };
+    archivePrinter.mockRejectedValueOnce(failure);
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+    const archiveButton = await screen.findByRole("button", { name: "Archive" });
+    await waitFor(() => expect(archiveButton).not.toBeDisabled());
+
+    fireEvent.click(archiveButton);
+
+    await waitFor(() => expect(reportError).toHaveBeenCalledWith(failure));
   });
 });

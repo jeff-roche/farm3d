@@ -54,11 +54,13 @@ vi.mock("./screens/AppShell", () => ({
   AppShell: (props: {
     title: string;
     printerRoster: { count: number };
+    lowSpoolCount?: number;
     children: JSX.Element;
   }) => (
     <div>
       <h1>{props.title}</h1>
       <output aria-label="Printer count">{props.printerRoster.count}</output>
+      <output aria-label="Low Spools">{props.lowSpoolCount}</output>
       {props.children}
     </div>
   ),
@@ -67,6 +69,26 @@ vi.mock("./screens/AppShell", () => ({
 vi.mock("./screens/ModelLibrary", () => ({
   ModelLibrary: () => <div>Library</div>,
 }));
+
+vi.mock("./screens/SpoolInventory", () => ({
+  SpoolInventory: () => <div>Spools</div>,
+}));
+
+const inventory = vi.hoisted(() => ({
+  onLoad: undefined as undefined | (() => void),
+  reset: undefined as undefined | (() => void),
+  ensureInventoryLoaded: vi.fn(),
+}));
+vi.mock("./spools/spool-store", async () => {
+  const { createStore } = await import("solid-js/store");
+  const [spoolState, setSpoolState] = createStore({ spools: [] as { id: string; facets: { low: boolean } }[] });
+  inventory.reset = () => setSpoolState("spools", []);
+  inventory.onLoad = () => setSpoolState("spools", [
+    { id: "spl-low", facets: { low: true } },
+    { id: "spl-ok", facets: { low: false } },
+  ]);
+  return { spoolState, ensureInventoryLoaded: inventory.ensureInventoryLoaded };
+});
 
 vi.mock("./screens/PrinterDashboard", () => ({
   PrinterDashboard: (props: {
@@ -145,6 +167,8 @@ beforeEach(() => {
   setArchiveNotice(null);
   setSyncState("syncing");
   window.location.hash = "";
+  inventory.reset?.();
+  inventory.ensureInventoryLoaded.mockReset().mockImplementation(async () => inventory.onLoad?.());
 });
 
 afterEach(() => {
@@ -207,6 +231,24 @@ describe("App", () => {
     await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
     expect(screen.getByText("Monitor")).toBeInTheDocument();
+  });
+
+  it("loads the Spool inventory at startup, so the low-Spool badge counts without visiting Spools", async () => {
+    const { default: App } = await import("./App");
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Low Spools")).toHaveTextContent("1"));
+    expect(inventory.ensureInventoryLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a cold-launch Spool deep link once the inventory has loaded", async () => {
+    window.location.hash = "#nav=v1/spools/spool/spl-low";
+    const { default: App } = await import("./App");
+    render(() => <App />);
+
+    await waitFor(() => expect(inventory.ensureInventoryLoaded).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0));
+    expect(screen.getByRole("heading", { name: "Spools" })).toBeInTheDocument();
   });
 
   it("shows listener startup failure as a recoverable banner", async () => {

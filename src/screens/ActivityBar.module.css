@@ -15,3 +15,27 @@
 .spacer {
   flex: 1;
 }
+
+.iconWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.badge {
+  position: absolute;
+  top: -0.125rem;
+  right: -0.125rem;
+  min-width: 0.9rem;
+  height: 0.9rem;
+  padding: 0 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-danger);
+  color: var(--f3d-color-on-danger);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  line-height: 1;
+  pointer-events: none;
+}

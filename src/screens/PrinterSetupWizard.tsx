@@ -18,13 +18,23 @@ import {
   type ConnectionDraft,
 } from "./ConnectionFields";
 import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
+import { spoolState } from "../spools/spool-store";
+import {
+  defaultSlotDrafts,
+  MaterialSlotsEditor,
+  slotDraftsValid,
+  spoolSummary,
+  toSlotSpecs,
+  type InitialLoad,
+} from "./MaterialSlotsEditor";
 import styles from "./PrinterSetupWizard.module.css";
 
-const STEP_ORDER = ["identify", "connect", "operate", "review"] as const;
+const STEP_ORDER = ["identify", "connect", "equip", "operate", "review"] as const;
 type StepId = (typeof STEP_ORDER)[number];
 const STEP_LABELS: Record<StepId, string> = {
   identify: "Identify",
   connect: "Connect",
+  equip: "Equip",
   operate: "Operate",
   review: "Review",
 };
@@ -98,6 +108,9 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     }),
   );
 
+  const [slots, setSlots] = createSignal(defaultSlotDrafts());
+  const [initialLoads, setInitialLoads] = createSignal<InitialLoad[]>([]);
+
   const [startSafety, setStartSafety] = createSignal<StartSafety>("confirmBedClear");
   const [bedType, setBedType] = createSignal("");
   const [bedTypeTouched, setBedTypeTouched] = createSignal(false);
@@ -116,6 +129,8 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     setStep("identify");
     setConnectionDraft(DEFAULT_CONNECTION_DRAFT);
     setLastProbe(null);
+    setSlots(defaultSlotDrafts());
+    setInitialLoads([]);
     setStartSafety("confirmBedClear");
     setBedType("");
     setBedTypeTouched(false);
@@ -173,6 +188,9 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
   });
   const canLeaveIdentify = createMemo(() => !!catalogRef() && !nameError());
 
+  const slotsValid = createMemo(() => slotDraftsValid(slots()));
+  const canLeave = (id: StepId) => (id === "identify" ? canLeaveIdentify() : id === "equip" ? slotsValid() : true);
+
   const hasConnection = createMemo(() => connectionDraft().host.trim() !== "");
 
   const mismatches = createMemo(() => {
@@ -183,7 +201,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
 
   function goNext() {
     const idx = STEP_ORDER.indexOf(step());
-    if (idx < STEP_ORDER.length - 1) setStep(STEP_ORDER[idx + 1]);
+    if (idx < STEP_ORDER.length - 1 && canLeave(step())) setStep(STEP_ORDER[idx + 1]);
   }
 
   function goBack() {
@@ -220,6 +238,11 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
         startSafety: startSafety(),
         defaultBedType: bedType() !== (preview()?.defaultBedType ?? "") ? bedType() : undefined,
         connection: hasConnection() ? toSubmission(connectionDraft(), "create") : undefined,
+        slotLayout: toSlotSpecs(slots()),
+        initialLoads: initialLoads().map((load) => ({
+          ...load,
+          expectedSpoolRevision: spoolState.spools.find((s) => s.id === load.spoolId)?.revision ?? 1,
+        })),
       });
       // A failed save leaves Review open (the store's own error banner
       // explains why) rather than closing over a lost draft.
@@ -230,6 +253,15 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
       setSaving(false);
     }
   }
+
+  const slotSummary = () =>
+    toSlotSpecs(slots()).map((slot) => (slot.feederLabel ? `${slot.name} (${slot.feederLabel})` : slot.name)).join(", ");
+  const loadSummaries = () =>
+    initialLoads().flatMap((load) => {
+      const spool = spoolState.spools.find((s) => s.id === load.spoolId);
+      const slot = slots()[load.slotIndex];
+      return spool && slot ? [`${slot.name.trim()} — ${spoolSummary(spool)}`] : [];
+    });
 
   const stepperSteps = createMemo(() => {
     const currentIndex = STEP_ORDER.indexOf(step());
@@ -244,7 +276,10 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     if (e.key !== "Enter" || e.defaultPrevented) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "TEXTAREA") return;
-    if (step() === "identify" && !canLeaveIdentify()) return;
+    // Enter on a button (Add slot, ↑/↓, Remove, a Select trigger, Next
+    // itself) activates that button natively; don't turn it into "Next".
+    if (target.closest("button, a[href], [role='button'], [role='option']")) return;
+    if (!canLeave(step())) return;
     if (step() === "review") return; // Save is an explicit click, not an Enter side effect.
     e.preventDefault();
     goNext();
@@ -296,6 +331,19 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
           </div>
         </Show>
 
+        <Show when={step() === "equip"}>
+          <div class={styles.form}>
+            <MaterialSlotsEditor
+              mode="layout"
+              slots={slots()}
+              onChange={setSlots}
+              initialLoads={initialLoads()}
+              onInitialLoadsChange={setInitialLoads}
+              multiMaterialHint={preview()?.supportsMultiFilament ?? false}
+            />
+          </div>
+        </Show>
+
         <Show when={step() === "operate"}>
           <div class={styles.form}>
             <RadioGroup
@@ -334,6 +382,8 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
                 )}
               </Show>
               <p>Bed type: {bedType() || "(catalog default)"}</p>
+              <p>Material Slots: {slotSummary()}</p>
+              <For each={loadSummaries()}>{(line) => <p>Load at creation: {line}</p>}</For>
               <p>
                 Start safety:{" "}
                 {START_SAFETY_OPTIONS.find((o) => o.value === startSafety())?.label ?? startSafety()}
@@ -387,14 +437,14 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
             fallback={
               <Button
                 variant="primary"
-                disabled={step() === "identify" && !canLeaveIdentify()}
+                disabled={!canLeave(step())}
                 onClick={goNext}
               >
                 Next →
               </Button>
             }
           >
-            <Button variant="primary" disabled={saving()} onClick={() => void handleSave()}>
+            <Button variant="primary" disabled={saving() || !canLeaveIdentify() || !slotsValid()} onClick={() => void handleSave()}>
               {saving() ? "Saving…" : "Save"}
             </Button>
           </Show>

@@ -151,8 +151,17 @@ impl Storage {
 
     #[doc(hidden)]
     pub fn inject_failure_once(&self, point: FailurePoint) {
-        self.failure_point
-            .store(point as u8, AtomicOrdering::SeqCst);
+        match point {
+            FailurePoint::Snapshot => self
+                .failure_point
+                .store(point as u8, AtomicOrdering::SeqCst),
+            FailurePoint::AfterDisplacement => {
+                let database = canonical_or_raw(&self.paths.database);
+                if let Ok(mut pending) = TRANSACTION_FAILURES.lock() {
+                    pending.push((database, point));
+                }
+            }
+        }
     }
 
     pub(super) fn take_failure(&self, point: FailurePoint) -> bool {
@@ -189,6 +198,47 @@ impl Storage {
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
+        self.write_with(operation)
+    }
+
+    /// [`write`](Self::write)'s sibling for P3's `spools::repository`/
+    /// `ledger`/`tares` — free functions that take the caller's
+    /// `&Transaction` and return `RepositoryError` directly (see those
+    /// modules' doc comments) rather than the plain `StorageError` every
+    /// pre-P3 repository collapses onto before translating it further up.
+    /// Letting a caller compose several such calls into one atomic commit
+    /// and get the precise `RepositoryError` straight out — instead of a
+    /// lossy round trip through `StorageError` — is exactly why those
+    /// functions take `&Transaction` rather than each opening their own.
+    /// A dedicated method (rather than making [`write`](Self::write)
+    /// generic over the error type) avoids reintroducing type-inference
+    /// ambiguity at `write`'s many existing `StorageError` call sites,
+    /// several of which return a bare `Ok(())`/`Ok(value)` with no other
+    /// local context to pin the error type.
+    pub fn write_repo<T>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, super::RepositoryError>,
+    ) -> Result<T, super::RepositoryError> {
+        self.write_with(operation)
+    }
+
+    /// The transaction body shared by [`write`](Self::write)/
+    /// [`write_repo`](Self::write_repo): begins an IMMEDIATE write
+    /// transaction, commits on `Ok`, rolls back on `Err`. Private and
+    /// generic over the operation's error type `E` — `write`/`write_repo`
+    /// themselves stay concretely typed (`StorageError`/`RepositoryError`
+    /// respectively), so each of *their* call sites still pins `E` from a
+    /// fixed public signature, not from this helper. That's what avoids
+    /// the type-inference ambiguity a directly-generic `write<T, E>` caused
+    /// at `write`'s many existing `StorageError` call sites (several close
+    /// over a bare `Ok(())` with no other local context to pin `E`).
+    fn write_with<T, E>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<rusqlite::Error> + From<StorageError>,
+    {
         let mut writer = self
             .writer
             .lock()
@@ -242,6 +292,50 @@ impl Storage {
 #[repr(u8)]
 pub enum FailurePoint {
     Snapshot = 1,
+    /// Inside `spools::movement::apply_move`, between the displaced Spool's
+    /// write and the moved Spool's write (P3 D6). Checked with
+    /// [`take_transaction_failure`], since `apply_move` only has the
+    /// caller's `&Transaction`, not the `Storage`.
+    AfterDisplacement = 2,
+}
+
+/// Failure points armed for code that only sees a `&Transaction` (see
+/// [`FailurePoint::AfterDisplacement`]), keyed by the canonical database
+/// path so parallel tests with separate databases never consume each
+/// other's injection.
+static TRANSACTION_FAILURES: Mutex<Vec<(PathBuf, FailurePoint)>> = Mutex::new(Vec::new());
+
+/// [`Storage::take_failure`]'s sibling for code that runs inside a caller's
+/// transaction: returns `true` exactly once after
+/// [`Storage::inject_failure_once`] armed `point` for this connection's
+/// database. Cheap when nothing is armed (one uncontended lock, no
+/// filesystem access).
+#[doc(hidden)]
+pub fn take_transaction_failure(connection: &Connection, point: FailurePoint) -> bool {
+    let Ok(mut pending) = TRANSACTION_FAILURES.lock() else {
+        return false;
+    };
+    if pending.is_empty() {
+        return false;
+    }
+    let Some(path) = connection.path().filter(|path| !path.is_empty()) else {
+        return false;
+    };
+    let database = canonical_or_raw(Path::new(path));
+    match pending
+        .iter()
+        .position(|(armed, armed_point)| *armed == database && *armed_point == point)
+    {
+        Some(index) => {
+            pending.remove(index);
+            true
+        }
+        None => false,
+    }
+}
+
+fn canonical_or_raw(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn configure_connection(connection: &Connection) -> Result<(), StorageError> {

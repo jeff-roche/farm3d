@@ -1,0 +1,90 @@
+.wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-md);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  line-height: var(--f3d-type-body-small-line-height);
+  color: var(--f3d-color-text);
+}
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--f3d-color-surface-raised);
+}
+
+.headerCell {
+  border-bottom: 1px solid var(--f3d-color-border-strong);
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  line-height: var(--f3d-type-label-line-height);
+}
+
+.headerCell[data-align="end"] {
+  text-align: right;
+}
+
+.sortButton {
+  composes: resetButton from "./shared.module.css";
+  composes: focusRing from "./shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: inherit;
+  font: inherit;
+}
+
+.headerCell[aria-sort="ascending"] .sortButton::after {
+  content: "▲";
+  font-size: var(--f3d-type-label-size);
+}
+
+.headerCell[aria-sort="descending"] .sortButton::after {
+  content: "▼";
+  font-size: var(--f3d-type-label-size);
+}
+
+.row {
+  cursor: pointer;
+}
+
+.row:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.row[data-selected] {
+  background-color: var(--f3d-color-surface-selected);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.cell {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--f3d-color-border);
+  white-space: nowrap;
+}
+
+.cell[data-align="end"] {
+  text-align: right;
+}
+
+.emptyCell {
+  padding: 1.5rem 0.5rem;
+  text-align: center;
+  color: var(--f3d-color-text-muted);
+}

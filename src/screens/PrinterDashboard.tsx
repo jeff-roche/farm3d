@@ -7,7 +7,7 @@ import { PrinterBatchDialog } from "./PrinterBatchDialog";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
-import { PrinterDetailDock } from "./PrinterDetailDock";
+import { PrinterDetailDock, type DockFocusRequest } from "./PrinterDetailDock";
 import styles from "./PrinterDashboard.module.css";
 
 export interface PrinterDashboardProps {
@@ -30,6 +30,7 @@ export interface PrinterDashboardProps {
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [wizardOpen, setWizardOpen] = createSignal(false);
   const [batchDialogOpen, setBatchDialogOpen] = createSignal(false);
+  const [dockFocus, setDockFocus] = createSignal<DockFocusRequest | undefined>();
   const sections = new Map<string, HTMLElement>();
   let workspace: HTMLDivElement | undefined;
   let selectionTrigger: HTMLButtonElement | undefined;
@@ -38,6 +39,12 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   const selectPrinter = (id: string) => {
     props.store.setSelectedPrinterId(id);
     props.onSelectionChange?.(id);
+  };
+  /** Batch Results' Equip: select the new Printer and open its Setup tab
+   *  at Material Slots (D12). */
+  const equipPrinter = (id: string) => {
+    selectPrinter(id);
+    setDockFocus({ printerId: id, section: "materialSlots" });
   };
   const closeDock = () => {
     props.store.setSelectedPrinterId(null);
@@ -167,6 +174,8 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           onClose={closeDock}
           onDeleted={(id) => props.onRemovePrinter?.(id)}
           syncState={props.syncState}
+          focusRequest={dockFocus()}
+          onFocusHandled={() => setDockFocus(undefined)}
         />
       </div>
       <PrinterSetupWizard
@@ -179,6 +188,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
         open={batchDialogOpen()}
         onOpenChange={setBatchDialogOpen}
         existingPrinters={props.existingPrinters ?? []}
+        onEquip={equipPrinter}
       />
     </div>
   );

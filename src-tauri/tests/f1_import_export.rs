@@ -102,8 +102,8 @@ fn settings_runtime(
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let manager = Arc::new(ConnectionManager::new(
         app.handle().clone(),
@@ -186,8 +186,8 @@ fn printers_runtime(
     Arc<ConnectionManager<tauri::test::MockRuntime>>,
 ) {
     let documents: Arc<dyn DocumentIo> = documents;
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let app = mock_builder()
         .invoke_handler(tauri::generate_handler![
@@ -556,11 +556,11 @@ fn printers_replacement_queues_removed_credentials_as_nonautomatic_import_orphan
     assert_eq!(reason, "import_orphan");
 }
 
-/// Task 6, step 1 item 1: export writes `schemaVersion: 2`, and every
-/// Printer carries `location`/`startSafety`/`archivedAt` — `null` when
-/// unset.
+/// Task 6, step 1 item 1: export writes every Printer's
+/// `location`/`startSafety`/`archivedAt` — `null` when unset. P3 Task 5
+/// bumped the schema to 3 (`materialSlots`, D12) without changing this.
 #[test]
-fn printers_export_writes_schema_version_2_with_lifecycle_fields() {
+fn printers_export_writes_schema_version_3_with_lifecycle_fields() {
     let (_temp, _lease, storage) = storage();
     let with_location = PrinterRepository::new(Arc::clone(&storage))
         .create(StoredPrinter {
@@ -601,7 +601,7 @@ fn printers_export_writes_schema_version_2_with_lifecycle_fields() {
     assert_eq!(exported["data"]["status"], "exported");
     let writes = documents.writes.lock().unwrap();
     let document: Value = serde_json::from_slice(&writes[0]).unwrap();
-    assert_eq!(document["schemaVersion"], 2);
+    assert_eq!(document["schemaVersion"], 3);
     let printers = document["printers"].as_array().unwrap();
     let by_id = |id: &str| printers.iter().find(|row| row["id"] == id).unwrap();
     let with_location = by_id(&with_location.id);
@@ -707,7 +707,7 @@ fn printers_import_does_not_supervise_a_printer_archived_after_its_commit() {
         let repository = PrinterRepository::new(storage_after_commit);
         let committed = repository.get("raced-printer").unwrap().unwrap();
         repository
-            .archive(&committed.id, committed.revision)
+            .archive(&committed.id, committed.revision, "op-archive", &[])
             .unwrap();
     }));
     let (_app, webview, manager) = printers_runtime(Arc::clone(&storage), documents);

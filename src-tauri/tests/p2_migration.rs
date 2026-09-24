@@ -72,11 +72,12 @@ fn insert_v3_printer_with_identity(
     })
 }
 
-/// 1. A fresh database reaches `PRAGMA user_version = 3`, with a ledger row
-///    for `0003_p2_printer_lifecycle` whose checksum matches the migration
-///    SQL on disk.
+/// 1. A fresh database reaches the current schema version (later phases
+///    bump it further, so this checks the ledger row rather than hardcoding
+///    `PRAGMA user_version`), with a ledger row for `0003_p2_printer_lifecycle`
+///    whose checksum matches the migration SQL on disk.
 #[test]
-fn fresh_database_reaches_v3_with_a_matching_ledger_row() {
+fn fresh_database_records_the_v3_ledger_row_with_a_matching_checksum() {
     let (_temp, _paths, _lease, storage) = open_storage();
 
     let (version, name, checksum) = storage
@@ -91,7 +92,7 @@ fn fresh_database_reaches_v3_with_a_matching_ledger_row() {
         })
         .expect("schema state");
 
-    assert_eq!(version, 3);
+    assert_eq!(version, farm3d_lib::persistence::CURRENT_SCHEMA_VERSION);
     assert_eq!(name, "0003_p2_printer_lifecycle");
     let expected_checksum = format!(
         "{:x}",

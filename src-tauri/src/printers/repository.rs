@@ -3,6 +3,10 @@ use std::sync::Arc;
 use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
+use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
+use crate::spools::movement::{self, MoveOutcome};
+use crate::spools::operations::{self, Claim, OperationKind};
+use crate::spools::slots::{self, InitialLoad, SlotSpec};
 
 use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
@@ -39,26 +43,56 @@ impl PrinterRepository {
         })
     }
 
+    /// D4/D12 (global constraints clarification 1): one extra query beyond
+    /// the Printer rows themselves — `slots::live_slots_by_printer` loads
+    /// every Printer's live slots in a single batched query, grouped by
+    /// `printer_id`, rather than one extra query per row.
     pub fn list(&self) -> Result<Vec<StoredPrinter>, StorageError> {
-        self.storage.read(|connection| {
-            let mut statement = connection.prepare(&format!(
-                "SELECT {PRINTER_COLUMNS} FROM printers ORDER BY CAST(id AS BLOB)"
-            ))?;
-            let rows = statement.query_map([], decode)?.collect();
-            rows
-        })
+        self.storage
+            .read(|connection| {
+                let mut statement = connection.prepare(&format!(
+                    "SELECT {PRINTER_COLUMNS} FROM printers ORDER BY CAST(id AS BLOB)"
+                ))?;
+                let printers = statement
+                    .query_map([], decode)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(
+                    slots::live_slots_by_printer(connection).map(|mut by_printer| {
+                        printers
+                            .into_iter()
+                            .map(|mut printer| {
+                                printer.material_slots =
+                                    by_printer.remove(&printer.id).unwrap_or_default();
+                                printer
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
+            })
+            .and_then(|inner| inner)
     }
 
+    /// D4/D12: fills `material_slots` with one extra query, scoped to this
+    /// Printer (global constraints clarification 1).
     pub fn get(&self, id: &str) -> Result<Option<StoredPrinter>, StorageError> {
-        self.storage.read(|connection| {
-            connection
-                .query_row(
-                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
-                    [id],
-                    decode,
-                )
-                .optional()
-        })
+        self.storage
+            .read(|connection| {
+                let printer = connection
+                    .query_row(
+                        &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+                        [id],
+                        decode,
+                    )
+                    .optional()?;
+                Ok(match printer {
+                    None => Ok(None),
+                    Some(mut printer) => slots::live_slots(connection, id).map(|found| {
+                        printer.material_slots = found;
+                        Some(printer)
+                    }),
+                })
+            })
+            .and_then(|inner| inner)
     }
 
     /// `printer_lifecycle_eligibility`'s read path: loads the Printer and
@@ -108,6 +142,7 @@ impl PrinterRepository {
             .write(|transaction| {
                 precheck_duplicate_host(transaction, &printer)?;
                 insert(transaction, &printer)?;
+                printer.material_slots = slots::live_slots(transaction, &printer.id)?;
                 Ok(printer.clone())
             })
             .map_err(duplicate_host_or_storage)
@@ -141,9 +176,57 @@ impl PrinterRepository {
                         [reference],
                     )?;
                 }
+                printer.material_slots = slots::live_slots(transaction, &printer.id)?;
                 Ok(printer.clone())
             })
             .map_err(duplicate_host_or_storage)
+    }
+
+    /// `create_in`'s sibling for P3's `create_printer`/batch create (Task
+    /// 5, D4/D12): inserts the Printer, its Material Slot layout
+    /// (`slots::insert_layout`), and every initial load
+    /// (`movement::apply_moves`, sharing one generated `operationId`) in
+    /// the SAME transaction — so a rejected initial load (an unloadable
+    /// slot, a stale `expectedSpoolRevision`) rolls back the whole create,
+    /// Printer row included. `apply_moves` bumps the Printer's own revision
+    /// once per occupied slot, so the row is re-read after the loads rather
+    /// than left at the just-inserted revision 1. Returns the Printer with
+    /// `material_slots` already populated (each occupied by its initial
+    /// load, if any).
+    pub fn create_with_layout(
+        &self,
+        mut printer: StoredPrinter,
+        provisional_reference: Option<&str>,
+        slot_layout: &[SlotSpec],
+        initial_loads: &[InitialLoad],
+    ) -> Result<StoredPrinter, RepositoryError> {
+        validate_id(&printer.id).map_err(|_| RepositoryError::Validation { field_path: "id" })?;
+        let now = crate::printers::now_rfc3339();
+        printer.revision = 1;
+        printer.created_at = now.clone();
+        printer.updated_at = now;
+        self.storage.write_repo(|transaction| {
+            precheck_duplicate_host(transaction, &printer)?;
+            insert(transaction, &printer)?;
+            if let Some(reference) = provisional_reference {
+                transaction.execute(
+                    "DELETE FROM pending_credential_cleanup WHERE credential_ref=?1",
+                    [reference],
+                )?;
+            }
+            let created_slots = slots::insert_layout(transaction, &printer.id, slot_layout)?;
+            if let Some((revision, updated_at)) = crate::spools::initial_loads::apply_initial_loads(
+                transaction,
+                &printer.id,
+                &created_slots,
+                initial_loads,
+            )? {
+                printer.revision = revision;
+                printer.updated_at = updated_at;
+            }
+            printer.material_slots = slots::live_slots(transaction, &printer.id)?;
+            Ok(printer.clone())
+        })
     }
 
     pub fn update(
@@ -174,6 +257,7 @@ impl PrinterRepository {
             printer.updated_at = crate::printers::now_rfc3339();
             precheck_duplicate_host(transaction, &printer)?;
             replace(transaction, &printer)?;
+            printer.material_slots = slots::live_slots(transaction, id)?;
             Ok(printer)
         });
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
@@ -223,50 +307,101 @@ impl PrinterRepository {
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
-    /// D6: moves a Printer into the archived state. Excluded from
-    /// supervision and the Monitor's default view once archived, but keeps
-    /// its Connection and data. Blocked when the Printer is already
-    /// archived.
+    /// D6/P3 D10: moves a Printer into the archived state, relocating its
+    /// loaded Spools first. One transaction: the revision check, every
+    /// disposition (`spools::dispositions::apply_dispositions`, one
+    /// movement operation under `operation_id`), the eligibility re-check,
+    /// and `archived_at`. Any failure rolls all of it back. Blocked when the
+    /// Printer is already archived, or still holds a Spool that
+    /// `dispositions` doesn't relocate (`SPOOLS_LOADED`).
     pub fn archive(
         &self,
         id: &str,
         expected_revision: i64,
+        operation_id: &str,
+        dispositions: &[SpoolDispositionInput],
     ) -> Result<StoredPrinter, RepositoryError> {
-        self.transition(id, expected_revision, LifecycleAction::Archive, |printer| {
+        self.archive_with_outcome(id, expected_revision, operation_id, dispositions)
+            .map(|(printer, _)| printer)
+    }
+
+    /// [`archive`](Self::archive), also returning the dispositions' movement
+    /// outcome, so `archive_printer` can publish inventory events for every
+    /// Spool and Printer the relocation touched (D11).
+    ///
+    /// Idempotent by `operation_id` (D10): the id is claimed in the
+    /// operations ledger before the revision check, so a retry of the same
+    /// request writes nothing and returns the Printer's current state with
+    /// the recorded relocation (`replayed = true`) — a replay, not a
+    /// `CONFLICT`, even when the archive moved no Spools. The id reused for
+    /// a different request is [`RepositoryError::OperationIdReused`].
+    pub fn archive_with_outcome(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+        dispositions: &[SpoolDispositionInput],
+    ) -> Result<(StoredPrinter, MoveOutcome), RepositoryError> {
+        if expected_revision <= 0 {
+            return Err(RepositoryError::Validation {
+                field_path: "expectedRevision",
+            });
+        }
+        let digest = operations::digest(&ArchivePrinterRequest {
+            printer_id: id,
+            expected_revision,
+            spool_dispositions: dispositions,
+        });
+        self.storage.write_repo(|transaction| {
+            if operations::claim(
+                transaction,
+                operation_id,
+                OperationKind::ArchivePrinter,
+                &digest,
+            )? == Claim::Replay
+            {
+                let printer = load_in(transaction, id)?;
+                let outcome = movement::find_operation(transaction, operation_id)?
+                    .unwrap_or_else(|| MoveOutcome::empty(true));
+                return Ok((printer, outcome));
+            }
+            let printer = load_for_write(transaction, id)?;
+            if printer.revision != expected_revision {
+                return Err(RepositoryError::Conflict {
+                    entity_id: id.to_string(),
+                    expected_revision,
+                    current_revision: printer.revision,
+                });
+            }
+            let outcome = apply_dispositions(transaction, id, operation_id, dispositions)?;
+            // The dispositions bumped this row's revision once per slot
+            // they emptied, so re-read it rather than reuse `printer`.
+            let mut printer = load_for_write(transaction, id)?;
+            let eligibility = evaluate(&printer, transaction)?;
+            if !eligibility.can_archive {
+                return Err(RepositoryError::LifecycleBlocked(blockers_for(
+                    eligibility,
+                    LifecycleAction::Archive,
+                )));
+            }
             printer.archived_at = Some(crate::printers::now_rfc3339());
+            printer.revision += 1;
+            printer.updated_at = crate::printers::now_rfc3339();
+            replace(transaction, &printer)?;
+            printer.material_slots = slots::live_slots(transaction, id)?;
+            Ok((printer, outcome))
         })
     }
 
-    /// D6: moves an archived Printer back to active. Goes through the same
-    /// duplicate-host-identity precheck as any other write (`update`'s), so
-    /// a host another active Printer has since claimed surfaces as
-    /// `RepositoryError::DuplicateHost`, not a silent takeover. Blocked when
-    /// the Printer isn't archived.
+    /// D6: moves an archived Printer back to active, with the empty slots
+    /// it was archived with. Goes through the same duplicate-host-identity
+    /// precheck as any other write (`update`'s), so a host another active
+    /// Printer has since claimed surfaces as `RepositoryError::DuplicateHost`,
+    /// not a silent takeover. Blocked when the Printer isn't archived.
     pub fn unarchive(
         &self,
         id: &str,
         expected_revision: i64,
-    ) -> Result<StoredPrinter, RepositoryError> {
-        self.transition(
-            id,
-            expected_revision,
-            LifecycleAction::Unarchive,
-            |printer| {
-                printer.archived_at = None;
-            },
-        )
-    }
-
-    /// Shared machinery for `archive`/`unarchive`: optimistic-concurrency
-    /// load, a `lifecycle::evaluate` gate for `action` inside the same
-    /// transaction as the write, then `mutate` + the usual duplicate-host
-    /// precheck and replace.
-    fn transition(
-        &self,
-        id: &str,
-        expected_revision: i64,
-        action: LifecycleAction,
-        mutate: impl FnOnce(&mut StoredPrinter),
     ) -> Result<StoredPrinter, RepositoryError> {
         if expected_revision <= 0 {
             return Err(RepositoryError::Validation {
@@ -287,20 +422,16 @@ impl PrinterRepository {
                 return Err(StorageError::OperationFailed);
             }
             let eligibility = evaluate(&printer, transaction)?;
-            let eligible = match action {
-                LifecycleAction::Archive => eligibility.can_archive,
-                LifecycleAction::Unarchive => eligibility.can_unarchive,
-                LifecycleAction::Delete => eligibility.can_delete,
-            };
-            if !eligible {
-                blocked = Some(blockers_for(eligibility, action));
+            if !eligibility.can_unarchive {
+                blocked = Some(blockers_for(eligibility, LifecycleAction::Unarchive));
                 return Err(StorageError::OperationFailed);
             }
-            mutate(&mut printer);
+            printer.archived_at = None;
             printer.revision += 1;
             printer.updated_at = crate::printers::now_rfc3339();
             precheck_duplicate_host(transaction, &printer)?;
             replace(transaction, &printer)?;
+            printer.material_slots = slots::live_slots(transaction, id)?;
             Ok(printer)
         });
         if let Some(blockers) = blocked {
@@ -357,9 +488,55 @@ impl PrinterRepository {
                     enqueue_credential_cleanup(transaction, &reference, Some(id), removed_reason)?;
                 }
             }
+            printer.material_slots = slots::live_slots(transaction, id)?;
             Ok(printer)
         });
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
+    }
+
+    /// D4/D12: sets `id`'s Material Slot layout. The
+    /// `set_material_slot_layout` command in `printers::commands` calls this.
+    /// Bumps the Printer's revision like any other mutation, so concurrent
+    /// layout edits are still guarded by `expectedRevision`.
+    pub fn set_material_slot_layout(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        layout: &[SlotSpec],
+    ) -> Result<StoredPrinter, RepositoryError> {
+        if expected_revision <= 0 {
+            return Err(RepositoryError::Validation {
+                field_path: "expectedRevision",
+            });
+        }
+        self.storage.write_repo(|transaction| {
+            let mut printer = transaction
+                .query_row(
+                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+                    [id],
+                    decode,
+                )
+                .optional()?
+                .ok_or_else(|| RepositoryError::NotFound {
+                    entity_id: id.to_string(),
+                })?;
+            if printer.revision != expected_revision {
+                return Err(RepositoryError::Conflict {
+                    entity_id: id.to_string(),
+                    expected_revision,
+                    current_revision: printer.revision,
+                });
+            }
+            let updated_slots = slots::set_layout(transaction, id, layout)?;
+            printer.revision += 1;
+            printer.updated_at = crate::printers::now_rfc3339();
+            transaction.execute(
+                "UPDATE printers SET revision = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, printer.revision, printer.updated_at],
+            )?;
+            printer.material_slots = updated_slots;
+            Ok(printer)
+        })
     }
 
     /// The Printers import write path (`import_printers`). Unlike
@@ -373,12 +550,36 @@ impl PrinterRepository {
     /// `host_identity::archive_duplicates` over `imported` before calling
     /// this, so no two active rows in `imported` share a host identity by
     /// the time they reach `insert`.
+    /// `layouts` is each imported Printer's Material Slot layout, keyed by
+    /// its (possibly reused) id — schemaVersion 3's own `materialSlots`, or
+    /// `slots::default_layout()` for a 1/2 document or a v3 Printer that
+    /// omitted it (Task 5, D12: "importing v3 recreates the layout with new
+    /// ids").
+    ///
+    /// Every Spool must be unloaded (`slot_id IS NULL`) before an import can
+    /// run — checked below and rejected as `RepositoryError::Validation`
+    /// before the delete. `spools.slot_id` has no `ON DELETE` action (unlike
+    /// `spool_movements.from_slot_id`/`to_slot_id`, which cascade), so
+    /// without this check the `DELETE FROM printers` below would fail its
+    /// own foreign-key check the moment a loaded Spool's Material Slot was
+    /// deleted out from under it, surfacing as an opaque
+    /// `PERSISTENCE_UNAVAILABLE` instead of a real validation error.
+    ///
+    /// With no Spool loaded, the `DELETE FROM printers` cascades away every
+    /// REPLACED Printer's Material Slot rows AND its `spool_movements`
+    /// history (the migration's `ON DELETE CASCADE` on both
+    /// `material_slots.printer_id` and `spool_movements.from_slot_id`/
+    /// `to_slot_id`) — that history loss is accepted, not a side effect to
+    /// work around, since every imported Printer's layout is inserted fresh
+    /// via `slots::insert_layout` with brand-new slot ids regardless (never
+    /// copied from whatever it had before the import).
     pub fn replace_all(
         &self,
         expected: &[(String, i64)],
         mut imported: Vec<StoredPrinter>,
+        layouts: &std::collections::HashMap<String, Vec<SlotSpec>>,
     ) -> Result<Vec<StoredPrinter>, RepositoryError> {
-        let result = self.storage.write(|transaction| {
+        self.storage.write_repo(|transaction| {
             let mut statement = transaction
                 .prepare("SELECT id, revision FROM printers ORDER BY CAST(id AS BLOB)")?;
             let current = statement
@@ -388,7 +589,13 @@ impl PrinterRepository {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(statement);
             if current != expected {
-                return Err(StorageError::OperationFailed);
+                return Err(RepositoryError::SetConflict {
+                    expected_count: expected.len(),
+                    current_count: current.len(),
+                });
+            }
+            if crate::spools::repository::any_loaded(transaction)? {
+                return Err(RepositoryError::SpoolsLoadedForImport);
             }
             let revisions: std::collections::HashMap<_, _> = current.into_iter().collect();
             let old_references = transaction.prepare("SELECT DISTINCT json_extract(connection_json, '$.credentialRef') FROM printers WHERE json_extract(connection_json, '$.credentialRef') IS NOT NULL")?
@@ -406,6 +613,9 @@ impl PrinterRepository {
                 }
                 printer.updated_at = now.clone();
                 insert(transaction, printer)?;
+                let default_layout = slots::default_layout();
+                let layout = layouts.get(&printer.id).unwrap_or(&default_layout);
+                printer.material_slots = slots::insert_layout(transaction, &printer.id, layout)?;
             }
             for reference in old_references.difference(&imported_references) {
                 enqueue_credential_cleanup(
@@ -417,13 +627,6 @@ impl PrinterRepository {
             }
             imported.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
             Ok(imported)
-        });
-        result.map_err(|error| match error {
-            StorageError::OperationFailed => RepositoryError::SetConflict {
-                expected_count: expected.len(),
-                current_count: self.list().map(|rows| rows.len()).unwrap_or(0),
-            },
-            other => RepositoryError::Storage(other),
         })
     }
 }
@@ -465,6 +668,45 @@ fn duplicate_host_or_storage(error: StorageError) -> RepositoryError {
         },
         other => RepositoryError::Storage(other),
     }
+}
+
+/// The Printer `id` with its live Material Slots, read inside the caller's
+/// transaction, or `NotFound`. The inventory commands use it to return
+/// every Printer whose occupancy their write changed.
+pub fn load_in(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+) -> Result<StoredPrinter, RepositoryError> {
+    let mut printer = load_for_write(transaction, id)?;
+    printer.material_slots = slots::live_slots(transaction, id)?;
+    Ok(printer)
+}
+
+/// The request fields that define an `archive_printer` operation, in a
+/// fixed order for [`operations::digest`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchivePrinterRequest<'a> {
+    printer_id: &'a str,
+    expected_revision: i64,
+    spool_dispositions: &'a [SpoolDispositionInput],
+}
+
+/// The Printer row `id` inside a `write_repo` transaction, or `NotFound`.
+fn load_for_write(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &str,
+) -> Result<StoredPrinter, RepositoryError> {
+    transaction
+        .query_row(
+            &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
+            [id],
+            decode,
+        )
+        .optional()?
+        .ok_or_else(|| RepositoryError::NotFound {
+            entity_id: id.to_string(),
+        })
 }
 
 /// The blockers relevant to `action` alone — a caller attempting one action
@@ -681,6 +923,9 @@ fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredPrinter> {
             )
         })?,
         archived_at: row.get(14)?,
+        // Never a `printers` column — every caller (`list`/`get`/every
+        // write path) fills it separately, right before returning.
+        material_slots: Vec::new(),
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
     })

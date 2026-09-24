@@ -1,13 +1,32 @@
-import { cleanup, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { ResolvedPrinter } from "../printers/types";
 import { PrinterStatusPanel } from "./PrinterStatusPanel";
+
+const spools = vi.hoisted(() => [] as SpoolRecord[]);
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools, loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
+const LOADED_SPOOL: SpoolRecord = {
+  id: "spl-7", revision: 1, spoolNumber: 7,
+  manufacturer: "Overture", materialFamily: "PETG", colorName: "Black", colorHex: "#111111", diameter: "1.75",
+  nominalMg: 1_000_000, lowThresholdMg: 100_000, lifecycle: "active",
+  location: { kind: "slot", slotId: "slt-main", printerId: "prn-1" },
+  availability: { currentMg: 612_000, reservedMg: 200_000, availableMg: 412_000 },
+  facets: { loaded: true, reserved: true, low: true, confidence: "estimated" },
+  createdAt: "", updatedAt: "",
+};
 
 const printer: ResolvedPrinter = {
   id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
   catalogRef: { vendor: "Bambu Lab", model: "X1 Carbon", variant: "X1 Carbon 0.4", modelId: "x1", printerVariant: "0.4" },
   catalogStatus: "ok", modelLabel: "X1 Carbon", variantLabel: "X1 Carbon 0.4", overriddenFields: [], inherited: {},
-  profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", setupGaps: [], createdAt: "", updatedAt: "",
+  profileDrift: [], unknownOverrideKeys: [], startSafety: "confirmBedClear", materialSlots: [{ id: "slt-main", position: 0, name: "Main" }], setupGaps: [], createdAt: "", updatedAt: "",
   profile: { bedShape: { kind: "rectangular", widthMm: 256, depthMm: 0, originXMm: 0, originYMm: 0 }, printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "", nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "klipper", hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false, suggestedHostType: null },
   runtimeStatus: {
     connectionState: "online", telemetry: { hostActivity: "printing", hostActivityName: "calibration cube", progress: 0.42, nozzleTempC: 210, nozzleTargetC: 215, bedTempC: 60, bedTargetC: 60 },
@@ -19,6 +38,47 @@ describe("PrinterStatusPanel", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    spools.length = 0;
+    window.location.hash = "";
+  });
+
+  it("lists each Material Slot with its occupant (number, material, swatch, color, remaining est., Low/Reserved) or Empty", () => {
+    spools.push(LOADED_SPOOL);
+    render(() => <PrinterStatusPanel printer={{
+      ...printer,
+      materialSlots: [
+        { id: "slt-main", position: 0, name: "Main", feederLabel: "AMS 1", occupantSpoolId: "spl-7" },
+        { id: "slt-aux", position: 1, name: "Aux" },
+      ],
+    }} />);
+
+    const list = screen.getByRole("list", { name: "Material slots" });
+    const [main, aux] = within(list).getAllByRole("listitem");
+    expect(main).toHaveTextContent("Main");
+    expect(main).toHaveTextContent("AMS 1");
+    const occupant = within(main).getByRole("button", { name: /#7/ });
+    expect(occupant).toHaveTextContent("#7");
+    expect(occupant).toHaveTextContent("PETG");
+    expect(within(occupant).getByRole("img", { name: "Black" })).toBeInTheDocument();
+    expect(occupant).toHaveTextContent("Black");
+    expect(occupant).toHaveTextContent("612 g");
+    expect(occupant).toHaveTextContent("est.");
+    expect(within(main).getByText("Low")).toBeInTheDocument();
+    expect(within(main).getByText("Reserved")).toBeInTheDocument();
+    expect(aux).toHaveTextContent("Aux");
+    expect(within(aux).getByText("Empty")).toBeInTheDocument();
+  });
+
+  it("activating an occupant deep-links to that Spool", () => {
+    spools.push(LOADED_SPOOL);
+    render(() => <PrinterStatusPanel printer={{
+      ...printer,
+      materialSlots: [{ id: "slt-main", position: 0, name: "Main", occupantSpoolId: "spl-7" }],
+    }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /#7/ }));
+
+    expect(window.location.hash).toBe("#nav=v1/spools/spool/spl-7");
   });
 
   it("renders generated operational state, telemetry, and reconciliation uncertainty", () => {
