@@ -1,11 +1,15 @@
 # P3 Spools and Material Slots verification
 
-**Date:** 2026-09-23
+**Date:** 2026-09-23 (follow-ups re-validated 2026-09-24)
 **Platform:** Linux
-**Validated source:** `bf86002` (`docs: correct stale P3 doc comments`) on
-`feature/p3-spools-material-slots`. The commit that adds this revision of
-the document changes only this file. The automated evidence below was
-re-run at `bf86002`, after the final whole-branch review fixes:
+**Validated source:** `b564f9d` (`fix(web): link the tare field error to
+its Select and give it specific text`) on `feature/p3-spools-material-slots`.
+The commit that adds this revision of the document changes only this file.
+The automated evidence below was re-run at `b564f9d`, after a follow-up
+batch (`8f8e575..b564f9d`, 16 commits) that fixed every item on PR #23's
+final review plus this batch's own follow-up review — see "P3 follow-ups
+(2026-09-24)" below for what changed and why. The whole-branch review
+fixes from the first pass are still in place underneath it:
 
 - `ff16953` fix: dock Spool detail inline on wide windows (the dock-mode
   bug from the browser pass, below)
@@ -19,17 +23,17 @@ re-run at `bf86002`, after the final whole-branch review fixes:
 The browser pass and its screenshots were taken earlier, before those
 fixes. "Visual and keyboard verification" notes where the UI has changed
 since.
-Covers Tasks 1–12 (P3 in full).
+Covers Tasks 1–12 (P3 in full), plus the 2026-09-24 follow-up batch.
 
 ## Automated evidence
 
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully (`dist/index.html`, `index-*.css`, `event-*.js`, `index-*.js`). |
-| `just test` | Passed: 49 files, 511 tests. The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 285 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 14 `p3_contract_path`, 11 `p3_ledger`, 17 `p3_lifecycle`, 8 `p3_migration`, 11 `p3_movement`, 10 `p3_reservations`, 12 `p3_setup`, **1 `p3_tracer`**, and 3 `snapshot` tests. That is 177 tests across the other integration files, and 490 passing tests in all. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
+| `just test` | Passed: 49 files, 523 tests. The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 288 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, **1 `p3_tracer`**, and 3 `snapshot` tests. That is 184 tests across the other integration files, and 500 passing tests in all. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Passed (exit 0). |
-| `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0). The review fixes changed no wire types. `ReservationError::InvalidAmount` is Rust-only. |
+| `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) -- `src/generated` already carries the one wire change this batch made (`set_spool_lifecycle`'s new `operationId` parameter, committed alongside its Rust source in `8bcde6e`); nothing later in the batch, including this final fix wave, touched a wire shape. `ReservationError::InvalidAmount` is Rust-only. |
 
 ### The tracer (spec acceptance criterion 14)
 
@@ -81,7 +85,7 @@ setup helpers).
 | 2 | The DB rejects a Spool in two slots and two Spools in one slot, even with the Rust check bypassed | `p3_migration.rs`: `two_spools_cannot_share_one_slot`, `an_archived_spool_cannot_keep_a_slot`, `a_spool_cannot_have_both_a_slot_and_a_storage_label` |
 | 3 | Swap into an occupied slot writes displaced+loaded movements under one `operationId` in one transaction; an injected failure between them leaves both Spools where they were | `p3_movement.rs`: `swapping_into_an_occupied_slot_displaces_the_occupant_to_storage_first`, `a_failure_after_displacement_rolls_back_the_whole_swap`; `p3_tracer.rs` (the swap step) |
 | 4 | Two concurrent `move_spool` calls into the same empty slot: exactly one succeeds, the other gets `CONFLICT` naming the winner | `p3_movement.rs`: `two_concurrent_loads_into_one_empty_slot_have_exactly_one_winner` |
-| 5 | Replaying a `move_spool` `operationId` writes nothing new and returns current state | `p3_movement.rs`: `replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing`; `p3_contract_path.rs`: `move_into_an_occupied_slot_emits_both_spools_the_printer_and_one_broadcast` (replay assertion at the end), `reusing_an_operation_id_for_a_different_spool_is_a_validation_error` |
+| 5 | Replaying a `move_spool` `operationId` writes nothing new and returns current state; the same operations ledger (D-operations-ledger) makes `archive_printer` and `set_spool_lifecycle` idempotent too, rejects a reused id across a different kind or request, and a replay of any of the three emits no events | `p3_movement.rs`: `replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing`, `reusing_an_operation_id_for_a_different_move_is_rejected_on_operation_id`; `p3_lifecycle.rs`: `a_move_operation_id_reused_for_a_spool_lifecycle_action_or_an_archive_is_rejected` (cross-kind reuse), `replaying_a_reactivate_succeeds_and_changes_the_spool_only_once`, `replaying_an_archive_of_a_printer_with_no_loaded_spools_succeeds_instead_of_conflicting`; `p3_contract_path.rs`: `move_into_an_occupied_slot_emits_both_spools_the_printer_and_one_broadcast` (replay assertion at the end), `reusing_an_operation_id_for_a_different_spool_is_a_validation_error`, `replaying_a_set_spool_lifecycle_operation_id_emits_no_events`, `replaying_an_archive_with_loaded_spools_emits_no_events_and_writes_nothing` (the `find_operation` branch with a loaded Spool, and no supervisor re-publish either) |
 | 6 | After restart, a Spool's amount ledger (initial, estimate, measurement correction) and movement history are intact and ordered; cached `current_mg`/`confidence` equal the last ledger row | `p3_ledger.rs`: `ledger_history_and_the_cache_survive_a_restart`; `p3_tracer.rs` (restart step) |
 | 7 | Ledger rows cannot be updated or deleted; a tare edit after a measurement doesn't change that measurement's snapshot | `p3_migration.rs`: `spool_amount_events_reject_update_and_delete_as_append_only`; `p3_ledger.rs`: `scale_entry_snapshots_gross_and_tare_without_ever_changing_the_spools_default_tare` |
 | 8 | Reservation primitives: over-`availableMg` reserve fails; `release` restores availability; `consume` writes one `consumption` row and clamps at 0; `unresolved` stays unavailable; a reserved Spool can't be archived/marked empty; the availability broadcast fires after commit only | `p3_reservations.rs` (all 10 tests): `reserving_tracks_available_mg_and_rejects_amounts_over_it`, `releasing_frees_the_amount_and_cannot_be_repeated`, `consuming_writes_one_estimated_consumption_event_carrying_the_reservation_id`, `consuming_more_than_the_current_amount_clamps_to_zero_and_notes_the_shortfall`, `marking_unresolved_keeps_the_amount_counted_against_availability`, `a_measurement_below_the_reserved_total_makes_availability_negative_and_blocks_further_reserves`, `reserving_on_an_empty_or_archived_spool_is_rejected`, `a_reservation_inside_a_failing_transaction_leaves_no_row`, `reserving_a_zero_or_negative_amount_is_rejected`, `consuming_a_negative_amount_is_rejected_but_zero_is_allowed`; `p3_lifecycle.rs`: `archiving_or_marking_empty_a_reserved_spool_is_blocked_by_its_reservation`; `p3_contract_path.rs`'s events tests confirm post-commit-only emission for ordinary mutations, `publish_ids_broadcasts_the_ids_even_when_the_record_read_fails` confirms the broadcast survives a failed post-commit read, and `debug_seed_reservation_reserves_and_reports_the_spool` demonstrates the demo-only fixture path |
@@ -174,21 +178,21 @@ Home/End, Enter-to-open) is exercised by `DataTable.test.tsx` and
 additionally confirmed click-driven row selection updates the deep link
 (`#nav=v1/spools/spool/<id>`) live in the browser.
 
-**A timing-order finding surfaced during this pass, since fixed (Task 3
-follow-up):** landing directly on a `#nav=v1/spools/...` deep link (a hard
-reload) could race `SpoolInventory`'s own `loadInventory()` call ahead of
-`printer-store`'s async catalog resolution in web mode, leaving Printer
-occupancy metadata (`materialSlots[].occupantSpoolId`) unsynced until the
-next remount or mutation — even though the Spool's own `location`/`loaded`
-facet (driving the inventory table and detail dock) was unaffected and
-stayed correct throughout, and the Rust backend (proven correct by the
-tracer and the full `p3_movement.rs`/`p3_setup.rs` suites) was never
-involved. `printer-store.ts` now tells `spool-store.ts` when a web-mode
-`loadPrinters()` finishes (`registerWebPrintersLoaded`), so whichever of the
-two stores' independent mount-time loads settles last re-applies the
-occupancy sync, making the two orders equivalent. Screenshots above were
-taken after confirming (and, at the time, working around) this race, so
-they reflect the intended, synced rendering.
+**A timing-order finding surfaced during this pass, since fixed in a
+follow-up (`fd12971`):** landing directly on a `#nav=v1/spools/...` deep
+link (a hard reload) could race `SpoolInventory`'s own `loadInventory()`
+call ahead of `printer-store`'s async catalog resolution in web mode,
+leaving Printer occupancy metadata (`materialSlots[].occupantSpoolId`)
+unsynced until the next remount or mutation — even though the Spool's own
+`location`/`loaded` facet (driving the inventory table and detail dock)
+was unaffected and stayed correct throughout, and the Rust backend
+(proven correct by the tracer and the full `p3_movement.rs`/`p3_setup.rs`
+suites) was never involved. `printer-store.ts` now tells `spool-store.ts`
+when a web-mode `loadPrinters()` finishes (`registerWebPrintersLoaded`),
+so whichever of the two stores' independent mount-time loads settles last
+re-applies the occupancy sync, making the two orders equivalent.
+Screenshots above were taken after confirming (and, at the time, working
+around) this race, so they reflect the intended, synced rendering.
 
 Still **unavailable**:
 
@@ -358,10 +362,104 @@ a covering test.
   displaced storage label is optional. The Archive dialog offers Mark empty
   only for an active Spool.
 
+## P3 follow-ups (2026-09-24)
+
+A second pass on PR #23, after it opened, working through its own final
+review's Known follow-ups plus a handful of pre-existing repository
+minors. Range `8f8e575..b564f9d`, 16 commits:
+
+- **Operations ledger** (`8bcde6e`). `move_spool`, `archive_printer`, and
+  `set_spool_lifecycle` are idempotent by a client-generated
+  `operationId`: each claims its id in a new `operations` table as the
+  first step of its transaction, keyed by the command's kind and a
+  SHA-256 digest of the request fields that define it (`spoolId`/
+  `expectedSpoolRevision`/`destination` for a move; `id`/
+  `expectedRevision`/`spoolDispositions` for an archive; `id`/
+  `expectedRevision`/`action`/`storageLabel` for a lifecycle action). The
+  same kind and digest is a replay: nothing is written and no event is
+  emitted, and the result reflects current state, not a snapshot of the
+  first call. Any other reuse is `VALIDATION` on `operationId`.
+  `set_spool_lifecycle` gained the `operationId` parameter as part of
+  this (the one wire-shape change in the whole batch).
+- **Client retry** (`d794217`). The client retries `move_spool`,
+  `set_spool_lifecycle`, and `archive_printer` once, with the same
+  `operationId`, when the call fails with a transport error rather than a
+  `CommandError`.
+- **Targeted UPDATEs** (`988ef57`). A Spool field edit or a bare revision
+  bump now writes only the changed columns, instead of rewriting the
+  whole row.
+- **Typed import error** (`02813f1`). Importing Printers while any Spool
+  is loaded now returns a typed `RepositoryError::SpoolsLoadedForImport`
+  (still `VALIDATION` on the wire), not a raw persistence failure.
+- **Initial loads moved** (`9cc7b7f`). Printer-create's D12 initial-load
+  application moved out of `printers/repository.rs` into the new
+  `spools/initial_loads.rs`.
+- **Batch slot-layout validation** (`6171a65`). An invalid shared slot
+  layout in a Printers batch now fails the whole batch up front with one
+  `VALIDATION` on `slots`, creating no Printers, rather than rejecting
+  each row independently.
+- **Notes cap** (`d7cd023`). `notes` is capped at 2000 characters,
+  enforced front (`SpoolFormDialog`, the web fixture) and back
+  (`spools::mod::validate_fields`).
+- **Web occupancy race and tareId** (`fd12971`). A cold deep-link landing
+  could race `SpoolInventory`'s own load ahead of `printer-store`'s
+  web-mode catalog resolution, leaving Printer occupancy unsynced (see
+  the timing-order note above); `printer-store.ts` now tells
+  `spool-store.ts` when its own load finishes, so whichever settles last
+  re-applies the sync. The web fixture also now rejects an unknown
+  default `tareId`, matching the desktop's `VALIDATION`/`tareId`.
+
+This batch's own final review found one Important and several minor
+issues, fixed in the same pass:
+
+- **Archive replay stayed noisy** (`dc46948`). `archive_printer` ran
+  `supervise_persisted` unconditionally, so a replay re-published the
+  supervisor's `printer.status.removed` tombstone even though nothing was
+  written. Supervision -- and the existing inventory-event publish -- is
+  now gated on `!relocation.replayed`. Safe because the first, non-replay
+  call already stopped supervision, and a restart before any replay would
+  too (`restore_persisted_connections` reconciles every stored Printer,
+  archived or not, at startup).
+- **Tare field error** (`b564f9d`). The tare `Select`'s server-field
+  error was a bare, unassociated `<p>` showing the generic server text.
+  Kobalte's Select has no `aria-invalid` on its trigger (only a
+  `data-invalid` dataset attribute), but does auto-link an
+  `aria-describedby` from its `validationState`/`ErrorMessage`, the same
+  mechanism `TextField`/`NumberField` already use -- so the
+  design-system `Select` gained an `error` prop using it. A `tareId`
+  `VALIDATION` now shows "That tare no longer exists.", the same way
+  `notes` already maps its generic message.
+- **Replay test coverage** (`dc46948`). Added command-level coverage in
+  `p3_contract_path.rs`: `replaying_a_set_spool_lifecycle_operation_id_emits_no_events`,
+  and `replaying_an_archive_with_loaded_spools_emits_no_events_and_writes_nothing`
+  (the latter exercises the `find_operation` branch in
+  `archive_with_outcome` with a loaded Spool, not just the no-Spools
+  empty-outcome branch already covered in `p3_lifecycle.rs`).
+
 ## Known follow-ups
 
-Deferred from the final review. None blocks P3's acceptance criteria. None
-remain open as of this task (Task 3).
+Deferred from the final follow-ups review. None blocks P3's acceptance
+criteria; all are small enough to fold into a later pass without a
+migration or a wire-shape change:
+
+- `retryOnTransportFailure` retries any rejection that isn't a
+  `CommandError`, not narrowed to an actual transport-error type -- only
+  `move_spool`, `set_spool_lifecycle`, and `archive_printer` are wired to
+  it, so a broader-than-strictly-necessary retry trigger only risks
+  re-sending one of those three, which is always safe by construction
+  (idempotent by `operationId`).
+- The web fixture's `CommandError`s carry `recovery: []`, where the
+  desktop's carry `["EDIT_FIELDS"]` for the same field-level
+  `VALIDATION`s -- a pre-existing fixture gap, not new to this batch.
+- A client-supplied `operationId` equal to a server-generated
+  `op-<uuid>` (used for Printer create's initial loads) would merge
+  outcomes on lookup. Practically unreachable: server ids are random
+  UUIDs, so a client would have to guess one.
+- The web re-sync after a cold-load race (`fd12971`, above) only covers
+  the equipped fixture Printer, not every Printer in the fixture roster.
+- `dispositions.rs` has an empty `MoveOutcome` literal and a duplicated
+  "unmoved" shape not folded into `MoveOutcome`'s own constructors --
+  reviewed and accepted as a minor, non-behavioral duplication.
 
 ## Files changed in this task
 
