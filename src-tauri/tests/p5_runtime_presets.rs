@@ -219,6 +219,34 @@ fn an_overridden_printer_matches_only_itself_and_its_override_reaches_the_machin
     assert_eq!(documents.process["layer_height"], "0.16");
 }
 
+/// A Printer whose stored variant name drifted is rematched by its printer
+/// variant. The snapshot names the variant actually sliced, not the stale
+/// stored ref.
+#[test]
+fn a_rematched_printer_snapshots_the_variant_it_slices() {
+    let (_temp, _lease, storage, _) = common::storage();
+    let stale = CatalogRef {
+        variant: "Test Printer 0.4 nozzle (renamed)".to_string(),
+        ..a_ref()
+    };
+    create(
+        &storage,
+        StoredPrinter {
+            catalog_ref: stale,
+            ..a_stored_printer("prn-r")
+        },
+        &[],
+    );
+    let catalog = a_catalog();
+    let target = resolve_target(&storage, &catalog, &printer("prn-r")).unwrap();
+    assert_eq!(target.machine_preset, "Test Printer 0.4 nozzle");
+    assert_eq!(target.catalog_ref, a_ref());
+    let options =
+        list_slice_options(&storage, &catalog, &fixture_index(), &printer("prn-r")).unwrap();
+    assert_eq!(options.profile_snapshot.catalog_ref, a_ref());
+    assert_eq!(options.machine_preset, "Test Printer 0.4 nozzle");
+}
+
 #[test]
 fn an_unknown_override_key_blocks_slicing_for_a_printer() {
     let (_temp, _lease, storage, _) = common::storage();

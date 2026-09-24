@@ -12,6 +12,7 @@ pub mod blockers;
 pub mod facts;
 pub mod mapping;
 pub mod presets;
+pub mod process_group;
 pub mod repository;
 pub mod runtime;
 

@@ -18,7 +18,7 @@ use crate::catalog::ingest::inherits::{
     resolve_preset, InheritsError, InheritsErrorKind, PresetLookup,
 };
 use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, CatalogStatus};
-use crate::catalog::{Catalog, PrinterProfile};
+use crate::catalog::{Catalog, CatalogVariant, PrinterProfile};
 use crate::contracts::command::CommandError;
 use crate::library::content::CancelFlag;
 use crate::persistence::{RepositoryError, Storage};
@@ -590,9 +590,15 @@ pub fn resolve_target(
                     "This Printer's profile is not in the printer catalog.",
                 ));
             }
+            // A rematched Printer slices the rematched variant, so the
+            // snapshot names that variant, not the stored (stale) ref.
+            let catalog_ref = resolve_catalog_ref(catalog, &stored.catalog_ref)
+                .0
+                .and_then(|variant| catalog_ref_for(catalog, variant))
+                .unwrap_or(stored.catalog_ref);
             ResolvedTarget {
                 printer_id: Some(stored.id),
-                catalog_ref: stored.catalog_ref,
+                catalog_ref,
                 machine_preset: resolution.variant_label,
                 profile: resolution.profile,
                 overridden_fields: resolution.overridden_fields,
@@ -605,7 +611,8 @@ pub fn resolve_target(
                 variant.ok_or_else(|| CommandError::not_found(catalog_ref.variant.clone()))?;
             ResolvedTarget {
                 printer_id: None,
-                catalog_ref: catalog_ref.clone(),
+                catalog_ref: catalog_ref_for(catalog, variant)
+                    .unwrap_or_else(|| catalog_ref.clone()),
                 machine_preset: variant.variant.clone(),
                 profile: PrinterProfile::from(variant),
                 overridden_fields: Vec::new(),
@@ -620,6 +627,22 @@ pub fn resolve_target(
         ));
     }
     Ok(resolved)
+}
+
+/// The catalog reference that names `variant` itself: its model's vendor,
+/// name, and id, and its own variant names.
+fn catalog_ref_for(catalog: &Catalog, variant: &CatalogVariant) -> Option<CatalogRef> {
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.variants.iter().any(|v| std::ptr::eq(v, variant)))?;
+    Some(CatalogRef {
+        vendor: model.vendor.clone(),
+        model: model.model.clone(),
+        variant: variant.variant.clone(),
+        model_id: model.model_id.clone(),
+        printer_variant: variant.printer_variant.clone(),
+    })
 }
 
 /// D15: whether two profiles match on the fields the matching-Printer

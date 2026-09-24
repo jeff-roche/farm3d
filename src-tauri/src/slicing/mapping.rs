@@ -113,6 +113,18 @@ fn text(value: &str) -> Value {
     Value::String(value.to_string())
 }
 
+/// P5 slices with exactly one nozzle (D4); anything else is `VALIDATION`
+/// at `target`.
+fn single_nozzle(profile: &PrinterProfile) -> Result<f64, CommandError> {
+    match profile.nozzle_diameter_mm.as_slice() {
+        [diameter] => Ok(*diameter),
+        _ => Err(CommandError::validation_at(
+            "target",
+            "farm3d slices for printers with exactly one nozzle.",
+        )),
+    }
+}
+
 /// D4's encoding of one mapped field's value.
 fn encode_profile_field(field: &str, profile: &PrinterProfile) -> Result<Value, CommandError> {
     Ok(match field {
@@ -132,15 +144,7 @@ fn encode_profile_field(field: &str, profile: &PrinterProfile) -> Result<Value, 
         },
         "printableHeightMm" => text(&number(profile.printable_height_mm)),
         "bedExcludeAreas" => points(&profile.bed_exclude_areas),
-        "nozzleDiameterMm" => match profile.nozzle_diameter_mm.as_slice() {
-            [diameter] => Value::Array(vec![text(&number(*diameter))]),
-            _ => {
-                return Err(CommandError::validation_at(
-                    "target",
-                    "farm3d slices for printers with exactly one nozzle.",
-                ))
-            }
-        },
+        "nozzleDiameterMm" => Value::Array(vec![text(&number(single_nozzle(profile)?))]),
         "nozzleType" => text(&profile.nozzle_type),
         "gcodeFlavor" => text(&profile.gcode_flavor),
         "defaultBedType" => text(&profile.default_bed_type),
@@ -358,15 +362,17 @@ pub struct SlicePresetDocuments {
     pub control_keys: Vec<&'static str>,
 }
 
-/// D3 and D4 for one slice: flattens the three presets, checks the process
-/// and filament are offered for the machine, applies the overrides and the
-/// controls, and checks every written key is known to the preset source
-/// (`UNSUPPORTED_SETTING_FOR_RUNTIME`). The caller writes the documents to
-/// disk.
+/// D3 and D4 for one slice: checks the controls against D4's ranges (for
+/// the profile's single nozzle), flattens the three presets, checks the
+/// process and filament are offered for the machine, applies the overrides
+/// and the controls, and checks every written key is known to the preset
+/// source (`UNSUPPORTED_SETTING_FOR_RUNTIME`). An out-of-range control never
+/// reaches `process.json`. The caller writes the documents to disk.
 pub fn apply_overrides_and_controls(
     index: &PresetIndex,
     input: SliceSettingsInput<'_>,
 ) -> Result<SlicePresetDocuments, CommandError> {
+    validate_controls(input.controls, single_nozzle(input.profile)?)?;
     let mut machine = index.flatten(PresetKind::Machine, input.machine_preset)?;
     let mut process = index.flatten(PresetKind::Process, input.process_preset)?;
     let filament = index.flatten(PresetKind::Filament, input.filament_preset)?;
@@ -693,6 +699,41 @@ mod tests {
         for document in [&documents.machine, &documents.process, &documents.filament] {
             assert!(document.get("inherits").is_none());
         }
+    }
+
+    #[test]
+    fn apply_refuses_out_of_range_controls() {
+        let index = fixture_index();
+        let profile = a_profile();
+        // 0.33 mm is over 80% of the profile's 0.4 mm nozzle.
+        let controls = SliceControls {
+            layer_height_mm: Some(0.33),
+            ..SliceControls::default()
+        };
+        let error =
+            apply_overrides_and_controls(&index, input(&profile, &[], &[], &controls)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Validation);
+        assert_eq!(
+            error.details.unwrap()["fieldPath"],
+            JsonValue::String("controls.layerHeightMm".to_string())
+        );
+
+        // The same height is fine for a 0.6 mm nozzle.
+        let mut wide = a_profile();
+        wide.nozzle_diameter_mm = vec![0.6];
+        apply_overrides_and_controls(&index, input(&wide, &[], &[], &controls)).unwrap();
+
+        let mut two_nozzles = a_profile();
+        two_nozzles.nozzle_diameter_mm = vec![0.4, 0.4];
+        let error = apply_overrides_and_controls(
+            &index,
+            input(&two_nozzles, &[], &[], &SliceControls::default()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.details.unwrap()["fieldPath"],
+            JsonValue::String("target".to_string())
+        );
     }
 
     #[test]

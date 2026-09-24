@@ -20,7 +20,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -35,6 +35,7 @@ use crate::contracts::command::CommandError;
 use crate::persistence::{RepositoryError, Storage};
 
 use super::presets::vendor_bundles;
+use super::process_group::{spawn_group, wait_or_stop, TERM_GRACE};
 use super::repository::{load_runtime_config, save_runtime_config, SlicerRuntimeConfig};
 use super::RuntimeChannel;
 
@@ -328,21 +329,6 @@ fn basename(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Spawns `command`, retrying briefly while the executable is still busy
-/// (`ETXTBSY`, a file just written by another thread).
-fn spawn(command: &mut Command) -> io::Result<Child> {
-    let mut attempts = 0;
-    loop {
-        match command.spawn() {
-            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
-                attempts += 1;
-                thread::sleep(Duration::from_millis(25));
-            }
-            result => return result,
-        }
-    }
-}
-
 fn orca_command(executable: &Path, args: &[&str], working_dir: &Path) -> Command {
     let mut command = Command::new(executable);
     command
@@ -352,22 +338,6 @@ fn orca_command(executable: &Path, args: &[&str], working_dir: &Path) -> Command
         .envs(orca_environment())
         .stdin(Stdio::null());
     command
-}
-
-/// Waits for `child` until `deadline`, then kills it. Returns whether it
-/// exited by itself.
-fn wait_until(child: &mut Child, deadline: Instant) -> bool {
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return true,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
 }
 
 /// What one `--help` run produced.
@@ -389,7 +359,7 @@ fn run_probe(executable: &Path, args: &[&str], timeout: Duration) -> RawProbe {
     };
     let mut command = orca_command(executable, args, &scratch.0);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match spawn(&mut command) {
+    let mut child = match spawn_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return failed(format!(
@@ -423,7 +393,9 @@ fn run_probe(executable: &Path, args: &[&str], timeout: Duration) -> RawProbe {
     });
 
     let line = line_receiver.recv_timeout(timeout).ok();
-    wait_until(&mut child, deadline);
+    // Stopping the whole group closes the pipes, so both reader threads
+    // finish.
+    wait_or_stop(&mut child, deadline, TERM_GRACE);
     let stderr = stderr_receiver
         .recv_timeout(Duration::from_millis(200))
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -919,13 +891,13 @@ pub fn extract_appimage_profiles(
         &scratch.0,
     );
     command.stdout(Stdio::null()).stderr(Stdio::null());
-    let mut child = match spawn(&mut command) {
+    let mut child = match spawn_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return ExtractOutcome::Failed(format!("{name} could not be started ({error})."))
         }
     };
-    if !wait_until(&mut child, Instant::now() + timeout) {
+    if !wait_or_stop(&mut child, Instant::now() + timeout, TERM_GRACE) {
         return ExtractOutcome::Failed(format!(
             "Extracting presets from {name} took longer than {} s.",
             timeout.as_secs()
@@ -1615,6 +1587,37 @@ mod fake_executable_tests {
         };
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(reason.contains("did not answer"), "{reason}");
+    }
+
+    /// A grandchild holding stdout open: the probe times out, stops the
+    /// whole process group (the grandchild too), and returns.
+    #[test]
+    fn a_hung_probe_with_a_grandchild_stops_the_whole_group() {
+        let temp = tempfile::tempdir().unwrap();
+        let pid_file = temp.path().join("grandchild");
+        let engine = script(
+            temp.path(),
+            "hang-with-child",
+            &format!("sleep 30 &\necho $! > '{}'\nwait", pid_file.display()),
+        );
+        let started = Instant::now();
+        let ProbeOutcome::Failed(reason) =
+            probe_engine(&engine, Duration::from_millis(300)).outcome
+        else {
+            panic!("a hang must fail");
+        };
+        assert!(reason.contains("did not answer"), "{reason}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let grandchild: i32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(grandchild).unwrap();
+        assert!(
+            rustix::process::test_kill_process(pid).is_err(),
+            "the grandchild survived the probe"
+        );
     }
 
     #[test]
