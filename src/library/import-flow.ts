@@ -118,6 +118,16 @@ export function setRowAction(row: ImportRow, action: DuplicateAction | undefined
   return withSuggestion(action === undefined ? rest : { ...rest, duplicateAction: action }, models);
 }
 
+export function setRowStorage(row: ImportRow, storageMode: ImportRow["storageMode"]): ImportRow {
+  if (row.candidate.status === "rejected") return row;
+  return { ...row, storageMode };
+}
+
+export function setRowAcknowledged(row: ImportRow, acknowledgeUnsupported: boolean): ImportRow {
+  if (row.candidate.status === "rejected") return row;
+  return { ...row, acknowledgeUnsupported };
+}
+
 /** The user's own target choice (the Add as a new revision Model picker). */
 export function setRowTarget(row: ImportRow, modelId: string): ImportRow {
   return { ...row, targetModelId: modelId, targetPickedByUser: true };
@@ -127,20 +137,21 @@ export function applyProjectsToAll(rows: ImportRow[], projectIds: string[], mode
   return rows.map((row) => setRowProjects(row, projectIds, models));
 }
 
-/** `useExisting` must name a Model that holds these bytes: the chosen
- *  target when it is one of the duplicates, otherwise the duplicate whose
- *  current revision matches, otherwise the first. */
+/** `useExisting` must name a Model that holds these bytes. With a single
+ *  duplicate that is the one shown; with several, only a duplicate the
+ *  user picked themselves (D14: never silent) -- until then there is none. */
 function useExistingTarget(row: ImportRow): string | undefined {
   if (row.candidate.status !== "ready") return undefined;
   const { duplicates } = row.candidate;
-  if (duplicates.some((match) => match.modelId === row.targetModelId)) return row.targetModelId;
-  return (duplicates.find((match) => match.isCurrent) ?? duplicates[0])?.modelId;
+  if (duplicates.length === 1) return duplicates[0]!.modelId;
+  const picked = row.targetPickedByUser && duplicates.some((match) => match.modelId === row.targetModelId);
+  return picked ? row.targetModelId : undefined;
 }
 
 /** The commit found the file's content already in the Library although
  *  inspection listed no duplicate -- two identical files in one selection,
  *  or a racing import (D14: never silent). */
-function decisionRequiredAtCommit(row: ImportRow): boolean {
+export function decisionRequiredAtCommit(row: ImportRow): boolean {
   return row.result?.errors.some((error) => error.code === "DUPLICATE_DECISION_REQUIRED") ?? false;
 }
 

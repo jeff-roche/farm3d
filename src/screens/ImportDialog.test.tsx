@@ -268,6 +268,29 @@ describe("ImportDialog", () => {
       });
     });
 
+    it("with several duplicates, Use existing waits until the user picks which Model", async () => {
+      const copy = model({ id: "mdl-copy", name: "Cube copy", projectIds: [] });
+      setLibraryState({ models: [EXISTING_CUBE, copy] });
+      await toReview(ready(1, "cube.stl", {
+        duplicates: [DUPLICATE_OF_CUBE, { ...DUPLICATE_OF_CUBE, modelId: "mdl-copy", modelName: "Cube copy", isCurrent: false }],
+      }));
+
+      await fireEvent.click(within(row("cube.stl")).getByRole("radio", { name: "Use existing" }));
+      const importButton = screen.getByRole("button", { name: "Import" });
+      expect(importButton).toBeDisabled();
+      expect(screen.getByText("Choose what to do with 1 duplicate file.")).toBeInTheDocument();
+
+      const existing = within(row("cube.stl")).getByRole("button", { name: /Existing Model/ });
+      await fireEvent.pointerDown(existing, { pointerType: "mouse", button: 0 });
+      await fireEvent.pointerUp(await screen.findByRole("option", { name: "Cube copy" }), { pointerType: "mouse", button: 0 });
+      expect(importButton).toBeEnabled();
+      await fireEvent.click(importButton);
+      await waitFor(() => expect(libraryStoreMock.importModels).toHaveBeenCalled());
+      expect(libraryStoreMock.importModels.mock.calls[0]![1][0]).toMatchObject({
+        duplicateAction: "useExisting", targetModelId: "mdl-copy",
+      });
+    });
+
     it("Add as a new revision of… reveals the Model picker, pre-filled with the same-name Model", async () => {
       await toReview(ready(1, "cube.stl", { duplicates: [DUPLICATE_OF_CUBE] }));
 
@@ -375,6 +398,29 @@ describe("ImportDialog", () => {
       expect(await within(row("lid.stl")).findByText("Imported as “Lid”")).toBeInTheDocument();
     });
 
+    it("while a retry is in flight, every Retry and Done wait for it", async () => {
+      await toReview(ready(0, "bracket.stl"), ready(1, "lid.stl"));
+      const failure = (fileIndex: number): ImportItemResult => ({
+        fileIndex, outcome: "rejected", errors: [{ code: "SOURCE_UNREADABLE", message: "Could not be read." }], warnings: [],
+      });
+      const pendingRetry = deferred<{ items: ImportItemResult[] }>();
+      libraryStoreMock.importModels
+        .mockResolvedValueOnce({ items: [failure(0), failure(1)] })
+        .mockReturnValueOnce(pendingRetry.promise);
+
+      await fireEvent.click(screen.getByRole("button", { name: "Import" }));
+      await waitFor(() => expect(currentStep()).toContain("Results"));
+      await fireEvent.click(within(row("bracket.stl")).getByRole("button", { name: "Retry" }));
+
+      expect(within(row("bracket.stl")).getByRole("button", { name: "Retry" })).toBeDisabled();
+      expect(within(row("lid.stl")).getByRole("button", { name: "Retry" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+
+      pendingRetry.resolve({ items: [IMPORTED] });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Done" })).toBeEnabled());
+      expect(within(row("lid.stl")).getByRole("button", { name: "Retry" })).toBeEnabled();
+    });
+
     it("Done closes the dialog and selects the first imported Model", async () => {
       const { onDone } = await toReview(ready(0, "bracket.stl"));
       libraryStoreMock.importModels.mockResolvedValue({ items: [IMPORTED] });
@@ -462,6 +508,25 @@ describe("ImportDialog", () => {
       expect(await screen.findByText("Another import is running.")).toBeInTheDocument();
       expect(within(row("bracket.stl")).getByRole("textbox", { name: "Name" })).toHaveValue("bracket");
     });
+  });
+
+  it("says so when a drop was refused because this import is open", async () => {
+    libraryStoreMock.inspectSelection.mockResolvedValue(inspection(ready(0, "bracket.stl")));
+    const [refused, setRefused] = createSignal(false);
+    render(() => (
+      <ImportDialog
+        selection={SELECTION}
+        defaultProjectIds={[]}
+        dropRefused={refused()}
+        onClose={vi.fn()}
+        onDone={vi.fn()}
+        onChooseAgain={vi.fn()}
+      />
+    ));
+    await waitFor(() => expect(currentStep()).toContain("Review"));
+    expect(screen.queryByText("Finish or cancel this import before adding more files.")).toBeNull();
+    setRefused(true);
+    expect(screen.getByText("Finish or cancel this import before adding more files.")).toBeInTheDocument();
   });
 
   it("closing the dialog cancels the selection", async () => {

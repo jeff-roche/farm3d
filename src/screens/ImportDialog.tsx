@@ -21,9 +21,12 @@ import {
   rowBlockers,
   rowsFromInspection,
   applyProjectsToAll,
+  decisionRequiredAtCommit,
+  setRowAcknowledged,
   setRowAction,
   setRowName,
   setRowProjects,
+  setRowStorage,
   setRowTarget,
   type ImportRow,
   type RowBlocker,
@@ -62,6 +65,8 @@ export interface ImportDialogProps {
   onDone: (modelId: string | undefined) => void;
   /** The selection expired: pick the files again. */
   onChooseAgain: () => void;
+  /** A window drop arrived while this import was open and was refused. */
+  dropRefused?: boolean;
 }
 
 const COMMITTED: ReadonlySet<ImportItemResult["outcome"]> = new Set(["imported", "revisionAdded", "reusedExisting"]);
@@ -88,14 +93,6 @@ function committed(row: ImportRow): boolean {
 
 function failed(row: ImportRow): boolean {
   return row.result !== undefined && !committed(row);
-}
-
-/** The commit sent this row back because the Library already holds its
- *  bytes (D14) -- possibly a duplicate inspection could not see. */
-function isDuplicateRow(row: ImportRow): boolean {
-  if (row.candidate.status !== "ready") return false;
-  return row.candidate.duplicates.length > 0
-    || (row.result?.errors.some((error) => error.code === "DUPLICATE_DECISION_REQUIRED") ?? false);
 }
 
 /** Why **Import** (or a row's **Retry**) is not available yet, one line
@@ -182,6 +179,7 @@ export function ImportDialog(props: ImportDialogProps) {
               props.onDone(modelId);
             }}
             onChooseAgain={props.onChooseAgain}
+            dropRefused={props.dropRefused ?? false}
           />
         )}
       </Show>
@@ -195,6 +193,7 @@ interface ImportFlowProps {
   onCancel: () => void;
   onDone: (modelId: string | undefined) => void;
   onChooseAgain: () => void;
+  dropRefused: boolean;
 }
 
 function ImportFlow(props: ImportFlowProps) {
@@ -299,6 +298,10 @@ function ImportFlow(props: ImportFlowProps) {
     }
   };
 
+  // One commit at a time: overlapping retries would meet the backend's
+  // CONFLICT, and Done would cancel the selection mid-commit.
+  const retryInFlight = () => Object.values(state.retrying).some(Boolean);
+
   const cancelImport = () => {
     void cancelSelection(selectionId).catch(showFailure);
   };
@@ -327,6 +330,9 @@ function ImportFlow(props: ImportFlowProps) {
     <div class={styles.body}>
       <Stepper aria-label="Import steps" steps={steps()} current={step()} />
 
+      <Show when={props.dropRefused}>
+        <p class={styles.dropNotice} role="status">Finish or cancel this import before adding more files.</p>
+      </Show>
       <Show when={expired()}>
         <div class={styles.notice} role="alert">
           <p class={styles.noticeText}>{EXPIRED_MESSAGE}</p>
@@ -424,7 +430,7 @@ function ImportFlow(props: ImportFlowProps) {
                       <Button
                         variant="secondary"
                         size="sm"
-                        disabled={rowBlockers(row()).length > 0 || state.retrying[row().fileIndex] === true}
+                        disabled={rowBlockers(row()).length > 0 || retryInFlight()}
                         onClick={() => void retry(row().fileIndex)}
                       >
                         Retry
@@ -442,7 +448,9 @@ function ImportFlow(props: ImportFlowProps) {
             when={!importing()}
             fallback={<Button variant="secondary" onClick={cancelImport}>Cancel</Button>}
           >
-            <Button variant="primary" onClick={() => props.onDone(firstImported())}>Done</Button>
+            <Button variant="primary" disabled={retryInFlight()} onClick={() => props.onDone(firstImported())}>
+              Done
+            </Button>
           </Show>
         </div>
       </Show>
@@ -574,7 +582,7 @@ function RowEditor(props: RowEditorProps) {
       </div>
 
       <Show
-        when={isDuplicateRow(props.row)}
+        when={duplicates().length > 0 || decisionRequiredAtCommit(props.row)}
         fallback={
           <Show when={revisionTargets().length > 0}>
             <RadioGroup
@@ -647,7 +655,7 @@ function RowEditor(props: RowEditorProps) {
           ]}
           value={props.row.storageMode}
           disabled={props.disabled}
-          onChange={(mode) => props.onChange((row) => ({ ...row, storageMode: mode as ImportRow["storageMode"] }))}
+          onChange={(mode) => props.onChange((row) => setRowStorage(row, mode as ImportRow["storageMode"]))}
         />
       </Show>
 
@@ -679,7 +687,7 @@ function RowEditor(props: RowEditorProps) {
           <Checkbox
             checked={props.row.acknowledgeUnsupported}
             disabled={props.disabled}
-            onChange={(checked) => props.onChange((row) => ({ ...row, acknowledgeUnsupported: checked }))}
+            onChange={(checked) => props.onChange((row) => setRowAcknowledged(row, checked))}
           >
             Import it anyway. farm3d won't use these contents.
           </Checkbox>

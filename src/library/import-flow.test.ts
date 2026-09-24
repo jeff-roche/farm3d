@@ -6,8 +6,11 @@ import {
   rowBlockers,
   rowsFromInspection,
   setRowName,
+  decisionRequiredAtCommit,
+  setRowAcknowledged,
   setRowAction,
   setRowProjects,
+  setRowStorage,
   setRowTarget,
   type ImportRow,
 } from "./import-flow";
@@ -199,6 +202,27 @@ describe("setRowAction", () => {
   });
 });
 
+describe("setRowStorage and setRowAcknowledged", () => {
+  it("set the storage mode and acknowledgment, leaving a rejected row alone", () => {
+    const [row, rejectedRow] = rowsFromInspection(inspection(ready(0, "cube.stl"), rejected(1, "notes.txt")), { projectIds: [], models: [] });
+    expect(setRowStorage(row, "linked").storageMode).toBe("linked");
+    expect(setRowAcknowledged(row, true).acknowledgeUnsupported).toBe(true);
+    expect(setRowStorage(rejectedRow, "linked")).toBe(rejectedRow);
+    expect(setRowAcknowledged(rejectedRow, true)).toBe(rejectedRow);
+  });
+});
+
+describe("decisionRequiredAtCommit", () => {
+  it("is true only for a row the commit sent back with DUPLICATE_DECISION_REQUIRED", () => {
+    const [row] = rowsFromInspection(inspection(ready(0, "cube.stl")), { projectIds: [], models: [] });
+    expect(decisionRequiredAtCommit(row)).toBe(false);
+    expect(decisionRequiredAtCommit({
+      ...row,
+      result: { fileIndex: 0, outcome: "rejected", errors: [{ code: "DUPLICATE_DECISION_REQUIRED", message: "m" }], warnings: [] },
+    })).toBe(true);
+  });
+});
+
 describe("rowBlockers", () => {
   const base = (candidate: ImportCandidate): ImportRow =>
     rowsFromInspection(inspection(candidate), { projectIds: [], models: [] })[0];
@@ -243,6 +267,19 @@ describe("rowBlockers", () => {
     };
     expect(rowBlockers(row)).toEqual(["duplicateDecision"]);
     expect(rowBlockers({ ...row, duplicateAction: "addAnother" })).toEqual([]);
+  });
+
+  it("blocks Use existing among several duplicates until the user picks one of them (D14: never silent)", () => {
+    const second = { ...DUPLICATE, modelId: "mdl-second", modelName: "Cube copy", isCurrent: false };
+    const row = setRowAction(base(ready(0, "cube.stl", { duplicates: [DUPLICATE, second] })), "useExisting", []);
+    expect(rowBlockers(row)).toEqual(["duplicateDecision"]);
+    expect(buildRequest([row], [])).toEqual([]);
+    // A target picked for something else (not one of the duplicates) doesn't count.
+    expect(rowBlockers(setRowTarget(row, "mdl-unrelated"))).toEqual(["duplicateDecision"]);
+
+    const picked = setRowTarget(row, "mdl-second");
+    expect(rowBlockers(picked)).toEqual([]);
+    expect(buildRequest([picked], [])[0]).toMatchObject({ duplicateAction: "useExisting", targetModelId: "mdl-second" });
   });
 
   it("reports a rejected row as rejected only", () => {

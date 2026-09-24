@@ -35,6 +35,8 @@ export interface LibraryWorkspaceProps {
   onImportClose?: () => void;
   /** A file drag is over the window (App's webview drag listener). */
   dropActive?: boolean;
+  /** A drop was refused because an import is already open. */
+  dropRefused?: boolean;
 }
 
 type LayoutMode = "grid" | "list";
@@ -372,6 +374,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         onClose={() => props.onImportClose?.()}
         onDone={finishImport}
         onChooseAgain={() => props.onImport?.()}
+        dropRefused={props.dropRefused ?? false}
       />
     </div>
   );

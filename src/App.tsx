@@ -113,20 +113,27 @@ function App() {
   // A file drag is over the window: only the hover highlight. Rust observes
   // the drop itself and announces it as `library.selection.dropped`.
   const [dropActive, setDropActive] = createSignal(false);
+  // A drop that arrived while an import was open; the open dialog says so.
+  const [dropRefused, setDropRefused] = createSignal(false);
+  const openImport = (selection: ImportSelectionSummary | null) => {
+    setDropRefused(false);
+    setImportSelection(selection);
+  };
   const startImport = () => {
     void pickFiles("import").then((selection) => {
-      if (selection) setImportSelection(selection);
+      if (selection) openImport(selection);
     }).catch(reportLibraryError);
   };
   const openDroppedSelection = (selection: ImportSelectionSummary) => {
     if (importSelection()) {
-      // One import at a time: a drop onto an open import dialog is dropped
-      // again, and its staging released.
+      // One import at a time: a drop onto an open import dialog is refused,
+      // its staging released, and the dialog says why.
       void cancelSelection(selection.selectionId).catch(reportLibraryError);
+      setDropRefused(true);
       return;
     }
     navigate({ version: 1, destination: "library" });
-    setImportSelection(selection);
+    openImport(selection);
   };
 
   onMount(() => {
@@ -304,8 +311,9 @@ function App() {
                 navigate={navigate}
                 onImport={startImport}
                 importSelection={importSelection()}
-                onImportClose={() => setImportSelection(null)}
+                onImportClose={() => openImport(null)}
                 dropActive={dropActive()}
+                dropRefused={dropRefused()}
               />
             </Match>
             <Match when={active() === "spools"}>

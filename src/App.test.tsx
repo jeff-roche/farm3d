@@ -72,8 +72,10 @@ vi.mock("./screens/LibraryWorkspace", () => ({
     onImportClose?: () => void;
     importSelection?: { selectionId: string } | null;
     dropActive?: boolean;
+    dropRefused?: boolean;
   }) => (
     <div>
+      <output aria-label="Drop refused">{String(props.dropRefused ?? false)}</output>
       <p>Library workspace</p>
       <output aria-label="Import selection">{props.importSelection?.selectionId ?? "none"}</output>
       <output aria-label="Drop active">{String(props.dropActive ?? false)}</output>
@@ -588,6 +590,10 @@ describe("App", () => {
       libraryStore.dropped!(summary("sel-second"));
       expect(screen.getByRole("status", { name: "Import selection" })).toHaveTextContent("sel-first");
       expect(libraryStore.cancelSelection).toHaveBeenCalledWith("sel-second");
+      // The open dialog says why, until it closes.
+      expect(screen.getByRole("status", { name: "Drop refused" })).toHaveTextContent("true");
+      await fireEvent.click(screen.getByRole("button", { name: "Close import" }));
+      expect(screen.getByRole("status", { name: "Drop refused" })).toHaveTextContent("false");
     });
 
     it("drag enter and leave toggle the drop highlight", async () => {
