@@ -1,0 +1,10 @@
+{
+  "type": "filament",
+  "name": "Test PETG @Test Printer",
+  "inherits": "fdm_filament_petg",
+  "from": "system",
+  "instantiation": "true",
+  "compatible_printers": [
+    "Test Printer 0.4 nozzle"
+  ]
+}

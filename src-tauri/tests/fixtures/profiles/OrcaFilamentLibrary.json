@@ -1,0 +1,25 @@
+{
+  "name": "OrcaFilamentLibrary",
+  "version": "01.00.00.00",
+  "filament_list": [
+    {
+      "name": "fdm_filament_common",
+      "sub_path": "filament/fdm_filament_common.json"
+    },
+    {
+      "name": "fdm_filament_pla",
+      "sub_path": "filament/fdm_filament_pla.json"
+    },
+    {
+      "name": "fdm_filament_petg",
+      "sub_path": "filament/fdm_filament_petg.json"
+    },
+    {
+      "name": "Generic PLA @Test Library",
+      "sub_path": "filament/Generic PLA @Test Library.json"
+    }
+  ],
+  "process_list": [],
+  "machine_model_list": [],
+  "machine_list": []
+}

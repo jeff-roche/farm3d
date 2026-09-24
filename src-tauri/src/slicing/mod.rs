@@ -4,17 +4,27 @@
 //! Rust remains persisted truth. [`repository`] holds the SQL for D14,
 //! [`facts`] the D15 facts and their provenance, and [`blockers`] the
 //! Slice Revision deletion registry plus the Model deletion blocker P5
-//! registers with the Library.
+//! registers with the Library. [`runtime`] discovers the OrcaSlicer engine
+//! and preset source (D2), [`presets`] indexes and flattens presets and
+//! lists the slice options (D3), and [`mapping`] holds the D4 tables.
 
 pub mod blockers;
 pub mod facts;
+pub mod mapping;
+pub mod presets;
 pub mod repository;
+pub mod runtime;
+
+pub use runtime::{
+    EngineSource, EngineState, PresetSourceOrigin, PresetSourceState, SlicerRuntimeStatus,
+};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::library::formats::Producer;
 use crate::printers::CatalogRef;
+use crate::spools::MaterialFamily;
 
 pub use facts::{
     ConfirmedFact, ConfirmedFacts, ExternalFacts, Fact, FactProvenance, Farm3dFacts,
@@ -498,6 +508,51 @@ pub struct SliceRevisionRecord {
     #[ts(optional)]
     pub producer: Option<Producer>,
     pub blobs: Vec<SliceRevisionBlob>,
+}
+
+/// One offered process preset.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ProcessPresetOption.ts")]
+pub struct ProcessPresetOption {
+    pub name: String,
+}
+
+/// One offered filament preset. `materialFamily` is its `filament_type`
+/// mapped as D15 maps it; both are absent when the preset has no type.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/FilamentPresetOption.ts")]
+pub struct FilamentPresetOption {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub filament_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub material_family: Option<MaterialFamily>,
+}
+
+/// D3's deterministic defaults; `null` when nothing is offered.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/SliceOptionDefaults.ts")]
+pub struct SliceOptionDefaults {
+    pub process_preset: Option<String>,
+    pub filament_preset: Option<String>,
+}
+
+/// `list_slice_options`' result (built by [`presets::list_slice_options`]).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/SliceOptions.ts")]
+pub struct SliceOptions {
+    pub machine_preset: String,
+    pub process_presets: Vec<ProcessPresetOption>,
+    pub filament_presets: Vec<FilamentPresetOption>,
+    pub defaults: SliceOptionDefaults,
+    pub profile_snapshot: ProfileSnapshot,
+    pub matching_printer_ids: Vec<String>,
 }
 
 #[cfg(test)]

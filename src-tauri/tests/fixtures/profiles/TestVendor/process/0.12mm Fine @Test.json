@@ -1,0 +1,8 @@
+{
+  "type": "process",
+  "name": "0.12mm Fine @Test",
+  "inherits": "0.20mm Standard @Test",
+  "from": "system",
+  "instantiation": "true",
+  "layer_height": "0.12"
+}

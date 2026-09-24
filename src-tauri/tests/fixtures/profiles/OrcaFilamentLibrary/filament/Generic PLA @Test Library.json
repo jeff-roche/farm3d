@@ -1,0 +1,8 @@
+{
+  "type": "filament",
+  "name": "Generic PLA @Test Library",
+  "inherits": "fdm_filament_pla",
+  "from": "system",
+  "instantiation": "true",
+  "compatible_printers": []
+}

@@ -1,0 +1,11 @@
+{
+  "type": "process",
+  "name": "0.20mm Standard @Test",
+  "inherits": "fdm_process_common",
+  "from": "system",
+  "instantiation": "true",
+  "wall_loops": "3",
+  "compatible_printers": [
+    "Test Printer 0.4 nozzle"
+  ]
+}

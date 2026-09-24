@@ -79,13 +79,14 @@ use farm3d_lib::settings::commands::{
     SettingsRecord,
 };
 use farm3d_lib::slicing::{
-    BrimType, ClaimedEstimateSource, ClaimedEstimates, Fact, FactProvenance, InfillPattern,
-    InstanceDoc, InstanceTransform, PlateDoc, PreparationDocument, PreparationRecord,
-    ProfileSnapshot, RuntimeChannel, SliceControls, SliceEstimateSource, SliceEstimates,
-    SliceFacts, SliceFailure, SliceFailureCode, SliceOperationRecord, SliceOperationState,
-    SlicePlateRef, SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind,
-    SliceRevisionRecord, SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget,
-    SupportMode,
+    BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineSource, EngineState, Fact,
+    FactProvenance, FilamentPresetOption, InfillPattern, InstanceDoc, InstanceTransform, PlateDoc,
+    PreparationDocument, PreparationRecord, PresetSourceOrigin, PresetSourceState,
+    ProcessPresetOption, ProfileSnapshot, RuntimeChannel, SliceControls, SliceEstimateSource,
+    SliceEstimates, SliceFacts, SliceFailure, SliceFailureCode, SliceOperationRecord,
+    SliceOperationState, SliceOptionDefaults, SliceOptions, SlicePlateRef, SliceRevisionBlob,
+    SliceRevisionBlobRole, SliceRevisionKind, SliceRevisionRecord, SliceRevisionSummary,
+    SliceRevisionTarget, SliceRuntimeInfo, SliceTarget, SlicerRuntimeStatus, SupportMode,
 };
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
@@ -458,6 +459,15 @@ fn export_registry() -> Vec<Export> {
         export::<SliceRevisionBlob>(),
         export::<SliceRevisionSummary>(),
         export::<SliceRevisionRecord>(),
+        export::<EngineSource>(),
+        export::<EngineState>(),
+        export::<PresetSourceOrigin>(),
+        export::<PresetSourceState>(),
+        export::<SlicerRuntimeStatus>(),
+        export::<ProcessPresetOption>(),
+        export::<FilamentPresetOption>(),
+        export::<SliceOptionDefaults>(),
+        export::<SliceOptions>(),
     ]
 }
 

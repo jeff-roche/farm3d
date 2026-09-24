@@ -3,6 +3,7 @@
   "name": "fdm_machine_common",
   "printable_area": ["0x0", "220x0", "220x220", "0x220"],
   "printable_height": "250",
+  "bed_exclude_area": ["0x0"],
   "gcode_flavor": "marlin",
   "nozzle_type": "brass",
   "default_bed_type": "1",
