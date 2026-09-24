@@ -775,6 +775,10 @@ impl CommandError {
                 Self::slot_occupied(&slot_id, &spool_id)
             }
             RepositoryError::LifecycleBlocked(blockers) => Self::lifecycle_blocked(&blockers),
+            RepositoryError::OperationIdReused => Self::validation_at(
+                "operationId",
+                "operationId was already used for a different request",
+            ),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

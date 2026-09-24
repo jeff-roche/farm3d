@@ -5,6 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
 use crate::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest};
+use crate::spools::operations::{self, Claim, OperationKind};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
 
 use super::host_identity::canonical_host_identity;
@@ -184,10 +185,7 @@ impl PrinterRepository {
     /// `create_in`'s sibling for P3's `create_printer`/batch create (Task
     /// 5, D4/D12): inserts the Printer, its Material Slot layout
     /// (`slots::insert_layout`), and every initial load
-    /// (`movement::apply_moves`, sharing one generated `operationId` and one
-    /// replay check — a plain `apply_move` per load would silently drop
-    /// every load after the first, since the second call would find the
-    /// first load's row under that `operationId` and replay it instead) in
+    /// (`movement::apply_moves`, sharing one generated `operationId`) in
     /// the SAME transaction — so a rejected initial load (an unloadable
     /// slot, a stale `expectedSpoolRevision`) rolls back the whole create,
     /// Printer row included. `apply_moves` bumps the Printer's own revision
@@ -218,6 +216,8 @@ impl PrinterRepository {
             }
             let created_slots = slots::insert_layout(transaction, &printer.id, slot_layout)?;
             if !initial_loads.is_empty() {
+                // Server-generated, so no client can retry it: not claimed
+                // in the operations ledger (D12).
                 let operation_id = format!("op-{}", uuid::Uuid::new_v4());
                 let mut moves = Vec::with_capacity(initial_loads.len());
                 for load in initial_loads {
@@ -351,6 +351,13 @@ impl PrinterRepository {
     /// [`archive`](Self::archive), also returning the dispositions' movement
     /// outcome, so `archive_printer` can publish inventory events for every
     /// Spool and Printer the relocation touched (D11).
+    ///
+    /// Idempotent by `operation_id` (D10): the id is claimed in the
+    /// operations ledger before the revision check, so a retry of the same
+    /// request writes nothing and returns the Printer's current state with
+    /// the recorded relocation (`replayed = true`) — a replay, not a
+    /// `CONFLICT`, even when the archive moved no Spools. The id reused for
+    /// a different request is [`RepositoryError::OperationIdReused`].
     pub fn archive_with_outcome(
         &self,
         id: &str,
@@ -363,12 +370,30 @@ impl PrinterRepository {
                 field_path: "expectedRevision",
             });
         }
-        if operation_id.trim().is_empty() {
-            return Err(RepositoryError::Validation {
-                field_path: "operationId",
-            });
-        }
+        let digest = operations::digest(&ArchivePrinterRequest {
+            printer_id: id,
+            expected_revision,
+            spool_dispositions: dispositions,
+        });
         self.storage.write_repo(|transaction| {
+            if operations::claim(
+                transaction,
+                operation_id,
+                OperationKind::ArchivePrinter,
+                &digest,
+            )? == Claim::Replay
+            {
+                let mut printer = load_for_write(transaction, id)?;
+                printer.material_slots = slots::live_slots(transaction, id)?;
+                let outcome =
+                    movement::find_operation(transaction, operation_id)?.unwrap_or(MoveOutcome {
+                        spool_ids: Vec::new(),
+                        printer_ids: Vec::new(),
+                        movements: Vec::new(),
+                        replayed: true,
+                    });
+                return Ok((printer, outcome));
+            }
             let printer = load_for_write(transaction, id)?;
             if printer.revision != expected_revision {
                 return Err(RepositoryError::Conflict {
@@ -691,6 +716,16 @@ pub fn load_in(
     let mut printer = load_for_write(transaction, id)?;
     printer.material_slots = slots::live_slots(transaction, id)?;
     Ok(printer)
+}
+
+/// The request fields that define an `archive_printer` operation, in a
+/// fixed order for [`operations::digest`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchivePrinterRequest<'a> {
+    printer_id: &'a str,
+    expected_revision: i64,
+    spool_dispositions: &'a [SpoolDispositionInput],
 }
 
 /// The Printer row `id` inside a `write_repo` transaction, or `NotFound`.

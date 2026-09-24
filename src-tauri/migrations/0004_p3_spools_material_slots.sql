@@ -110,3 +110,19 @@ CREATE TABLE spool_reservations (
 ) STRICT;
 CREATE INDEX spool_reservations_open ON spool_reservations(spool_id)
   WHERE state IN ('active','unresolved');
+
+-- D6: the operations ledger. One row per client-supplied `operationId`,
+-- claimed in the same transaction as the operation's writes, so a retry
+-- with the same id and the same request (`request_digest`, a SHA-256 of
+-- its fields) replays instead of writing again, and a reuse for a
+-- different request is rejected. Append-only in spirit: nothing updates
+-- a row, and Printer deletion leaves the rows it relates to in place (they
+-- hold no foreign keys, and a stale id only ever blocks its own reuse).
+-- Printer create's initial loads use a server-generated id and are not
+-- recorded here.
+CREATE TABLE operations (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('moveSpool','archivePrinter','spoolLifecycle')),
+  request_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;

@@ -5,9 +5,11 @@
 //! transaction (global constraint: "no other code writes `spools.slot_id`
 //! or `spool_movements`").
 //!
-//! [`apply_move`] runs D6 steps 1-6. Step 7 (commit, then emit events) is
-//! the caller's: `Storage::write_repo` commits on `Ok` and rolls back on
-//! `Err`, so every early return below leaves the database untouched.
+//! [`move_spool`] runs D6 steps 1-6: step 1 (replay) is its claim in the
+//! operations ledger (`spools::operations`), steps 2-6 are [`apply_move`].
+//! Step 7 (commit, then emit events) is the caller's: `Storage::write_repo`
+//! commits on `Ok` and rolls back on `Err`, so every early return below
+//! leaves the database untouched.
 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,7 @@ use ts_rs::TS;
 use crate::persistence::{take_transaction_failure, FailurePoint, RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
 
+use super::operations::{self, Claim, OperationKind};
 use super::repository::{check_and_bump_revision, normalize_storage_label};
 use super::{decode_enum, encode_enum, SpoolLifecycle};
 
@@ -106,7 +109,7 @@ pub struct MoveOutcome {
 
 /// One move of [`apply_moves`]'s batch — the same arguments [`apply_move`]
 /// takes for a single move, packaged so several can share one
-/// `operation_id`/replay check.
+/// `operation_id`.
 #[derive(Clone, Debug)]
 pub struct MoveRequest {
     pub spool_id: String,
@@ -115,12 +118,71 @@ pub struct MoveRequest {
     pub reason_override: Option<MovementReason>,
 }
 
-/// D6 steps 1-6 for a single move. Idempotent by `operation_id`: a second
-/// call with the same id returns the recorded outcome with `replayed =
-/// true` and writes nothing, before any revision or occupancy check. A
+/// The `move_spool` operation (D6): claims `operation_id` in the operations
+/// ledger, then applies the move. A retry of the same request is a replay:
+/// it returns the outcome [`find_operation`] reconstructs, with `replayed =
+/// true`, and writes nothing, before any revision or occupancy check. The
+/// same id for a different request is
+/// [`RepositoryError::OperationIdReused`].
+pub fn move_spool(
+    tx: &Transaction<'_>,
+    operation_id: &str,
+    spool_id: &str,
+    expected_spool_revision: i64,
+    dest: &MoveDestination,
+) -> Result<MoveOutcome, RepositoryError> {
+    let digest = operations::digest(&MoveSpoolRequest {
+        spool_id,
+        expected_spool_revision,
+        destination: dest,
+    });
+    match operations::claim(tx, operation_id, OperationKind::MoveSpool, &digest)? {
+        Claim::Replay => Ok(recorded_or_unmoved(tx, operation_id, spool_id)?),
+        Claim::Fresh => apply_move(
+            tx,
+            operation_id,
+            spool_id,
+            expected_spool_revision,
+            dest,
+            None,
+        ),
+    }
+}
+
+/// The request fields that define a `move_spool` operation, in a fixed
+/// order for [`operations::digest`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveSpoolRequest<'a> {
+    spool_id: &'a str,
+    expected_spool_revision: i64,
+    destination: &'a MoveDestination,
+}
+
+/// A replay's outcome: the movements recorded under `operation_id`, or —
+/// when the operation wrote none (or Printer deletion has since cascaded
+/// them away) — just `spool_id`, with nothing moved.
+pub(crate) fn recorded_or_unmoved(
+    tx: &Transaction<'_>,
+    operation_id: &str,
+    spool_id: &str,
+) -> Result<MoveOutcome, StorageError> {
+    Ok(
+        find_operation(tx, operation_id)?.unwrap_or_else(|| MoveOutcome {
+            spool_ids: vec![spool_id.to_string()],
+            printer_ids: Vec::new(),
+            movements: Vec::new(),
+            replayed: true,
+        }),
+    )
+}
+
+/// D6 steps 2-6 for a single move under `operation_id`. Does no replay
+/// check: that is the operations ledger's job, done once by the
+/// operation's caller ([`move_spool`], `lifecycle::apply_lifecycle`). A
 /// thin wrapper over [`apply_moves`] — see that function for callers that
 /// need several moves (e.g. several initial loads) to share one
-/// `operation_id` and one replay check.
+/// `operation_id`.
 pub fn apply_move(
     tx: &Transaction<'_>,
     operation_id: &str,
@@ -141,20 +203,17 @@ pub fn apply_move(
     )
 }
 
-/// D6 steps 1-6 for a batch of moves sharing one `operation_id`. The
-/// replay check (step 1) runs ONCE for the whole batch — a second call
-/// with the same `operation_id` (whether the same batch or a single
-/// [`apply_move`]) returns the recorded combined outcome with `replayed =
-/// true` and writes nothing. Moves apply in order, each under its own
-/// revision/occupancy checks; if any move fails, the whole batch's writes
-/// roll back with it (the caller's transaction). The returned outcome
-/// combines every row written under `operation_id` — `spool_ids`/
-/// `printer_ids` deduped, `movements` in write order — via the same
-/// [`find_operation`] query a single move's outcome uses.
+/// D6 steps 2-6 for a batch of moves sharing one `operation_id`. Moves
+/// apply in order, each under its own revision/occupancy checks; if any
+/// move fails, the whole batch's writes roll back with it (the caller's
+/// transaction). The returned outcome combines every row written under
+/// `operation_id` — `spool_ids`/`printer_ids` deduped, `movements` in
+/// write order — via the same [`find_operation`] query a replay uses.
 ///
-/// `printers/repository.rs`'s `create_with_layout` uses this for
-/// `initialLoads` (D12); Task 6's archive dispositions reuse it for
-/// several Spools unloaded under one operation.
+/// There is no replay check here: the caller claims `operation_id` in the
+/// operations ledger first (`archive_printer`'s dispositions), or uses a
+/// fresh server-generated id (`printers/repository.rs`'s
+/// `create_with_layout`, for `initialLoads`, D12).
 pub fn apply_moves(
     tx: &Transaction<'_>,
     operation_id: &str,
@@ -164,10 +223,6 @@ pub fn apply_moves(
         return Err(RepositoryError::Validation {
             field_path: "operationId",
         });
-    }
-    // Step 1: replay, checked once for the whole batch.
-    if let Some(outcome) = find_operation(tx, operation_id)? {
-        return Ok(outcome);
     }
     for request in moves {
         apply_one_move(
@@ -189,9 +244,9 @@ pub fn apply_moves(
     Ok(outcome)
 }
 
-/// One move's steps 2-6, without the replay check (that's [`apply_moves`]'s
-/// job, once per batch) or the final combined-outcome query (also the
-/// caller's, once per batch — this function only writes the rows).
+/// One move's steps 2-6, without the final combined-outcome query (that's
+/// [`apply_moves`]'s, once per batch — this function only writes the
+/// rows).
 fn apply_one_move(
     tx: &Transaction<'_>,
     operation_id: &str,
@@ -328,8 +383,9 @@ fn apply_one_move(
     Ok(())
 }
 
-/// D6 step 1's lookup: the outcome recorded under `operation_id`, marked
-/// `replayed = true`, or `None` if no movement used that id.
+/// The outcome recorded under `operation_id`, marked `replayed = true`, or
+/// `None` if no movement used that id. A replay's result (D6 step 1) and
+/// every applied batch's combined outcome both come from here.
 pub fn find_operation(
     tx: &Transaction<'_>,
     operation_id: &str,

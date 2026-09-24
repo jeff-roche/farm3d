@@ -270,7 +270,7 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ),
         (
             "set_spool_lifecycle",
-            json!({"id": "s", "expectedRevision": 1, "action": "archive"}),
+            json!({"operationId": "op", "id": "s", "expectedRevision": 1, "action": "archive"}),
         ),
         ("create_tare", json!({"name": "t", "weightMg": 1})),
         (

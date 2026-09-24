@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod lifecycle;
 pub mod lifecycle_blockers;
 pub mod movement;
+pub mod operations;
 pub mod repository;
 pub mod reservations;
 pub mod slots;

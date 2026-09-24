@@ -369,7 +369,7 @@ fn reusing_an_operation_id_for_a_different_spool_is_a_validation_error() {
     assert_eq!(error["details"]["fieldPath"], json!("operationId"));
     assert_eq!(
         error["message"],
-        json!("operationId was already used for a different operation")
+        json!("operationId was already used for a different request")
     );
     assert!(env.take_events().is_empty());
     // B did not move.
@@ -476,6 +476,7 @@ fn mark_empty_on_a_loaded_spool_unloads_it_and_returns_the_printer() {
     let result = env.ok(
         "set_spool_lifecycle",
         json!({
+            "operationId": uuid::Uuid::new_v4().to_string(),
             "id": a["id"],
             "expectedRevision": a["revision"],
             "action": "markEmpty",
@@ -504,6 +505,7 @@ fn mark_empty_on_a_loaded_spool_unloads_it_and_returns_the_printer() {
     let result = env.ok(
         "set_spool_lifecycle",
         json!({
+            "operationId": uuid::Uuid::new_v4().to_string(),
             "id": a["id"],
             "expectedRevision": result["spool"]["revision"],
             "action": "reactivate",

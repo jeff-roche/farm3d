@@ -166,9 +166,6 @@ pub fn apply_dispositions(
     }
 
     let outcome = movement::apply_moves(tx, operation_id, &moves)?;
-    if outcome.replayed {
-        return Ok(outcome);
-    }
     for spool_id in emptied {
         record_marked_empty(tx, spool_id)?;
     }

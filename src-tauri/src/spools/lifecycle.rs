@@ -15,6 +15,7 @@ use crate::printers::now_rfc3339;
 
 use super::ledger::{self, AmountEventKind, LedgerSnapshot};
 use super::movement::{self, MoveDestination, MoveOutcome, MovementReason};
+use super::operations::{self, Claim, OperationKind};
 use super::repository::{self, check_and_bump_revision, StoredSpool};
 use super::reservations;
 use super::{encode_enum, AmountConfidence, SpoolLifecycle};
@@ -45,10 +46,13 @@ pub enum SpoolLifecycleAction {
 /// A wrong starting state is `VALIDATION` on `action`; a loaded or reserved
 /// Spool is `LIFECYCLE_BLOCKED` (`SPOOLS_LOADED`/`SPOOL_RESERVED`).
 ///
-/// Idempotent by `operation_id` the way `move_spool` is (D6): if a movement
-/// already carries it, the recorded outcome is returned and nothing is
-/// written. Only a `markEmpty` of a loaded Spool writes a movement, so a
-/// retry of any other action is caught by the revision check instead.
+/// Idempotent by `operation_id` the way `move_spool` is (D6): the id is
+/// claimed in the operations ledger first, and a retry of the same request
+/// writes nothing and returns `replayed = true` — the recorded movement
+/// for a `markEmpty` that unloaded the Spool, otherwise just this Spool.
+/// A replay reports the Spool's current state, not a snapshot of the first
+/// call's result. The id reused for a different request is
+/// [`RepositoryError::OperationIdReused`].
 pub fn apply_lifecycle(
     tx: &Transaction<'_>,
     spool_id: &str,
@@ -57,13 +61,15 @@ pub fn apply_lifecycle(
     storage_label: Option<&str>,
     operation_id: &str,
 ) -> Result<MoveOutcome, RepositoryError> {
-    if operation_id.trim().is_empty() {
-        return Err(RepositoryError::Validation {
-            field_path: "operationId",
-        });
-    }
-    if let Some(outcome) = movement::find_operation(tx, operation_id)? {
-        return Ok(outcome);
+    let digest = operations::digest(&SpoolLifecycleRequest {
+        spool_id,
+        expected_revision,
+        action,
+        storage_label,
+    });
+    if operations::claim(tx, operation_id, OperationKind::SpoolLifecycle, &digest)? == Claim::Replay
+    {
+        return Ok(movement::recorded_or_unmoved(tx, operation_id, spool_id)?);
     }
     if expected_revision <= 0 {
         return Err(RepositoryError::Validation {
@@ -138,6 +144,17 @@ pub fn apply_lifecycle(
             Ok(unmoved(spool_id))
         }
     }
+}
+
+/// The request fields that define a `set_spool_lifecycle` operation, in a
+/// fixed order for [`operations::digest`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpoolLifecycleRequest<'a> {
+    spool_id: &'a str,
+    expected_revision: i64,
+    action: SpoolLifecycleAction,
+    storage_label: Option<&'a str>,
 }
 
 /// The mark-empty preconditions (D8/D9): the Spool is `active` (else

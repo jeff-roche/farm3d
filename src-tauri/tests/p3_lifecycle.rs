@@ -23,7 +23,7 @@ use farm3d_lib::printers::StoredPrinter;
 use farm3d_lib::spools::dispositions::{SpoolDisposition, SpoolDispositionInput};
 use farm3d_lib::spools::ledger::{self, AmountEntry, AmountEvent, AmountEventKind};
 use farm3d_lib::spools::lifecycle::{apply_lifecycle, SpoolLifecycleAction};
-use farm3d_lib::spools::movement::{self, MovementReason, SpoolMovement};
+use farm3d_lib::spools::movement::{self, MoveDestination, MovementReason, SpoolMovement};
 use farm3d_lib::spools::repository::{self, StoredSpool};
 use farm3d_lib::spools::reservations::{self, ReservationHolder};
 use farm3d_lib::spools::slots::{InitialLoad, SlotSpec};
@@ -1138,4 +1138,117 @@ fn archiving_an_empty_printer_with_no_dispositions_succeeds_as_in_p2() {
         1
     );
     assert!(movements_of_operation(&env.storage, "op-r").is_empty());
+}
+
+// --- 10. The operations ledger ---------------------------------------------------
+
+fn operation_count(storage: &Storage) -> i64 {
+    storage
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))
+        })
+        .unwrap()
+}
+
+#[test]
+fn a_move_operation_id_reused_for_a_spool_lifecycle_action_or_an_archive_is_rejected() {
+    let env = env();
+    let farm = farm(&env.storage);
+    let stored = new_spool(&env.storage);
+    env.storage
+        .write_repo(|tx| {
+            movement::move_spool(
+                tx,
+                "op-move",
+                &stored.id,
+                stored.revision,
+                &MoveDestination::Storage {
+                    storage_label: Some("Shelf".to_string()),
+                },
+            )
+        })
+        .unwrap();
+    let moved = spool(&env.storage, &stored.id);
+    let r_before = printer(&env.storage, &farm.r.id);
+
+    let lifecycle_error = lifecycle(
+        &env.storage,
+        &stored.id,
+        SpoolLifecycleAction::Archive,
+        None,
+        "op-move",
+    )
+    .unwrap_err();
+    let archive_error = archive_repo(&env.storage, &farm.r.id, "op-move", &[]).unwrap_err();
+
+    assert!(
+        matches!(lifecycle_error, RepositoryError::OperationIdReused),
+        "{lifecycle_error:?}"
+    );
+    assert!(
+        matches!(archive_error, RepositoryError::OperationIdReused),
+        "{archive_error:?}"
+    );
+    assert_eq!(spool(&env.storage, &stored.id), moved);
+    assert_eq!(printer(&env.storage, &farm.r.id), r_before);
+}
+
+#[test]
+fn replaying_a_reactivate_succeeds_and_changes_the_spool_only_once() {
+    let env = env();
+    let stored = new_spool(&env.storage);
+    lifecycle(
+        &env.storage,
+        &stored.id,
+        SpoolLifecycleAction::MarkEmpty,
+        None,
+        "op-empty",
+    )
+    .unwrap();
+    let empty = spool(&env.storage, &stored.id);
+    let ledger_rows = ledger_history(&env.storage, &stored.id).len();
+    let reactivate = || {
+        env.storage.write_repo(|tx| {
+            apply_lifecycle(
+                tx,
+                &stored.id,
+                empty.revision,
+                SpoolLifecycleAction::Reactivate,
+                None,
+                "op-reactivate",
+            )
+        })
+    };
+
+    let first = reactivate().unwrap();
+    let after_first = spool(&env.storage, &stored.id);
+    let replay = reactivate().unwrap();
+
+    assert!(!first.replayed);
+    assert!(replay.replayed);
+    assert_eq!(replay.spool_ids, vec![stored.id.clone()]);
+    assert!(replay.movements.is_empty());
+    assert_eq!(after_first.lifecycle, SpoolLifecycle::Active);
+    assert_eq!(after_first.revision, empty.revision + 1);
+    assert_eq!(spool(&env.storage, &stored.id), after_first);
+    assert_eq!(ledger_history(&env.storage, &stored.id).len(), ledger_rows);
+    assert_eq!(operation_count(&env.storage), 2);
+}
+
+#[test]
+fn replaying_an_archive_of_a_printer_with_no_loaded_spools_succeeds_instead_of_conflicting() {
+    let env = env();
+    let farm = farm(&env.storage);
+    let rt = runtime(&env.storage);
+    let body = archive_body(&env.storage, &farm.r.id, "op-archive-r", &[]);
+
+    let first = invoke(&rt.webview, "archive_printer", body.clone()).unwrap();
+    let replay = invoke(&rt.webview, "archive_printer", body).unwrap();
+
+    assert!(first["data"]["printer"]["archivedAt"].is_string());
+    assert_eq!(replay["data"]["printer"], first["data"]["printer"]);
+    assert_eq!(
+        printer(&env.storage, &farm.r.id).revision,
+        farm.r.revision + 1
+    );
 }

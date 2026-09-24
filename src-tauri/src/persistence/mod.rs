@@ -1182,6 +1182,7 @@ mod tests {
                     ("table", "legacy_imports"),
                     ("table", "material_slots"),
                     ("table", "migration_warnings"),
+                    ("table", "operations"),
                     ("table", "pending_credential_cleanup"),
                     ("table", "printer_status_snapshots"),
                     ("table", "printers"),
@@ -1261,6 +1262,10 @@ mod tests {
             ("migration_warnings", "message", "TEXT", 1, None, 0),
             ("migration_warnings", "details_json", "TEXT", 1, None, 0),
             ("migration_warnings", "created_at", "TEXT", 1, None, 0),
+            ("operations", "id", "TEXT", 1, None, 1),
+            ("operations", "kind", "TEXT", 1, None, 0),
+            ("operations", "request_digest", "TEXT", 1, None, 0),
+            ("operations", "created_at", "TEXT", 1, None, 0),
             (
                 "pending_credential_cleanup",
                 "credential_ref",

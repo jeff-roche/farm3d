@@ -113,6 +113,10 @@ pub enum RepositoryError {
     /// current lifecycle state (or, in a later phase, other work that still
     /// depends on it). See `crate::printers::lifecycle::evaluate`.
     LifecycleBlocked(Vec<LifecycleBlocker>),
+    /// P3 D6: the `operationId` is already in the operations ledger for a
+    /// different request (another kind of operation, or different fields).
+    /// Nothing was written. `VALIDATION` on `operationId`.
+    OperationIdReused,
     Storage(StorageError),
 }
 

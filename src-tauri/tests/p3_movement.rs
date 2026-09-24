@@ -118,6 +118,24 @@ fn apply(
     })
 }
 
+/// The `move_spool` operation: the ledger claim, then the move.
+fn move_op(
+    storage: &Storage,
+    operation_id: &str,
+    spool: &StoredSpool,
+    dest: &MoveDestination,
+) -> Result<MoveOutcome, RepositoryError> {
+    storage.write_repo(|tx| movement::move_spool(tx, operation_id, &spool.id, spool.revision, dest))
+}
+
+fn operation_count(storage: &Storage) -> i64 {
+    storage
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))
+        })
+        .unwrap()
+}
+
 fn apply_batch(
     storage: &Storage,
     operation_id: &str,
@@ -349,37 +367,29 @@ fn two_concurrent_loads_into_one_empty_slot_have_exactly_one_winner() {
     assert_eq!(movement_count(&storage), 1);
 }
 
-/// 6. Replay: the same `operation_id` again returns `replayed = true` and
-///    writes nothing.
+/// 6. Replay: the same `operation_id` and the same request again returns
+///    `replayed = true` and writes nothing — not even a second ledger row.
 #[test]
 fn replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing() {
     let (_temp, _lease, storage, _db) = storage();
     let (a, b) = swap_setup(&storage);
-    let first = apply(
-        &storage,
-        "op-swap",
-        &b,
-        &to_slot("slt-x", Some(&a.id), Some("Shelf")),
-    )
-    .unwrap();
+    let dest = to_slot("slt-x", Some(&a.id), Some("Shelf"));
+    let first = move_op(&storage, "op-swap", &b, &dest).unwrap();
     let rows_after_first = movement_count(&storage);
     let b_after = spool(&storage, &b.id);
     let printer_after = printer_revision(&storage, "prn-x");
+    assert!(!first.replayed);
+    assert_eq!(operation_count(&storage), 1);
 
     // Same request (now-stale revision included): a replay, not a conflict.
-    let replay = apply(
-        &storage,
-        "op-swap",
-        &b,
-        &to_slot("slt-x", Some(&a.id), Some("Shelf")),
-    )
-    .unwrap();
+    let replay = move_op(&storage, "op-swap", &b, &dest).unwrap();
 
     assert!(replay.replayed);
     assert_eq!(replay.spool_ids, first.spool_ids);
     assert_eq!(replay.printer_ids, first.printer_ids);
     assert_eq!(replay.movements, first.movements);
     assert_eq!(movement_count(&storage), rows_after_first);
+    assert_eq!(operation_count(&storage), 1);
     assert_eq!(spool(&storage, &b.id), b_after);
     assert_eq!(printer_revision(&storage, "prn-x"), printer_after);
 
@@ -395,12 +405,36 @@ fn replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing() {
         .is_none());
 }
 
-/// Fix round 1, Critical 1: `apply_moves` applies several moves under one
-/// `operationId`, checking the replay ONCE for the whole batch — a plain
-/// `apply_move` per load would find the first load's row on the second call
-/// and silently replay it instead of applying the second move.
+/// The same `operation_id` with a different request is rejected on
+/// `operationId`, before any revision check, and writes nothing.
 #[test]
-fn apply_moves_applies_a_batch_under_one_operation_id_and_replays_the_whole_batch_together() {
+fn reusing_an_operation_id_for_a_different_move_is_rejected_on_operation_id() {
+    let (_temp, _lease, storage, _db) = storage();
+    seed_printer_with_slot(&storage, "prn-x", "slt-x");
+    let a = new_spool(&storage);
+    move_op(&storage, "op-load", &a, &to_slot("slt-x", None, None)).unwrap();
+    let a_after = spool(&storage, &a.id);
+    let rows_after_first = movement_count(&storage);
+
+    let different = MoveDestination::Storage {
+        storage_label: Some("Shelf".to_string()),
+    };
+    let error = move_op(&storage, "op-load", &a, &different).unwrap_err();
+
+    assert!(
+        matches!(error, RepositoryError::OperationIdReused),
+        "{error:?}"
+    );
+    assert_eq!(movement_count(&storage), rows_after_first);
+    assert_eq!(operation_count(&storage), 1);
+    assert_eq!(spool(&storage, &a.id), a_after);
+}
+
+/// Fix round 1, Critical 1: `apply_moves` applies several moves under one
+/// `operationId` (replay is the operations ledger's job, checked once by
+/// the operation's caller, never per move).
+#[test]
+fn apply_moves_applies_a_batch_under_one_operation_id() {
     let (_temp, _lease, storage, _db) = storage();
     seed_printer_with_slot(&storage, "prn-x", "slt-x");
     seed_printer_with_slot(&storage, "prn-y", "slt-y");
@@ -435,23 +469,6 @@ fn apply_moves_applies_a_batch_under_one_operation_id_and_replays_the_whole_batc
     assert_eq!(printer_revision(&storage, "prn-x"), 2);
     assert_eq!(printer_revision(&storage, "prn-y"), 2);
     assert_eq!(movement_count(&storage), 2);
-
-    // Replaying the same batch (the same `operationId`) writes nothing and
-    // returns the same combined outcome.
-    let rows_before = movement_count(&storage);
-    let x_before = printer_revision(&storage, "prn-x");
-    let y_before = printer_revision(&storage, "prn-y");
-    let replay = apply_batch(&storage, "op-batch", &moves).unwrap();
-
-    assert!(replay.replayed);
-    assert_eq!(replay.spool_ids, outcome.spool_ids);
-    assert_eq!(replay.printer_ids, outcome.printer_ids);
-    assert_eq!(replay.movements, outcome.movements);
-    assert_eq!(movement_count(&storage), rows_before);
-    assert_eq!(printer_revision(&storage, "prn-x"), x_before);
-    assert_eq!(printer_revision(&storage, "prn-y"), y_before);
-    assert_eq!(spool(&storage, &a.id).slot_id.as_deref(), Some("slt-x"));
-    assert_eq!(spool(&storage, &b.id).slot_id.as_deref(), Some("slt-y"));
 }
 
 fn assert_validation(result: Result<MoveOutcome, RepositoryError>, expected_field: &str) {

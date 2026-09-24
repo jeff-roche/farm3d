@@ -738,7 +738,9 @@ export async function setLifecycle(
   if (!desktopAvailable()) return webSetLifecycle(id, action, storageLabel);
   const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
   try {
-    const result = await command("set_spool_lifecycle", { id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}) });
+    const result = await command("set_spool_lifecycle", {
+      operationId: crypto.randomUUID(), id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}),
+    });
     upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;

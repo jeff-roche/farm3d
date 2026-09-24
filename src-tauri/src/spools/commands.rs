@@ -300,22 +300,11 @@ pub fn record_spool_amount<R: tauri::Runtime>(
     })
 }
 
-/// What `move_spool`'s transaction decided.
-enum MoveTransaction {
-    Applied {
-        committed: Committed,
-        movements: Vec<SpoolMovement>,
-        replayed: bool,
-    },
-    /// `operationId` already recorded an operation that didn't involve this
-    /// Spool. Nothing was written.
-    OperationIdReused,
-}
-
 /// D6: load, unload, swap, relocate, or move between Printers. Idempotent
-/// by `operationId`: a replay returns the current state of the recorded
-/// Spools and Printers and emits nothing. An `operationId` already used by
-/// an operation that didn't move `spoolId` is `VALIDATION`.
+/// by `operationId` through the operations ledger: a retry of the same
+/// request returns the current state of the recorded Spools and Printers
+/// and emits nothing. The same `operationId` for a different request is
+/// `VALIDATION` on `operationId`.
 #[tauri::command]
 pub fn move_spool<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -328,58 +317,41 @@ pub fn move_spool<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<MoveSpoolResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let outcome = services
+    let (committed, outcome) = services
         .storage
         .write_repo(|tx| {
-            if let Some(recorded) = movement::find_operation(tx, &operation_id)? {
-                if !recorded.spool_ids.contains(&spool_id) {
-                    return Ok(MoveTransaction::OperationIdReused);
-                }
-            }
-            let outcome = movement::apply_move(
+            let outcome = movement::move_spool(
                 tx,
                 &operation_id,
                 &spool_id,
                 expected_spool_revision,
                 &destination,
-                None,
             )?;
-            Ok(MoveTransaction::Applied {
-                committed: Committed::read(tx, &outcome.spool_ids, &outcome.printer_ids)?,
-                movements: outcome.movements,
-                replayed: outcome.replayed,
-            })
+            let committed = Committed::read(tx, &outcome.spool_ids, &outcome.printer_ids)?;
+            Ok((committed, outcome))
         })
         .map_err(CommandError::from_repository)?;
-    let MoveTransaction::Applied {
-        committed,
-        movements,
-        replayed,
-    } = outcome
-    else {
-        return Err(CommandError::validation_at(
-            "operationId",
-            "operationId was already used for a different operation",
-        ));
-    };
-    if !replayed {
+    if !outcome.replayed {
         committed.publish(&app, &services);
     }
     Ok(CommandSuccess::new(MoveSpoolResult {
         printers: committed.resolved_printers(&services),
         spools: committed.spools,
-        movements,
+        movements: outcome.movements,
     }))
 }
 
 /// D9: `markEmpty`, `reactivate`, `archive`, or `unarchive`. A `markEmpty`
 /// of a loaded Spool also unloads it to `storageLabel`, so `printers` then
-/// holds the Printer it left.
+/// holds the Printer it left. Idempotent by `operationId`, like
+/// `move_spool`: a retry of the same request returns the Spool's current
+/// state and emits nothing.
 #[tauri::command]
 pub fn set_spool_lifecycle<R: tauri::Runtime>(
     app: AppHandle<R>,
     bootstrap: Services<'_, R>,
     contract_version: IncomingContractVersion,
+    operation_id: String,
     id: String,
     expected_revision: i64,
     action: SpoolLifecycleAction,
@@ -387,22 +359,27 @@ pub fn set_spool_lifecycle<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<SpoolMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    // The request carries no operationId (D13), so each call is its own
-    // operation; a retry is caught by the revision check instead.
-    let operation_id = format!("op-{}", uuid::Uuid::new_v4());
-    mutate_spool(&app, &services, |tx| {
-        let outcome = lifecycle::apply_lifecycle(
-            tx,
-            &id,
-            expected_revision,
-            action,
-            storage_label.as_deref(),
-            &operation_id,
-        )?;
-        // `outcome.spool_ids` is just this Spool: a lifecycle unload never
-        // displaces another.
-        Ok((vec![id.clone()], outcome.printer_ids))
-    })
+    let (committed, replayed) = services
+        .storage
+        .write_repo(|tx| {
+            let outcome = lifecycle::apply_lifecycle(
+                tx,
+                &id,
+                expected_revision,
+                action,
+                storage_label.as_deref(),
+                &operation_id,
+            )?;
+            // `outcome.spool_ids` is just this Spool: a lifecycle unload
+            // never displaces another.
+            let committed = Committed::read(tx, std::slice::from_ref(&id), &outcome.printer_ids)?;
+            Ok((committed, outcome.replayed))
+        })
+        .map_err(CommandError::from_repository)?;
+    if !replayed {
+        committed.publish(&app, &services);
+    }
+    Ok(CommandSuccess::new(committed.into_mutation(&services)))
 }
 
 #[tauri::command]
