@@ -319,25 +319,34 @@ pub async fn archive_printer<R: tauri::Runtime>(
         .archive_with_outcome(&id, expected_revision, &operation_id, &spool_dispositions)
         .map_err(CommandError::from_repository)?;
     let mut warnings = Vec::new();
-    let _reconciliation = services.manager.reconciliation_guard().await;
-    match crate::printers::setup::supervise_persisted(
-        &services.manager,
-        &services.storage,
-        services.credentials.as_ref(),
-        &services.catalog,
-        &archived,
-    )
-    .await
-    {
-        crate::printers::setup::SupervisionOutcome::Archived(false)
-        | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
-            warnings.push(OperationWarning::supervisor(&id));
-        }
-        _ => {}
-    }
-    // D11, after the P2 order above: the Spools the dispositions relocated,
-    // and every Printer whose slots changed.
+    // A replay writes nothing (D-operations-ledger), so it must publish
+    // nothing either -- including the supervisor's own
+    // `printer.status.removed`, which `supervise_persisted` would otherwise
+    // re-publish unconditionally (`supervise_printer`'s `manager.stop()`
+    // for an already-archived Printer). The first, non-replay call already
+    // stopped supervision; a restart before any replay would too
+    // (`restore_persisted_connections` reconciles every stored Printer,
+    // archived or not, at startup), so skipping this is safe, not just
+    // event-quiet.
     if !relocation.replayed {
+        let _reconciliation = services.manager.reconciliation_guard().await;
+        match crate::printers::setup::supervise_persisted(
+            &services.manager,
+            &services.storage,
+            services.credentials.as_ref(),
+            &services.catalog,
+            &archived,
+        )
+        .await
+        {
+            crate::printers::setup::SupervisionOutcome::Archived(false)
+            | crate::printers::setup::SupervisionOutcome::Deleted(false) => {
+                warnings.push(OperationWarning::supervisor(&id));
+            }
+            _ => {}
+        }
+        // D11, after the P2 order above: the Spools the dispositions
+        // relocated, and every Printer whose slots changed.
         crate::spools::events::publish_ids(
             &app,
             &services,

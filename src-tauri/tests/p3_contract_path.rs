@@ -515,6 +515,34 @@ fn mark_empty_on_a_loaded_spool_unloads_it_and_returns_the_printer() {
     assert_eq!(result["printers"], json!([]));
 }
 
+/// Final follow-ups review, minor: a command-level check that a
+/// `set_spool_lifecycle` replay (same `operationId`, same request) is
+/// silent -- no `spool.changed`/`spool.availability.changed` events, on top
+/// of the repository-level replay coverage in `p3_lifecycle.rs`.
+#[test]
+fn replaying_a_set_spool_lifecycle_operation_id_emits_no_events() {
+    let env = env();
+    let a = env.create_spool();
+    env.take_events();
+
+    let body = json!({
+        "operationId": uuid::Uuid::new_v4().to_string(),
+        "id": a["id"],
+        "expectedRevision": a["revision"],
+        "action": "markEmpty",
+        "storageLabel": "Empties",
+    });
+
+    let first = env.ok("set_spool_lifecycle", body.clone());
+    let events = env.take_events();
+    assert_eq!(count(&events, "spool.changed"), 1);
+    assert_eq!(count(&events, "spool.availability.changed"), 1);
+
+    let replay = env.ok("set_spool_lifecycle", body);
+    assert_eq!(replay, first);
+    assert!(env.take_events().is_empty());
+}
+
 // --- Other commands --------------------------------------------------------------
 
 #[test]
@@ -735,6 +763,68 @@ fn slot_layout_create_with_loads_and_archive_emit_inventory_events_after_commit(
     assert_eq!(
         change.spool_ids,
         vec![a["id"].as_str().unwrap().to_string()]
+    );
+}
+
+/// Final follow-ups review, Important: a replay of `archive_printer` with a
+/// loaded Spool (exercising the `find_operation` branch in
+/// `archive_with_outcome`, not just the no-Spools empty-outcome branch)
+/// must be silent end to end -- not only no inventory events, but also no
+/// re-publish of the supervisor's `printer.status.removed` tombstone
+/// (`printers::setup::supervise_persisted`/`supervise_printer`'s
+/// unconditional `manager.stop()` for an archived Printer), and no further
+/// write.
+#[test]
+fn replaying_an_archive_with_loaded_spools_emits_no_events_and_writes_nothing() {
+    let env = env();
+    let printer = env.printer(&["Main"]);
+    let a = env.create_spool();
+    let loaded = env.load(&a, &printer.material_slots[0].id, None);
+    let printer_revision = loaded["printers"][0]["revision"].as_i64().unwrap();
+    let a_loaded = env.current(a["id"].as_str().unwrap());
+    env.take_events();
+
+    let body = json!({
+        "id": printer.id,
+        "expectedRevision": printer_revision,
+        "operationId": uuid::Uuid::new_v4().to_string(),
+        "spoolDispositions": [{
+            "spoolId": a["id"],
+            "expectedSpoolRevision": a_loaded["revision"],
+            "disposition": {"kind": "storage", "storageLabel": "Shelf"},
+        }],
+    });
+
+    let first = env.ok("archive_printer", body.clone());
+    assert!(first["printer"]["archivedAt"].is_string());
+    let events = env.take_events();
+    assert_eq!(count(&events, "spool.changed"), 1);
+    assert_eq!(count(&events, "printer.slots.changed"), 1);
+    // `take_events` drains every recorded event, filtered or not, so this
+    // also clears the first (non-replay) archive's own
+    // `printer.status.removed` tombstone -- only the replay's silence is
+    // under test below.
+    let a_after_first = env.current(a["id"].as_str().unwrap());
+    let printer_after_first = PrinterRepository::new(Arc::clone(&env.storage))
+        .get(printer.id.as_str())
+        .unwrap()
+        .unwrap();
+
+    let replay = env.ok("archive_printer", body);
+
+    assert_eq!(replay["printer"], first["printer"]);
+    assert_eq!(env.current(a["id"].as_str().unwrap()), a_after_first);
+    assert_eq!(
+        PrinterRepository::new(Arc::clone(&env.storage))
+            .get(printer.id.as_str())
+            .unwrap()
+            .unwrap()
+            .revision,
+        printer_after_first.revision
+    );
+    assert!(
+        env.events.lock().unwrap().is_empty(),
+        "a replay must publish no events at all, including the supervisor's"
     );
 }
 
