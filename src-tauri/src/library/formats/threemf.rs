@@ -6,14 +6,17 @@
 //! to per-object bounds and a triangle count as they stream past; vertex
 //! arrays are never kept.
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::Path;
+use std::rc::Rc;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
+use zip::read::ZipFile;
 use zip::result::ZipError;
 use zip::ZipArchive;
 
@@ -31,6 +34,10 @@ const MODEL_SETTINGS: &str = "Metadata/model_settings.config";
 const MODEL_REL: &str = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel";
 const PRODUCTION_NS: &str = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
 const MATERIALS_NS: &str = "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
+/// The most text kept from one `Title`, `Application`, or
+/// `Thumbnail_Middle` metadata element.
+pub(crate) const MAX_METADATA_BYTES: usize = 4096;
+
 const NO_OBJECTS: &str = "This 3MF contains no objects.";
 /// Component nesting deeper than this is treated like a cycle.
 const MAX_COMPONENT_DEPTH: usize = 64;
@@ -61,6 +68,7 @@ pub(crate) struct ZipLimits {
     pub max_total_bytes: u64,
     pub max_entry_bytes: u64,
     pub max_ratio: u64,
+    pub max_event_bytes: u64,
 }
 
 impl ZipLimits {
@@ -69,6 +77,7 @@ impl ZipLimits {
         max_total_bytes: 4 << 30,
         max_entry_bytes: 2 << 30,
         max_ratio: 1_000,
+        max_event_bytes: 16 << 20,
     };
 }
 
@@ -87,11 +96,8 @@ type Thumbnails = (
 /// D8: a ZIP that holds `[Content_Types].xml`. A ZIP that can't be read
 /// isn't one.
 pub fn is_3mf_package(file: File) -> Result<bool, InspectError> {
-    match ZipArchive::new(file) {
-        Ok(archive) => Ok(archive.index_for_name(CONTENT_TYPES).is_some()),
-        Err(ZipError::Io(error)) => Err(error.into()),
-        Err(_) => Ok(false),
-    }
+    Ok(open_archive(file, &ZipLimits::SPEC)?
+        .is_some_and(|archive| archive.index_for_name(CONTENT_TYPES).is_some()))
 }
 
 pub fn inspect(path: &Path, cancel: &CancelFlag) -> Result<Inspected, InspectError> {
@@ -106,7 +112,8 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
     if cancel.is_cancelled() {
         return Err(InspectError::Cancelled);
     }
-    let archive = ZipArchive::new(reader).map_err(from_zip)?;
+    let archive = open_archive(reader, limits)?
+        .ok_or_else(|| InspectError::invalid("This 3MF isn't a readable ZIP package."))?;
     if archive.len() > limits.max_entries {
         return Err(limit_exceeded(format!(
             "it has more than {} ZIP entries",
@@ -272,6 +279,277 @@ fn include_bounds(bounds: &mut Option<BoundsMm>, other: &BoundsMm) {
     }
 }
 
+// --- Opening the archive ----------------------------------------------------
+//
+// zip 8.6's `ZipArchive::new` reserves a `Vec` for the declared entry count
+// and parses every central-directory record before `len()` can be checked.
+// When the first end record fails to parse, it also scans backwards for an
+// earlier one and tries again. A hostile ZIP64 file under the import size
+// cap could therefore make it allocate for millions of entries.
+//
+// `open_archive` bounds that in two steps:
+//
+// 1. `guard_directory` reads the end record (and the ZIP64 end record) the
+//    same way zip picks its first candidate: the highest `PK\x05\x06` in the
+//    tail whose comment fits. It rejects a declared count over the entry
+//    limit, a directory larger than `max_entries` records of 46 bytes plus
+//    1 KiB, and any other end-record signature between the directory start
+//    and the end record.
+// 2. `ZipArchive::new` then reads through `GuardedReader`, which shows zip
+//    only that checked region, serves zeros for every other byte, and stops
+//    after a read budget. The guard is lifted once the archive is open.
+//
+// So the only end records zip can see are the checked ones. A retry after a
+// failed parse finds no other signature (the rest of the file reads as
+// zeros), and it runs out of budget if it keeps scanning.
+
+/// The most bytes a central-directory record may average: the fixed 46
+/// bytes plus 1 KiB of name, extra field, and comment.
+const MAX_DIRECTORY_RECORD: u64 = 46 + 1024;
+/// The longest end record plus comment.
+const MAX_END_RECORD: u64 = 22 + u16::MAX as u64;
+/// The ZIP64 end record plus its locator.
+const ZIP64_END_RECORDS: u64 = 56 + 20;
+/// Reads allowed during `ZipArchive::new` beyond the checked region.
+const GUARD_SLACK: u64 = 1 << 20;
+
+const END_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+const ZIP64_END_SIGNATURE: &[u8; 4] = b"PK\x06\x06";
+const ZIP64_LOCATOR_SIGNATURE: &[u8; 4] = b"PK\x06\x07";
+const DIRECTORY_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+
+/// Opens the ZIP with its central directory bounded (see above). `None`
+/// means it isn't a ZIP farm3d can read; a limit breach is an error.
+fn open_archive<R: Read + Seek>(
+    reader: R,
+    limits: &ZipLimits,
+) -> Result<Option<ZipArchive<GuardedReader<R>>>, InspectError> {
+    let guard = Rc::new(Cell::new(None));
+    let mut view = GuardedReader::new(reader, guard.clone())?;
+    let Some(region) = guard_directory(&mut view, limits)? else {
+        return Ok(None);
+    };
+    guard.set(Some(DirectoryGuard {
+        start: region.start,
+        end: region.end,
+        budget: (region.end - region.start).saturating_add(GUARD_SLACK),
+    }));
+    let opened = ZipArchive::new(view);
+    guard.set(None);
+    match opened {
+        Ok(archive) => Ok(Some(archive)),
+        Err(ZipError::Io(error)) if is_stop(&error) => Err(from_io(&error)),
+        Err(ZipError::Io(error))
+            if !matches!(
+                error.kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData
+            ) =>
+        {
+            Err(error.into())
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+fn is_stop(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<Stop>())
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> u64 {
+    u64::from(u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()))
+}
+
+fn le_u64(bytes: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
+}
+
+fn read_at<R: Read + Seek>(reader: &mut R, at: u64, len: usize) -> io::Result<Vec<u8>> {
+    reader.seek(io::SeekFrom::Start(at))?;
+    let mut bytes = vec![0; len];
+    reader.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Checks the end records and returns the byte range zip may read while
+/// opening: from the directory start to the end of the file. `None` means
+/// there is no usable end record.
+fn guard_directory<R: Read + Seek>(
+    reader: &mut R,
+    limits: &ZipLimits,
+) -> Result<Option<std::ops::Range<u64>>, InspectError> {
+    let file_len = reader.seek(io::SeekFrom::End(0))?;
+    let tail_start = file_len.saturating_sub(MAX_END_RECORD);
+    let tail = read_at(reader, tail_start, (file_len - tail_start) as usize)?;
+
+    // zip's first candidate: the highest signature whose comment fits.
+    let Some(end_at) = (0..tail.len().saturating_sub(21)).rev().find(|&at| {
+        &tail[at..at + 4] == END_SIGNATURE
+            && at + 22 + le_u16(&tail, at + 20) as usize <= tail.len()
+    }) else {
+        return Ok(None);
+    };
+    let end = &tail[end_at..end_at + 22];
+    let end_offset = tail_start + end_at as u64;
+    let mut declared = le_u16(end, 8).max(le_u16(end, 10));
+    let mut directory_start = le_u32(end, 16);
+
+    // A ZIP64 locator right before the end record names the ZIP64 end
+    // record, which must be exactly where it says (no prepended data).
+    let mut zip64_offset = None;
+    if end_offset >= 20 {
+        let locator = read_at(reader, end_offset - 20, 20)?;
+        if &locator[..4] == ZIP64_LOCATOR_SIGNATURE {
+            let offset = le_u64(&locator, 8);
+            if offset.saturating_add(56) > end_offset - 20 {
+                return Ok(None);
+            }
+            let record = read_at(reader, offset, 56)?;
+            if &record[..4] != ZIP64_END_SIGNATURE {
+                return Ok(None);
+            }
+            // 0xFFFF in the classic record defers to the ZIP64 counts.
+            if declared == u64::from(u16::MAX) {
+                declared = 0;
+            }
+            declared = declared.max(le_u64(&record, 24)).max(le_u64(&record, 32));
+            directory_start = le_u64(&record, 48);
+            zip64_offset = Some(offset);
+        }
+    }
+
+    if declared > limits.max_entries as u64 {
+        return Err(limit_exceeded(format!(
+            "it has more than {} ZIP entries",
+            limits.max_entries
+        )));
+    }
+    let region_start = zip64_offset.map_or(directory_start, |offset| offset.min(directory_start));
+    if region_start > end_offset {
+        return Ok(None);
+    }
+    let directory_bytes = end_offset - region_start;
+    let allowed = (limits.max_entries as u64)
+        .saturating_mul(MAX_DIRECTORY_RECORD)
+        .saturating_add(ZIP64_END_RECORDS);
+    if directory_bytes > allowed {
+        return Err(limit_exceeded(format!(
+            "its ZIP central directory is larger than {allowed} bytes"
+        )));
+    }
+    if declared > 0 && read_at(reader, directory_start, 4)? != DIRECTORY_SIGNATURE {
+        return Ok(None);
+    }
+
+    // No second end record may hide in the directory for zip to retry.
+    let directory = read_at(reader, region_start, directory_bytes as usize)?;
+    let hidden = directory.windows(4).enumerate().any(|(at, window)| {
+        window == END_SIGNATURE
+            || (window == ZIP64_END_SIGNATURE && Some(region_start + at as u64) != zip64_offset)
+    });
+    if hidden {
+        return Err(InspectError::invalid(
+            "This 3MF has a malformed ZIP directory.",
+        ));
+    }
+    Ok(Some(region_start..file_len))
+}
+
+/// While a guard is set, what [`ZipArchive::new`] may read.
+#[derive(Clone, Copy, Debug)]
+struct DirectoryGuard {
+    start: u64,
+    end: u64,
+    budget: u64,
+}
+
+/// A `Read + Seek` view that, while its guard is set, serves real bytes only
+/// inside the guarded range, zeros elsewhere, and fails once the read budget
+/// is spent. Unguarded, it passes through. Seeks are applied lazily.
+struct GuardedReader<R> {
+    inner: R,
+    guard: Rc<Cell<Option<DirectoryGuard>>>,
+    len: u64,
+    position: u64,
+    inner_position: Option<u64>,
+}
+
+impl<R: Read + Seek> GuardedReader<R> {
+    fn new(mut inner: R, guard: Rc<Cell<Option<DirectoryGuard>>>) -> io::Result<Self> {
+        let len = inner.seek(io::SeekFrom::End(0))?;
+        Ok(Self {
+            inner,
+            guard,
+            len,
+            position: 0,
+            inner_position: None,
+        })
+    }
+
+    fn read_inner(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.inner_position != Some(self.position) {
+            self.inner.seek(io::SeekFrom::Start(self.position))?;
+        }
+        let count = self.inner.read(buf)?;
+        self.position += count as u64;
+        self.inner_position = Some(self.position);
+        Ok(count)
+    }
+}
+
+impl<R: Read + Seek> Read for GuardedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let Some(mut guard) = self.guard.get() else {
+            return self.read_inner(buf);
+        };
+        if buf.is_empty() || self.position >= self.len {
+            return Ok(0);
+        }
+        if guard.budget == 0 {
+            return Err(io::Error::other(Stop::Limit(
+                "its ZIP central directory can't be read within bounds".to_string(),
+            )));
+        }
+        let inside = (guard.start..guard.end).contains(&self.position);
+        let boundary = if inside {
+            guard.end
+        } else if self.position < guard.start {
+            guard.start
+        } else {
+            self.len
+        };
+        let want = (buf.len() as u64)
+            .min(boundary - self.position)
+            .min(guard.budget) as usize;
+        let count = if inside {
+            self.read_inner(&mut buf[..want])?
+        } else {
+            buf[..want].fill(0);
+            self.position += want as u64;
+            want
+        };
+        guard.budget -= count as u64;
+        self.guard.set(Some(guard));
+        Ok(count)
+    }
+}
+
+impl<R: Read + Seek> Seek for GuardedReader<R> {
+    fn seek(&mut self, target: io::SeekFrom) -> io::Result<u64> {
+        let position = match target {
+            io::SeekFrom::Start(offset) => Some(offset),
+            io::SeekFrom::End(offset) => self.len.checked_add_signed(offset),
+            io::SeekFrom::Current(offset) => self.position.checked_add_signed(offset),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek out of range"))?;
+        self.position = position;
+        Ok(position)
+    }
+}
+
 // --- Limits and errors ------------------------------------------------------
 
 /// Why a [`LimitedRead`] stopped, carried through `io::Error` (and
@@ -326,13 +604,16 @@ fn from_xml(error: quick_xml::Error, part: &str) -> InspectError {
 }
 
 /// Reads one ZIP entry while enforcing D10's per-entry size, per-entry
-/// ratio, and package-wide total limits, and the cancel flag.
+/// ratio, and package-wide total limits, and the cancel flag. `since_event`
+/// counts bytes since the XML reader last produced an event, so one start
+/// tag or text run can't grow its buffer past `max_event_bytes`.
 struct LimitedRead<'a, R> {
     inner: R,
     cancel: &'a CancelFlag,
     limits: &'a ZipLimits,
     ratio_cap: u64,
     read: u64,
+    since_event: u64,
     total: &'a mut u64,
 }
 
@@ -343,8 +624,14 @@ impl<R: Read> Read for LimitedRead<'_, R> {
         }
         let count = self.inner.read(buf)?;
         self.read += count as u64;
+        self.since_event += count as u64;
         *self.total += count as u64;
-        let limit = if self.read > self.limits.max_entry_bytes {
+        let limit = if self.since_event > self.limits.max_event_bytes {
+            Some(format!(
+                "one XML element or text run is larger than {} bytes",
+                self.limits.max_event_bytes
+            ))
+        } else if self.read > self.limits.max_entry_bytes {
             Some(format!(
                 "a ZIP entry is larger than {} bytes",
                 self.limits.max_entry_bytes
@@ -383,7 +670,7 @@ impl<R: Read + Seek> Package<'_, R> {
         self.archive.index_for_name(name).is_some()
     }
 
-    fn open(&mut self, name: &str) -> Result<impl Read + '_, InspectError> {
+    fn open(&mut self, name: &str) -> Result<LimitedRead<'_, ZipFile<'_, R>>, InspectError> {
         let entry = self.archive.by_name(name).map_err(from_zip)?;
         let ratio_cap = entry
             .compressed_size()
@@ -395,6 +682,7 @@ impl<R: Read + Seek> Package<'_, R> {
             limits: self.limits,
             ratio_cap,
             read: 0,
+            since_event: 0,
             total: &mut self.total_read,
         })
     }
@@ -416,6 +704,7 @@ impl<R: Read + Seek> Package<'_, R> {
                 event => on_event(event)?,
             }
             buffer.clear();
+            reader.get_mut().get_mut().since_event = 0;
         }
     }
 
@@ -668,7 +957,7 @@ struct ModelParser {
     in_build: bool,
     object: Option<ObjectInProgress>,
     /// A `Title`/`Application`/`Thumbnail_Middle` element being read: its
-    /// name and escaped text.
+    /// name and resolved text, capped at [`MAX_METADATA_BYTES`].
     metadata: Option<(String, String)>,
     part: ModelPart,
 }
@@ -714,16 +1003,23 @@ impl ModelParser {
                     _ => {}
                 }
             }
+            // quick-xml 0.42 reports entity and character references as
+            // separate events, so text runs hold no escapes.
             Event::Text(text) => {
                 if let Some((_, value)) = &mut self.metadata {
-                    value.push_str(&text.into_inner());
+                    push_capped(value, &text.into_inner());
                 }
             }
             Event::GeneralRef(reference) => {
                 if let Some((_, value)) = &mut self.metadata {
-                    value.push('&');
-                    value.push_str(&reference);
-                    value.push(';');
+                    let mut utf8 = [0; 4];
+                    let resolved = match reference.resolve_char_ref() {
+                        Ok(Some(character)) => character.encode_utf8(&mut utf8),
+                        Ok(None) => quick_xml::escape::resolve_predefined_entity(&reference)
+                            .ok_or_else(|| malformed(&self.name))?,
+                        Err(_) => return Err(malformed(&self.name)),
+                    };
+                    push_capped(value, resolved);
                 }
             }
             _ => {}
@@ -911,13 +1207,10 @@ impl ModelParser {
     }
 
     fn finish_metadata(&mut self) -> Result<(), InspectError> {
-        let Some((key, escaped)) = self.metadata.take() else {
+        let Some((key, text)) = self.metadata.take() else {
             return Ok(());
         };
-        let value = quick_xml::escape::unescape(&escaped)
-            .map_err(|_| malformed(&self.name))?
-            .trim()
-            .to_string();
+        let value = text.trim().to_string();
         let slot = match key.as_str() {
             "Title" => &mut self.part.title,
             "Application" => &mut self.part.application,
@@ -928,6 +1221,17 @@ impl ModelParser {
         }
         Ok(())
     }
+}
+
+/// Appends `text` to `value` without growing it past
+/// [`MAX_METADATA_BYTES`], cutting on a char boundary.
+fn push_capped(value: &mut String, text: &str) {
+    let room = MAX_METADATA_BYTES.saturating_sub(value.len());
+    let mut end = text.len().min(room);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.push_str(&text[..end]);
 }
 
 fn parse_transform(text: &str) -> Option<Transform> {
@@ -1116,6 +1420,10 @@ fn classify_metadata_part(name: &str) -> Option<(UnsupportedCode, &'static str)>
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, Write};
+
+    use std::cell::Cell;
+    use std::io::SeekFrom;
+    use std::rc::Rc;
 
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
@@ -1667,5 +1975,141 @@ mod tests {
             &ZipLimits::SPEC,
         );
         assert_eq!(result.unwrap_err(), InspectError::Cancelled);
+    }
+
+    // --- Central-directory guard (review I1) --------------------------------
+
+    /// Overwrites the EOCD's two entry counts (it is the last 22 bytes when
+    /// there is no comment).
+    fn with_declared_entries(mut bytes: Vec<u8>, count: u16) -> Vec<u8> {
+        let eocd = bytes.len() - 22;
+        assert_eq!(&bytes[eocd..eocd + 4], b"PK\x05\x06");
+        bytes[eocd + 8..eocd + 10].copy_from_slice(&count.to_le_bytes());
+        bytes[eocd + 10..eocd + 12].copy_from_slice(&count.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_declared_entry_count_over_the_limit_is_rejected_before_parsing() {
+        let bytes = with_declared_entries(core_package(single_cube_model("", ""), vec![]), 60_000);
+        let reason = invalid_reason(inspect_bytes(bytes));
+        assert!(reason.contains("entries"), "{reason}");
+    }
+
+    /// A ZIP64 end record claiming 20 million entries, as a sub-1 GiB file
+    /// could. zip 8.6 would reserve a `Vec` for all of them before reading
+    /// a single record; the guard must refuse it first.
+    #[test]
+    fn a_zip64_directory_claiming_millions_of_entries_is_rejected() {
+        let mut bytes = b"PK\x03\x04".to_vec();
+        bytes.resize(4096, 0);
+        let eocd64_offset = bytes.len() as u64;
+        bytes.extend_from_slice(b"PK\x06\x06");
+        bytes.extend_from_slice(&44u64.to_le_bytes());
+        bytes.extend_from_slice(&[45, 0, 45, 0]);
+        bytes.extend_from_slice(&[0; 8]);
+        bytes.extend_from_slice(&20_000_000u64.to_le_bytes());
+        bytes.extend_from_slice(&20_000_000u64.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x06\x07");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&eocd64_offset.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x05\x06");
+        bytes.extend_from_slice(&[0; 4]);
+        bytes.extend_from_slice(&[0xff; 4]);
+        bytes.extend_from_slice(&[0xff; 8]);
+        bytes.extend_from_slice(&[0; 2]);
+        let started = std::time::Instant::now();
+        let reason = invalid_reason(inspect_bytes(bytes));
+        assert!(reason.contains("entries"), "{reason}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_central_directory_larger_than_the_limit_is_rejected() {
+        let limits = ZipLimits {
+            max_entries: 4,
+            ..ZipLimits::SPEC
+        };
+        let long_name = format!("Metadata/{}.txt", "n".repeat(5000));
+        let bytes = core_package(
+            single_cube_model("", ""),
+            vec![(long_name.as_str(), b"x".to_vec())],
+        );
+        let reason = invalid_reason(inspect_with(bytes, &limits));
+        assert!(reason.contains("directory"), "{reason}");
+    }
+
+    /// A second end record hidden in the directory is what zip's retry
+    /// would find after the real one fails, so it is refused up front.
+    #[test]
+    fn an_end_record_signature_inside_the_directory_is_rejected() {
+        let bytes = core_package(
+            single_cube_model("", ""),
+            vec![("Metadata/PK\u{5}\u{6}.txt", b"x".to_vec())],
+        );
+        invalid_reason(inspect_bytes(bytes));
+    }
+
+    #[test]
+    fn the_guarded_view_zeroes_bytes_outside_the_directory_and_caps_reads() {
+        let data: Vec<u8> = (1..=100).collect();
+        let guard = Rc::new(Cell::new(Some(DirectoryGuard {
+            start: 40,
+            end: 60,
+            budget: 50,
+        })));
+        let mut view = GuardedReader::new(Cursor::new(data), guard.clone()).unwrap();
+        let mut buffer = [0xaau8; 30];
+        view.seek(SeekFrom::Start(20)).unwrap();
+        view.read_exact(&mut buffer[..20]).unwrap();
+        assert_eq!(
+            &buffer[..20],
+            &[0u8; 20],
+            "before the directory reads as zeros"
+        );
+        let mut inside = [0u8; 20];
+        view.read_exact(&mut inside).unwrap();
+        assert_eq!(inside.to_vec(), (41..=60).collect::<Vec<u8>>());
+        let error = view.read_exact(&mut buffer).unwrap_err();
+        assert!(error.get_ref().is_some_and(|inner| inner.is::<Stop>()));
+
+        guard.set(None);
+        view.seek(SeekFrom::Start(0)).unwrap();
+        let mut all = Vec::new();
+        view.read_to_end(&mut all).unwrap();
+        assert_eq!(all, (1..=100).collect::<Vec<u8>>());
+    }
+
+    // --- Per-event XML bound (review I2) -------------------------------------
+
+    fn titled_model(title: &str) -> String {
+        single_cube_model("", "").replace(
+            "<resources>",
+            &format!("<metadata name=\"Title\">{title}</metadata><resources>"),
+        )
+    }
+
+    #[test]
+    fn an_oversized_xml_event_is_rejected() {
+        let limits = ZipLimits {
+            max_event_bytes: 16 * 1024,
+            ..ZipLimits::SPEC
+        };
+        let bytes = core_package(titled_model(&"t".repeat(100_000)), vec![]);
+        let reason = invalid_reason(inspect_with(bytes, &limits));
+        assert!(reason.contains("XML"), "{reason}");
+    }
+
+    #[test]
+    fn retained_metadata_text_is_capped() {
+        let title = format!("{}&amp;{}", "t".repeat(3000), "é".repeat(3000));
+        let (inspection, _, _) = inspect_bytes(core_package(titled_model(&title), vec![])).unwrap();
+        let kept = inspection.title.unwrap();
+        // 3,000 + 1 ASCII bytes, then as many 2-byte `é` as fit whole.
+        assert_eq!(kept.len(), MAX_METADATA_BYTES - 1);
+        assert!(kept.starts_with(&format!("{}&é", "t".repeat(3000))));
     }
 }

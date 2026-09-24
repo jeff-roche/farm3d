@@ -468,7 +468,10 @@ pub fn detect_named(path: &Path, file_name: &str) -> Result<Detected, InspectErr
         (ModelFormat::Stl, Some(encoding))
     } else if gcode::looks_like_gcode(&head) {
         (ModelFormat::Gcode, None)
-    } else if let Some(reason) = stl::truncated_binary_reason(&head, file_len) {
+    } else if let Some(reason) = has_extension(file_name, "stl")
+        .then(|| stl::truncated_binary_reason(&head, file_len))
+        .flatten()
+    {
         return Err(InspectError::InvalidContent(reason));
     } else {
         return Err(InspectError::unsupported(
@@ -482,6 +485,12 @@ pub fn detect_named(path: &Path, file_name: &str) -> Result<Detected, InspectErr
         stl_encoding,
         warnings,
     })
+}
+
+fn has_extension(file_name: &str, extension: &str) -> bool {
+    file_name
+        .rsplit_once('.')
+        .is_some_and(|(_, actual)| actual.eq_ignore_ascii_case(extension))
 }
 
 /// D8: an extension that disagrees with the detected format is a warning,
@@ -616,6 +625,25 @@ mod tests {
         writer.finish().unwrap();
         let error = detect(&path).unwrap_err();
         assert_eq!(error.code(), "UNSUPPORTED_FORMAT");
+    }
+
+    #[test]
+    fn a_binary_stl_cut_mid_record_is_truncated_only_when_named_stl() {
+        let mut bytes = b"cut".to_vec();
+        bytes.resize(80, 0);
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend(std::iter::repeat_n(0u8, 3 * 50 + 17));
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("0.part");
+        std::fs::write(&staged, &bytes).unwrap();
+
+        let error = detect_named(&staged, "cut.STL").unwrap_err();
+        assert_eq!(error.code(), "INVALID_CONTENT");
+        assert!(error.message().contains("truncated"), "{}", error.message());
+        assert_eq!(
+            detect_named(&staged, "cut.bin").unwrap_err().code(),
+            "UNSUPPORTED_FORMAT"
+        );
     }
 
     #[test]

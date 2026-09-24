@@ -36,15 +36,13 @@ pub fn detect(head: &[u8], file_len: u64) -> Option<StlEncoding> {
     }
 }
 
-/// For a file no reader claimed: when it looks like a binary STL cut short
-/// (not text, whole 50-byte records after the header, but fewer than it
-/// declares), the D9 `INVALID_CONTENT` reason.
+/// D9: for a file named `.stl` that no reader claimed, the truncation
+/// reason when it isn't ASCII and declares more triangles than it holds
+/// complete records, however it was cut. The caller checks the name.
 pub fn truncated_binary_reason(head: &[u8], file_len: u64) -> Option<String> {
     let declared = declared_count(head)?;
-    let body = file_len.checked_sub(HEADER_LEN)?;
-    let present = body / RECORD_LEN;
-    let looks_binary = head.contains(&0);
-    (looks_binary && body % RECORD_LEN == 0 && present < u64::from(declared)).then(|| {
+    let present = file_len.checked_sub(HEADER_LEN)? / RECORD_LEN;
+    (!is_ascii_stl(head) && u64::from(declared) > present).then(|| {
         format!(
             "This binary STL is truncated: it declares {declared} triangles but holds {present}."
         )
@@ -399,17 +397,25 @@ mod tests {
 
     #[test]
     fn a_binary_stl_cut_short_is_reported_as_truncated() {
-        let bytes = binary(b"cut", 12, &[TRIANGLE; 3]);
-        let reason = truncated_binary_reason(&bytes, bytes.len() as u64).unwrap();
+        let whole_records = binary(b"cut", 12, &[TRIANGLE; 3]);
+        let reason = truncated_binary_reason(&whole_records, whole_records.len() as u64).unwrap();
         assert!(reason.contains("truncated"), "{reason}");
         assert!(reason.contains("12") && reason.contains('3'), "{reason}");
-        // Text, and binary that isn't whole records, are not STLs at all.
-        let text =
-            b"hello world, this is not an STL file at all but it is long enough to pass 84 bytes";
-        assert_eq!(truncated_binary_reason(text, text.len() as u64), None);
-        let mut ragged = binary(b"cut", 12, &[TRIANGLE; 3]);
-        ragged.push(0);
-        assert_eq!(truncated_binary_reason(&ragged, ragged.len() as u64), None);
+
+        // Cut in the middle of the fourth record: still three whole ones.
+        let mut mid_record = binary(b"cut", 12, &[TRIANGLE; 4]);
+        mid_record.truncate(mid_record.len() - 17);
+        let reason = truncated_binary_reason(&mid_record, mid_record.len() as u64).unwrap();
+        assert!(reason.contains("holds 3"), "{reason}");
+
+        // ASCII, and a binary file whose count fits, are not truncated.
+        let text = ascii("solid part", &[ASCII_TRIANGLE]);
+        assert_eq!(truncated_binary_reason(&text, text.len() as u64), None);
+        let complete = binary(b"ok", 1, &[TRIANGLE]);
+        assert_eq!(
+            truncated_binary_reason(&complete, complete.len() as u64),
+            None
+        );
     }
 
     #[test]
