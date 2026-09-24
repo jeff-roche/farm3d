@@ -111,6 +111,57 @@ describe("DataTable", () => {
     expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("false");
   });
 
+  it("ignores keys pressed on an interactive control inside a row, but still handles keys on the row itself", async () => {
+    const onActivate = vi.fn();
+    const onMenu = vi.fn();
+    function TableWithControls() {
+      const [selectedId, setSelectedId] = createSignal<string | null>("a");
+      return (
+        <DataTable
+          label="Rows"
+          rows={rows}
+          rowId={(row) => row.id}
+          columns={[
+            ...columns,
+            {
+              id: "actions",
+              header: "Actions",
+              cell: (row) => (
+                <>
+                  <button type="button" onClick={onMenu}>Edit {row.name}</button>
+                  <span role="button" tabIndex={0} aria-haspopup="menu">Menu {row.name}</span>
+                  <input aria-label={`Note ${row.name}`} />
+                </>
+              ),
+            },
+          ]}
+          selectedId={selectedId()}
+          onSelect={setSelectedId}
+          onActivate={onActivate}
+        />
+      );
+    }
+    render(() => <TableWithControls />);
+    const alpha = () => screen.getByRole("row", { name: /Alpha/ });
+
+    for (const control of [
+      screen.getByRole("button", { name: "Edit Alpha" }),
+      screen.getByRole("button", { name: "Menu Alpha" }),
+      screen.getByRole("textbox", { name: "Note Alpha" }),
+    ]) {
+      await fireEvent.keyDown(control, { key: "Enter" });
+      await fireEvent.keyDown(control, { key: "ArrowDown" });
+      await fireEvent.keyDown(control, { key: "End" });
+    }
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(alpha().getAttribute("aria-selected")).toBe("true");
+
+    await fireEvent.keyDown(alpha(), { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledWith("a");
+    await fireEvent.keyDown(alpha(), { key: "ArrowDown" });
+    expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("is itself tabbable when nothing is selected, and selects+focuses the first row on ArrowDown", async () => {
     function UnselectedTable() {
       const [selectedId, setSelectedId] = createSignal<string | null>(null);

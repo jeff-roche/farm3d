@@ -4,7 +4,7 @@ import { LibraryWorkspace } from "./LibraryWorkspace";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
 import { libraryStoreMock, resetLibraryStoreMock, setLibraryState } from "../library/library-store-mock";
 import { navigation, type NavigationTarget } from "../navigation/navigation-store";
-import type { ImportSelectionSummary } from "../library/types";
+import type { ImportSelectionSummary, ModelRecord } from "../library/types";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 
@@ -257,7 +257,7 @@ describe("LibraryWorkspace", () => {
     await fireEvent.click(sidebarEntry(/^Brackets/));
     await fireEvent.click(screen.getByRole("button", { name: /^Enclosure lid/ }));
     const projects = within(screen.getByRole("complementary", { name: "Model details" })).getByRole("group", { name: "Projects" });
-    await fireEvent.click(within(projects).getByRole("button", { name: /Brackets/ }).querySelector("[aria-label='Remove']")!);
+    await fireEvent.click(within(projects).getByRole("button", { name: "Remove Brackets" }));
 
     await waitFor(() => expect(libraryStoreMock.library.models().find((m) => m.id === "mdl-web-enclosure")?.projectIds).toEqual([]));
     expect(sidebarEntry(/^Brackets/)).toHaveAttribute("aria-current", "page");
@@ -312,5 +312,177 @@ describe("LibraryWorkspace", () => {
 
     await fireEvent.click(within(dialog).getByRole("button", { name: "Close details" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Model details" })).toBeNull());
+  });
+});
+
+function details(): HTMLElement {
+  return screen.getByRole("complementary", { name: "Model details" });
+}
+
+function selectModel(id: string) {
+  navigate({ version: 1, destination: "library", selection: { kind: "model", id } });
+}
+
+function updateModel(id: string, change: (model: ModelRecord) => ModelRecord) {
+  setLibraryState({ models: libraryStoreMock.library.models().map((m) => (m.id === id ? change(m) : m)) });
+}
+
+async function openProjectMenu(name: string, item: string) {
+  await fireEvent.pointerDown(screen.getByLabelText(`Actions for ${name}`), { pointerType: "mouse", button: 0 });
+  await fireEvent.pointerUp(await screen.findByText(item), { pointerType: "mouse", button: 0 });
+}
+
+describe("LibraryWorkspace recovery", () => {
+  it("Locate source… opens the dialog; a successful locate closes it and the panel shows the source OK", async () => {
+    desktop.available = true;
+    libraryStoreMock.pickFiles.mockResolvedValue({
+      selectionId: "sel-locate", purpose: "locate", files: [{ fileIndex: 0, fileName: "cable-clip.stl", sizeBytes: 684 }],
+    });
+    libraryStoreMock.locateSource.mockImplementation(async (modelId) => {
+      updateModel(modelId, (m) => ({ ...m, revision: m.revision + 1, link: { ...m.link!, state: "ok" } }));
+      return libraryStoreMock.library.models().find((m) => m.id === modelId)!;
+    });
+    selectModel("mdl-web-clip");
+    renderWorkspace();
+    expect(within(details()).getByRole("status", { name: "Source missing" })).toBeInTheDocument();
+
+    await fireEvent.click(within(details()).getByRole("button", { name: "Locate source…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Locate source" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Choose file…" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Locate source" })).toBeNull());
+    expect(libraryStoreMock.locateSource).toHaveBeenCalledWith("mdl-web-clip", "sel-locate", 0, false);
+    expect(within(details()).getByRole("status", { name: "Source OK" })).toBeInTheDocument();
+  });
+
+  it("Convert to managed asks first, and converts only on confirm", async () => {
+    desktop.available = true;
+    selectModel("mdl-web-clip");
+    renderWorkspace();
+    await fireEvent.click(within(details()).getByRole("button", { name: "Convert to managed" }));
+    const dialog = await screen.findByRole("dialog", { name: "Convert to managed" });
+    expect(dialog).toHaveTextContent("farm3d will stop following cable-clip.stl. Your existing revisions are kept.");
+    expect(libraryStoreMock.convertToManaged).not.toHaveBeenCalled();
+
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Convert to managed" }));
+    expect(libraryStoreMock.convertToManaged).toHaveBeenCalledWith("mdl-web-clip");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Convert to managed" })).toBeNull());
+  });
+});
+
+describe("LibraryWorkspace Projects and deletion", () => {
+  it("New Project creates a Project and opens its view", async () => {
+    libraryStoreMock.createProject.mockImplementation(async (name: string) => {
+      const created = { id: "prj-new", revision: 1, name, modelCount: 0, createdAt: "", updatedAt: "" };
+      setLibraryState({ projects: [...libraryStoreMock.library.projects(), created] });
+      return created;
+    });
+    renderWorkspace();
+    await fireEvent.click(screen.getByRole("button", { name: "New Project" }));
+    const dialog = await screen.findByRole("dialog", { name: "New Project" });
+    await fireEvent.input(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Knobs" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New Project" })).toBeNull());
+    expect(sidebarEntry(/^Knobs/)).toHaveAttribute("aria-current", "page");
+  });
+
+  it("a Project's Rename… opens the rename dialog for it", async () => {
+    renderWorkspace();
+    await openProjectMenu("Calibration", "Rename…");
+    const dialog = await screen.findByRole("dialog", { name: "Rename Project" });
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Calibration");
+    await fireEvent.input(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Tuning" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+    expect(libraryStoreMock.renameProject).toHaveBeenCalledWith("prj-web-calibration", "Tuning");
+  });
+
+  it("deleting the viewed Project keeps every Model and switches to All Models", async () => {
+    libraryStoreMock.deleteProject.mockImplementation(async (id: string) => {
+      setLibraryState({
+        projects: libraryStoreMock.library.projects().filter((p) => p.id !== id),
+        models: libraryStoreMock.library.models().map((m) => ({ ...m, projectIds: m.projectIds.filter((p) => p !== id) })),
+      });
+    });
+    renderWorkspace();
+    await fireEvent.click(sidebarEntry(/^Brackets/));
+    await openProjectMenu("Brackets", "Delete…");
+    const dialog = await screen.findByRole("dialog", { name: "Delete Project" });
+    expect(dialog).toHaveTextContent("Delete Brackets? Its 3 Models stay in the Library. 1 of them will become Unfiled.");
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Delete Project" }));
+
+    await waitFor(() => expect(navigation.target()).toEqual({ version: 1, destination: "library" }));
+    expect(sidebarEntry(/^All Models/)).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("dialog", { name: "Delete Project" })).toBeNull();
+    expect(libraryStoreMock.library.models()).toHaveLength(fixture.models.length);
+    expect(libraryStoreMock.deleteModel).not.toHaveBeenCalled();
+    expect(within(screen.getByRole("list", { name: "Models" })).getAllByRole("listitem")).toHaveLength(fixture.models.length);
+  });
+
+  it("deleting another Project keeps the current view", async () => {
+    libraryStoreMock.deleteProject.mockImplementation(async (id: string) => {
+      setLibraryState({ projects: libraryStoreMock.library.projects().filter((p) => p.id !== id) });
+    });
+    renderWorkspace();
+    await fireEvent.click(sidebarEntry(/^Brackets/));
+    await openProjectMenu("Calibration", "Delete…");
+    await fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete Project" })).getByRole("button", { name: "Delete Project" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete Project" })).toBeNull());
+    expect(sidebarEntry(/^Brackets/)).toHaveAttribute("aria-current", "page");
+  });
+
+  it("Delete… on a Model deletes it after confirmation and clears the selection", async () => {
+    libraryStoreMock.deleteModel.mockImplementation(async (id: string) => {
+      setLibraryState({ models: libraryStoreMock.library.models().filter((m) => m.id !== id) });
+    });
+    selectModel("mdl-web-knob");
+    renderWorkspace();
+    await fireEvent.click(within(details()).getByRole("button", { name: "Delete…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete Model" });
+    expect(dialog).toHaveTextContent("Delete Spare knob? Its imported revisions are deleted. The original file on disk is not.");
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete Model" })).toBeNull());
+    expect(libraryStoreMock.deleteModel).toHaveBeenCalledWith("mdl-web-knob");
+    expect(navigation.target()).toEqual({ version: 1, destination: "library" });
+    expect(within(details()).getByText("Select a Model to see its details.")).toBeInTheDocument();
+  });
+});
+
+describe("LibraryWorkspace source checks", () => {
+  it("checks linked sources on mount and when the window regains focus", async () => {
+    desktop.available = true;
+    renderWorkspace();
+    expect(libraryStoreMock.checkSources).toHaveBeenCalledTimes(1);
+    expect(libraryStoreMock.checkSources).toHaveBeenLastCalledWith();
+    window.dispatchEvent(new Event("focus"));
+    expect(libraryStoreMock.checkSources).toHaveBeenCalledTimes(2);
+    expect(libraryStoreMock.checkSources).toHaveBeenLastCalledWith();
+  });
+
+  it("Check sources forces a check and says when it ran", async () => {
+    desktop.available = true;
+    renderWorkspace();
+    expect(screen.queryByText("Checked just now")).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Check sources" }));
+    expect(libraryStoreMock.checkSources).toHaveBeenLastCalledWith(undefined, { force: true });
+    expect(await screen.findByText("Checked just now")).toBeInTheDocument();
+  });
+
+  it("sends a failed check to the Library banner", async () => {
+    desktop.available = true;
+    const failure = { contractVersion: 1, code: "INTERNAL", message: "Something went wrong.", recovery: [], retryable: false };
+    libraryStoreMock.checkSources.mockRejectedValue(failure);
+    renderWorkspace();
+    await fireEvent.click(screen.getByRole("button", { name: "Check sources" }));
+    await waitFor(() => expect(libraryStoreMock.reportLibraryError).toHaveBeenCalledWith(failure));
+    expect(screen.queryByText("Checked just now")).toBeNull();
+  });
+
+  it("never checks in web mode, where Check sources is unavailable", async () => {
+    renderWorkspace();
+    window.dispatchEvent(new Event("focus"));
+    expect(libraryStoreMock.checkSources).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Check sources" })).toBeDisabled();
   });
 });

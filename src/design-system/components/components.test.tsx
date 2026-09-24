@@ -118,8 +118,26 @@ describe("Chip", () => {
     await fireEvent.click(screen.getByText("Tag"));
     expect(onSelectedChange).toHaveBeenCalledWith(true);
 
-    await fireEvent.click(screen.getByLabelText("Remove"));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove Tag" }));
     expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onSelectedChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes the remove control a native button in the tab order, labelled with the chip's text", () => {
+    render(() => (
+      <>
+        <Chip onRemove={() => {}}>Brackets</Chip>
+        <Chip onRemove={() => {}}>Calibration</Chip>
+      </>
+    ));
+    const remove = screen.getByRole("button", { name: "Remove Brackets" });
+    expect(remove.tagName).toBe("BUTTON");
+    expect(remove).toHaveAttribute("type", "button");
+    expect(remove.tabIndex).toBe(0);
+    expect(screen.getByRole("button", { name: "Remove Calibration" })).toBeInTheDocument();
+    // Never nested inside the chip's own toggle button.
+    expect(remove.closest("button:not([aria-labelledby])")).toBeNull();
+    expect(screen.getByRole("button", { name: "Brackets" })).toBeInTheDocument();
   });
 });
 
@@ -213,6 +231,17 @@ describe("Combobox", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Remove Voron 2.4" }));
     expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it("with `multiple`, puts each token's remove button in the tab order", () => {
+    render(() => (
+      <Combobox multiple label="Printers" options={["Prusa MK4", "Voron 2.4"]} value={["Prusa MK4", "Voron 2.4"]} />
+    ));
+    for (const name of ["Remove Prusa MK4", "Remove Voron 2.4"]) {
+      const remove = screen.getByRole("button", { name });
+      expect(remove.tagName).toBe("BUTTON");
+      expect(remove.tabIndex).toBe(0);
+    }
   });
 
   it("suppresses an option's mousedown default so it never steals focus from the input", async () => {

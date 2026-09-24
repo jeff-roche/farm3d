@@ -238,6 +238,19 @@ describe("startLibrary (desktop)", () => {
     expect(dropped).toHaveBeenCalledTimes(1);
   });
 
+  it("5c. library.revision.created reaches onRevisionCreated handlers in stream order", async () => {
+    const { onRevisionCreated } = await startedStore();
+    const created = vi.fn();
+    const stop = onRevisionCreated(created);
+    const revision = { ...model({ id: "mdl-a" }).currentRevision, id: "msr-2", sequence: 2, origin: "linkedChange" };
+    emit(envelope(1, "library.revision.created", revision, "msr-2"));
+    expect(created).toHaveBeenCalledWith(revision);
+
+    stop();
+    emit(envelope(2, "library.revision.created", { ...revision, id: "msr-3", sequence: 3 }, "msr-3"));
+    expect(created).toHaveBeenCalledTimes(1);
+  });
+
   it("5b. a drop that arrives while the snapshot is loading is delivered at once, not held back", async () => {
     const backfill = deferred<unknown>();
     responders.list_library = () => backfill.promise;

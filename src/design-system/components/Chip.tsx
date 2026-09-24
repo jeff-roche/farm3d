@@ -1,5 +1,5 @@
 import { ToggleButton } from "@kobalte/core/toggle-button";
-import { splitProps, type JSX, type ParentProps } from "solid-js";
+import { createUniqueId, Show, splitProps, type JSX, type ParentProps } from "solid-js";
 import styles from "./Chip.module.css";
 
 export interface ChipProps extends ParentProps {
@@ -11,6 +11,9 @@ export interface ChipProps extends ParentProps {
   class?: string;
 }
 
+/** A toggle chip. With `onRemove`, a separate native remove button sits
+ *  beside the toggle (never inside it: a button can't contain another), in
+ *  the tab order and named after the chip, e.g. "Remove Brackets". */
 export function Chip(props: ChipProps) {
   const [local, rest] = splitProps(props, [
     "selected",
@@ -20,31 +23,42 @@ export function Chip(props: ChipProps) {
     "children",
     "class",
   ]);
+  const toggleId = createUniqueId();
+  const removeId = createUniqueId();
 
-  return (
+  const toggle = () => (
     <ToggleButton
+      id={toggleId}
       class={[styles.chip, local.class].filter(Boolean).join(" ")}
+      data-removable={local.onRemove ? "" : undefined}
       pressed={local.selected}
       defaultPressed={local.defaultSelected}
       onChange={local.onSelectedChange}
       {...rest}
     >
       {local.children}
-      {local.onRemove && (
-        <span
-          class={styles.remove}
-          role="button"
-          tabIndex={-1}
-          aria-label="Remove"
-          onClick={(e: MouseEvent) => {
-            e.stopPropagation();
-            local.onRemove?.();
-          }}
-        >
-          <RemoveIcon />
+    </ToggleButton>
+  );
+
+  return (
+    <Show when={local.onRemove} fallback={toggle()}>
+      {(onRemove) => (
+        <span class={styles.removable}>
+          {toggle()}
+          <button
+            type="button"
+            id={removeId}
+            class={styles.remove}
+            aria-label="Remove"
+            aria-labelledby={`${removeId} ${toggleId}`}
+            disabled={rest.disabled}
+            onClick={() => onRemove()()}
+          >
+            <RemoveIcon />
+          </button>
         </span>
       )}
-    </ToggleButton>
+    </Show>
   );
 }
 

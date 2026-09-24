@@ -121,7 +121,7 @@ button.trigger {
 }
 
 .tokenRemove {
-  composes: resetButton from "./shared.module.css";
+  composes: resetButton focusRing from "./shared.module.css";
   display: inline-flex;
   padding: 0.125rem;
   border-radius: var(--f3d-radius-sm);

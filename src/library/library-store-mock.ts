@@ -17,6 +17,7 @@ import type {
   LibraryContentInfo,
   ModelRecord,
   ModelSourceRevisionRecord,
+  ModelSourceRevisionSummary,
   ProjectRecord,
   SelectionPurpose,
 } from "./types";
@@ -43,6 +44,7 @@ const [state, setState] = createStore<MockLibraryState>(initialState());
 
 const progressHandlers = new Set<(selectionId: string, progress: ImportProgress) => void>();
 const droppedHandlers = new Set<(summary: ImportSelectionSummary) => void>();
+const revisionHandlers = new Set<(revision: ModelSourceRevisionSummary) => void>();
 
 export const libraryStoreMock = {
   library: {
@@ -58,7 +60,17 @@ export const libraryStoreMock = {
   createProject: vi.fn(async (name: string): Promise<ProjectRecord> => ({
     id: "prj-new", revision: 1, name, modelCount: 0, createdAt: "", updatedAt: "",
   })),
+  renameProject: vi.fn(async (_id: string, _name: string) => {}),
+  deleteProject: vi.fn(async (_id: string) => {}),
+  deleteModel: vi.fn(async (_id: string) => {}),
   convertToManaged: vi.fn(async (_id: string) => {}),
+  checkSources: vi.fn(async (_modelIds?: string[], _options?: { force?: boolean }) => {}),
+  locateSource: vi.fn(async (
+    modelId: string,
+    _selectionId: string,
+    _fileIndex: number,
+    _acceptDifferentContent: boolean,
+  ): Promise<ModelRecord> => state.models.find((m) => m.id === modelId)!),
   loadRevisions: vi.fn(async (_modelId: string): Promise<ModelSourceRevisionRecord[]> => []),
   loadThumbnail: vi.fn(async (_revisionId: string): Promise<string | null> => null),
   reportLibraryError: vi.fn(),
@@ -80,7 +92,16 @@ export const libraryStoreMock = {
     droppedHandlers.add(handler);
     return () => droppedHandlers.delete(handler);
   }),
+  onRevisionCreated: vi.fn((handler: (revision: ModelSourceRevisionSummary) => void) => {
+    revisionHandlers.add(handler);
+    return () => revisionHandlers.delete(handler);
+  }),
 };
+
+/** Delivers a `library.revision.created` event to the subscribed handlers. */
+export function emitRevisionCreated(revision: ModelSourceRevisionSummary): void {
+  for (const handler of revisionHandlers) handler(revision);
+}
 
 /** Delivers a `library.import.progress` event to the subscribed handlers. */
 export function emitImportProgress(selectionId: string, progress: ImportProgress): void {
@@ -102,6 +123,7 @@ export function resetLibraryStoreMock(): void {
   setState(initialState());
   progressHandlers.clear();
   droppedHandlers.clear();
+  revisionHandlers.clear();
   for (const value of Object.values(libraryStoreMock)) {
     if (typeof value === "function" && "mockReset" in value) value.mockReset();
   }

@@ -12,9 +12,10 @@ export interface LibrarySidebarProps {
   models: ModelRecord[];
   now: Date;
   onSelectView: (view: LibraryView) => void;
-  /** Absent until the Project dialogs exist; the menu entry is then disabled. */
-  onRenameProject?: (projectId: string) => void;
-  onDeleteProject?: (projectId: string) => void;
+  /** Each Project row's **Rename…** and **Delete…**; the caller opens the
+   *  dialog. */
+  onRenameProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
 }
 
 /** D19: the saved views, then the Projects alphabetically, each with the
@@ -71,16 +72,8 @@ export function LibrarySidebar(props: LibrarySidebarProps) {
                   </span>
                 }
                 items={[
-                  {
-                    label: "Rename…",
-                    disabled: !props.onRenameProject,
-                    onSelect: () => props.onRenameProject?.(project.id),
-                  },
-                  {
-                    label: "Delete…",
-                    disabled: !props.onDeleteProject,
-                    onSelect: () => props.onDeleteProject?.(project.id),
-                  },
+                  { label: "Rename…", onSelect: () => props.onRenameProject(project.id) },
+                  { label: "Delete…", onSelect: () => props.onDeleteProject(project.id) },
                 ]}
               />
             </li>

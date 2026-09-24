@@ -1,25 +1,46 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  lazy,
+  Match,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+  Switch,
+} from "solid-js";
 import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { IconLayoutGrid, IconList } from "@tabler/icons-solidjs";
 import { Button, FileDropSurface, SegmentedControl, Select, TextField } from "../design-system";
 import { desktopAvailable } from "../ipc/client";
 import {
-  convertToManaged,
+  checkSources,
   dismissLibraryError,
   library,
   refreshLibrary,
   reportLibraryError,
 } from "../library/library-store";
 import { modelsFor, SAVED_VIEW_IDS, searchModels, sortModels, type LibraryView } from "../library/saved-views";
-import type { ImportSelectionSummary, ModelRecord } from "../library/types";
+import type { ImportSelectionSummary, ModelRecord, ProjectRecord } from "../library/types";
 import { navigation, type NavigationTarget } from "../navigation/navigation-store";
-import { ImportDialog } from "./ImportDialog";
 import { formatBytes, viewLabel } from "./library-presentation";
 import { LibrarySidebar } from "./LibrarySidebar";
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
 import { ModelGrid } from "./ModelGrid";
 import { ModelList } from "./ModelList";
 import styles from "./LibraryWorkspace.module.css";
+
+// The dialogs load on first use, keeping them out of the main chunk.
+const ImportDialog = lazy(() => import("./ImportDialog").then((m) => ({ default: m.ImportDialog })));
+const LocateSourceDialog = lazy(() => import("./LocateSourceDialog").then((m) => ({ default: m.LocateSourceDialog })));
+const ConvertToManagedDialog = lazy(() =>
+  import("./LocateSourceDialog").then((m) => ({ default: m.ConvertToManagedDialog })));
+const DeleteModelDialog = lazy(() => import("./DeleteModelDialog").then((m) => ({ default: m.DeleteModelDialog })));
+const CreateProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.CreateProjectDialog })));
+const RenameProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.RenameProjectDialog })));
+const DeleteProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.DeleteProjectDialog })));
 
 export interface LibraryWorkspaceProps {
   /** App's navigation, so a selection is checked against every available
@@ -42,6 +63,12 @@ export interface LibraryWorkspaceProps {
 type LayoutMode = "grid" | "list";
 type SortOrder = "name" | "recent";
 
+/** The one workspace dialog open at a time, by the id it acts on. */
+type WorkspaceDialog =
+  | { kind: "locate" | "convert" | "deleteModel"; modelId: string }
+  | { kind: "createProject" }
+  | { kind: "renameProject" | "deleteProject"; projectId: string };
+
 const MODE_KEY = "farm3d:library-mode";
 const VIEW_KEY = "farm3d:library-view";
 const ALL_MODELS: LibraryView = { kind: "view", id: "all" };
@@ -50,6 +77,14 @@ const ALL_MODELS: LibraryView = { kind: "view", id: "all" };
 const INLINE_DETAILS_MIN_WIDTH = 1280;
 const SORT_LABELS: Record<SortOrder, string> = { name: "Name", recent: "Recently added" };
 const WEB_IMPORT_REASON = "Importing Models needs the desktop app.";
+const WEB_CHECK_REASON = "Checking sources needs the desktop app.";
+const MINUTE_MS = 60_000;
+
+function checkedLabel(checkedAt: number, now: number): string {
+  const minutes = Math.floor((now - checkedAt) / MINUTE_MS);
+  if (minutes < 1) return "Checked just now";
+  return minutes === 1 ? "Checked 1 minute ago" : `Checked ${minutes} minutes ago`;
+}
 
 // The grid/list mode and the active view are display state, remembered per
 // viewer. Storage can be unavailable (private windows, blocked site data),
@@ -99,12 +134,44 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
   const [narrow, setNarrow] = createSignal(window.innerWidth < INLINE_DETAILS_MIN_WIDTH);
   const [detailsOpen, setDetailsOpen] = createSignal(false);
   const [focusRequest, setFocusRequest] = createSignal(0);
+  const [dialog, setDialog] = createSignal<WorkspaceDialog | null>(null);
+  const [checking, setChecking] = createSignal(false);
+  const [checkedAt, setCheckedAt] = createSignal<number | null>(null);
+  const [clock, setClock] = createSignal(Date.now());
   const now = () => new Date();
+
+  // D15 trigger 3: check linked sources when the Library becomes visible
+  // and when the window regains focus. The store throttles these to one per
+  // 30 s. Web mode has no files to check.
+  const checkInBackground = () => {
+    if (desktopAvailable()) void checkSources().catch(reportLibraryError);
+  };
+  const checkNow = async () => {
+    if (checking()) return;
+    setChecking(true);
+    try {
+      await checkSources(undefined, { force: true });
+      setCheckedAt(Date.now());
+      setClock(Date.now());
+    } catch (error) {
+      reportLibraryError(error);
+    } finally {
+      setChecking(false);
+    }
+  };
 
   onMount(() => {
     const onResize = () => setNarrow(window.innerWidth < INLINE_DETAILS_MIN_WIDTH);
     window.addEventListener("resize", onResize);
-    onCleanup(() => window.removeEventListener("resize", onResize));
+    window.addEventListener("focus", checkInBackground);
+    // Keeps "Checked N minutes ago" current.
+    const ticker = window.setInterval(() => setClock(Date.now()), MINUTE_MS / 2);
+    onCleanup(() => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("focus", checkInBackground);
+      window.clearInterval(ticker);
+    });
+    checkInBackground();
   });
 
   const setMode = (next: LayoutMode) => {
@@ -164,6 +231,31 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
       ? { version: 1, destination: "library", selection: { kind: "project", id: next.id } }
       : { version: 1, destination: "library" });
   };
+  const closeDialog = () => setDialog(null);
+  const dialogModel = (kind: "locate" | "convert" | "deleteModel"): ModelRecord | undefined => {
+    const current = dialog();
+    if (current?.kind !== kind) return undefined;
+    return library.models().find((model) => model.id === current.modelId);
+  };
+  const dialogProject = (kind: "renameProject" | "deleteProject"): ProjectRecord | undefined => {
+    const current = dialog();
+    if (current?.kind !== kind) return undefined;
+    return library.projects().find((project) => project.id === current.projectId);
+  };
+  const projectCreated = (project: ProjectRecord) => {
+    closeDialog();
+    selectView({ kind: "project", id: project.id });
+  };
+  // D18: the Models stay. Only the view goes, if it was this Project's.
+  const projectDeleted = (projectId: string) => {
+    closeDialog();
+    const current = view();
+    if (current.kind === "project" && current.id === projectId) selectView(ALL_MODELS);
+  };
+  const modelDeleted = () => {
+    closeDialog();
+    selectView(activeView());
+  };
   const selectModel = (modelId: string) => {
     props.navigate({ version: 1, destination: "library", selection: { kind: "model", id: modelId } });
   };
@@ -192,7 +284,9 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         <ModelDetailsPanel
           model={shownModel()!}
           projects={library.projects()}
-          onConvertToManaged={(id) => void convertToManaged(id).catch(reportLibraryError)}
+          onLocateSource={(modelId) => setDialog({ kind: "locate", modelId })}
+          onConvertToManaged={(modelId) => setDialog({ kind: "convert", modelId })}
+          onDelete={(modelId) => setDialog({ kind: "deleteModel", modelId })}
           focusRequest={focusRequest()}
           onFocusHandled={() => setFocusRequest(0)}
         />
@@ -210,6 +304,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     if (modelId) selectModel(modelId);
   };
   const importReasonId = "library-import-unavailable";
+  const checkReasonId = "library-check-unavailable";
 
   const storedCopies = () => {
     const info = library.contentInfo();
@@ -241,6 +336,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         >
           Import…
         </Button>
+        <Button variant="secondary" onClick={() => setDialog({ kind: "createProject" })}>New Project</Button>
         <TextField
           type="search"
           aria-label="Search Models"
@@ -269,6 +365,20 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           <span id={importReasonId} class={styles.status}>{WEB_IMPORT_REASON}</span>
         </Show>
         <Show when={storedCopies()}>{(text) => <span class={styles.status}>{text()}</span>}</Show>
+        <Show when={checkedAt()}>
+          {(at) => <span class={styles.status} role="status">{checkedLabel(at(), clock())}</span>}
+        </Show>
+        <Show when={!desktopAvailable()}>
+          <span id={checkReasonId} class={styles.status}>{WEB_CHECK_REASON}</span>
+        </Show>
+        <Button
+          variant="secondary"
+          disabled={checking() || !desktopAvailable()}
+          aria-describedby={desktopAvailable() ? undefined : checkReasonId}
+          onClick={() => void checkNow()}
+        >
+          Check sources
+        </Button>
         <Show when={narrow()}>
           <Button variant="ghost" aria-expanded={detailsOpen()} onClick={() => setDetailsOpen((open) => !open)}>
             Details
@@ -282,6 +392,8 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           models={library.models()}
           now={now()}
           onSelectView={selectView}
+          onRenameProject={(projectId) => setDialog({ kind: "renameProject", projectId })}
+          onDeleteProject={(projectId) => setDialog({ kind: "deleteProject", projectId })}
         />
         <div class={styles.content}>
           <Show
@@ -368,14 +480,40 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           </KDialog>
         </Show>
       </div>
-      <ImportDialog
-        selection={props.importSelection ?? null}
-        defaultProjectIds={importProjectIds()}
-        onClose={() => props.onImportClose?.()}
-        onDone={finishImport}
-        onChooseAgain={() => props.onImport?.()}
-        dropRefused={props.dropRefused ?? false}
-      />
+      <Suspense>
+        <Show when={props.importSelection}>
+          {(selection) => (
+            <ImportDialog
+              selection={selection()}
+              defaultProjectIds={importProjectIds()}
+              onClose={() => props.onImportClose?.()}
+              onDone={finishImport}
+              onChooseAgain={() => props.onImport?.()}
+              dropRefused={props.dropRefused ?? false}
+            />
+          )}
+        </Show>
+        <Switch>
+          <Match when={dialogModel("locate")}>
+            {(model) => <LocateSourceDialog model={model()} onClose={closeDialog} />}
+          </Match>
+          <Match when={dialogModel("convert")}>
+            {(model) => <ConvertToManagedDialog model={model()} onClose={closeDialog} />}
+          </Match>
+          <Match when={dialogModel("deleteModel")}>
+            {(model) => <DeleteModelDialog model={model()} onClose={closeDialog} onDeleted={modelDeleted} />}
+          </Match>
+          <Match when={dialog()?.kind === "createProject"}>
+            <CreateProjectDialog onClose={closeDialog} onCreated={projectCreated} />
+          </Match>
+          <Match when={dialogProject("renameProject")}>
+            {(project) => <RenameProjectDialog project={project()} onClose={closeDialog} />}
+          </Match>
+          <Match when={dialogProject("deleteProject")}>
+            {(project) => <DeleteProjectDialog project={project()} onClose={closeDialog} onDeleted={projectDeleted} />}
+          </Match>
+        </Switch>
+      </Suspense>
     </div>
   );
 }

@@ -1,14 +1,33 @@
-import { createEffect, createMemo, createResource, createSignal, createUniqueId, For, Match, on, Show, Switch } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  createUniqueId,
+  For,
+  Match,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js";
 import { Button, Chip, Combobox, SeverityMarker, TextField, Timeline, type TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import {
   createProject,
   loadRevisions,
+  onRevisionCreated,
   reportLibraryError,
   setModelProjects,
   updateModel,
 } from "../library/library-store";
-import type { Inspection, ModelRecord, ModelSourceRevisionRecord, ProjectRecord } from "../library/types";
+import type {
+  Inspection,
+  ModelRecord,
+  ModelSourceRevisionRecord,
+  ModelSourceRevisionSummary,
+  ProjectRecord,
+} from "../library/types";
 import { BuildPlate } from "./BuildPlate";
 import {
   approximateSize,
@@ -23,9 +42,13 @@ import styles from "./ModelDetailsPanel.module.css";
 export interface ModelDetailsPanelProps {
   model: ModelRecord;
   projects: ProjectRecord[];
-  /** Absent until the recovery dialogs exist; the button is then disabled. */
-  onLocateSource?: (modelId: string) => void;
-  onConvertToManaged?: (modelId: string) => void;
+  /** **Locate source…** (D16), offered while a linked source isn't `ok`. */
+  onLocateSource: (modelId: string) => void;
+  /** **Convert to managed** (D5), offered for every linked Model. The
+   *  caller confirms first. */
+  onConvertToManaged: (modelId: string) => void;
+  /** **Delete…** (D18). The caller confirms first. */
+  onDelete: (modelId: string) => void;
   /** A new non-zero value moves focus to **Add to Project…**. */
   focusRequest?: number;
   /** Called once `focusRequest` has been acted on, so a remount doesn't
@@ -49,10 +72,29 @@ function errorMessage(error: unknown): string {
  *  and the recovery actions. Details only: P4 has no Slice, Queue, or
  *  Dispatch control (D11). */
 export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
-  // Keyed by the current revision too, so a newly captured revision
-  // refreshes the history, but a rename or membership change doesn't.
+  // The newest revision this panel has heard of: the record's current one,
+  // or a `library.revision.created` that got here first. Both arrive for
+  // one capture, in either order, and name the same revision.
+  const [announced, setAnnounced] = createSignal<ModelSourceRevisionSummary | undefined>();
+  // Only a linked-source capture says "Updated from source"; Locate and
+  // Add as a new revision are the user's own doing.
+  const [captured, setCaptured] = createSignal<ModelSourceRevisionSummary | undefined>();
+  onCleanup(onRevisionCreated((revision) => {
+    if (revision.modelId !== props.model.id) return;
+    setAnnounced(revision);
+    setCaptured(revision.origin === "linkedChange" ? revision : undefined);
+  }));
+  const newestRevisionId = createMemo(() => {
+    const current = props.model.currentRevision;
+    const heard = announced();
+    return heard && heard.sequence > current.sequence ? heard.id : current.id;
+  });
+
+  // Keyed by the newest revision too, so a newly captured revision
+  // refreshes the history (once), but a rename or membership change
+  // doesn't.
   const [revisions] = createResource(
-    () => `${props.model.id}\n${props.model.currentRevision.id}`,
+    () => `${props.model.id}\n${newestRevisionId()}`,
     () => loadRevisions(props.model.id),
   );
   const historyId = createUniqueId();
@@ -80,6 +122,11 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
         <dt>Current revision</dt>
         <dd>
           <RevisionSummary model={props.model} />
+          <Show when={captured()}>
+            {(revision) => (
+              <p class={styles.captured} role="status">Updated from source · revision {revision().sequence}</p>
+            )}
+          </Show>
         </dd>
       </dl>
       <Switch>
@@ -96,28 +143,23 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
           <Timeline label="Revision history" items={timelineItems(revisions() ?? [])} />
         </Show>
       </section>
-      <Show when={props.model.link}>
-        {(link) => (
-          <div class={styles.actions}>
-            <Show when={link().state !== "ok"}>
-              <Button
-                variant="secondary"
-                disabled={!props.onLocateSource}
-                onClick={() => props.onLocateSource?.(props.model.id)}
-              >
-                Locate source…
+      <div class={styles.actions}>
+        <Show when={props.model.link}>
+          {(link) => (
+            <>
+              <Show when={link().state !== "ok"}>
+                <Button variant="secondary" onClick={() => props.onLocateSource(props.model.id)}>
+                  Locate source…
+                </Button>
+              </Show>
+              <Button variant="secondary" onClick={() => props.onConvertToManaged(props.model.id)}>
+                Convert to managed
               </Button>
-            </Show>
-            <Button
-              variant="secondary"
-              disabled={!props.onConvertToManaged}
-              onClick={() => props.onConvertToManaged?.(props.model.id)}
-            >
-              Convert to managed
-            </Button>
-          </div>
-        )}
-      </Show>
+            </>
+          )}
+        </Show>
+        <Button variant="secondary" onClick={() => props.onDelete(props.model.id)}>Delete…</Button>
+      </div>
     </div>
   );
 }

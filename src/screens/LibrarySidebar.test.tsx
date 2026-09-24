@@ -60,10 +60,13 @@ describe("LibrarySidebar", () => {
     expect(props.onSelectView).toHaveBeenLastCalledWith({ kind: "project", id: "prj-web-brackets" });
   });
 
-  it("offers Rename… and Delete… in each Project row's menu", async () => {
+  it("offers enabled Rename… and Delete… in each Project row's menu", async () => {
     const props = renderSidebar();
     await fireEvent.pointerDown(screen.getByLabelText("Actions for Brackets"), { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Rename…")).toBeInTheDocument();
+    for (const item of ["Rename…", "Delete…"]) {
+      expect(screen.getByText(item).closest("[role='menuitem']")).not.toHaveAttribute("aria-disabled", "true");
+    }
     await fireEvent.pointerUp(screen.getByText("Rename…"), { pointerType: "mouse", button: 0 });
     expect(props.onRenameProject).toHaveBeenCalledWith("prj-web-brackets");
 

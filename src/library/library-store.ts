@@ -16,6 +16,7 @@ import {
   type LibrarySnapshot,
   type ModelRecord,
   type ModelSourceRevisionRecord,
+  type ModelSourceRevisionSummary,
   type ProjectRecord,
   type SelectionPurpose,
 } from "./types";
@@ -163,6 +164,17 @@ export function onImportProgress(handler: (selectionId: string, progress: Import
   return () => progressHandlers.delete(handler);
 }
 
+const revisionHandlers = new Set<(revision: ModelSourceRevisionSummary) => void>();
+
+/** `library.revision.created`, in stream order (after the Model's own
+ *  `library.model.changed`), so the details panel can say a linked source
+ *  was captured. The snapshot has no such events, so one a backfill covers
+ *  is not replayed. */
+export function onRevisionCreated(handler: (revision: ModelSourceRevisionSummary) => void): () => void {
+  revisionHandlers.add(handler);
+  return () => revisionHandlers.delete(handler);
+}
+
 /** Drops and progress are not in any snapshot, so they are delivered the
  *  moment they arrive -- even mid-backfill, when an ordinary event would
  *  still be buffered. The stream still sees them, for gap detection. */
@@ -188,10 +200,13 @@ function applyEvent(event: LibraryEvent): void {
     case "library.model.removed":
       dropModel(event.subject.id);
       break;
+    case "library.revision.created":
+      // The record itself comes with a `library.model.changed` carrying
+      // the new `currentRevision`; this only tells the listeners.
+      for (const handler of revisionHandlers) handler(event.payload as ModelSourceRevisionSummary);
+      break;
     default:
-      // `library.revision.created` arrives with a `library.model.changed`
-      // carrying the new `currentRevision`; drops and progress were
-      // delivered on arrival.
+      // Drops and progress were delivered on arrival.
       break;
   }
 }

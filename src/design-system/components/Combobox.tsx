@@ -106,13 +106,12 @@ export function Combobox<T>(props: ComboboxProps<T>): JSX.Element {
                 {(option) => (
                   <span class={styles.token}>
                     <span class={styles.tokenLabel}>{toLabel(option)}</span>
-                    {/* Pointer-reachable only: from the keyboard, Backspace
-                        in the empty input removes the last token
-                        (Kobalte's `removeOnBackspace`). */}
+                    {/* A native button in the tab order, like `Chip`'s
+                        remove. Backspace in the empty input also removes
+                        the last token (Kobalte's `removeOnBackspace`). */}
                     <button
                       type="button"
                       class={styles.tokenRemove}
-                      tabIndex={-1}
                       aria-label={`Remove ${toLabel(option)}`}
                       disabled={props.disabled}
                       onClick={() => state.remove(option)}

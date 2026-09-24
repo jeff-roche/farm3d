@@ -3,7 +3,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
-import { libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
+import { emitRevisionCreated, libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
 import type { ModelRecord } from "../library/types";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
@@ -24,7 +24,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 function renderPanel(record: ModelRecord, extra: Partial<Parameters<typeof ModelDetailsPanel>[0]> = {}) {
-  const props = { model: record, projects: fixture.projects, ...extra };
+  const props = {
+    model: record,
+    projects: fixture.projects,
+    onLocateSource: vi.fn(),
+    onConvertToManaged: vi.fn(),
+    onDelete: vi.fn(),
+    ...extra,
+  };
   render(() => <ModelDetailsPanel {...props} />);
   return props;
 }
@@ -63,7 +70,15 @@ describe("ModelDetailsPanel", () => {
 
   it("keeps a name edit in progress when an unrelated update arrives, and refetches history only for a new revision", async () => {
     const [record, setRecord] = createSignal(fixtureModel("mdl-web-bracket"));
-    render(() => <ModelDetailsPanel model={record()} projects={fixture.projects} />);
+    render(() => (
+      <ModelDetailsPanel
+        model={record()}
+        projects={fixture.projects}
+        onLocateSource={vi.fn()}
+        onConvertToManaged={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    ));
     await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(1));
     const name = screen.getByRole("textbox", { name: "Name" });
     await fireEvent.input(name, { target: { value: "Half-typed" } });
@@ -95,9 +110,9 @@ describe("ModelDetailsPanel", () => {
   it("lists Projects as removable chips; removing one sends that one remove", async () => {
     renderPanel(fixtureModel("mdl-web-bracket"));
     const projects = screen.getByRole("group", { name: "Projects" });
-    const chip = within(projects).getByRole("button", { name: /Brackets/ });
-    expect(within(projects).getByRole("button", { name: /Calibration/ })).toBeInTheDocument();
-    await fireEvent.click(chip.querySelector("[aria-label='Remove']")!);
+    expect(within(projects).getByRole("button", { name: "Brackets" })).toBeInTheDocument();
+    expect(within(projects).getByRole("button", { name: "Calibration" })).toBeInTheDocument();
+    await fireEvent.click(within(projects).getByRole("button", { name: "Remove Brackets" }));
     expect(libraryStoreMock.setModelProjects).toHaveBeenCalledWith("mdl-web-bracket", { add: [], remove: [BRACKETS] });
   });
 
@@ -177,6 +192,69 @@ describe("ModelDetailsPanel", () => {
     renderPanel(fixtureModel("mdl-web-bracket"));
     expect(screen.queryByRole("button", { name: "Locate source…" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Convert to managed" })).toBeNull();
+  });
+
+  it("offers Delete… for every Model", async () => {
+    for (const id of ["mdl-web-bracket", "mdl-web-clip"]) {
+      const onDelete = vi.fn();
+      renderPanel(fixtureModel(id), { onDelete });
+      await fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+      expect(onDelete).toHaveBeenCalledWith(id);
+      cleanup();
+    }
+  });
+
+  it("says Updated from source when a linked change is captured, and refreshes the history once", async () => {
+    const clip = fixtureModel("mdl-web-clip");
+    const [record, setRecord] = createSignal(clip);
+    render(() => (
+      <ModelDetailsPanel
+        model={record()}
+        projects={fixture.projects}
+        onLocateSource={vi.fn()}
+        onConvertToManaged={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    ));
+    await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Updated from source ·/)).toBeNull();
+
+    const captured = { ...clip.currentRevision, id: "msr-web-clip-3", sequence: 3, origin: "linkedChange" as const };
+    const history = [
+      { ...fixture.revisions["mdl-web-clip"]![0]!, id: captured.id, sequence: 3, origin: "linkedChange" as const },
+      ...fixture.revisions["mdl-web-clip"]!,
+    ];
+    libraryStoreMock.loadRevisions.mockImplementation(async () => history);
+    // Another Model's revision says nothing here.
+    emitRevisionCreated({ ...captured, id: "msr-other", modelId: "mdl-web-enclosure" });
+    expect(screen.queryByText(/Updated from source ·/)).toBeNull();
+
+    // The stream delivers the Model change, then the revision.
+    setRecord({ ...clip, revision: clip.revision + 1, currentRevision: captured, revisionCount: 3 });
+    emitRevisionCreated(captured);
+
+    const notice = await screen.findByText("Updated from source · revision 3");
+    expect(notice.closest("[role='status']")).not.toBeNull();
+    const list = screen.getByRole("list", { name: "Revision history" });
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(3));
+    expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the history on revision.created even before the Model change arrives", async () => {
+    const clip = fixtureModel("mdl-web-clip");
+    renderPanel(clip);
+    await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(1));
+    emitRevisionCreated({ ...clip.currentRevision, id: "msr-web-clip-3", sequence: 3, origin: "linkedChange" });
+    expect(await screen.findByText("Updated from source · revision 3")).toBeInTheDocument();
+    await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(2));
+  });
+
+  it("gives no notice for a revision that didn't come from the linked source", async () => {
+    const clip = fixtureModel("mdl-web-clip");
+    renderPanel(clip);
+    emitRevisionCreated({ ...clip.currentRevision, id: "msr-web-clip-3", sequence: 3, origin: "relocate" });
+    await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Updated from source ·/)).toBeNull();
   });
 
   it("shows the build plate placeholder with the Model's name and approximate size", () => {

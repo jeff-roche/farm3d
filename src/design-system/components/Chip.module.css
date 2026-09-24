@@ -30,12 +30,27 @@
   color: var(--f3d-color-accent);
 }
 
+.removable {
+  position: relative;
+  display: inline-flex;
+}
+
+.chip[data-removable] {
+  padding-right: 1.375rem;
+}
+
 .remove {
-  composes: resetButton from "./shared.module.css";
+  composes: resetButton focusRing from "./shared.module.css";
+  position: absolute;
+  top: 50%;
+  right: 0.3125rem;
+  transform: translateY(-50%);
   display: inline-flex;
   border-radius: var(--f3d-radius-full);
   padding: 0.0625rem;
+  color: var(--f3d-color-text-muted);
 }
-.remove:hover {
+.remove:not(:disabled):hover {
   background-color: var(--f3d-color-surface-selected);
+  color: var(--f3d-color-text);
 }

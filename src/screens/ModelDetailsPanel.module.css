@@ -111,3 +111,9 @@
   display: flex;
   flex-direction: column;
 }
+
+.captured {
+  margin: 0.25rem 0 0;
+  color: var(--f3d-color-info);
+  font-size: var(--f3d-type-body-small-size);
+}
