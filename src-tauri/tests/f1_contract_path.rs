@@ -1,6 +1,6 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 41);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 44);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -45,6 +45,9 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_additions() {
             "create_tare",
             "update_tare",
             "delete_tare",
+            "pick_model_files",
+            "inspect_import_selection",
+            "cancel_import_selection",
         ]
     );
 }
@@ -140,6 +143,9 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::spools::commands::create_tare,
             farm3d_lib::spools::commands::update_tare,
             farm3d_lib::spools::commands::delete_tare,
+            farm3d_lib::library::commands::pick_model_files,
+            farm3d_lib::library::commands::inspect_import_selection,
+            farm3d_lib::library::commands::cancel_import_selection,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -278,6 +284,9 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             json!({"id": "t", "expectedRevision": 1, "name": "t", "weightMg": 1}),
         ),
         ("delete_tare", json!({"id": "t", "expectedRevision": 1})),
+        ("pick_model_files", json!({"purpose": "import"})),
+        ("inspect_import_selection", json!({"selectionId": "s"})),
+        ("cancel_import_selection", json!({"selectionId": "s"})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

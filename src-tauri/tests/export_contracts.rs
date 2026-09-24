@@ -28,7 +28,23 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
-use farm3d_lib::library::{ModelFormat, ProjectRecord, RevisionOrigin, SourceState, StorageMode};
+use farm3d_lib::library::events::{LibraryEvent, LibraryEventPayload, LibraryEventType};
+use farm3d_lib::library::formats::{
+    BoundsMm, GcodeClaim, GcodeInspection, GcodeSummary, Inspection, InspectionSummary, Plate,
+    Producer, StlEncoding, StlInspection, StlSummary, ThreeMfInspection, ThreeMfSummary,
+    ThumbnailImageFormat, ThumbnailInfo, UnsupportedCode, UnsupportedEntry,
+};
+use farm3d_lib::library::inspection::{
+    DuplicateMatch, ImportCandidate, ImportInspection, ImportItemErrorCode,
+};
+use farm3d_lib::library::selection::{
+    CancelImportSelectionData, ImportProgress, ImportSelectionFile, ImportSelectionSummary,
+    SelectionPurpose,
+};
+use farm3d_lib::library::{
+    ImportWarning, ImportWarningCode, ModelFormat, ProjectRecord, RevisionOrigin, SourceState,
+    StorageMode,
+};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -343,6 +359,37 @@ fn export_registry() -> Vec<Export> {
         export::<SourceState>(),
         export::<RevisionOrigin>(),
         export::<ProjectRecord>(),
+        export::<ImportWarningCode>(),
+        export::<ImportWarning>(),
+        export::<BoundsMm>(),
+        export::<StlEncoding>(),
+        export::<StlInspection>(),
+        export::<Plate>(),
+        export::<UnsupportedCode>(),
+        export::<UnsupportedEntry>(),
+        export::<ThumbnailImageFormat>(),
+        export::<ThumbnailInfo>(),
+        export::<ThreeMfInspection>(),
+        export::<Producer>(),
+        export::<GcodeClaim>(),
+        export::<GcodeInspection>(),
+        export::<Inspection>(),
+        export::<StlSummary>(),
+        export::<ThreeMfSummary>(),
+        export::<GcodeSummary>(),
+        export::<InspectionSummary>(),
+        export::<SelectionPurpose>(),
+        export::<ImportSelectionFile>(),
+        export::<ImportSelectionSummary>(),
+        export::<ImportProgress>(),
+        export::<CancelImportSelectionData>(),
+        export::<ImportItemErrorCode>(),
+        export::<DuplicateMatch>(),
+        export::<ImportCandidate>(),
+        export::<ImportInspection>(),
+        export::<LibraryEventType>(),
+        export::<LibraryEventPayload>(),
+        export::<LibraryEvent>(),
     ]
 }
 
@@ -564,6 +611,10 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::Timeout,
         ErrorCode::IncompatibleContractVersion,
         ErrorCode::Internal,
+        ErrorCode::SelectionExpired,
+        ErrorCode::SourceContentDiffers,
+        ErrorCode::SourceUnavailable,
+        ErrorCode::UnsupportedFormat,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -585,7 +636,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "CORRUPT_DATA", "MIGRATION_FAILED", "UNSUPPORTED_SCHEMA_VERSION",
                 "CREDENTIAL_UNAVAILABLE", "CREDENTIAL_REQUIRED", "UNSUPPORTED_ADAPTER",
                 "PRINTER_UNREACHABLE", "AUTHENTICATION_FAILED", "PROTOCOL_ERROR",
-                "TIMEOUT", "INCOMPATIBLE_CONTRACT_VERSION", "INTERNAL"
+                "TIMEOUT", "INCOMPATIBLE_CONTRACT_VERSION", "INTERNAL",
+                "SELECTION_EXPIRED", "SOURCE_CONTENT_DIFFERS", "SOURCE_UNAVAILABLE",
+                "UNSUPPORTED_FORMAT"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

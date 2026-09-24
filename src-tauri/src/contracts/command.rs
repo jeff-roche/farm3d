@@ -303,6 +303,10 @@ pub enum ErrorCode {
     DuplicateHost,
     LifecycleBlocked,
     SlotOccupied,
+    SelectionExpired,
+    SourceContentDiffers,
+    SourceUnavailable,
+    UnsupportedFormat,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -625,6 +629,80 @@ impl CommandError {
         error
     }
 
+    /// P4 D7: the file selection is unknown, expired, cancelled, or already
+    /// imported. The dialog offers **Choose files again**.
+    pub fn selection_expired() -> Self {
+        Self::typed(
+            ErrorCode::SelectionExpired,
+            "This file selection has expired. Choose the files again.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+    }
+
+    /// P4 D16: the file chosen by Locate has different bytes from the
+    /// Model's current revision. The UI offers **Relink and import as a new
+    /// revision**.
+    pub fn source_content_differs(
+        current_sha256: &str,
+        located_sha256: &str,
+        located_file_name: &str,
+    ) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::SourceContentDiffers,
+            "The located file is different from the stored copy.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            (
+                "currentSha256".to_string(),
+                JsonValue::String(current_sha256.to_string()),
+            ),
+            (
+                "locatedSha256".to_string(),
+                JsonValue::String(located_sha256.to_string()),
+            ),
+            (
+                "locatedFileName".to_string(),
+                JsonValue::String(located_file_name.to_string()),
+            ),
+        ]));
+        error
+    }
+
+    /// P4 D16: the file chosen by Locate can't be read. `file_name` is a
+    /// basename, never a path.
+    pub fn source_unavailable(file_name: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::SourceUnavailable,
+            "farm3d couldn't read the chosen file.",
+            vec![RecoveryCode::Retry],
+            true,
+        );
+        error.details = Some(BTreeMap::from([(
+            "fileName".to_string(),
+            JsonValue::String(file_name.to_string()),
+        )]));
+        error
+    }
+
+    /// P4 D8/D10: not a format farm3d reads. `extensions` names a 3MF's
+    /// unimplemented required extensions, when that is the reason.
+    pub fn unsupported_format(reason: &str, extensions: &[String]) -> Self {
+        let mut error = Self::typed(ErrorCode::UnsupportedFormat, reason, vec![], false);
+        let mut details =
+            BTreeMap::from([("reason".to_string(), JsonValue::String(reason.to_string()))]);
+        if !extensions.is_empty() {
+            details.insert(
+                "extensions".to_string(),
+                JsonValue::Array(extensions.iter().cloned().map(JsonValue::String).collect()),
+            );
+        }
+        error.details = Some(details);
+        error
+    }
+
     /// D7: an action (a Printer's archive/delete, or a Spool's archive/
     /// mark empty) is blocked. The message lists every blocker's own
     /// message, so it reads right whichever entity was blocked.
@@ -944,5 +1022,48 @@ mod tests {
             panic!("blockers must be an array");
         };
         assert_eq!(blockers.len(), 1);
+    }
+
+    #[test]
+    fn p4_library_errors_carry_their_code_recovery_and_basename_details() {
+        let expired = CommandError::selection_expired();
+        assert_eq!(expired.code, ErrorCode::SelectionExpired);
+        assert_eq!(expired.recovery, vec![RecoveryCode::Reload]);
+        assert!(!expired.retryable);
+
+        let differs = CommandError::source_content_differs("aa", "bb", "cube.stl");
+        assert_eq!(differs.code, ErrorCode::SourceContentDiffers);
+        let details = differs.details.unwrap();
+        assert_eq!(
+            details.get("locatedFileName"),
+            Some(&JsonValue::String("cube.stl".to_string()))
+        );
+        assert_eq!(
+            details.get("currentSha256"),
+            Some(&JsonValue::String("aa".to_string()))
+        );
+        assert_eq!(
+            details.get("locatedSha256"),
+            Some(&JsonValue::String("bb".to_string()))
+        );
+
+        let unavailable = CommandError::source_unavailable("cube.stl");
+        assert_eq!(unavailable.code, ErrorCode::SourceUnavailable);
+        assert_eq!(
+            unavailable.details.unwrap().get("fileName"),
+            Some(&JsonValue::String("cube.stl".to_string()))
+        );
+
+        let plain = CommandError::unsupported_format("Binary G-code isn't supported yet.", &[]);
+        assert_eq!(plain.code, ErrorCode::UnsupportedFormat);
+        assert!(!plain.details.as_ref().unwrap().contains_key("extensions"));
+        let extension = CommandError::unsupported_format(
+            "This 3MF needs an extension farm3d doesn't read.",
+            &["b".to_string()],
+        );
+        assert_eq!(
+            extension.details.unwrap().get("extensions"),
+            Some(&JsonValue::Array(vec![JsonValue::String("b".to_string())]))
+        );
     }
 }

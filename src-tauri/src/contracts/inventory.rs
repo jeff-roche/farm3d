@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 41] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 44] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -173,9 +173,24 @@ contracts![
     ("create_tare", "CreateTareRequest", "CreateTareResult"),
     ("update_tare", "UpdateTareRequest", "UpdateTareResult"),
     ("delete_tare", "DeleteTareRequest", "DeleteTareResult"),
+    (
+        "pick_model_files",
+        "PickModelFilesRequest",
+        "PickModelFilesResult"
+    ),
+    (
+        "inspect_import_selection",
+        "InspectImportSelectionRequest",
+        "InspectImportSelectionResult"
+    ),
+    (
+        "cancel_import_selection",
+        "CancelImportSelectionRequest",
+        "CancelImportSelectionResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 41] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 44] {
     &COMMAND_CONTRACTS
 }
 
@@ -279,7 +294,13 @@ export type CreateTareResult = CommandSuccess<TareMutationResult>;
 export type UpdateTareRequest = ContractRequest & { id: string; expectedRevision: number; name: string; weightMg: number };
 export type UpdateTareResult = CommandSuccess<TareMutationResult>;
 export type DeleteTareRequest = ContractRequest & { id: string; expectedRevision: number };
-export type DeleteTareResult = CommandSuccess<TareMutationResult>;"#.to_string()
+export type DeleteTareResult = CommandSuccess<TareMutationResult>;
+export type PickModelFilesRequest = ContractRequest & { purpose: SelectionPurpose };
+export type PickModelFilesResult = CommandSuccess<ImportSelectionSummary | null>;
+export type InspectImportSelectionRequest = ContractRequest & { selectionId: string };
+export type InspectImportSelectionResult = CommandSuccess<ImportInspection>;
+export type CancelImportSelectionRequest = ContractRequest & { selectionId: string };
+export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -334,6 +355,10 @@ export type DeleteTareResult = CommandSuccess<TareMutationResult>;"#.to_string()
         visitor.visit::<crate::spools::commands::MoveSpoolResult>();
         visitor.visit::<crate::spools::lifecycle::SpoolLifecycleAction>();
         visitor.visit::<crate::spools::commands::TareMutationResult>();
+        visitor.visit::<crate::library::selection::SelectionPurpose>();
+        visitor.visit::<crate::library::selection::ImportSelectionSummary>();
+        visitor.visit::<crate::library::inspection::ImportInspection>();
+        visitor.visit::<crate::library::selection::CancelImportSelectionData>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

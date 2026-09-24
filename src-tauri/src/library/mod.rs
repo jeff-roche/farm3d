@@ -3,21 +3,66 @@
 //! task), the content store (Task 3), format inspection (Task 4), import
 //! (Tasks 5-6), commands (Tasks 7-8), and linking (Task 8).
 //!
-//! Rust remains persisted truth. `ModelRecord` (the full wire shape with
-//! `projectIds`, `link`, and revision summaries) is a later task's
-//! responsibility — this module only carries what Task 2's migration and
-//! Project repository need: the closed enums the schema's `CHECK`
-//! constraints mirror, the persisted `Project`/`Model`/`ModelSourceRevision`
-//! row shapes, and name validation (D1).
+//! Rust remains persisted truth. This module holds the closed enums the
+//! schema's `CHECK` constraints mirror, the persisted row shapes, name
+//! validation (D1), and [`LibraryServices`], the Library's runtime state in
+//! `RuntimeServices`. The wire `ModelRecord` (with `projectIds`, `link`, and
+//! revision summaries) arrives with import in Task 6.
 
+pub mod commands;
 pub mod content;
+pub mod events;
 pub mod formats;
+pub mod inspection;
 pub mod repository;
+pub mod selection;
+
+use std::marker::PhantomData;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::contracts::command::CommandError;
+
+use content::ContentStore;
+use events::LibraryStream;
+use selection::{ModelFileIo, SelectionRegistry};
+
+/// The Library's runtime services, held in `RuntimeServices::library`.
+/// Holds no `AppHandle`: whatever emits events passes its own (P3's
+/// pattern).
+pub struct LibraryServices<R: tauri::Runtime> {
+    /// D4: the long-lived content store (staging, blobs, cleanup).
+    pub content: Arc<ContentStore>,
+    /// D17: the `library` event stream.
+    pub stream: Arc<LibraryStream>,
+    /// D7: live import and Locate selections.
+    pub selections: Arc<SelectionRegistry>,
+    /// D7: the native file picker.
+    pub file_io: Arc<dyn ModelFileIo>,
+    /// D15: the linked-source supervisor. Task 8 starts it; until then the
+    /// slot stays empty and linked Models report `notWatched`.
+    pub links: OnceLock<Arc<LinkSupervisor<R>>>,
+}
+
+impl<R: tauri::Runtime> LibraryServices<R> {
+    pub fn new(content: Arc<ContentStore>, file_io: Arc<dyn ModelFileIo>) -> Self {
+        Self {
+            selections: Arc::new(SelectionRegistry::new(Arc::clone(&content))),
+            content,
+            stream: Arc::new(LibraryStream::default()),
+            file_io,
+            links: OnceLock::new(),
+        }
+    }
+}
+
+/// Placeholder for D15's `LinkSupervisor`, which Task 8 implements. It
+/// exists now so `LibraryServices` has its final shape.
+pub struct LinkSupervisor<R: tauri::Runtime> {
+    _runtime: PhantomData<fn() -> R>,
+}
 
 /// D1: a Model's format, fixed at creation. Matches
 /// `library_models`/`model_source_revisions`'s `format` `CHECK`.

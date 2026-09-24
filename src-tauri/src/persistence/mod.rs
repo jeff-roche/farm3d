@@ -5,7 +5,7 @@ mod migrations;
 pub mod snapshot;
 pub mod validation;
 
-pub(crate) use database::create_contained_directory;
+pub(crate) use database::{create_contained_directory, normalize_absolute};
 pub use database::{
     take_transaction_failure, FailurePoint, MetadataRootLease, Storage, StoragePaths,
 };

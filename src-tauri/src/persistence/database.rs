@@ -351,7 +351,9 @@ fn configure_connection(connection: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn normalize_absolute(path: &Path) -> Result<PathBuf, StorageError> {
+/// An absolute path with `.` and `..` resolved lexically (no symlink
+/// resolution). A relative path, or `..` above the root, is `PathCollision`.
+pub(crate) fn normalize_absolute(path: &Path) -> Result<PathBuf, StorageError> {
     if !path.is_absolute() {
         return Err(StorageError::PathCollision);
     }
@@ -396,7 +398,19 @@ pub(crate) fn create_contained_directory(
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&candidate)?;
+                match fs::create_dir(&candidate) {
+                    Ok(()) => {}
+                    // Another thread created it between the check and the
+                    // create (two files of one import staging at once).
+                    // Re-check what is there now.
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = fs::symlink_metadata(&candidate)?;
+                        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                            return Err(StorageError::PathCollision);
+                        }
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
             Err(error) => return Err(error.into()),
         }

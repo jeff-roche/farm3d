@@ -775,3 +775,31 @@ fn undeletable_leftovers_do_not_fail_the_startup_sweep() {
     assert!(!fixture.blob_path(&orphan.sha256).exists());
     assert_eq!(fixture.pending_rows(&pending.sha256), 0);
 }
+
+/// Two files of one selection are staged at once (D13), so two threads
+/// create the same `staging/<key>` directory concurrently. Neither may
+/// fail because the other created it first.
+#[test]
+fn concurrent_staging_into_one_key_never_races_on_the_directory() {
+    let fixture = Fixture::new();
+    let store = Arc::new(fixture.store());
+    for round in 0..50 {
+        let key = format!("race-{round}");
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let threads: Vec<_> = (0..4)
+            .map(|index| {
+                let (store, barrier, key) = (Arc::clone(&store), Arc::clone(&barrier), key.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.stage_bytes(b"bytes", &key, &format!("{index}.thumb.png"))
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread
+                .join()
+                .unwrap()
+                .unwrap_or_else(|error| panic!("round {round}: {error}"));
+        }
+    }
+}
