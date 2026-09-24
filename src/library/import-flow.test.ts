@@ -5,6 +5,9 @@ import {
   mergeResults,
   rowBlockers,
   rowsFromInspection,
+  setRowName,
+  setRowProjects,
+  setRowTarget,
   type ImportRow,
 } from "./import-flow";
 import { model } from "./test-records";
@@ -111,9 +114,63 @@ describe("applyProjectsToAll", () => {
       projectIds: [],
       models: [],
     });
-    const next = applyProjectsToAll(rows, ["prj-b", "prj-c"]);
+    const next = applyProjectsToAll(rows, ["prj-b", "prj-c"], []);
     expect(next.map((r) => r.projectIds)).toEqual([["prj-b", "prj-c"], [], ["prj-b", "prj-c"]]);
     expect(next[0].projectIds).not.toBe(next[2].projectIds);
+  });
+});
+
+describe("keeping the same-name suggestion current (D14)", () => {
+  const models = [
+    model({ id: "mdl-cube-in-b", name: "Cube", projectIds: ["prj-b"] }),
+    model({ id: "mdl-cube-in-c", name: "Cube", projectIds: ["prj-c"] }),
+    model({ id: "mdl-lid-in-b", name: "Lid", projectIds: ["prj-b"] }),
+  ];
+  const cubeRow = () => rowsFromInspection(inspection(ready(0, "cube.stl")), { projectIds: ["prj-b"], models })[0];
+
+  it("moves the suggestion when the row's Projects change", () => {
+    expect(cubeRow().targetModelId).toBe("mdl-cube-in-b");
+    expect(setRowProjects(cubeRow(), ["prj-c"], models).targetModelId).toBe("mdl-cube-in-c");
+  });
+
+  it("clears the suggestion when nothing matches the new Projects", () => {
+    const row = setRowProjects(cubeRow(), ["prj-z"], models);
+    expect(row.targetModelId).toBeUndefined();
+    expect(row).not.toHaveProperty("targetModelId");
+    expect(setRowProjects(cubeRow(), [], models).targetModelId).toBeUndefined();
+  });
+
+  it("recomputes the suggestion when the row is renamed", () => {
+    expect(setRowName(cubeRow(), "lid", models)).toMatchObject({ name: "lid", targetModelId: "mdl-lid-in-b" });
+    expect(setRowName(cubeRow(), "Bracket", models).targetModelId).toBeUndefined();
+  });
+
+  it("applyProjectsToAll recomputes every row's suggestion", () => {
+    const rows = rowsFromInspection(inspection(ready(0, "cube.stl"), ready(1, "lid.stl")), { projectIds: ["prj-b"], models });
+    expect(rows.map((r) => r.targetModelId)).toEqual(["mdl-cube-in-b", "mdl-lid-in-b"]);
+    expect(applyProjectsToAll(rows, ["prj-c"], models).map((r) => r.targetModelId)).toEqual(["mdl-cube-in-c", undefined]);
+  });
+
+  it("never chooses the action while recomputing", () => {
+    expect(setRowProjects(cubeRow(), ["prj-c"], models).duplicateAction).toBeUndefined();
+  });
+
+  it("keeps a target the user picked themselves", () => {
+    const picked = setRowTarget(cubeRow(), "mdl-lid-in-b");
+    expect(setRowProjects(picked, ["prj-c"], models).targetModelId).toBe("mdl-lid-in-b");
+    expect(setRowName(picked, "Other", models).targetModelId).toBe("mdl-lid-in-b");
+    expect(applyProjectsToAll([picked], [], models)[0].targetModelId).toBe("mdl-lid-in-b");
+  });
+
+  it("keeps the target once the user has chosen Add as a new revision", () => {
+    const chosen: ImportRow = { ...cubeRow(), duplicateAction: "addRevision" };
+    expect(setRowProjects(chosen, ["prj-z"], models).targetModelId).toBe("mdl-cube-in-b");
+    expect(setRowName(chosen, "Other", models).targetModelId).toBe("mdl-cube-in-b");
+  });
+
+  it("leaves a rejected row alone", () => {
+    const [row] = rowsFromInspection(inspection(rejected(0, "notes.txt")), { projectIds: [], models });
+    expect(setRowProjects(row, ["prj-b"], models)).toBe(row);
   });
 });
 

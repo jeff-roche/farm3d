@@ -23,6 +23,9 @@ export type ImportRow = {
   /** The `addRevision`/`useExisting` target. May be pre-filled with a
    *  same-name Model (D14) without any action being chosen. */
   targetModelId?: string;
+  /** Set by `setRowTarget`: the user chose the target, so a Projects or
+   *  name change no longer replaces it with a suggestion. */
+  targetPickedByUser?: boolean;
   acknowledgeUnsupported: boolean;
   result?: ImportItemResult;
 };
@@ -84,8 +87,34 @@ export function rowsFromInspection(
   });
 }
 
-export function applyProjectsToAll(rows: ImportRow[], projectIds: string[]): ImportRow[] {
-  return rows.map((row) => (row.candidate.status === "rejected" ? row : { ...row, projectIds: [...projectIds] }));
+/** Re-derives the D14 suggestion from the row's current name and Projects,
+ *  clearing it when nothing matches. A target the user owns -- picked
+ *  directly, or held once they chose Add as a new revision -- is kept. The
+ *  suggestion never chooses the action. */
+function withSuggestion(row: ImportRow, models: ModelRecord[]): ImportRow {
+  if (row.candidate.status !== "ready" || row.targetPickedByUser || row.duplicateAction === "addRevision") return row;
+  const { targetModelId: _previous, ...rest } = row;
+  const target = sameNameTarget(row.name, row.candidate.format, row.projectIds, models);
+  return target === undefined ? rest : { ...rest, targetModelId: target };
+}
+
+export function setRowProjects(row: ImportRow, projectIds: string[], models: ModelRecord[]): ImportRow {
+  if (row.candidate.status === "rejected") return row;
+  return withSuggestion({ ...row, projectIds: [...projectIds] }, models);
+}
+
+export function setRowName(row: ImportRow, name: string, models: ModelRecord[]): ImportRow {
+  if (row.candidate.status === "rejected") return row;
+  return withSuggestion({ ...row, name }, models);
+}
+
+/** The user's own target choice (the Add as a new revision Model picker). */
+export function setRowTarget(row: ImportRow, modelId: string): ImportRow {
+  return { ...row, targetModelId: modelId, targetPickedByUser: true };
+}
+
+export function applyProjectsToAll(rows: ImportRow[], projectIds: string[], models: ModelRecord[]): ImportRow[] {
+  return rows.map((row) => setRowProjects(row, projectIds, models));
 }
 
 /** `useExisting` must name a Model that holds these bytes: the chosen
