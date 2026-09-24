@@ -688,3 +688,90 @@ fn a_symlinked_blob_directory_is_a_path_collision() {
         Err(StorageError::PathCollision)
     ));
 }
+
+/// Review fix: a file the sweep cannot delete must not block startup. The
+/// pending blob stays pending (and is not retried as an orphan), and the
+/// orphan and staging leftovers are counted as failures for the next sweep.
+#[cfg(unix)]
+#[test]
+fn undeletable_leftovers_do_not_fail_the_startup_sweep() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let store = fixture.store();
+    let pending = stage(&store, &fixture.source("a.stl", &pattern(1000)), "sel-p", 0)
+        .expect("pending staged");
+    place(&fixture, &store, &pending);
+    fixture
+        .storage
+        .write(|transaction| {
+            mark_unreferenced_blobs(transaction, std::slice::from_ref(&pending.sha256))
+        })
+        .expect("marked");
+    let orphan =
+        stage(&store, &fixture.source("b.stl", &pattern(3000)), "sel-o", 0).expect("orphan staged");
+    store.inject_failure_once(ContentFailurePoint::AfterPlacementBeforeCommit);
+    assert!(store
+        .place_and_commit(&fixture.storage, &[&orphan], |_| Ok(()))
+        .is_err());
+    stage(
+        &store,
+        &fixture.source("c.stl", &pattern(500)),
+        "sel-stuck",
+        0,
+    )
+    .expect("staged");
+
+    let locked: Vec<PathBuf> = vec![
+        fixture
+            .blob_path(&pending.sha256)
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+        fixture
+            .blob_path(&orphan.sha256)
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+        fixture.content_root().join("staging/sel-stuck"),
+    ];
+    let set_mode = |mode: u32| {
+        for directory in &locked {
+            fs::set_permissions(directory, fs::Permissions::from_mode(mode)).expect("chmod");
+        }
+    };
+    set_mode(0o500);
+    if fs::write(locked[2].join("probe"), b"").is_ok() {
+        set_mode(0o700);
+        eprintln!("skipped: read-only directories are writable here (running as root?)");
+        return;
+    }
+
+    let report = store.startup_sweep(&fixture.storage);
+    set_mode(0o700);
+    let report = report.expect("an undeletable file must not fail the sweep");
+
+    // The emptied `sel-p` and `sel-o` keys go; only `sel-stuck` is stuck.
+    assert_eq!(report.staging_removed, 2);
+    assert_eq!(report.staging_failed, 1);
+    assert_eq!(report.pending_released, 0);
+    assert_eq!(report.orphans_removed, 0);
+    assert_eq!(report.orphans_failed, 1);
+    assert!(fixture.blob_path(&pending.sha256).exists());
+    assert!(fixture.blob_path(&orphan.sha256).exists());
+    assert_eq!(fixture.pending_rows(&pending.sha256), 1);
+    let attempts = fixture.count(
+        "SELECT attempt_count FROM pending_blob_cleanup WHERE sha256 = ?1",
+        &pending.sha256,
+    );
+    assert_eq!(attempts, 1);
+
+    let retried = store.startup_sweep(&fixture.storage).expect("retry sweep");
+
+    assert_eq!(retried.staging_removed, 1);
+    assert_eq!(retried.pending_released, 1);
+    assert_eq!(retried.orphans_removed, 1);
+    assert!(!fixture.blob_path(&pending.sha256).exists());
+    assert!(!fixture.blob_path(&orphan.sha256).exists());
+    assert_eq!(fixture.pending_rows(&pending.sha256), 0);
+}

@@ -161,10 +161,16 @@ impl From<ContentError> for CommandError {
 pub struct SweepReport {
     /// Top-level entries (one per staging key) deleted from `staging/`.
     pub staging_removed: usize,
+    /// Top-level `staging/` entries that could not be deleted (left for
+    /// the next sweep).
+    pub staging_failed: usize,
     /// `pending_blob_cleanup` blobs unlinked.
     pub pending_released: usize,
     /// Blob files deleted because no `content_blobs` row names them.
     pub orphans_removed: usize,
+    /// Orphan blob files that could not be deleted (left for the next
+    /// sweep).
+    pub orphans_failed: usize,
 }
 
 /// The store's totals, for the Library status line (`library_content_info`).
@@ -570,43 +576,87 @@ impl ContentStore {
     /// metadata-root lease guarantees no import is in flight): empties
     /// `staging/`, retries `pending_blob_cleanup`, and deletes blob files
     /// that no `content_blobs` row names.
+    ///
+    /// Deleting is best effort: a file that can't be removed is counted in
+    /// the report, logged by basename or hash, and left for the next sweep,
+    /// so one stuck file never stops the app from serving. Only a
+    /// containment violation (a symlinked blob prefix directory) or a
+    /// database failure is an error.
     pub fn startup_sweep(&self, storage: &Storage) -> Result<SweepReport, StorageError> {
-        let staging_removed = self.clear_staging()?;
+        let (staging_removed, staging_failed) = self.clear_staging();
         let pending_released = self.release_unreferenced(storage)?;
-        let orphans_removed = self.remove_orphans(storage)?;
+        let (orphans_removed, orphans_failed) = self.remove_orphans(storage)?;
         Ok(SweepReport {
             staging_removed,
+            staging_failed,
             pending_released,
             orphans_removed,
+            orphans_failed,
         })
     }
 
-    fn clear_staging(&self) -> Result<usize, StorageError> {
-        let mut removed = 0;
-        for entry in fs::read_dir(&self.staging)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                fs::remove_dir_all(entry.path())?;
-            } else {
-                fs::remove_file(entry.path())?;
+    /// Returns `(removed, failed)` top-level `staging/` entries.
+    fn clear_staging(&self) -> (usize, usize) {
+        let entries = match fs::read_dir(&self.staging) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!("farm3d: content sweep could not list staging: {error}");
+                return (0, 1);
             }
-            removed += 1;
+        };
+        let (mut removed, mut failed) = (0, 0);
+        for entry in entries {
+            let outcome = entry.and_then(|entry| {
+                let path = entry.path();
+                let result = if entry.file_type()?.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                result.map_err(|error| {
+                    eprintln!(
+                        "farm3d: content sweep could not remove staging entry {:?}: {error}",
+                        entry.file_name()
+                    );
+                    error
+                })
+            });
+            match outcome {
+                Ok(()) => removed += 1,
+                Err(_) => failed += 1,
+            }
         }
-        Ok(removed)
+        (removed, failed)
     }
 
-    fn remove_orphans(&self, storage: &Storage) -> Result<usize, StorageError> {
-        let known = storage.read(|connection| {
-            let mut statement = connection.prepare("SELECT sha256 FROM content_blobs")?;
-            let hashes = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<HashSet<_>>>()?;
-            Ok(hashes)
+    /// Returns `(removed, failed)` orphan blob files. A hash with a
+    /// `pending_blob_cleanup` row is left to `release_unreferenced`, which
+    /// already tried it and recorded the attempt.
+    fn remove_orphans(&self, storage: &Storage) -> Result<(usize, usize), StorageError> {
+        let (known, pending) = storage.read(|connection| {
+            let hashes = |sql: &str| -> rusqlite::Result<HashSet<String>> {
+                let mut statement = connection.prepare(sql)?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect()
+            };
+            Ok((
+                hashes("SELECT sha256 FROM content_blobs")?,
+                hashes("SELECT sha256 FROM pending_blob_cleanup")?,
+            ))
         })?;
-        let mut removed = 0;
-        for prefix in fs::read_dir(&self.blobs)? {
-            let prefix = prefix?;
-            let file_type = prefix.file_type()?;
+        let (mut removed, mut failed) = (0, 0);
+        let prefixes = match fs::read_dir(&self.blobs) {
+            Ok(prefixes) => prefixes,
+            Err(error) => {
+                eprintln!("farm3d: content sweep could not list blobs: {error}");
+                return Ok((0, 1));
+            }
+        };
+        for prefix in prefixes.flatten() {
+            let Ok(file_type) = prefix.file_type() else {
+                failed += 1;
+                continue;
+            };
             if file_type.is_symlink() {
                 return Err(StorageError::PathCollision);
             }
@@ -614,23 +664,40 @@ impl ContentStore {
                 continue;
             }
             let prefix_name = prefix.file_name();
-            for blob in fs::read_dir(prefix.path())? {
-                let blob = blob?;
-                if blob.file_type()?.is_dir() {
+            let blobs = match fs::read_dir(prefix.path()) {
+                Ok(blobs) => blobs,
+                Err(error) => {
+                    eprintln!(
+                        "farm3d: content sweep could not list blob prefix {prefix_name:?}: {error}"
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+            for blob in blobs.flatten() {
+                if blob.file_type().is_ok_and(|file_type| file_type.is_dir()) {
                     continue;
                 }
                 let name = blob.file_name();
-                let referenced = name
+                let keep = name
                     .to_str()
                     .zip(prefix_name.to_str())
-                    .is_some_and(|(name, prefix)| name.starts_with(prefix) && known.contains(name));
-                if !referenced {
-                    remove_blob_file(&blob.path())?;
-                    removed += 1;
+                    .is_some_and(|(name, prefix)| {
+                        name.starts_with(prefix) && (known.contains(name) || pending.contains(name))
+                    });
+                if keep {
+                    continue;
+                }
+                match remove_blob_file(&blob.path()) {
+                    Ok(()) => removed += 1,
+                    Err(error) => {
+                        eprintln!("farm3d: content sweep could not remove blob {name:?}: {error}");
+                        failed += 1;
+                    }
                 }
             }
         }
-        Ok(removed)
+        Ok((removed, failed))
     }
 
     /// D2: opens the blob for `sha256` for reading. The returned reader
