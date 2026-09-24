@@ -232,7 +232,10 @@ impl Storage {
     /// the type-inference ambiguity a directly-generic `write<T, E>` caused
     /// at `write`'s many existing `StorageError` call sites (several close
     /// over a bare `Ok(())` with no other local context to pin `E`).
-    fn write_with<T, E>(&self, operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>) -> Result<T, E>
+    fn write_with<T, E>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+    ) -> Result<T, E>
     where
         E: From<rusqlite::Error> + From<StorageError>,
     {

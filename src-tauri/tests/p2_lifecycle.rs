@@ -540,7 +540,9 @@ fn supervising_the_persisted_state_after_a_concurrent_archive_starts_nothing() {
         ))
         .unwrap();
     // An interleaved archive commits after the caller captured `stale`.
-    repository.archive(&stale.id, stale.revision, "op-archive", &[]).unwrap();
+    repository
+        .archive(&stale.id, stale.revision, "op-archive", &[])
+        .unwrap();
 
     tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(
         &manager,
@@ -562,7 +564,9 @@ fn supervising_the_persisted_state_of_a_deleted_printer_removes_its_status() {
         runtime(Arc::clone(&storage), Arc::new(a_catalog()), factory);
     let repository = PrinterRepository::new(Arc::clone(&storage));
     let stale = repository.create(a_printer("printer-a", None)).unwrap();
-    repository.archive(&stale.id, stale.revision, "op-archive", &[]).unwrap();
+    repository
+        .archive(&stale.id, stale.revision, "op-archive", &[])
+        .unwrap();
     repository.delete(&stale.id, stale.revision + 1).unwrap();
 
     tauri::async_runtime::block_on(farm3d_lib::printers::setup::supervise_persisted(

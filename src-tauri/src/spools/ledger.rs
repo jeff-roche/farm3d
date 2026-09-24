@@ -315,7 +315,8 @@ fn decode_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<AmountEvent> {
         kind: decode_enum(&kind_text).map_err(|error| from_sql_error(3, error))?,
         before_mg: row.get(4)?,
         after_mg: row.get(5)?,
-        confidence_after: decode_enum(&confidence_text).map_err(|error| from_sql_error(6, error))?,
+        confidence_after: decode_enum(&confidence_text)
+            .map_err(|error| from_sql_error(6, error))?,
         gross_mg: row.get(7)?,
         tare_mg: row.get(8)?,
         reservation_id: row.get(9)?,

@@ -348,7 +348,11 @@ fn an_initial_load_of_a_spool_already_loaded_elsewhere_fails_the_whole_create() 
     let loaded = spool(&storage, &spool_row.id);
 
     let before_count = storage
-        .read(|connection| connection.query_row("SELECT COUNT(*) FROM printers", [], |row| row.get::<_, i64>(0)))
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM printers", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })
         .unwrap();
 
     let error = error_of(invoke(
@@ -371,7 +375,11 @@ fn an_initial_load_of_a_spool_already_loaded_elsewhere_fails_the_whole_create() 
     );
 
     let after_count = storage
-        .read(|connection| connection.query_row("SELECT COUNT(*) FROM printers", [], |row| row.get::<_, i64>(0)))
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM printers", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })
         .unwrap();
     assert_eq!(before_count, after_count, "no Printer row was created");
 }
@@ -432,9 +440,7 @@ fn batch_create_copies_the_shared_layout_into_each_row_with_disjoint_ids() {
     let target_slots = material_slots(target);
     let mut new_layout: Vec<Value> = target_slots
         .iter()
-        .map(|slot| {
-            json!({ "id": slot["id"], "name": slot["name"] })
-        })
+        .map(|slot| json!({ "id": slot["id"], "name": slot["name"] }))
         .collect();
     new_layout[0]["name"] = json!("Renamed");
 
@@ -456,7 +462,8 @@ fn batch_create_copies_the_shared_layout_into_each_row_with_disjoint_ids() {
 
     for other in &printers[1..] {
         let other_id = other["id"].as_str().unwrap();
-        let list_response = invoke(&webview, "list_printers", json!({"contractVersion": 1})).unwrap();
+        let list_response =
+            invoke(&webview, "list_printers", json!({"contractVersion": 1})).unwrap();
         let current = list_response["data"]
             .as_array()
             .unwrap()
@@ -559,7 +566,9 @@ fn set_material_slot_layout_reorders_renames_adds_and_removes_an_empty_slot() {
                 "op-b-unload",
                 &spool_row.id,
                 after_load.revision,
-                &MoveDestination::Storage { storage_label: None },
+                &MoveDestination::Storage {
+                    storage_label: None,
+                },
                 None,
             )
         })
@@ -910,7 +919,10 @@ fn export_v3_carries_material_slots_without_occupancy() {
     assert_eq!(document["schemaVersion"], json!(3));
     let exported_slots = document["printers"][0]["materialSlots"].as_array().unwrap();
     assert_eq!(exported_slots.len(), 2);
-    assert_eq!(exported_slots[0], json!({"name": "1", "feederLabel": "AMS 1"}));
+    assert_eq!(
+        exported_slots[0],
+        json!({"name": "1", "feederLabel": "AMS 1"})
+    );
     assert_eq!(exported_slots[1], json!({"name": "2"}));
     assert!(exported_slots[0].get("id").is_none());
     assert!(exported_slots[0].get("position").is_none());
@@ -929,7 +941,10 @@ fn importing_v1_and_v2_documents_gives_each_printer_the_default_main_layout() {
         create_printer_body("Seed", json!({})),
     )
     .unwrap();
-    let id = created["data"]["printer"]["id"].as_str().unwrap().to_string();
+    let id = created["data"]["printer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let revision = created["data"]["printer"]["revision"].as_i64().unwrap();
 
     for version in [1, 2] {
@@ -937,7 +952,8 @@ fn importing_v1_and_v2_documents_gives_each_printer_the_default_main_layout() {
             version,
             json!([imported_printer(&id, revision, json!({}))]),
         );
-        *documents.open.lock().unwrap() = Some(PathBuf::from(format!("/tmp/import-v{version}.json")));
+        *documents.open.lock().unwrap() =
+            Some(PathBuf::from(format!("/tmp/import-v{version}.json")));
         *documents.bytes.lock().unwrap() = Some(document);
 
         let current = invoke(&webview, "list_printers", json!({"contractVersion": 1})).unwrap();
@@ -954,7 +970,11 @@ fn importing_v1_and_v2_documents_gives_each_printer_the_default_main_layout() {
         assert_eq!(response["data"]["status"], json!("applied"), "v{version}");
         let printers = response["data"]["printers"].as_array().unwrap();
         assert_eq!(material_slots(&printers[0]).len(), 1, "v{version}");
-        assert_eq!(material_slots(&printers[0])[0]["name"], json!("Main"), "v{version}");
+        assert_eq!(
+            material_slots(&printers[0])[0]["name"],
+            json!("Main"),
+            "v{version}"
+        );
     }
 }
 
@@ -973,7 +993,10 @@ fn importing_v3_recreates_the_layout_with_new_ids() {
     let printer = &created["data"]["printer"];
     let id = printer["id"].as_str().unwrap().to_string();
     let revision = printer["revision"].as_i64().unwrap();
-    let old_slot_id = material_slots(printer)[0]["id"].as_str().unwrap().to_string();
+    let old_slot_id = material_slots(printer)[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let document = printers_document_versioned(
         3,
@@ -1187,7 +1210,10 @@ fn importing_with_no_spool_loaded_cascades_away_the_replaced_printers_old_slot_h
             )
         })
         .unwrap();
-    assert_eq!(old_slot_exists, 0, "the old slot row must be gone, not soft-removed");
+    assert_eq!(
+        old_slot_exists, 0,
+        "the old slot row must be gone, not soft-removed"
+    );
     let movements_after: i64 = storage
         .read(|connection| {
             connection.query_row(
@@ -1197,5 +1223,8 @@ fn importing_with_no_spool_loaded_cascades_away_the_replaced_printers_old_slot_h
             )
         })
         .unwrap();
-    assert_eq!(movements_after, 0, "the old slot's movement history must cascade away too");
+    assert_eq!(
+        movements_after, 0,
+        "the old slot's movement history must cascade away too"
+    );
 }

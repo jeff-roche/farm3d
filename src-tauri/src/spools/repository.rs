@@ -114,10 +114,12 @@ pub fn load_spool(tx: &Transaction<'_>, id: &str) -> Result<Option<StoredSpool>,
 /// `movement::apply_moves` alone wouldn't reject "steal a Spool from
 /// wherever it currently is", since a slot->slot move is an ordinary, valid
 /// move in general.
-pub fn is_loadable_from_storage(tx: &Transaction<'_>, spool_id: &str) -> Result<bool, StorageError> {
-    Ok(load_spool(tx, spool_id)?.is_some_and(|spool| {
-        spool.lifecycle == SpoolLifecycle::Active && spool.slot_id.is_none()
-    }))
+pub fn is_loadable_from_storage(
+    tx: &Transaction<'_>,
+    spool_id: &str,
+) -> Result<bool, StorageError> {
+    Ok(load_spool(tx, spool_id)?
+        .is_some_and(|spool| spool.lifecycle == SpoolLifecycle::Active && spool.slot_id.is_none()))
 }
 
 /// D9's derived, wire-shaped Spool list, ordered by `spoolNumber`. Joins
@@ -146,10 +148,7 @@ pub fn loaded_on_printer(
 /// One Spool as [`list_spools`] derives it, or `None` if there is no such
 /// Spool. Takes `&Connection` so the inventory commands can use it both
 /// inside their write transaction and from a post-commit read.
-pub fn load_record(
-    connection: &Connection,
-    id: &str,
-) -> Result<Option<SpoolRecord>, StorageError> {
+pub fn load_record(connection: &Connection, id: &str) -> Result<Option<SpoolRecord>, StorageError> {
     Ok(query_records(connection, "s.id = ?1", [id])?.pop())
 }
 

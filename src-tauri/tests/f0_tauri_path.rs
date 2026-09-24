@@ -136,8 +136,8 @@ fn versioned_mock_runtime_command_mutation_survives_restart() {
     let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
     let lease = MetadataRootLease::acquire(&paths).unwrap();
     let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let model = &catalog.models[0];
     let variant = &model.variants[0];
@@ -229,8 +229,8 @@ fn complete_f1_mock_runtime_tracer_crosses_migration_restart_events_and_document
     let lease = MetadataRootLease::acquire(&paths).unwrap();
     let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
     migrate_legacy(&storage).unwrap();
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let documents = Arc::new(TracerDocuments::default());
     *documents.settings_import.lock().unwrap() = serde_json::to_vec(&json!({

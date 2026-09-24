@@ -51,8 +51,9 @@ pub fn get(tx: &Transaction<'_>, id: &str) -> Result<Option<Tare>, StorageError>
 /// Every tare, case-insensitive name order — the order a tare picker shows
 /// them in.
 pub fn list(tx: &Transaction<'_>) -> Result<Vec<Tare>, StorageError> {
-    let mut statement =
-        tx.prepare(&format!("SELECT {COLUMNS} FROM spool_tares ORDER BY lower(name)"))?;
+    let mut statement = tx.prepare(&format!(
+        "SELECT {COLUMNS} FROM spool_tares ORDER BY lower(name)"
+    ))?;
     let rows = statement
         .query_map([], decode)?
         .collect::<rusqlite::Result<Vec<_>>>()?;

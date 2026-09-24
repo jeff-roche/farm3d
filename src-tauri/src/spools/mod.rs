@@ -288,8 +288,8 @@ impl SpoolFields {
         self.product = normalize_optional_text(self.product.take());
         self.material_other = normalize_optional_text(self.material_other.take());
         self.notes = normalize_optional_text(self.notes.take());
-        self.color_hex = normalize_optional_text(self.color_hex.take())
-            .map(|hex| hex.to_ascii_uppercase());
+        self.color_hex =
+            normalize_optional_text(self.color_hex.take()).map(|hex| hex.to_ascii_uppercase());
     }
 }
 

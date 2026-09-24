@@ -30,7 +30,12 @@ fn v3_database(paths: &StoragePaths) -> rusqlite::Connection {
     connection
 }
 
-fn insert_v3_printer(connection: &rusqlite::Connection, id: &str, created_at: &str, archived: bool) {
+fn insert_v3_printer(
+    connection: &rusqlite::Connection,
+    id: &str,
+    created_at: &str,
+    archived: bool,
+) {
     let archived_at = archived.then(|| created_at.to_string());
     connection
         .execute(
@@ -111,7 +116,12 @@ fn upgrading_v3_reaches_v4_and_backfills_one_main_slot_per_printer() {
     {
         let connection = v3_database(&paths);
         insert_v3_printer(&connection, "prn-active", "2026-01-01T00:00:00.000Z", false);
-        insert_v3_printer(&connection, "prn-archived", "2026-01-02T00:00:00.000Z", true);
+        insert_v3_printer(
+            &connection,
+            "prn-archived",
+            "2026-01-02T00:00:00.000Z",
+            true,
+        );
     }
 
     let storage = Storage::open(paths, &lease).expect("v4 storage");
@@ -147,9 +157,7 @@ fn upgrading_v3_reaches_v4_and_backfills_one_main_slot_per_printer() {
     assert_eq!(ledger_name, "0004_p3_spools_material_slots");
     let expected_checksum = format!(
         "{:x}",
-        Sha256::digest(
-            include_str!("../migrations/0004_p3_spools_material_slots.sql").as_bytes()
-        )
+        Sha256::digest(include_str!("../migrations/0004_p3_spools_material_slots.sql").as_bytes())
     );
     assert_eq!(ledger_checksum, expected_checksum);
 
@@ -172,14 +180,34 @@ fn two_spools_cannot_share_one_slot() {
     storage
         .write(|tx| {
             seed_printer_and_slot(tx, "prn-a", "slt-a");
-            insert_spool(tx, "spl-1", 1, "PLA", None, "active", None, Some("slt-a"), None)?;
+            insert_spool(
+                tx,
+                "spl-1",
+                1,
+                "PLA",
+                None,
+                "active",
+                None,
+                Some("slt-a"),
+                None,
+            )?;
             Ok(())
         })
         .expect("first spool loads into the slot");
 
     let error = storage
         .write(|tx| {
-            insert_spool(tx, "spl-2", 2, "PLA", None, "active", None, Some("slt-a"), None)?;
+            insert_spool(
+                tx,
+                "spl-2",
+                2,
+                "PLA",
+                None,
+                "active",
+                None,
+                Some("slt-a"),
+                None,
+            )?;
             Ok(())
         })
         .expect_err("a second spool in the same slot must be rejected");
@@ -253,7 +281,17 @@ fn other_family_without_material_other_is_rejected() {
 
     let error = storage
         .write(|tx| {
-            insert_spool(tx, "spl-1", 1, "OTHER", None, "active", None, None, Some("Shelf 1"))?;
+            insert_spool(
+                tx,
+                "spl-1",
+                1,
+                "OTHER",
+                None,
+                "active",
+                None,
+                None,
+                Some("Shelf 1"),
+            )?;
             Ok(())
         })
         .expect_err("OTHER without materialOther must be rejected");
@@ -280,7 +318,10 @@ fn spool_amount_events_reject_update_and_delete_as_append_only() {
 
     let connection = rusqlite::Connection::open(paths.database()).expect("raw connection");
     let update_error = connection
-        .execute("UPDATE spool_amount_events SET after_mg = 0 WHERE id = 'evt-1'", [])
+        .execute(
+            "UPDATE spool_amount_events SET after_mg = 0 WHERE id = 'evt-1'",
+            [],
+        )
         .expect_err("update must be rejected");
     assert!(update_error.to_string().contains("append-only"));
 
@@ -336,21 +377,29 @@ fn deleting_a_printer_cascades_its_slots_and_touching_movements() {
                 [],
                 |row| row.get(0),
             )?;
-            let spool_count: i64 =
-                connection.query_row("SELECT count(*) FROM spools WHERE id = 'spl-1'", [], |row| {
-                    row.get(0)
-                })?;
-            let fk_violations: i64 =
-                connection.query_row("SELECT count(*) FROM pragma_foreign_key_check()", [], |row| {
-                    row.get(0)
-                })?;
+            let spool_count: i64 = connection.query_row(
+                "SELECT count(*) FROM spools WHERE id = 'spl-1'",
+                [],
+                |row| row.get(0),
+            )?;
+            let fk_violations: i64 = connection.query_row(
+                "SELECT count(*) FROM pragma_foreign_key_check()",
+                [],
+                |row| row.get(0),
+            )?;
             Ok((slot_count, movement_count, spool_count, fk_violations))
         })
         .expect("post-delete state");
 
     assert_eq!(slot_count, 0, "the printer's slot must be gone");
-    assert_eq!(movement_count, 0, "movements touching the slot must be gone");
-    assert_eq!(spool_count, 1, "the spool itself must survive the printer delete");
+    assert_eq!(
+        movement_count, 0,
+        "movements touching the slot must be gone"
+    );
+    assert_eq!(
+        spool_count, 1,
+        "the spool itself must survive the printer delete"
+    );
     assert_eq!(fk_violations, 0);
 }
 
@@ -375,5 +424,8 @@ fn a_crash_before_commit_leaves_the_database_byte_identical_at_v3() {
     drop(connection);
 
     let after = fs::read(paths.database()).expect("post-crash bytes");
-    assert_eq!(before, after, "a rolled-back v4 upgrade must not touch the file");
+    assert_eq!(
+        before, after,
+        "a rolled-back v4 upgrade must not touch the file"
+    );
 }

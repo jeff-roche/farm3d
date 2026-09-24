@@ -48,6 +48,10 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::settings::commands::{
+    ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
+    SettingsRecord,
+};
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
 };
@@ -64,10 +68,6 @@ use farm3d_lib::spools::tares::Tare;
 use farm3d_lib::spools::{
     AmountConfidence, Availability, FilamentDiameter, MaterialFamily, MaterialSlot, SpoolFacets,
     SpoolFields, SpoolLifecycle, SpoolLocation, SpoolRecord,
-};
-use farm3d_lib::settings::commands::{
-    ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
-    SettingsRecord,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;

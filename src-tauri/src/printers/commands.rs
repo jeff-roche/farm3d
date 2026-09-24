@@ -933,7 +933,9 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         return Err(CommandError::unsupported_schema(version));
     }
     if version != 1 && version != 2 && version != 3 {
-        return Err(CommandError::validation("schemaVersion must be 1, 2, or 3."));
+        return Err(CommandError::validation(
+            "schemaVersion must be 1, 2, or 3.",
+        ));
     }
     let rows = root
         .get("printers")

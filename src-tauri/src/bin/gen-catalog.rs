@@ -60,8 +60,8 @@ fn main() {
 
     // Vite's `public/` dir, so the browser build serves it too; Tauri bundles
     // the same file as the `resources/printer-catalog.json` resource.
-    let out_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../public/catalog/printer-catalog.json");
+    let out_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
     fs::create_dir_all(out_path.parent().unwrap()).expect("could not create catalog dir");
     let json = serde_json::to_string_pretty(&catalog).expect("could not serialize catalog");
     fs::write(&out_path, json).expect("could not write catalog");

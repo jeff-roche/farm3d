@@ -159,9 +159,17 @@ contracts![
     ("spool_history", "SpoolHistoryRequest", "SpoolHistoryResult"),
     ("create_spool", "CreateSpoolRequest", "CreateSpoolResult"),
     ("update_spool", "UpdateSpoolRequest", "UpdateSpoolResult"),
-    ("record_spool_amount", "RecordSpoolAmountRequest", "RecordSpoolAmountResult"),
+    (
+        "record_spool_amount",
+        "RecordSpoolAmountRequest",
+        "RecordSpoolAmountResult"
+    ),
     ("move_spool", "MoveSpoolRequest", "MoveSpoolResult"),
-    ("set_spool_lifecycle", "SetSpoolLifecycleRequest", "SetSpoolLifecycleResult"),
+    (
+        "set_spool_lifecycle",
+        "SetSpoolLifecycleRequest",
+        "SetSpoolLifecycleResult"
+    ),
     ("create_tare", "CreateTareRequest", "CreateTareResult"),
     ("update_tare", "UpdateTareRequest", "UpdateTareResult"),
     ("delete_tare", "DeleteTareRequest", "DeleteTareResult"),

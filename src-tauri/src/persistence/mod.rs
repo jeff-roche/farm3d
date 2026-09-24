@@ -5,7 +5,9 @@ mod migrations;
 pub mod snapshot;
 pub mod validation;
 
-pub use database::{take_transaction_failure, FailurePoint, MetadataRootLease, Storage, StoragePaths};
+pub use database::{
+    take_transaction_failure, FailurePoint, MetadataRootLease, Storage, StoragePaths,
+};
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
 pub use migrations::CURRENT_SCHEMA_VERSION;
@@ -1398,14 +1400,7 @@ mod tests {
             ),
             ("spool_amount_events", "gross_mg", "INTEGER", 0, None, 0),
             ("spool_amount_events", "tare_mg", "INTEGER", 0, None, 0),
-            (
-                "spool_amount_events",
-                "reservation_id",
-                "TEXT",
-                0,
-                None,
-                0,
-            ),
+            ("spool_amount_events", "reservation_id", "TEXT", 0, None, 0),
             ("spool_amount_events", "note", "TEXT", 0, None, 0),
             ("spool_amount_events", "occurred_at", "TEXT", 1, None, 0),
             ("spool_movements", "id", "TEXT", 1, None, 1),
@@ -1413,14 +1408,7 @@ mod tests {
             ("spool_movements", "spool_id", "TEXT", 1, None, 0),
             ("spool_movements", "reason", "TEXT", 1, None, 0),
             ("spool_movements", "from_slot_id", "TEXT", 0, None, 0),
-            (
-                "spool_movements",
-                "from_storage_label",
-                "TEXT",
-                0,
-                None,
-                0,
-            ),
+            ("spool_movements", "from_storage_label", "TEXT", 0, None, 0),
             ("spool_movements", "to_slot_id", "TEXT", 0, None, 0),
             ("spool_movements", "to_storage_label", "TEXT", 0, None, 0),
             ("spool_movements", "occurred_at", "TEXT", 1, None, 0),

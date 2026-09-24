@@ -3,9 +3,9 @@ use std::sync::Arc;
 use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
-use crate::spools::slots::{self, InitialLoad, SlotSpec};
 use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
 use crate::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest};
+use crate::spools::slots::{self, InitialLoad, SlotSpec};
 
 use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
@@ -52,17 +52,21 @@ impl PrinterRepository {
                 let mut statement = connection.prepare(&format!(
                     "SELECT {PRINTER_COLUMNS} FROM printers ORDER BY CAST(id AS BLOB)"
                 ))?;
-                let printers = statement.query_map([], decode)?.collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(slots::live_slots_by_printer(connection).map(|mut by_printer| {
-                    printers
-                        .into_iter()
-                        .map(|mut printer| {
-                            printer.material_slots =
-                                by_printer.remove(&printer.id).unwrap_or_default();
-                            printer
-                        })
-                        .collect::<Vec<_>>()
-                }))
+                let printers = statement
+                    .query_map([], decode)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(
+                    slots::live_slots_by_printer(connection).map(|mut by_printer| {
+                        printers
+                            .into_iter()
+                            .map(|mut printer| {
+                                printer.material_slots =
+                                    by_printer.remove(&printer.id).unwrap_or_default();
+                                printer
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
             })
             .and_then(|inner| inner)
     }
@@ -217,11 +221,12 @@ impl PrinterRepository {
                 let operation_id = format!("op-{}", uuid::Uuid::new_v4());
                 let mut moves = Vec::with_capacity(initial_loads.len());
                 for load in initial_loads {
-                    let slot = created_slots.get(load.slot_index).ok_or(
-                        RepositoryError::Validation {
-                            field_path: "initialLoads",
-                        },
-                    )?;
+                    let slot =
+                        created_slots
+                            .get(load.slot_index)
+                            .ok_or(RepositoryError::Validation {
+                                field_path: "initialLoads",
+                            })?;
                     moves.push(MoveRequest {
                         spool_id: load.spool_id.clone(),
                         expected_spool_revision: load.expected_spool_revision,

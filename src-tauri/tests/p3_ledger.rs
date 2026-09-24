@@ -6,9 +6,13 @@
 
 mod common;
 
-use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StorageError, StoragePaths};
+use farm3d_lib::persistence::{
+    MetadataRootLease, RepositoryError, Storage, StorageError, StoragePaths,
+};
 use farm3d_lib::spools::ledger::{self, AmountEntry, AmountEventKind, LedgerSnapshot};
-use farm3d_lib::spools::{repository, tares, AmountConfidence, FilamentDiameter, MaterialFamily, SpoolFields};
+use farm3d_lib::spools::{
+    repository, tares, AmountConfidence, FilamentDiameter, MaterialFamily, SpoolFields,
+};
 
 use common::storage;
 
@@ -105,9 +109,7 @@ fn scale_entry_snapshots_gross_and_tare_without_ever_changing_the_spools_default
     // Updating the tare's weight leaves the already-recorded snapshot
     // unchanged (D3: each measurement snapshots the values it used).
     let updated_cardboard = storage
-        .write_repo(|tx| {
-            tares::update(tx, &cardboard.id, cardboard.revision, "Cardboard", 150_000)
-        })
+        .write_repo(|tx| tares::update(tx, &cardboard.id, cardboard.revision, "Cardboard", 150_000))
         .unwrap();
     let history_after_tare_edit = storage.write(|tx| ledger::history(tx, &spool.id)).unwrap();
     assert_eq!(history_after_tare_edit[0].tare_mg, Some(140_000));
@@ -262,8 +264,14 @@ fn a_measurement_after_a_consumption_is_flagged_as_a_correction() {
 
     let history = storage.write(|tx| ledger::history(tx, &spool.id)).unwrap();
     assert_eq!(history.len(), 3);
-    assert!(!history[0].is_correction, "the initial row is never a correction");
-    assert!(!history[1].is_correction, "a consumption is never itself a correction");
+    assert!(
+        !history[0].is_correction,
+        "the initial row is never a correction"
+    );
+    assert!(
+        !history[1].is_correction,
+        "a consumption is never itself a correction"
+    );
     assert!(history[2].is_correction);
     assert_eq!(history[2].before_mg, Some(consumption.after_mg));
 }
@@ -343,7 +351,10 @@ fn low_facet_reflects_the_threshold_and_lifecycle_confidence_mirrors_the_cache()
     // exercise the derivation for an `empty` lifecycle.
     storage
         .write(|tx| -> Result<(), StorageError> {
-            tx.execute("UPDATE spools SET lifecycle = 'empty' WHERE id = ?1", [&spool.id])?;
+            tx.execute(
+                "UPDATE spools SET lifecycle = 'empty' WHERE id = ?1",
+                [&spool.id],
+            )?;
             Ok(())
         })
         .unwrap();

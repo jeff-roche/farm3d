@@ -11,7 +11,9 @@ use std::thread;
 
 use farm3d_lib::persistence::{FailurePoint, RepositoryError, Storage, StorageError};
 use farm3d_lib::spools::ledger::AmountEntry;
-use farm3d_lib::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest, MovementReason};
+use farm3d_lib::spools::movement::{
+    self, MoveDestination, MoveOutcome, MoveRequest, MovementReason,
+};
 use farm3d_lib::spools::repository::{self, StoredSpool};
 use farm3d_lib::spools::{AmountConfidence, FilamentDiameter, MaterialFamily, SpoolFields};
 

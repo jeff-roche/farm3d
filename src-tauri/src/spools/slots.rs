@@ -87,7 +87,9 @@ struct NormalizedSlot {
 /// convention to match here.
 fn normalize_and_validate(layout: &[SlotSpec]) -> Result<Vec<NormalizedSlot>, RepositoryError> {
     if layout.is_empty() || layout.len() > 16 {
-        return Err(RepositoryError::Validation { field_path: "slots" });
+        return Err(RepositoryError::Validation {
+            field_path: "slots",
+        });
     }
     let mut normalized = Vec::with_capacity(layout.len());
     let mut seen_names: Vec<String> = Vec::with_capacity(layout.len());
@@ -95,18 +97,24 @@ fn normalize_and_validate(layout: &[SlotSpec]) -> Result<Vec<NormalizedSlot>, Re
     for spec in layout {
         if let Some(id) = spec.id.as_deref() {
             if seen_ids.contains(&id) {
-                return Err(RepositoryError::Validation { field_path: "slots" });
+                return Err(RepositoryError::Validation {
+                    field_path: "slots",
+                });
             }
             seen_ids.push(id);
         }
         let name = spec.name.trim().to_string();
         let len = name.chars().count();
         if len < 1 || len > 32 {
-            return Err(RepositoryError::Validation { field_path: "slots" });
+            return Err(RepositoryError::Validation {
+                field_path: "slots",
+            });
         }
         let folded = name.to_lowercase();
         if seen_names.contains(&folded) {
-            return Err(RepositoryError::Validation { field_path: "slots" });
+            return Err(RepositoryError::Validation {
+                field_path: "slots",
+            });
         }
         seen_names.push(folded);
 
@@ -114,7 +122,9 @@ fn normalize_and_validate(layout: &[SlotSpec]) -> Result<Vec<NormalizedSlot>, Re
             None | Some("") => None,
             Some(trimmed) => {
                 if trimmed.chars().count() > 32 {
-                    return Err(RepositoryError::Validation { field_path: "slots" });
+                    return Err(RepositoryError::Validation {
+                        field_path: "slots",
+                    });
                 }
                 Some(trimmed.to_string())
             }
@@ -195,7 +205,9 @@ pub fn set_layout(
     for slot in &normalized {
         if let Some(id) = &slot.id {
             if !existing_ids.contains(id.as_str()) {
-                return Err(RepositoryError::Validation { field_path: "slots" });
+                return Err(RepositoryError::Validation {
+                    field_path: "slots",
+                });
             }
         }
     }
@@ -364,12 +376,16 @@ mod tests {
     fn normalize_and_validate_rejects_empty_and_over_sixteen() {
         assert!(matches!(
             normalize_and_validate(&[]),
-            Err(RepositoryError::Validation { field_path: "slots" })
+            Err(RepositoryError::Validation {
+                field_path: "slots"
+            })
         ));
         let too_many: Vec<SlotSpec> = (0..17).map(|i| spec(&format!("Slot {i}"))).collect();
         assert!(matches!(
             normalize_and_validate(&too_many),
-            Err(RepositoryError::Validation { field_path: "slots" })
+            Err(RepositoryError::Validation {
+                field_path: "slots"
+            })
         ));
         let sixteen: Vec<SlotSpec> = (0..16).map(|i| spec(&format!("Slot {i}"))).collect();
         assert!(normalize_and_validate(&sixteen).is_ok());
@@ -380,7 +396,9 @@ mod tests {
         let layout = vec![spec("Main"), spec("main")];
         assert!(matches!(
             normalize_and_validate(&layout),
-            Err(RepositoryError::Validation { field_path: "slots" })
+            Err(RepositoryError::Validation {
+                field_path: "slots"
+            })
         ));
     }
 

@@ -750,10 +750,7 @@ impl CommandError {
         match error {
             RepositoryError::Validation {
                 field_path: "printers",
-            } => Self::validation_at(
-                "printers",
-                "Unload every Spool before importing Printers.",
-            ),
+            } => Self::validation_at("printers", "Unload every Spool before importing Printers."),
             RepositoryError::Validation { field_path } => {
                 Self::validation_at(field_path, "The submitted value is invalid.")
             }
@@ -836,7 +833,10 @@ mod tests {
         assert_eq!(occupancy.code, ErrorCode::Conflict);
         let details = occupancy.details.unwrap();
         assert_eq!(details.len(), 2);
-        assert_eq!(details.get("slotId"), Some(&JsonValue::String("slt-a".to_string())));
+        assert_eq!(
+            details.get("slotId"),
+            Some(&JsonValue::String("slt-a".to_string()))
+        );
         assert_eq!(
             details.get("currentOccupantSpoolId"),
             Some(&JsonValue::String("spl-a".to_string()))
@@ -898,7 +898,10 @@ mod tests {
             message: "This Spool is reserved.".to_string(),
         }]);
         assert_eq!(error.code, ErrorCode::LifecycleBlocked);
-        assert_eq!(error.message, "This action is blocked: This Spool is reserved.");
+        assert_eq!(
+            error.message,
+            "This action is blocked: This Spool is reserved."
+        );
         assert!(!error.retryable);
         assert!(error.recovery.is_empty());
         let blockers = error.details.unwrap().remove("blockers").unwrap();

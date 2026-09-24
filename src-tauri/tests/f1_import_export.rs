@@ -102,8 +102,8 @@ fn settings_runtime(
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let manager = Arc::new(ConnectionManager::new(
         app.handle().clone(),
@@ -186,8 +186,8 @@ fn printers_runtime(
     Arc<ConnectionManager<tauri::test::MockRuntime>>,
 ) {
     let documents: Arc<dyn DocumentIo> = documents;
-    let catalog_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/catalog/printer-catalog.json");
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../public/catalog/printer-catalog.json");
     let catalog = Arc::new(farm3d_lib::catalog::load_snapshot(&catalog_path).unwrap());
     let app = mock_builder()
         .invoke_handler(tauri::generate_handler![
