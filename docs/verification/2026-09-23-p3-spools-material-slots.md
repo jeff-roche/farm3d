@@ -419,7 +419,8 @@ issues, fixed in the same pass:
   now gated on `!relocation.replayed`. Safe because the first, non-replay
   call already stopped supervision, and a restart before any replay would
   too (`restore_persisted_connections` reconciles every stored Printer,
-  archived or not, at startup).
+  archived or not, at startup). The spec's D10 "P2 order after commit is
+  unchanged" bullet now says so too.
 - **Tare field error** (`b564f9d`). The tare `Select`'s server-field
   error was a bare, unassociated `<p>` showing the generic server text.
   Kobalte's Select has no `aria-invalid` on its trigger (only a

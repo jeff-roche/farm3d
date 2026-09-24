@@ -437,7 +437,10 @@ ArchivePrinterRequest {
   4. Re-evaluate eligibility. `SPOOLS_LOADED` is now clear, so set
      `archived_at`.
 - The P2 order after commit is unchanged: reconciliation guard,
-  `stop_and_wait`, then `printer.status.removed`.
+  `stop_and_wait`, then `printer.status.removed`. A replay (below) skips
+  this step entirely, along with the inventory-event publish: the first,
+  non-replay call already stopped supervision, so nothing needs
+  reconciling and nothing should re-publish `printer.status.removed`.
 - A disposition that fails (for example a `CONFLICT` on the destination slot)
   rolls back the whole archive. Nothing is half-applied.
 - `operationId` is claimed in the operations ledger (D6) before the revision
