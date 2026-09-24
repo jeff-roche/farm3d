@@ -272,11 +272,17 @@ These terms are added to or refined in `CONTEXT.md`:
 
 ### D3. Presets
 
-- **A resolver** (`slicing/presets.rs`) indexes every `<Vendor>.json`
-  bundle in the preset source by `(kind, name)` over `machine_list`,
-  `process_list`, and `filament_list`. The first entry for a name wins, in
-  sorted vendor order, so `OrcaFilamentLibrary` parents resolve across
-  bundles (Gate B).
+- **A resolver** (`slicing/presets.rs`) indexes every vendor bundle in the
+  preset source, meaning a `<Vendor>.json` that has a `<Vendor>/` directory
+  beside it, so stray files such as `blacklist.json` are ignored. The index
+  is keyed by `(kind, name)` over `machine_list`, `process_list`, and
+  `filament_list`.
+- **Parents resolve in OrcaSlicer's order:** the child's own bundle first,
+  then `OrcaFilamentLibrary`, then the other bundles by name.
+  - A plain "first entry wins in sorted vendor order" is wrong. On v2.4.2 it
+    resolves 8,563 of 9,795 chains to another vendor's same-named base
+    (for example Afinia's `fdm_machine_common`). The spike's flattener only
+    worked by luck (Task 4 finding).
 - **Flattening** follows `inherits` to a depth of 20; a cycle is
   `PRESET_INVALID`. Parent then child keys are merged, `inherits` is
   removed, and `name` and `from: "system"` are kept.
@@ -1178,7 +1184,7 @@ carry an `expectedRevision` or an `operationId`.
 | `get_slicer_runtime` | — | `SlicerRuntimeStatus` |
 | `check_slicer_runtime` | — | `SlicerRuntimeStatus` (forces a probe) |
 | `pick_slicer_engine` | `{ expectedRevision }` | `SlicerRuntimeStatus` or `cancelled` |
-| `pick_preset_source` | `{ expectedRevision }` | same |
+| `pick_preset_source` | `{ expectedRevision, kind: "file" \| "folder" }` (a file is an executable or AppImage; a folder is an install or resources directory) | same |
 | `reset_slicer_runtime` | `{ expectedRevision, engine: bool, presetSource: bool }` | `SlicerRuntimeStatus` |
 | `list_slice_options` | `{ target: SliceTarget }` | `{ machinePreset, processPresets[], filamentPresets[], defaults, profileSnapshot, matchingPrinterIds[] }` |
 | `get_revision_geometry` | `{ revisionId }` | `RevisionGeometry` |
