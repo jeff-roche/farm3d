@@ -276,6 +276,9 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     if (e.key !== "Enter" || e.defaultPrevented) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "TEXTAREA") return;
+    // Enter on a button (Add slot, ↑/↓, Remove, a Select trigger, Next
+    // itself) activates that button natively; don't turn it into "Next".
+    if (target.closest("button, a[href], [role='button'], [role='option']")) return;
     if (!canLeave(step())) return;
     if (step() === "review") return; // Save is an explicit click, not an Enter side effect.
     e.preventDefault();

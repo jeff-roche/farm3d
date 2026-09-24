@@ -6,7 +6,7 @@ import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { ModelLibrary, type Model } from "./screens/ModelLibrary";
 import { SpoolInventory } from "./screens/SpoolInventory";
-import { spoolState } from "./spools/spool-store";
+import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -124,6 +124,12 @@ function App() {
           persistPreferences: (next) => updateSettings(next),
         }));
         reconcileNavigation();
+        // The low-Spool badge and a cold-launch Spool deep link both need
+        // the inventory; re-check navigation once it has loaded, since a
+        // Spool id isn't known until then.
+        void ensureInventoryLoaded().then(() => {
+          if (!disposed && generation === startupGeneration) reconcileNavigation();
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();

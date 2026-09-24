@@ -87,7 +87,9 @@ export function ArchivePrinterDialog(props: ArchivePrinterDialogProps) {
   /** Two rows can't both target one slot: each row's options leave out
    *  slots another row has already taken. */
   const optionsFor = (spoolId: string) => {
-    const taken = new Set(Object.entries(rows).filter(([id]) => id !== spoolId).map(([, row]) => row.slotId));
+    const taken = new Set(
+      Object.entries(rows).filter(([id, row]) => id !== spoolId && row.kind === "slot").map(([, row]) => row.slotId),
+    );
     return slotChoices().filter((c) => !taken.has(c.slot.id)).map((c) => c.slot.id);
   };
 
@@ -163,7 +165,10 @@ export function ArchivePrinterDialog(props: ArchivePrinterDialogProps) {
           {(spool) => {
             const row = () => rows[spool.id] ?? { storageLabel: "", displacedLabel: "" };
             const slotName = () => props.printer.materialSlots.find((s) => s.occupantSpoolId === spool.id)?.name;
-            const occupant = () => (row().kind === "slot" && row().slotId ? findSpool(occupantIdOf(row())) : undefined);
+            /** The slot's occupant id, when this row targets an occupied
+             *  slot -- the swap block keys off this, not the Spool record,
+             *  so a label is still asked for when the record isn't loaded. */
+            const occupantId = () => (row().kind === "slot" && row().slotId ? occupantIdOf(row()) : null);
             const headingId = `archive-row-${spool.id}`;
             return (
               <div role="group" aria-labelledby={headingId} class={styles.row}>
@@ -178,7 +183,9 @@ export function ArchivePrinterDialog(props: ArchivePrinterDialogProps) {
                   optionLabel={(kind) => KIND_LABELS[kind]}
                   value={row().kind}
                   placeholder="Choose…"
-                  onChange={(kind) => kind !== row().kind && patchRow(spool.id, { kind })}
+                  onChange={(kind) =>
+                    kind !== row().kind &&
+                    patchRow(spool.id, { kind, slotId: undefined, conflictOccupantId: undefined, displacedLabel: "" })}
                 />
                 <Show when={row().kind === "storage" || row().kind === "markEmpty"}>
                   <TextField
@@ -199,10 +206,12 @@ export function ArchivePrinterDialog(props: ArchivePrinterDialogProps) {
                     placeholder="Choose a slot"
                     onChange={(slotId) => slotId !== row().slotId && patchRow(spool.id, { slotId, conflictOccupantId: undefined })}
                   />
-                  <Show when={occupant()}>
-                    {(occ) => (
+                  <Show when={occupantId()}>
+                    {(id) => (
                       <div class={styles.swap}>
-                        <p class={styles.swapLine}>Swap: {spoolLabel(occ())} goes to storage</p>
+                        <p class={styles.swapLine}>
+                          Swap: {findSpool(id()) ? spoolLabel(findSpool(id())!) : "the Spool in that slot"} goes to storage
+                        </p>
                         <TextField
                           label="Displaced Spool storage label"
                           value={row().displacedLabel}

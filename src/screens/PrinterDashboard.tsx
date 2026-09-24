@@ -175,6 +175,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           onDeleted={(id) => props.onRemovePrinter?.(id)}
           syncState={props.syncState}
           focusRequest={dockFocus()}
+          onFocusHandled={() => setDockFocus(undefined)}
         />
       </div>
       <PrinterSetupWizard

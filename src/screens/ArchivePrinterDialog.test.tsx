@@ -168,6 +168,37 @@ describe("ArchivePrinterDialog", () => {
     ]));
   });
 
+  it("frees a slot for another row once the first row switches away from it, clearing its slot choice", async () => {
+    seed();
+    renderDialog();
+    await pick(within(row(7)).getByRole("button", { name: /Where #7 goes/ }), /Another Printer's slot/);
+    await pick(within(row(7)).getByRole("button", { name: /Destination slot/ }), /Bay 2 — A/);
+    await pick(within(row(7)).getByRole("button", { name: /Where #7 goes/ }), /^Storage$/);
+
+    await pick(within(row(8)).getByRole("button", { name: /Where #8 goes/ }), /Another Printer's slot/);
+    await pick(within(row(8)).getByRole("button", { name: /Destination slot/ }), /Bay 2 — A/);
+    expect(within(row(8)).getByRole("button", { name: /Destination slot/ })).toHaveTextContent("Bay 2 — A");
+
+    // Switching row 7 back to a slot starts from no choice, not the old one.
+    await pick(within(row(7)).getByRole("button", { name: /Where #7 goes/ }), /Another Printer's slot/);
+    expect(within(row(7)).getByRole("button", { name: /Destination slot/ })).toHaveTextContent("Choose a slot");
+  });
+
+  it("asks for the displaced label even when the slot's occupant isn't in the loaded inventory", async () => {
+    seed();
+    (printersList[1] as { materialSlots: { occupantSpoolId?: string }[] }).materialSlots[0].occupantSpoolId = "spl-ghost";
+    archivePrinter.mockResolvedValue(undefined);
+    renderDialog([LOADED_A]);
+    await pick(within(row(7)).getByRole("button", { name: /Where #7 goes/ }), /Another Printer's slot/);
+    await pick(within(row(7)).getByRole("button", { name: /Destination slot/ }), /Bay 2 — A/);
+
+    expect(within(row(7)).getByText("Swap: the Spool in that slot goes to storage")).toBeInTheDocument();
+    const archive = screen.getByRole("button", { name: "Archive" });
+    expect(archive).toBeDisabled();
+    fireEvent.input(within(row(7)).getByLabelText(/Displaced Spool storage label/), { target: { value: "Bin" } });
+    expect(archive).not.toBeDisabled();
+  });
+
   it("shows a failure it can't pin to a row at the dialog level", async () => {
     seed();
     archivePrinter.mockRejectedValueOnce({

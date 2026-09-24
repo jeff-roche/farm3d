@@ -27,6 +27,10 @@ export interface PrinterDetailDockProps {
   /** Opens the Setup tab at a section (batch Results' Equip). A new object
    *  is a new request; one for another Printer is ignored. */
   focusRequest?: DockFocusRequest;
+  /** Called once `focusRequest` has been acted on, so the caller can clear
+   *  it -- the dock's content remounts on reopen or an inline/overlay
+   *  switch, and must not replay the request then. */
+  onFocusHandled?: () => void;
 }
 
 export interface DockFocusRequest {
@@ -43,6 +47,7 @@ export function PrinterDetailDock(props: PrinterDetailDockProps) {
       onDeleted={props.onDeleted}
       syncState={props.syncState}
       focusRequest={props.focusRequest}
+      onFocusHandled={props.onFocusHandled}
     />
   );
 
@@ -84,6 +89,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
   createEffect(on(() => props.focusRequest, (request) => {
     if (!request || request.printerId !== props.printer.id) return;
     setTab("setup");
+    props.onFocusHandled?.();
     setTimeout(() => {
       const section = document.getElementById(MATERIAL_SLOTS_ANCHOR_ID);
       section?.scrollIntoView?.({ block: "start" });

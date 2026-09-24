@@ -54,4 +54,22 @@ describe("PrinterDashboard — batch Equip", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true"));
     expect(screen.getByRole("heading", { name: "Material Slots", level: 3 })).toBeInTheDocument();
   });
+
+  it("handles an Equip request once: reopening the Printer later starts on Status", async () => {
+    const monitor = createMonitorStore({
+      printers: () => [PRINTER], initialSection: "printerModel", initialDensity: "comfortable",
+      persistPreferences: vi.fn().mockResolvedValue(undefined),
+    });
+    render(() => <PrinterDashboard store={monitor} />);
+    await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Equip stub" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true"));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Setup" })).not.toBeInTheDocument());
+    monitor.setSelectedPrinterId("prn-1");
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Status" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "false");
+  });
 });

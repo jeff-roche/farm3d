@@ -522,6 +522,16 @@ describe("PrinterSetupWizard — Equip", () => {
     expect(options.map((o) => o.textContent)).toEqual(["None", "#2 PETG Clear — 812 g"]);
   });
 
+  it("leaves Enter on a button to the button instead of advancing the step", async () => {
+    await reachEquip();
+    const addSlot = screen.getByRole("button", { name: "Add slot" });
+    const notPrevented = fireEvent.keyDown(addSlot, { key: "Enter" });
+    expect(notPrevented).toBe(true);
+    fireEvent.click(addSlot); // the button's own native Enter activation
+    expect(stepItem("Equip").getAttribute("aria-current")).toBe("step");
+    expect(screen.getByLabelText("Name for slot 2")).toHaveValue("Slot 2");
+  });
+
   it("disables Next while a slot name is invalid", async () => {
     await reachEquip();
     fireEvent.input(screen.getByLabelText("Name for slot 1"), { target: { value: " " } });
