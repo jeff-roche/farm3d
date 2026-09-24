@@ -1179,7 +1179,7 @@ capabilities; it does not create an in-memory Queue. P8 cameras remain optional.
 
 - farm3d is single-user and local for v1.
 - Printers are catalog-backed; unsupported custom Printer Profiles are not v1.
-- Projects are organizational folders, not orders.
+- Projects are organizational groupings (many-to-many with Models), not orders.
 - Model storage is selected per import: managed or linked.
 - Slice Revisions are immutable.
 - Queue Entries become Jobs only when assigned to a Printer.
@@ -1208,8 +1208,8 @@ The following have an owning phase and may not be silently decided elsewhere:
 | Batch CSV and host matching | P2 | User workflow plus discovery fixtures — **Resolved (P2)**: see the P2 design's D2 (canonical host identity), D10 (CSV/paste intake format and rules), and D12 (discovery mapping). |
 | Slot count/topology source | P3 | Catalog and real-hardware evidence — **Resolved (P3)**: see the P3 design's D4. `supportsMultiFilament` does not establish slot count, names, or topology (only 12 of 971 catalog variants set it, and the catalog has no AMS/MMU data), so P3 derives no slot layout automatically. Every Printer gets a user-configured, ordered layout of 1–16 named Material Slots, defaulting to one slot named "Main". |
 | Weight precision/material taxonomy | P3 | Inventory and slicer requirements — **Resolved (P3)**: see the P3 design's D1 (integer milligrams everywhere below the UI, grams-only display, one-decimal entry) and D2 (`MaterialFamily` is a closed enum drawn from the OrcaSlicer `filament_type` values at the catalog's pinned `v2.4.2` tag, plus `OTHER`). |
-| Parser and watcher libraries | P4 | Representative STL/3MF/G-code/platform fixtures |
-| Managed-content layout and hashing | P4 | Duplicate, revision, cleanup, backup requirements |
+| Parser and watcher libraries | P4 | Representative STL/3MF/G-code/platform fixtures — **Resolved (P4)**: see the P4 design's D9 (a farm3d-owned STL reader), D10 (`zip` + `quick-xml` 3MF reader with a defined support boundary), D11 (G-code inspection and retention), and D15 (native `notify` watches with a 750 ms debouncer, polling only as the per-directory fallback), and the spike report `docs/superpowers/baselines/2026-09-24-p4-format-watcher-spike.md`. Watcher behavior is verified on Linux x86_64 only. |
+| Managed-content layout and hashing | P4 | Duplicate, revision, cleanup, backup requirements — **Resolved (P4)**: see the P4 design's D3 (SHA-256 content hash) and D4 (content-addressed `blobs/sha256/<hh>/<hex>` under `content_root`, with crash-safe placement, a startup sweep, and deferred cleanup through `pending_blob_cleanup`). Backup of managed content stays with P9. |
 | Geometry renderer | P5 | Accessibility, performance, format, and plate needs |
 | OrcaSlicer runtime contract | P5 | Executable and installed-bundle spike on every F0-declared supported platform |
 | Adapter command/camera capabilities | P6 | Real Moonraker/OctoPrint/ElegooLink evidence |

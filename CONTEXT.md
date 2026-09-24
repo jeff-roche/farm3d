@@ -92,9 +92,11 @@ than auto-added.
 _Avoid_: Scan, auto-detect
 
 **Model**:
-A 3D file (e.g. STL/3MF) representing an object that can be sliced and
-printed. Distinct from **Printer Model** above, which identifies a printer's
-make in the catalog, not a printable file.
+A 3D file (STL/3MF) *or a pre-sliced G-code file* kept in the Library. A
+G-code Model is inspectable and retained, but it is never sliced, and it
+becomes dispatchable work only as an external Slice Revision. Distinct from
+**Printer Model** above, which identifies a printer's make in the catalog,
+not a printable file.
 _Avoid_: File, part, design
 
 **Library**:
@@ -103,9 +105,30 @@ from a Model merely opened for inspection.
 _Avoid_: Collection, catalog
 
 **Project**:
-An organizational folder for related Models in the Library. A Project does
-not carry production quantities, deadlines, or fulfillment state.
+An organizational grouping of Models in the Library. A Model may belong
+to any number of Projects, or none (Unfiled). A Project does not carry
+production quantities, deadlines, or fulfillment state.
 _Avoid_: Order, batch, job folder
+
+**Unfiled**:
+The state of a Model that belongs to no Project. It is not a Project.
+
+**Managed Model**:
+A Model whose source is farm3d's own stored copy. It changes only when the
+user adds a revision.
+
+**Linked Model**:
+A Model that follows a file path outside farm3d. farm3d watches it and
+captures a new Model Source Revision whenever its content changes.
+
+**Source state**:
+A Linked Model's current relationship to its file: `ok`, `missing`,
+`unreadable`, `notAFile`, `invalidContent`, or `changing`. It never affects
+existing revisions.
+
+**Import selection**:
+A short-lived, Rust-held set of files the user picked or dropped. It is not
+persisted.
 
 **Slice**:
 The act of converting a Model into printable G-code for a specific Printer
