@@ -122,6 +122,9 @@ describe("SpoolFormDialog", () => {
   });
 
   it("shows a VALIDATION rejection on an unknown default tareId under the tare field and stays open", async () => {
+    // Matches the Notes field's mapping: the desktop `tareId` `VALIDATION`
+    // also carries the same generic `RepositoryError::Validation` message,
+    // not a tare-specific one, so the friendly text is spelled out here.
     createSpool.mockRejectedValue({
       contractVersion: 1, code: "VALIDATION", message: "The submitted value is invalid.",
       recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "tareId" },
@@ -132,8 +135,16 @@ describe("SpoolFormDialog", () => {
     await fillRequiredFields();
     await fireEvent.click(screen.getByRole("button", { name: "Add Spool" }));
 
-    expect(await screen.findByText("The submitted value is invalid.")).toBeInTheDocument();
+    const message = await screen.findByText("That tare no longer exists.");
+    expect(screen.queryByText("The submitted value is invalid.")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Associated with the tare Select, not just shown somewhere in the
+    // dialog -- Kobalte's Select links its trigger to its ErrorMessage via
+    // `aria-describedby`, the same mechanism TextField/NumberField use.
+    const tareTrigger = screen.getByRole("button", { name: /Default tare/ });
+    expect(tareTrigger.getAttribute("aria-describedby")).toContain(message.id);
+
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 

@@ -57,14 +57,17 @@ const FIELD_ERROR_PATHS = new Set([
   "nominalMg", "lowThresholdMg", "notes", "tareId", "entry.netMg", "entry.grossMg",
 ]);
 
-/** Task 3 fix: the desktop `notes` `VALIDATION` carries the same generic
- *  message every field-level `RepositoryError::Validation` maps to
- *  (`contracts/command.rs`'s `validation_at`), not a notes-specific one --
- *  so the 2000-character cap must be spelled out here rather than relying
- *  on the server's own text, which web mode's `validateNotesCap` already
- *  does happen to match. Keeps web and desktop showing the same text. */
+/** Task 3 fix: the desktop `notes`/`tareId` `VALIDATION`s carry the same
+ *  generic message every field-level `RepositoryError::Validation` maps to
+ *  (`contracts/command.rs`'s `validation_at`), not a field-specific one --
+ *  so their friendly text is spelled out here rather than relying on the
+ *  server's own text, which web mode's `validateNotesCap`/
+ *  `validateTareReference` already happen to match. Keeps web and desktop
+ *  showing the same text. */
 function serverFieldErrorMessage(fieldPath: string, message: string): string {
-  return fieldPath === "notes" ? "Notes must be at most 2000 characters." : message;
+  if (fieldPath === "notes") return "Notes must be at most 2000 characters.";
+  if (fieldPath === "tareId") return "That tare no longer exists.";
+  return message;
 }
 
 /** Add/Edit (D2/D3/D7 §Components: `SpoolFormDialog`). Add also collects
@@ -310,10 +313,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           value={tareId()}
           onChange={onTareIdChange}
           optionLabel={tareLabel}
+          error={serverFieldErrorFor("tareId")}
         />
-        <Show when={serverFieldErrorFor("tareId")}>
-          {(message) => <p class={styles.fieldError}>{message()}</p>}
-        </Show>
         <Show when={!isEdit()}>
           <TextField label="Storage label (optional)" value={storageLabel()} onChange={setStorageLabel} />
         </Show>

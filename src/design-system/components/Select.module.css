@@ -69,3 +69,9 @@
 .item[data-highlighted] {
   background-color: var(--f3d-color-surface-hover);
 }
+
+.errorMessage {
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  color: var(--f3d-color-danger);
+}

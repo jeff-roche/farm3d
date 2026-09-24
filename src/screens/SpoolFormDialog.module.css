@@ -41,15 +41,6 @@
   font-size: var(--f3d-type-body-size);
 }
 
-/** For a field with no `error`/`errorMessage` slot of its own (the tare
- *  `Select`) -- matches `TextField`/`Textarea`'s own `errorMessage` style. */
-.fieldError {
-  margin: 0;
-  color: var(--f3d-color-danger);
-  font-family: var(--f3d-type-body-small-font);
-  font-size: var(--f3d-type-body-small-size);
-}
-
 .actions {
   display: flex;
   justify-content: flex-end;
