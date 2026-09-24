@@ -80,7 +80,7 @@ async function choosePrinterAndSlot(slotName: RegExp) {
 }
 
 describe("MoveSpoolDialog", () => {
-  it("shows the swap line and a required label once an occupied slot is chosen", async () => {
+  it("shows the swap line and an optional label once an occupied slot is chosen", async () => {
     spools.push(OCCUPANT);
     render(() => <MoveSpoolDialog open onOpenChange={vi.fn()} spool={MOVING_SPOOL} />);
 
@@ -88,12 +88,28 @@ describe("MoveSpoolDialog", () => {
     await choosePrinterAndSlot(/AMS 1/);
 
     expect(screen.getByText("Swap: #7 PETG Black goes to storage")).toBeInTheDocument();
-    const displacedLabel = screen.getByLabelText("Displaced Spool storage label");
-    expect(displacedLabel).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
-
-    await fireEvent.input(displacedLabel, { target: { value: "Shelf C1" } });
+    const displacedLabel = screen.getByLabelText(/Displaced Spool storage label/);
+    expect(displacedLabel).not.toBeRequired();
+    // D6: the label is optional; blank means storage with no label.
     expect(screen.getByRole("button", { name: "Move" })).not.toBeDisabled();
+  });
+
+  it("sends a null displacedStorageLabel when the displaced label is left blank", async () => {
+    spools.push(OCCUPANT);
+    moveSpool.mockResolvedValue({ spools: [], printers: [], movements: [] });
+    render(() => <MoveSpoolDialog open onOpenChange={vi.fn()} spool={MOVING_SPOOL} />);
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Printer" }));
+    await choosePrinterAndSlot(/AMS 1/);
+    await fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    expect(moveSpool).toHaveBeenCalledWith({
+      spoolId: "spl-move",
+      expectedSpoolRevision: 2,
+      destination: {
+        kind: "slot", slotId: "slt-2", expectedOccupantSpoolId: "spl-occupant", displacedStorageLabel: null,
+      },
+    });
   });
 
   it("submits moveSpool with expectedOccupantSpoolId on the occupied slot", async () => {
@@ -103,7 +119,7 @@ describe("MoveSpoolDialog", () => {
 
     await fireEvent.click(screen.getByRole("radio", { name: "Printer" }));
     await choosePrinterAndSlot(/AMS 1/);
-    await fireEvent.input(screen.getByLabelText("Displaced Spool storage label"), { target: { value: "Shelf C1" } });
+    await fireEvent.input(screen.getByLabelText(/Displaced Spool storage label/), { target: { value: "Shelf C1" } });
     await fireEvent.click(screen.getByRole("button", { name: "Move" }));
 
     expect(moveSpool).toHaveBeenCalledWith({
@@ -131,5 +147,33 @@ describe("MoveSpoolDialog", () => {
 
     expect(await screen.findByText("Swap: #3 PLA Charcoal goes to storage")).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("forgets a CONFLICT's occupant once a different slot is chosen", async () => {
+    spools.push(RACER, OCCUPANT);
+    moveSpool.mockRejectedValueOnce({
+      contractVersion: 1, code: "CONFLICT", message: "Another Spool already occupies that slot.",
+      recovery: ["RETRY"], retryable: true, details: { slotId: "slt-1", currentOccupantSpoolId: "spl-racer" },
+    });
+    moveSpool.mockResolvedValueOnce({ spools: [], printers: [], movements: [] });
+    render(() => <MoveSpoolDialog open onOpenChange={vi.fn()} spool={MOVING_SPOOL} />);
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Printer" }));
+    await choosePrinterAndSlot(/^Main/);
+    await fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    expect(await screen.findByText("Swap: #3 PLA Charcoal goes to storage")).toBeInTheDocument();
+
+    const slotTrigger = screen.getByRole("button", { name: /^Slot/ });
+    await fireEvent.pointerDown(slotTrigger, { button: 0, pointerType: "mouse" });
+    const amsOption = await screen.findByRole("option", { name: /AMS 1/ });
+    await fireEvent.pointerDown(amsOption, { button: 0, pointerType: "mouse" });
+    await fireEvent.pointerUp(amsOption, { button: 0, pointerType: "mouse" });
+
+    expect(screen.queryByText("Swap: #3 PLA Charcoal goes to storage")).not.toBeInTheDocument();
+    expect(screen.getByText("Swap: #7 PETG Black goes to storage")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    expect(moveSpool).toHaveBeenLastCalledWith(expect.objectContaining({
+      destination: expect.objectContaining({ slotId: "slt-2", expectedOccupantSpoolId: "spl-occupant" }),
+    }));
   });
 });

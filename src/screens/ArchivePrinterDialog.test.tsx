@@ -103,6 +103,25 @@ describe("ArchivePrinterDialog", () => {
     expect(archive).not.toBeDisabled();
   });
 
+  it("offers Mark empty only for an active Spool", async () => {
+    // An empty Spool can stay loaded (D5), so it can reach this dialog;
+    // marking it empty again is not a valid lifecycle action.
+    const emptyLoaded = spool({
+      ...LOADED_B, lifecycle: "empty",
+      availability: { currentMg: 0, reservedMg: 0, availableMg: 0 },
+    });
+    seed();
+    renderDialog([LOADED_A, emptyLoaded]);
+
+    await fireEvent.pointerDown(within(row(8)).getByRole("button", { name: /Where #8 goes/ }), { button: 0, pointerType: "mouse" });
+    await screen.findByRole("option", { name: /^Storage$/ });
+    expect(screen.queryByRole("option", { name: /Mark empty/ })).not.toBeInTheDocument();
+    await fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    await fireEvent.pointerDown(within(row(7)).getByRole("button", { name: /Where #7 goes/ }), { button: 0, pointerType: "mouse" });
+    expect(await screen.findByRole("option", { name: /Mark empty \(used up\)/ })).toBeInTheDocument();
+  });
+
   it("offers only other, active Printers' slots, and asks where a swapped-out occupant goes", async () => {
     seed();
     renderDialog([LOADED_A]);

@@ -272,6 +272,26 @@ describe("printer-store", () => {
       expect(printers()[0].runtimeStatus?.error).toBe("Could not reach the printer");
     });
 
+    it("spliceResolved keeps the existing record when the incoming one has an older revision", async () => {
+      // A late response (e.g. a move result racing an inventory event) must
+      // not roll a Printer back to a revision the store has already moved
+      // past -- the same guard the Spool store applies.
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [{ ...structuredClone(A_PRINTER_RECORD), revision: 3, name: "Current" }] });
+      const { loadPrinters, spliceResolved, printers } = await import("./printer-store");
+      await loadPrinters();
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 2, name: "Stale" } as never);
+      expect(printers()[0].revision).toBe(3);
+      expect(printers()[0].name).toBe("Current");
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 3, name: "Same revision" } as never);
+      expect(printers()[0].name).toBe("Same revision");
+
+      spliceResolved({ ...structuredClone(A_RESOLVED_PRINTER), revision: 4, name: "Newer" } as never);
+      expect(printers()[0].revision).toBe(4);
+      expect(printers()[0].name).toBe("Newer");
+    });
+
     it("applies a printer-status event straight off the Rust event channel", async () => {
       // Pins the seam between supervisor.rs's STATUS_EVENT/StatusEvent and
       // this module's own `listen(...)` string and payload shape. Both sides

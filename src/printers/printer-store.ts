@@ -353,7 +353,11 @@ export function spliceResolved(resolved: ResolvedPrinter): void {
   setState(
     "printers",
     (p) => p.id === resolved.id,
-    (previous) => ({ ...resolved, runtimeStatus: previous.runtimeStatus }),
+    // An older revision is a late response the store has already moved
+    // past (the same guard the Spool store applies); keep what's there.
+    (previous) => previous.revision > resolved.revision
+      ? previous
+      : { ...resolved, runtimeStatus: previous.runtimeStatus },
   );
 }
 

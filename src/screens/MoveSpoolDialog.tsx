@@ -29,7 +29,8 @@ function spoolLabel(spool: SpoolRecord): string {
 
 /** D6 §Components: destination is Storage (a label combobox of existing
  *  labels) or a Printer, then a Slot; an occupied slot shows a swap line
- *  and requires a label for the displaced Spool. Submits through the
+ *  and an optional storage label for the displaced Spool (blank means
+ *  storage with no label). Submits through the
  *  optimistic, rejecting `moveSpool` (unlike most spool-store mutations,
  *  which report to the banner instead) -- a `CONFLICT` is caught and shown
  *  inline, re-reading the slot's now-current occupant from `spoolState`
@@ -66,6 +67,10 @@ export function MoveSpoolDialog(props: MoveSpoolDialogProps) {
     }
   }));
 
+  // A CONFLICT's occupant belongs to the slot it was reported for; once the
+  // user picks another slot or Printer, that slot's own occupant applies.
+  createEffect(on([printerId, slotId], () => setConflictOccupantId(null), { defer: true }));
+
   const availablePrinters = createMemo(() => printers().filter((p) => !p.archivedAt));
   const storageLabelOptions = createMemo<string[]>(() => {
     const labels = new Set<string>();
@@ -100,9 +105,7 @@ export function MoveSpoolDialog(props: MoveSpoolDialogProps) {
   const canSubmit = createMemo(() => {
     if (submitting()) return false;
     if (destKind() === "storage") return true;
-    if (!slotId()) return false;
-    if (displayedOccupant() && displacedLabel().trim().length === 0) return false;
-    return true;
+    return slotId() !== undefined;
   });
 
   async function onSubmit() {
@@ -183,10 +186,9 @@ export function MoveSpoolDialog(props: MoveSpoolDialogProps) {
               <div class={styles.swap}>
                 <p class={styles.swapLine}>Swap: {spoolLabel(occ())} goes to storage</p>
                 <TextField
-                  label="Displaced Spool storage label"
+                  label="Displaced Spool storage label (optional)"
                   value={displacedLabel()}
                   onChange={setDisplacedLabel}
-                  required
                 />
               </div>
             )}

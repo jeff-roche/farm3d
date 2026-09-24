@@ -22,6 +22,10 @@ export interface ArchivePrinterDialogProps {
 
 type DispositionKind = SpoolDisposition["kind"];
 const KIND_OPTIONS: DispositionKind[] = ["storage", "slot", "markEmpty"];
+/** "Mark empty" is a lifecycle action on an `active` Spool only. An empty
+ *  Spool can still be loaded (D5), so it can appear here. */
+const kindOptionsFor = (spool: SpoolRecord): DispositionKind[] =>
+  spool.lifecycle === "active" ? KIND_OPTIONS : KIND_OPTIONS.filter((kind) => kind !== "markEmpty");
 const KIND_LABELS: Record<DispositionKind, string> = {
   storage: "Storage",
   slot: "Another Printer's slot",
@@ -179,7 +183,7 @@ export function ArchivePrinterDialog(props: ArchivePrinterDialogProps) {
                 </p>
                 <Select
                   label={`Where #${spool.spoolNumber} goes`}
-                  options={KIND_OPTIONS}
+                  options={kindOptionsFor(spool)}
                   optionLabel={(kind) => KIND_LABELS[kind]}
                   value={row().kind}
                   placeholder="Choose…"
