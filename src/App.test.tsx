@@ -66,9 +66,34 @@ vi.mock("./screens/AppShell", () => ({
   ),
 }));
 
-vi.mock("./screens/ModelLibrary", () => ({
-  ModelLibrary: () => <div>Library</div>,
+vi.mock("./screens/LibraryWorkspace", () => ({
+  LibraryWorkspace: () => <div>Library workspace</div>,
 }));
+
+/** `vi.resetModules` gives each test a fresh navigation store, so read the
+ *  one this test's App imported. */
+async function importAppAndNavigation() {
+  const { default: App } = await import("./App");
+  const { navigation } = await import("./navigation/navigation-store");
+  return { App, navigation };
+}
+
+const libraryStore = vi.hoisted(() => ({
+  startLibrary: vi.fn(),
+  dispose: vi.fn(),
+  load: undefined as undefined | (() => void),
+  reset: undefined as undefined | (() => void),
+}));
+vi.mock("./library/library-store", async () => {
+  const { createStore } = await import("solid-js/store");
+  const [state, setState] = createStore({ projects: [] as { id: string }[], models: [] as { id: string }[] });
+  libraryStore.reset = () => setState({ projects: [], models: [] });
+  libraryStore.load = () => setState({ projects: [{ id: "prj-brackets" }], models: [{ id: "mdl-bracket" }] });
+  return {
+    library: { projects: () => state.projects, models: () => state.models },
+    startLibrary: libraryStore.startLibrary,
+  };
+});
 
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
@@ -169,6 +194,12 @@ beforeEach(() => {
   window.location.hash = "";
   inventory.reset?.();
   inventory.ensureInventoryLoaded.mockReset().mockImplementation(async () => inventory.onLoad?.());
+  libraryStore.reset?.();
+  libraryStore.dispose.mockReset();
+  libraryStore.startLibrary.mockReset().mockImplementation(async () => {
+    libraryStore.load?.();
+    return libraryStore.dispose;
+  });
 });
 
 afterEach(() => {
@@ -249,6 +280,79 @@ describe("App", () => {
     await waitFor(() => expect(inventory.ensureInventoryLoaded).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0));
     expect(screen.getByRole("heading", { name: "Spools" })).toBeInTheDocument();
+  });
+
+  it("starts the Library after Printers load and disposes it on unmount", async () => {
+    const callOrder: string[] = [];
+    appState.loadPrinters.mockImplementation(async () => {
+      callOrder.push("loadPrinters");
+      appState.printers = [PRINTER];
+    });
+    libraryStore.startLibrary.mockImplementation(async () => {
+      callOrder.push("startLibrary");
+      return libraryStore.dispose;
+    });
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["loadPrinters", "startLibrary"]);
+    unmount();
+    expect(libraryStore.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("lists the Library as an available destination", async () => {
+    window.location.hash = "#nav=v1/library";
+    const { default: App } = await import("./App");
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "Library" })).toBeInTheDocument();
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    expect(screen.queryByText("Library is not available in this version.")).toBeNull();
+  });
+
+  it("resolves a cold-launch Model deep link once the Library has loaded", async () => {
+    window.location.hash = "#nav=v1/library/model/mdl-bracket";
+    let finishLoad: (() => void) | undefined;
+    libraryStore.startLibrary.mockImplementation(() => new Promise((resolve) => {
+      finishLoad = () => {
+        libraryStore.load?.();
+        resolve(libraryStore.dispose);
+      };
+    }));
+    const { App, navigation } = await importAppAndNavigation();
+    // Let the hash assignment's own hashchange land before mounting, so
+    // only the post-load reconcile can resolve the selection.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    expect(navigation.availability()).toBe("selectionUnavailable");
+    finishLoad?.();
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-bracket" });
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+    expect(screen.getByText("Library workspace")).toBeInTheDocument();
+  });
+
+  it("resolves a cold-launch Project deep link once the Library has loaded", async () => {
+    window.location.hash = "#nav=v1/library/project/prj-brackets";
+    const { App, navigation } = await importAppAndNavigation();
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(navigation.target().selection).toEqual({ kind: "project", id: "prj-brackets" });
+  });
+
+  it("shows the no-longer-available banner for an unknown Model id", async () => {
+    window.location.hash = "#nav=v1/library/model/mdl-gone";
+    const { App, navigation } = await importAppAndNavigation();
+    render(() => <App />);
+
+    await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
+    expect(navigation.availability()).toBe("selectionUnavailable");
   });
 
   it("shows listener startup failure as a recoverable banner", async () => {

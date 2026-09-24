@@ -1,0 +1,15 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text-muted);
+  cursor: pointer;
+}
+
+.trigger:hover {
+  background-color: var(--f3d-color-surface-hover);
+  color: var(--f3d-color-text);
+}

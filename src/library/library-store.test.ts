@@ -331,6 +331,15 @@ describe("mutations (desktop)", () => {
     expect(library.models()).toEqual([]);
   });
 
+  it("refreshLibrary backfills again, for the workspace's Refresh", async () => {
+    const { refreshLibrary, library } = await startedStore();
+    responders.list_library = () => snapshot(0, [project({ id: "prj-fresh" })]);
+    refreshLibrary();
+    await flush();
+    expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "list_library")).toHaveLength(2);
+    expect(library.projects().map((p) => p.id)).toEqual(["prj-fresh"]);
+  });
+
   it("a CONFLICT rejects and refreshes the Library so a retry uses the fresh revision", async () => {
     responders.list_library = () => snapshot(0, [], [model({ id: "mdl-a", revision: 1 })]);
     const { updateModel, library } = await startedStore();

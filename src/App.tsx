@@ -4,9 +4,10 @@ import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
-import { ModelLibrary, type Model } from "./screens/ModelLibrary";
+import { LibraryWorkspace } from "./screens/LibraryWorkspace";
 import { SpoolInventory } from "./screens/SpoolInventory";
 import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
+import { library, startLibrary } from "./library/library-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -31,11 +32,6 @@ import {
   serializeNavigationTarget,
   type NavigationDestination,
 } from "./navigation/navigation-store";
-
-const MODELS: Model[] = [
-  { id: "benchy", name: "Benchy_v3.gcode", addedAt: "2 days ago" },
-  { id: "bracket", name: "mount_bracket.stl", addedAt: "1 week ago" },
-];
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -74,7 +70,12 @@ function App() {
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
   const navigationContext = () => ({
     availableDestinations: ["monitor", "library", "spools"] as NavigationDestination[],
-    availableIds: [...printers().map((printer) => printer.id), ...spoolState.spools.map((spool) => spool.id)],
+    availableIds: [
+      ...printers().map((printer) => printer.id),
+      ...spoolState.spools.map((spool) => spool.id),
+      ...library.projects().map((project) => project.id),
+      ...library.models().map((model) => model.id),
+    ],
   });
   const reconcileNavigation = () => {
     navigation.navigate(navigation.target(), navigationContext());
@@ -95,6 +96,7 @@ function App() {
   onMount(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let disposeLibrary: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -130,6 +132,17 @@ function App() {
         void ensureInventoryLoaded().then(() => {
           if (!disposed && generation === startupGeneration) reconcileNavigation();
         });
+        // Same for a Library deep link. `startLibrary` is idempotent, so a
+        // startup retry replaces the previous listener; a start that a
+        // retry or unmount has overtaken disposes its own.
+        void startLibrary().then((dispose) => {
+          if (disposed || generation !== startupGeneration) {
+            dispose();
+            return;
+          }
+          disposeLibrary = dispose;
+          reconcileNavigation();
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -155,6 +168,7 @@ function App() {
       disposed = true;
       retryStartup = undefined;
       unlisten?.();
+      disposeLibrary?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });
@@ -226,7 +240,7 @@ function App() {
         fallback={
           <Switch>
             <Match when={active() === "library"}>
-              <ModelLibrary models={MODELS} compatiblePrinterNames={printers().map((p) => p.name)} />
+              <LibraryWorkspace navigate={navigate} />
             </Match>
             <Match when={active() === "spools"}>
               <SpoolInventory />

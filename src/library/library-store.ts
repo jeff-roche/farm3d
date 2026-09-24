@@ -285,6 +285,13 @@ export async function startLibrary(): Promise<() => void> {
   return dispose;
 }
 
+/** The workspace's **Refresh** while the Library may be out of date:
+ *  backfill now rather than wait for the stream's backoff. Web mode has no
+ *  stream to refresh. */
+export function refreshLibrary(): void {
+  activeStream?.resync();
+}
+
 /** A `CONFLICT` means this store holds a stale revision: reload, so a retry
  *  reads the fresh one, then rethrow for the caller to report. */
 async function withConflictRefresh<T>(run: () => Promise<T>): Promise<T> {

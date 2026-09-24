@@ -1,0 +1,113 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}
+
+.membership {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.unfiled,
+.muted {
+  color: var(--f3d-color-text-muted);
+}
+
+.newProject {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+}
+
+.formActions,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.facts,
+.claims {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+}
+
+.facts dt,
+.claims dt {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+}
+
+.facts dd,
+.claims dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.storage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.path {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  overflow-wrap: anywhere;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.heading {
+  margin: 0;
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  letter-spacing: var(--f3d-type-heading-tracking);
+}
+
+.note {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.unused {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.unused li {
+  display: flex;
+  flex-direction: column;
+}

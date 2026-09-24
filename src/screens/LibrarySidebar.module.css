@@ -1,0 +1,95 @@
+.sidebar {
+  flex: 0 0 14rem;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border-right: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+}
+
+.heading {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0 0.5rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+}
+
+.projectRow {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.entry {
+  composes: focusRing from "../design-system/components/shared.module.css";
+  composes: resetButton from "../design-system/components/shared.module.css";
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.entry:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.entry[aria-current="page"] {
+  background-color: var(--f3d-color-accent-muted);
+  color: var(--f3d-color-accent);
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.menuTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text-muted);
+  cursor: pointer;
+}
+
+.menuTrigger:hover {
+  background-color: var(--f3d-color-surface-hover);
+  color: var(--f3d-color-text);
+}
+
+.empty {
+  padding: 0.25rem 0.5rem;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
