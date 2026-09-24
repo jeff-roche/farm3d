@@ -803,3 +803,81 @@ fn concurrent_staging_into_one_key_never_races_on_the_directory() {
         }
     }
 }
+
+// Task 6: the commit's cancel check and the recorded source stat.
+
+#[test]
+fn a_raised_cancel_stops_placement_before_anything_is_placed_or_written() {
+    let fixture = Fixture::new();
+    let store = fixture.store();
+    let bytes = pattern(4096);
+    let staged = stage(
+        &store,
+        &fixture.source("model.stl", &bytes),
+        "sel-cancel",
+        0,
+    )
+    .expect("staged");
+    let (cancel, raised) = tokio::sync::watch::channel(true);
+    let mut ran = false;
+
+    let error = store
+        .place_and_commit_unless_cancelled(
+            &fixture.storage,
+            &[&staged],
+            &CancelFlag::new(raised),
+            |_| {
+                ran = true;
+                Ok(())
+            },
+        )
+        .expect_err("a raised cancel stops the commit");
+
+    assert!(matches!(error, ContentError::Cancelled), "{error:?}");
+    assert!(!ran, "the commit closure never runs");
+    assert!(staged.path.is_file(), "the staged copy is not moved");
+    assert!(!fixture.blob_path(&staged.sha256).exists());
+    assert_eq!(
+        fixture.count(
+            "SELECT COUNT(*) FROM content_blobs WHERE sha256 = ?1",
+            &staged.sha256
+        ),
+        0
+    );
+    drop(cancel);
+}
+
+#[test]
+fn a_staged_source_records_the_stat_it_was_copied_under() {
+    let fixture = Fixture::new();
+    let store = fixture.store();
+    let source = fixture.source("model.stl", &pattern(4096));
+    let metadata = fs::metadata(&source).expect("metadata");
+
+    let staged = stage(&store, &source, "sel-stat", 0).expect("staged");
+    let thumbnail = store
+        .stage_bytes(b"png", "sel-stat", "0.thumb.png")
+        .expect("thumbnail");
+
+    let stat = staged.source.expect("a copied source has a stat");
+    assert_eq!(stat.size, 4096);
+    assert_eq!(stat.modified, Some(metadata.modified().expect("mtime")));
+    let since_epoch = metadata
+        .modified()
+        .expect("mtime")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch");
+    assert_eq!(stat.modified_ns(), Some(since_epoch.as_nanos() as i64));
+    assert!(stat
+        .modified_rfc3339()
+        .is_some_and(|text| text.ends_with('Z')));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            stat.file_id,
+            Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+        );
+    }
+    assert_eq!(thumbnail.source, None, "in-memory bytes have no source");
+}

@@ -4,29 +4,36 @@
 //! (Tasks 5-6), commands (Tasks 7-8), and linking (Task 8).
 //!
 //! Rust remains persisted truth. This module holds the closed enums the
-//! schema's `CHECK` constraints mirror, the persisted row shapes, name
-//! validation (D1), and [`LibraryServices`], the Library's runtime state in
-//! `RuntimeServices`. The wire `ModelRecord` (with `projectIds`, `link`, and
-//! revision summaries) arrives with import in Task 6.
+//! schema's `CHECK` constraints mirror, the persisted row shapes, the wire
+//! `ModelRecord` and `ModelSourceRevisionSummary`, name validation (D1),
+//! and [`LibraryServices`], the Library's runtime state in
+//! `RuntimeServices`. [`LibraryServices::record_for`] and
+//! [`LibraryServices::records_for`] are the one place a `ModelRecord` is
+//! assembled (clarification 3, P15).
 
 pub mod commands;
 pub mod content;
 pub mod events;
 pub mod formats;
+pub mod import;
 pub mod inspection;
 pub mod repository;
 pub mod selection;
 
 use std::marker::PhantomData;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::contracts::command::CommandError;
+use crate::persistence::StorageError;
 
 use content::ContentStore;
 use events::LibraryStream;
+use formats::InspectionSummary;
 use selection::{ModelFileIo, SelectionRegistry};
 
 /// The Library's runtime services, held in `RuntimeServices::library`.
@@ -56,12 +63,94 @@ impl<R: tauri::Runtime> LibraryServices<R> {
             links: OnceLock::new(),
         }
     }
+
+    /// The `ModelRecord` for `model_id`, or `None` when there is no such
+    /// Model. See [`Self::records_for`].
+    pub fn record_for(
+        &self,
+        connection: &Connection,
+        model_id: &str,
+    ) -> Result<Option<ModelRecord>, StorageError> {
+        Ok(self
+            .records_for(connection, Some(&[model_id.to_string()]))?
+            .into_iter()
+            .next())
+    }
+
+    /// The `ModelRecord`s for `model_ids` (every Model when `None`), ordered
+    /// by name (case-insensitive), then id. Unknown ids are skipped. The
+    /// stored rows come from `connection`; `link.watchMode` is the link
+    /// supervisor's runtime state (clarification 3), `notWatched` while no
+    /// supervisor is running.
+    pub fn records_for(
+        &self,
+        connection: &Connection,
+        model_ids: Option<&[String]>,
+    ) -> Result<Vec<ModelRecord>, StorageError> {
+        let views = repository::load_model_views(connection, model_ids)?;
+        let mut memberships = match model_ids {
+            None => repository::project_ids_by_model(connection)?,
+            Some(_) => views
+                .iter()
+                .map(|view| {
+                    repository::project_ids_for(connection, &view.model.id)
+                        .map(|ids| (view.model.id.clone(), ids))
+                })
+                .collect::<Result<_, _>>()?,
+        };
+        Ok(views
+            .into_iter()
+            .map(|view| {
+                let project_ids = memberships.remove(&view.model.id).unwrap_or_default();
+                let mut record = view.into_record(project_ids);
+                self.apply_watch_mode(&mut record);
+                record
+            })
+            .collect())
+    }
+
+    /// Sets `record.link.watchMode` from the link supervisor.
+    pub fn apply_watch_mode(&self, record: &mut ModelRecord) {
+        if let Some(link) = record.link.as_mut() {
+            link.watch_mode = self
+                .links
+                .get()
+                .map_or(WatchMode::NotWatched, |links| links.watch_mode(&record.id));
+        }
+    }
+
+    /// D13/D15: starts following a newly linked Model's source after its
+    /// import commits. This is the one call site Task 8's supervisor fills
+    /// in (P14); until the supervisor is running it does nothing.
+    ///
+    /// Returns the warning to append to the import result, if any.
+    pub fn follow_link(&self, model_id: &str, linked_path: &Path) -> Option<ImportWarning> {
+        let links = self.links.get()?;
+        let _mode = links.register(model_id, linked_path);
+        // TODO(Task 8, P14): return `WATCH_UNAVAILABLE` when registration
+        // fell back to polling for this directory (but not when the global
+        // policy is `PollOnly`).
+        None
+    }
 }
 
 /// Placeholder for D15's `LinkSupervisor`, which Task 8 implements. It
-/// exists now so `LibraryServices` has its final shape.
+/// exists now so `LibraryServices` has its final shape, and its two
+/// methods are the calls Task 6 already makes.
 pub struct LinkSupervisor<R: tauri::Runtime> {
     _runtime: PhantomData<fn() -> R>,
+}
+
+impl<R: tauri::Runtime> LinkSupervisor<R> {
+    /// Starts following `linked_path` for `model_id` (P14). Task 8.
+    pub fn register(&self, _model_id: &str, _linked_path: &Path) -> WatchMode {
+        WatchMode::NotWatched
+    }
+
+    /// How `model_id`'s source is being followed right now. Task 8.
+    pub fn watch_mode(&self, _model_id: &str) -> WatchMode {
+        WatchMode::NotWatched
+    }
 }
 
 /// D1: a Model's format, fixed at creation. Matches
@@ -98,6 +187,17 @@ pub enum SourceState {
     NotAFile,
     InvalidContent,
     Changing,
+}
+
+/// D15: how a linked Model's source is followed right now. Runtime state
+/// from the link supervisor, merged into every `ModelRecord`; never stored.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/WatchMode.ts")]
+pub enum WatchMode {
+    Watching,
+    Polling,
+    NotWatched,
 }
 
 /// D2: a Model Source Revision's provenance.
@@ -165,8 +265,66 @@ pub struct ProjectRecord {
     pub updated_at: String,
 }
 
+/// `ModelRecord.link`: a linked Model's source. `path` is the one full
+/// path that crosses to the UI (D6), so the user can recognise and recover
+/// the source.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ModelLink.ts")]
+pub struct ModelLink {
+    pub path: String,
+    pub state: SourceState,
+    pub checked_at: Option<String>,
+    pub watch_mode: WatchMode,
+}
+
+/// Spec §Domain types: a Model Source Revision as lists show it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/ModelSourceRevisionSummary.ts"
+)]
+pub struct ModelSourceRevisionSummary {
+    pub id: String,
+    pub model_id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
+    pub sha256: String,
+    #[ts(type = "number")]
+    pub size_bytes: i64,
+    pub format: ModelFormat,
+    pub origin: RevisionOrigin,
+    pub source_file_name: String,
+    pub captured_at: String,
+    pub has_thumbnail: bool,
+    pub summary: InspectionSummary,
+}
+
+/// D1: a Model as the frontend sees it. `projectIds` is ordered by Project
+/// name (`[]` is Unfiled), and `currentRevision` is the highest `sequence`.
+/// Built only by [`LibraryServices::records_for`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ModelRecord.ts")]
+pub struct ModelRecord {
+    pub id: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub name: String,
+    pub project_ids: Vec<String>,
+    pub format: ModelFormat,
+    pub storage_mode: StorageMode,
+    pub link: Option<ModelLink>,
+    pub current_revision: ModelSourceRevisionSummary,
+    #[ts(type = "number")]
+    pub revision_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// D1/D5: the full persisted `library_models` row. Not wire-exported —
-/// `ModelRecord` (a later task) derives the frontend's shape from this plus
+/// [`ModelRecord`] derives the frontend's shape from this plus
 /// `project_ids_for`/`project_ids_by_model` and the link supervisor's
 /// runtime state (clarification 3).
 #[derive(Clone, Debug, PartialEq)]
@@ -187,8 +345,8 @@ pub struct StoredModel {
 }
 
 /// D2: the full persisted `model_source_revisions` row (immutable once
-/// written). Not wire-exported — `ModelSourceRevisionRecord`/`Summary` (a
-/// later task) derive the frontend's shape from this.
+/// written). Not wire-exported — [`ModelSourceRevisionSummary`] (and Task
+/// 7's `ModelSourceRevisionRecord`) derive the frontend's shape from this.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredRevision {
     pub id: String,

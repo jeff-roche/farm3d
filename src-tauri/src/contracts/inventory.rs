@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 44] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 45] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -188,9 +188,10 @@ contracts![
         "CancelImportSelectionRequest",
         "CancelImportSelectionResult"
     ),
+    ("import_models", "ImportModelsRequest", "ImportModelsResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 44] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 45] {
     &COMMAND_CONTRACTS
 }
 
@@ -300,7 +301,9 @@ export type PickModelFilesResult = CommandSuccess<ImportSelectionSummary | null>
 export type InspectImportSelectionRequest = ContractRequest & { selectionId: string };
 export type InspectImportSelectionResult = CommandSuccess<ImportInspection>;
 export type CancelImportSelectionRequest = ContractRequest & { selectionId: string };
-export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;"#.to_string()
+export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;
+export type ImportModelsRequest = ContractRequest & { selectionId: string; operationId: string; items: ImportItemRequest[] };
+export type ImportModelsResult = CommandSuccess<ImportModelsData>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -359,6 +362,8 @@ export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionDa
         visitor.visit::<crate::library::selection::ImportSelectionSummary>();
         visitor.visit::<crate::library::inspection::ImportInspection>();
         visitor.visit::<crate::library::selection::CancelImportSelectionData>();
+        visitor.visit::<crate::library::import::ImportItemRequest>();
+        visitor.visit::<crate::library::import::ImportModelsResult>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

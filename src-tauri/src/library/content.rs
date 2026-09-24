@@ -69,12 +69,57 @@ impl CancelFlag {
 }
 
 /// One file copied into staging: its path under `staging/`, the lowercase
-/// hex SHA-256 of the bytes, and their length.
+/// hex SHA-256 of the bytes, and their length. `source` is the source file's
+/// stat as the copy saw it, for a file staged from a path; in-memory bytes
+/// (a thumbnail) have none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagedFile {
     pub path: PathBuf,
     pub sha256: String,
     pub size: u64,
+    pub source: Option<SourceStat>,
+}
+
+/// D6's change-detection identity for a source file: its size, its
+/// modification time, and, on Unix, `dev:ino` of the resolved file. On
+/// other platforms the file id is omitted until they are verified.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceStat {
+    pub size: u64,
+    pub modified: Option<SystemTime>,
+    pub file_id: Option<String>,
+}
+
+impl SourceStat {
+    pub fn of(metadata: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let file_id = {
+            use std::os::unix::fs::MetadataExt;
+            Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+        };
+        #[cfg(not(unix))]
+        let file_id = None;
+        Self {
+            size: metadata.len(),
+            modified: modified(metadata),
+            file_id,
+        }
+    }
+
+    /// The modification time in nanoseconds since the Unix epoch, when it
+    /// is known and fits.
+    pub fn modified_ns(&self) -> Option<i64> {
+        let since_epoch = self.modified?.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+        i64::try_from(since_epoch.as_nanos()).ok()
+    }
+
+    /// The modification time as RFC 3339 UTC, when it is known.
+    pub fn modified_rfc3339(&self) -> Option<String> {
+        self.modified.map(|modified| {
+            chrono::DateTime::<chrono::Utc>::from(modified)
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -200,8 +245,9 @@ pub enum ContentFailurePoint {
 type BeforeRestatHook = Box<dyn FnOnce(&Path) + Send>;
 
 /// Test-only barrier (S3, S5, S6): holds one `stage_from_path` call after
-/// its first chunk is written until the test releases it. A source with no
-/// bytes has no first chunk and never pauses.
+/// its first chunk is written, or one `place_and_commit_unless_cancelled`
+/// call before its cancel check, until the test releases it. A source with
+/// no bytes has no first chunk and never pauses.
 #[doc(hidden)]
 pub struct StagePause {
     reached: Barrier,
@@ -228,6 +274,7 @@ pub struct ContentStore {
     failures: AtomicU8,
     before_restat: Mutex<Option<BeforeRestatHook>>,
     pause: Mutex<Option<Arc<StagePause>>>,
+    placement_pause: Mutex<Option<Arc<StagePause>>>,
 }
 
 impl ContentStore {
@@ -246,6 +293,7 @@ impl ContentStore {
             failures: AtomicU8::new(0),
             before_restat: Mutex::new(None),
             pause: Mutex::new(None),
+            placement_pause: Mutex::new(None),
         })
     }
 
@@ -273,12 +321,16 @@ impl ContentStore {
     /// first chunk. See [`StagePause`].
     #[doc(hidden)]
     pub fn pause_after_first_chunk_once(&self) -> Arc<StagePause> {
-        let pause = Arc::new(StagePause {
-            reached: Barrier::new(2),
-            released: Barrier::new(2),
-        });
-        *lock_ignoring_poison(&self.pause) = Some(Arc::clone(&pause));
-        pause
+        arm_pause(&self.pause)
+    }
+
+    /// Test hook (S6): pauses the next `place_and_commit_unless_cancelled`
+    /// before its cancel check and the placement lock, so a test can land a
+    /// cancel or a second import while one import is between staging and
+    /// placement. See [`StagePause`].
+    #[doc(hidden)]
+    pub fn pause_before_placement_once(&self) -> Arc<StagePause> {
+        arm_pause(&self.placement_pause)
     }
 
     fn take_failure(&self, point: ContentFailurePoint) -> bool {
@@ -381,15 +433,12 @@ impl ContentStore {
             path: path.to_path_buf(),
             sha256: format!("{:x}", hasher.finalize()),
             size: copied,
+            source: Some(SourceStat::of(before)),
         })
     }
 
     fn pause_if_armed(&self) {
-        let pause = lock_ignoring_poison(&self.pause).take();
-        if let Some(pause) = pause {
-            pause.reached.wait();
-            pause.released.wait();
-        }
+        wait_if_armed(&self.pause);
     }
 
     /// Stages in-memory bytes (a thumbnail) as `staging/<staging_key>/<name>`.
@@ -421,6 +470,7 @@ impl ContentStore {
             path,
             sha256: format!("{:x}", Sha256::digest(bytes)),
             size: bytes.len() as u64,
+            source: None,
         })
     }
 
@@ -445,10 +495,27 @@ impl ContentStore {
         staged: &[&StagedFile],
         commit: impl FnOnce(&Transaction<'_>) -> Result<T, RepositoryError>,
     ) -> Result<T, ContentError> {
+        self.place_and_commit_unless_cancelled(storage, staged, &CancelFlag::never(), commit)
+    }
+
+    /// [`Self::place_and_commit`] with D13's last cancel check: once the
+    /// placement lock is held, a raised `cancel` stops the item with
+    /// [`ContentError::Cancelled`] before anything is placed or written.
+    pub fn place_and_commit_unless_cancelled<T>(
+        &self,
+        storage: &Storage,
+        staged: &[&StagedFile],
+        cancel: &CancelFlag,
+        commit: impl FnOnce(&Transaction<'_>) -> Result<T, RepositoryError>,
+    ) -> Result<T, ContentError> {
+        wait_if_armed(&self.placement_pause);
         let _placement = self
             .placement
             .lock()
             .map_err(|_| ContentError::Storage(StorageError::PersistenceUnavailable))?;
+        if cancel.is_cancelled() {
+            return Err(ContentError::Cancelled);
+        }
         for file in staged {
             self.place(file)?;
         }
@@ -848,6 +915,23 @@ impl Read for VerifiedReader {
             self.state = ReadState::Mismatch;
             Err(io::Error::new(io::ErrorKind::InvalidData, BlobHashMismatch))
         }
+    }
+}
+
+fn arm_pause(slot: &Mutex<Option<Arc<StagePause>>>) -> Arc<StagePause> {
+    let pause = Arc::new(StagePause {
+        reached: Barrier::new(2),
+        released: Barrier::new(2),
+    });
+    *lock_ignoring_poison(slot) = Some(Arc::clone(&pause));
+    pause
+}
+
+fn wait_if_armed(slot: &Mutex<Option<Arc<StagePause>>>) {
+    let pause = lock_ignoring_poison(slot).take();
+    if let Some(pause) = pause {
+        pause.reached.wait();
+        pause.released.wait();
     }
 }
 

@@ -298,7 +298,7 @@ fn cleanup_failure_is_counted_and_a_later_startup_retry_removes_the_orphan() {
 #[test]
 fn every_registered_command_has_generated_request_and_result_contracts() {
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
-    assert_eq!(manifest.len(), 44);
+    assert_eq!(manifest.len(), 45);
     assert_eq!(
         manifest
             .iter()

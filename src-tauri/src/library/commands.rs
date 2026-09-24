@@ -9,6 +9,7 @@ use crate::bootstrap::BootstrapState;
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
 use crate::RuntimeServices;
 
+use super::import::{self, ImportItemRequest, ImportModelsResult};
 use super::inspection::{self, ImportInspection};
 use super::selection::{CancelImportSelectionData, ImportSelectionSummary, SelectionPurpose};
 
@@ -52,6 +53,42 @@ pub async fn inspect_import_selection<R: tauri::Runtime>(
     inspection::inspect_selection(&app, &services.storage, &services.library, entry)
         .await
         .map(CommandSuccess::new)
+}
+
+/// D13 step 3: commits the requested `ready` items of an inspected
+/// selection, each in its own transaction, and returns one outcome per
+/// item. Repeating an `operationId` replays its recorded outcomes; another
+/// operation while one is importing is `CONFLICT`.
+#[tauri::command]
+pub async fn import_models<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    selection_id: String,
+    operation_id: String,
+    items: Vec<ImportItemRequest>,
+) -> Result<CommandSuccess<ImportModelsResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let entry = services.library.selections.get(&selection_id)?;
+    import::validate_request(&entry, &operation_id, &items)?;
+    let inspected = entry.inspection.lock().await.clone().ok_or_else(|| {
+        CommandError::validation_at("selectionId", "Inspect these files before importing them.")
+    })?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        import::import_selection(
+            &app,
+            &services.storage,
+            &services.library,
+            &entry,
+            &inspected,
+            &operation_id,
+            &items,
+        )
+    })
+    .await
+    .map_err(|_| CommandError::internal())??;
+    Ok(CommandSuccess::new(result))
 }
 
 /// D13: stops in-flight work on the selection at its next check, deletes

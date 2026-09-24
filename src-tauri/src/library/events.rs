@@ -10,8 +10,8 @@
 //! (`library.selection.dropped`, `library.import.progress`) included, so
 //! gap detection still works. Record-bearing events go out after commit
 //! only, never inside a transaction and never for a replay. Payloads carry
-//! ids and basenames, never a full path (D6); `ModelRecord.link.path` is
-//! the one exception, added with `library.model.changed` in Task 6.
+//! ids and basenames, never a full path (D6); `ModelRecord.link.path` in
+//! `library.model.changed` is the one exception.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -26,7 +26,7 @@ use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::contracts::ContractVersion;
 
 use super::selection::{ImportProgress, ImportSelectionSummary};
-use super::ProjectRecord;
+use super::{ModelRecord, ModelSourceRevisionSummary, ProjectRecord};
 
 /// D17's seven Library event types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -56,16 +56,17 @@ pub enum LibraryEventType {
 }
 
 /// A Library event's payload. Untagged: the envelope's `type` says which
-/// shape it is, and the payload is exactly the record D17 names.
-///
-/// `library.model.changed` (`ModelRecord`) and `library.revision.created`
-/// (`ModelSourceRevisionSummary`) gain their variants with those record
-/// types in Task 6.
+/// shape it is, and the payload is exactly the record D17 names. Variant
+/// order matters when deserializing: each record's required fields rule out
+/// the ones before it, and the empty `Removed {}` matches every payload, so
+/// it stays last.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(untagged)]
 #[ts(untagged, export_to = "domain/LibraryEventPayload.ts")]
 pub enum LibraryEventPayload {
     ProjectChanged(ProjectRecord),
+    ModelChanged(Box<ModelRecord>),
+    RevisionCreated(Box<ModelSourceRevisionSummary>),
     SelectionDropped(ImportSelectionSummary),
     ImportProgress(ImportProgress),
     /// `library.project.removed` and `library.model.removed`: `{}`.

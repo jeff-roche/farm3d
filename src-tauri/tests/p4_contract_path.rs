@@ -9,6 +9,7 @@ const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
     "inspect_import_selection",
     "cancel_import_selection",
+    "import_models",
 ];
 
 #[test]

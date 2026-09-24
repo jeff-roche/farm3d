@@ -31,6 +31,8 @@ import type { CreatePrintersBatchInput } from "./CreatePrintersBatchInput";
 import type { CreatePrintersBatchOutput } from "./CreatePrintersBatchOutput";
 import type { DeletePrinterData } from "./DeletePrinterData";
 import type { ImportInspection } from "./ImportInspection";
+import type { ImportItemRequest } from "./ImportItemRequest";
+import type { ImportModelsData } from "./ImportModelsData";
 import type { ImportSelectionSummary } from "./ImportSelectionSummary";
 import type { JsonValue } from "./JsonValue";
 import type { MoveSpoolData } from "./MoveSpoolData";
@@ -135,3 +137,5 @@ export type InspectImportSelectionRequest = ContractRequest & { selectionId: str
 export type InspectImportSelectionResult = CommandSuccess<ImportInspection>;
 export type CancelImportSelectionRequest = ContractRequest & { selectionId: string };
 export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;
+export type ImportModelsRequest = ContractRequest & { selectionId: string; operationId: string; items: ImportItemRequest[] };
+export type ImportModelsResult = CommandSuccess<ImportModelsData>;

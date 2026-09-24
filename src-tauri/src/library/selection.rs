@@ -20,6 +20,7 @@ use crate::contracts::command::CommandError;
 
 use super::content::{CancelFlag, ContentStore};
 use super::events;
+use super::import::ImportLedger;
 use super::inspection::InspectedItem;
 use super::LibraryServices;
 
@@ -151,11 +152,13 @@ pub struct SelectedFile {
 /// A registered selection. `inspection` holds D13's stored inspection
 /// result once `inspect_import_selection` has run; its lock is held for the
 /// whole inspection, so a concurrent second call waits for the first.
+/// `imports` records each committed item's outcome per `operationId` (D13).
 pub struct SelectionEntry {
     pub id: String,
     pub purpose: SelectionPurpose,
     pub files: Vec<SelectedFile>,
     pub inspection: tokio::sync::Mutex<Option<Arc<Vec<InspectedItem>>>>,
+    pub imports: ImportLedger,
     cancel: tokio::sync::watch::Sender<bool>,
     last_used: Mutex<Instant>,
 }
@@ -232,6 +235,7 @@ impl SelectionRegistry {
             purpose,
             files,
             inspection: tokio::sync::Mutex::new(None),
+            imports: ImportLedger::default(),
             cancel: tokio::sync::watch::channel(false).0,
             last_used: Mutex::new(now),
         });

@@ -17,7 +17,9 @@ use connections::commands::{
     set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
-use library::commands::{cancel_import_selection, inspect_import_selection, pick_model_files};
+use library::commands::{
+    cancel_import_selection, import_models, inspect_import_selection, pick_model_files,
+};
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
     archive_printer, create_printer, delete_printer, export_printers, import_printers,
@@ -100,7 +102,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 44] = [
+pub const COMMAND_NAMES: [&str; 45] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -145,6 +147,7 @@ pub const COMMAND_NAMES: [&str; 44] = [
     "pick_model_files",
     "inspect_import_selection",
     "cancel_import_selection",
+    "import_models",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -478,6 +481,7 @@ pub fn run() {
             pick_model_files,
             inspect_import_selection,
             cancel_import_selection,
+            import_models,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

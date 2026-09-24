@@ -34,6 +34,10 @@ use farm3d_lib::library::formats::{
     Producer, StlEncoding, StlInspection, StlSummary, ThreeMfInspection, ThreeMfSummary,
     ThumbnailImageFormat, ThumbnailInfo, UnsupportedCode, UnsupportedEntry,
 };
+use farm3d_lib::library::import::{
+    DuplicateAction, ImportItemError, ImportItemRequest, ImportItemResult, ImportModelsResult,
+    ImportOutcome,
+};
 use farm3d_lib::library::inspection::{
     DuplicateMatch, ImportCandidate, ImportInspection, ImportItemErrorCode,
 };
@@ -42,8 +46,8 @@ use farm3d_lib::library::selection::{
     SelectionPurpose,
 };
 use farm3d_lib::library::{
-    ImportWarning, ImportWarningCode, ModelFormat, ProjectRecord, RevisionOrigin, SourceState,
-    StorageMode,
+    ImportWarning, ImportWarningCode, ModelFormat, ModelLink, ModelRecord,
+    ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin, SourceState, StorageMode, WatchMode,
 };
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
@@ -387,6 +391,16 @@ fn export_registry() -> Vec<Export> {
         export::<DuplicateMatch>(),
         export::<ImportCandidate>(),
         export::<ImportInspection>(),
+        export::<WatchMode>(),
+        export::<ModelLink>(),
+        export::<ModelSourceRevisionSummary>(),
+        export::<ModelRecord>(),
+        export::<DuplicateAction>(),
+        export::<ImportItemRequest>(),
+        export::<ImportOutcome>(),
+        export::<ImportItemError>(),
+        export::<ImportItemResult>(),
+        export::<ImportModelsResult>(),
         export::<LibraryEventType>(),
         export::<LibraryEventPayload>(),
         export::<LibraryEvent>(),
