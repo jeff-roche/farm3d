@@ -185,6 +185,36 @@ describe("Combobox", () => {
     expect(await screen.findByText("Prusa")).toBeInTheDocument();
   });
 
+  it("with `multiple`, adds options to the value array, keeps the list open, and removes a chosen option", async () => {
+    const [value, setValue] = createSignal<string[]>(["Prusa MK4"]);
+    const onChange = vi.fn((next: string[]) => setValue(next));
+    render(() => (
+      <Combobox
+        multiple
+        label="Printers"
+        options={["Elegoo Centauri Carbon", "Prusa MK4", "Voron 2.4"]}
+        value={value()}
+        onChange={onChange}
+      />
+    ));
+    // The chosen value is shown as a removable token beside the input.
+    expect(screen.getByRole("button", { name: "Remove Prusa MK4" })).toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: /show suggestions/i });
+    await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("option", { name: "Voron 2.4" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenLastCalledWith(["Prusa MK4", "Voron 2.4"]);
+    // A multi-select stays open for the next pick, and marks what's chosen.
+    const voron = screen.getByRole("option", { name: "Voron 2.4" });
+    expect(voron).toHaveAttribute("aria-selected", "true");
+
+    await fireEvent.pointerUp(screen.getByRole("option", { name: "Prusa MK4" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenLastCalledWith(["Voron 2.4"]);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Remove Voron 2.4" }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
   it("suppresses an option's mousedown default so it never steals focus from the input", async () => {
     // Kobalte selects on pointerup, not mousedown — but an unprevented
     // mousedown still moves native focus to the item, which blurs the

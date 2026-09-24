@@ -4,6 +4,7 @@
  *  here touches `library-store`. */
 import type {
   DuplicateAction,
+  DuplicateMatch,
   ImportCandidate,
   ImportInspection,
   ImportItemRequest,
@@ -108,6 +109,15 @@ export function setRowName(row: ImportRow, name: string, models: ModelRecord[]):
   return withSuggestion({ ...row, name }, models);
 }
 
+/** The row's resolution: a D14 duplicate action, `addRevision` for any
+ *  ready row, or `undefined` for a plain new Model. Clearing
+ *  `addRevision` lets the same-name suggestion follow the row again. */
+export function setRowAction(row: ImportRow, action: DuplicateAction | undefined, models: ModelRecord[]): ImportRow {
+  if (row.candidate.status === "rejected") return row;
+  const { duplicateAction: _previous, ...rest } = row;
+  return withSuggestion(action === undefined ? rest : { ...rest, duplicateAction: action }, models);
+}
+
 /** The user's own target choice (the Add as a new revision Model picker). */
 export function setRowTarget(row: ImportRow, modelId: string): ImportRow {
   return { ...row, targetModelId: modelId, targetPickedByUser: true };
@@ -127,11 +137,18 @@ function useExistingTarget(row: ImportRow): string | undefined {
   return (duplicates.find((match) => match.isCurrent) ?? duplicates[0])?.modelId;
 }
 
+/** The commit found the file's content already in the Library although
+ *  inspection listed no duplicate -- two identical files in one selection,
+ *  or a racing import (D14: never silent). */
+function decisionRequiredAtCommit(row: ImportRow): boolean {
+  return row.result?.errors.some((error) => error.code === "DUPLICATE_DECISION_REQUIRED") ?? false;
+}
+
 export function rowBlockers(row: ImportRow): RowBlocker[] {
   if (row.candidate.status === "rejected") return ["rejected"];
   const blockers: RowBlocker[] = [];
   const undecided =
-    (row.candidate.duplicates.length > 0 && row.duplicateAction === undefined)
+    ((row.candidate.duplicates.length > 0 || decisionRequiredAtCommit(row)) && row.duplicateAction === undefined)
     || (row.duplicateAction === "addRevision" && row.targetModelId === undefined)
     || (row.duplicateAction === "useExisting" && useExistingTarget(row) === undefined);
   if (undecided) blockers.push("duplicateDecision");
@@ -169,12 +186,36 @@ export function buildRequest(rows: ImportRow[], models: ModelRecord[]): ImportIt
     });
 }
 
+/** The held Models whose current revision has these bytes, as duplicate
+ *  matches. Only current revisions are visible here, so a match on an
+ *  older revision stays unknown and Use existing is not offered for it. */
+function libraryDuplicates(sha256: string, models: ModelRecord[]): DuplicateMatch[] {
+  return models
+    .filter((model) => model.currentRevision.sha256 === sha256)
+    .map((model) => ({
+      modelId: model.id,
+      modelName: model.name,
+      projectIds: [...model.projectIds],
+      revisionId: model.currentRevision.id,
+      sequence: model.currentRevision.sequence,
+      isCurrent: true,
+    }));
+}
+
 /** Attaches each item's outcome to its row by `fileIndex`, keeping every
- *  choice the user made so a failed row can be retried as it was. */
-export function mergeResults(rows: ImportRow[], result: ImportModelsResult): ImportRow[] {
+ *  choice the user made so a failed row can be retried as it was. A row
+ *  sent back with `DUPLICATE_DECISION_REQUIRED` that inspection listed no
+ *  duplicates for gets them from `models` (which already hold this
+ *  import's own results), so the user can choose Use existing. */
+export function mergeResults(rows: ImportRow[], result: ImportModelsResult, models: ModelRecord[]): ImportRow[] {
   const byIndex = new Map(result.items.map((item) => [item.fileIndex, item]));
   return rows.map((row) => {
     const item = byIndex.get(row.fileIndex);
-    return item ? { ...row, result: item } : row;
+    if (!item) return row;
+    const merged: ImportRow = { ...row, result: item };
+    if (merged.candidate.status === "ready" && merged.candidate.duplicates.length === 0 && decisionRequiredAtCommit(merged)) {
+      merged.candidate = { ...merged.candidate, duplicates: libraryDuplicates(merged.candidate.sha256, models) };
+    }
+    return merged;
   });
 }

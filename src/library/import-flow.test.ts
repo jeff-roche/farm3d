@@ -6,6 +6,7 @@ import {
   rowBlockers,
   rowsFromInspection,
   setRowName,
+  setRowAction,
   setRowProjects,
   setRowTarget,
   type ImportRow,
@@ -174,6 +175,30 @@ describe("keeping the same-name suggestion current (D14)", () => {
   });
 });
 
+describe("setRowAction", () => {
+  const models = [model({ id: "mdl-same-name", name: "cube" })];
+
+  it("sets the action without touching a pre-filled target", () => {
+    const [row] = rowsFromInspection(inspection(ready(0, "cube.stl", { duplicates: [DUPLICATE] })), { projectIds: [], models });
+    const chosen = setRowAction(row, "addRevision", models);
+    expect(chosen).toMatchObject({ duplicateAction: "addRevision", targetModelId: "mdl-same-name" });
+  });
+
+  it("clears the action with undefined and re-derives the suggestion", () => {
+    const [row] = rowsFromInspection(inspection(ready(0, "cube.stl")), { projectIds: [], models });
+    const renamed = setRowName(setRowAction(row, "addRevision", models), "lid", models);
+    expect(renamed.targetModelId).toBe("mdl-same-name");
+    const cleared = setRowAction(renamed, undefined, models);
+    expect(cleared).not.toHaveProperty("duplicateAction");
+    expect(cleared).not.toHaveProperty("targetModelId");
+  });
+
+  it("leaves a rejected row alone", () => {
+    const [row] = rowsFromInspection(inspection(rejected(0, "notes.txt")), { projectIds: [], models });
+    expect(setRowAction(row, "addAnother", models)).toBe(row);
+  });
+});
+
 describe("rowBlockers", () => {
   const base = (candidate: ImportCandidate): ImportRow =>
     rowsFromInspection(inspection(candidate), { projectIds: [], models: [] })[0];
@@ -202,6 +227,22 @@ describe("rowBlockers", () => {
 
   it("blocks a blank name", () => {
     expect(rowBlockers({ ...base(ready(0, "cube.stl")), name: "   " })).toEqual(["name"]);
+  });
+
+  it("blocks a row the backend sent back with DUPLICATE_DECISION_REQUIRED until an action is chosen", () => {
+    // Inspection saw no duplicate (e.g. two identical files in one
+    // selection), so only the commit-time result says a decision is needed.
+    const row: ImportRow = {
+      ...base(ready(0, "cube.stl")),
+      result: {
+        fileIndex: 0,
+        outcome: "rejected",
+        errors: [{ code: "DUPLICATE_DECISION_REQUIRED", message: "The Library already has this file. Choose what to do with it." }],
+        warnings: [],
+      },
+    };
+    expect(rowBlockers(row)).toEqual(["duplicateDecision"]);
+    expect(rowBlockers({ ...row, duplicateAction: "addAnother" })).toEqual([]);
   });
 
   it("reports a rejected row as rejected only", () => {
@@ -265,16 +306,38 @@ describe("mergeResults", () => {
       { fileIndex: 1, outcome: "rejected", errors: [{ code: "SOURCE_UNREADABLE", message: "b.stl could not be read." }], warnings: [] },
       { fileIndex: 2, outcome: "cancelled", errors: [], warnings: [] },
     ];
-    const merged = mergeResults(rows, { items: results });
+    const merged = mergeResults(rows, { items: results }, []);
 
     expect(merged.map((r) => r.result?.outcome)).toEqual(["imported", "rejected", "cancelled"]);
     expect(merged[1]).toMatchObject({ name: "Chosen name", storageMode: "linked", projectIds: ["prj-b"] });
     expect(buildRequest(merged, []).map((i) => i.fileIndex)).toEqual([1, 2]);
   });
 
+  it("lists a commit-time duplicate's Model from the Library, so Use existing has a target", () => {
+    const [row] = rowsFromInspection(inspection(ready(0, "twin.stl")), { projectIds: [], models: [] });
+    const sha256 = row.candidate.status === "ready" ? row.candidate.sha256 : "";
+    const holder = model({ id: "mdl-twin", name: "Twin", projectIds: ["prj-b"] });
+    holder.currentRevision = { ...holder.currentRevision, id: "msr-twin", sha256, sequence: 2 };
+    const [merged] = mergeResults([row], {
+      items: [{
+        fileIndex: 0,
+        outcome: "rejected",
+        errors: [{ code: "DUPLICATE_DECISION_REQUIRED", message: "The Library already has this file. Choose what to do with it." }],
+        warnings: [],
+      }],
+    }, [model({ id: "mdl-other" }), holder]);
+
+    expect(merged.candidate.status === "ready" && merged.candidate.duplicates).toEqual([
+      { modelId: "mdl-twin", modelName: "Twin", projectIds: ["prj-b"], revisionId: "msr-twin", sequence: 2, isCurrent: true },
+    ]);
+    expect(buildRequest([setRowAction(merged, "useExisting", [])], [])[0]).toMatchObject({
+      duplicateAction: "useExisting", targetModelId: "mdl-twin",
+    });
+  });
+
   it("leaves rows the result does not mention unchanged", () => {
     const rows = rowsFromInspection(inspection(ready(0, "a.stl"), ready(1, "b.stl")), { projectIds: [], models: [] });
-    const merged = mergeResults(rows, { items: [{ fileIndex: 1, outcome: "reusedExisting", model: model(), errors: [], warnings: [] }] });
+    const merged = mergeResults(rows, { items: [{ fileIndex: 1, outcome: "reusedExisting", model: model(), errors: [], warnings: [] }] }, []);
     expect(merged[0]).toEqual(rows[0]);
     expect(merged[1].result?.outcome).toBe("reusedExisting");
     expect(buildRequest(merged, []).map((i) => i.fileIndex)).toEqual([0]);

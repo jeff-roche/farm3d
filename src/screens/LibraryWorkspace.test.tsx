@@ -4,6 +4,7 @@ import { LibraryWorkspace } from "./LibraryWorkspace";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
 import { libraryStoreMock, resetLibraryStoreMock, setLibraryState } from "../library/library-store-mock";
 import { navigation, type NavigationTarget } from "../navigation/navigation-store";
+import type { ImportSelectionSummary } from "../library/types";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 
@@ -43,11 +44,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderWorkspace() {
+function renderWorkspace(props: Partial<Parameters<typeof LibraryWorkspace>[0]> = {}) {
   const onImport = vi.fn();
-  render(() => <LibraryWorkspace navigate={navigate} onImport={onImport} />);
-  return { onImport };
+  const onImportClose = vi.fn();
+  render(() => <LibraryWorkspace navigate={navigate} onImport={onImport} onImportClose={onImportClose} {...props} />);
+  return { onImport, onImportClose };
 }
+
+const SELECTION: ImportSelectionSummary = {
+  selectionId: "sel-1",
+  purpose: "import",
+  files: [{ fileIndex: 0, fileName: "hook.stl", sizeBytes: 684 }],
+};
 
 function sidebarEntry(name: RegExp): HTMLElement {
   return within(screen.getByRole("navigation", { name: "Library" })).getByRole("button", { name });
@@ -100,7 +108,9 @@ describe("LibraryWorkspace", () => {
     setLibraryState({ projects: [], models: [] });
     renderWorkspace();
     expect(screen.getByRole("button", { name: "Choose files…" })).toBeDisabled();
-    expect(screen.getByText("Importing Models needs the desktop app.")).toBeInTheDocument();
+    // The toolbar's Import… says so too; this is the surface's own copy.
+    const surface = screen.getByRole("region", { name: "Import Models" });
+    expect(within(surface).getByText("Importing Models needs the desktop app.")).toBeInTheDocument();
   });
 
   it("enables the drop surface on the desktop", async () => {
@@ -111,6 +121,68 @@ describe("LibraryWorkspace", () => {
     expect(choose).toBeEnabled();
     await fireEvent.click(choose);
     expect(onImport).toHaveBeenCalledOnce();
+  });
+
+  it("the toolbar's Import… starts an import on the desktop", async () => {
+    desktop.available = true;
+    const { onImport } = renderWorkspace();
+    await fireEvent.click(screen.getByRole("button", { name: "Import…" }));
+    expect(onImport).toHaveBeenCalledOnce();
+  });
+
+  it("disables the toolbar's Import… in web mode, saying why", () => {
+    renderWorkspace();
+    const importButton = screen.getByRole("button", { name: "Import…" });
+    expect(importButton).toBeDisabled();
+    const reason = screen.getByText("Importing Models needs the desktop app.");
+    expect(importButton.getAttribute("aria-describedby")).toBe(reason.id);
+  });
+
+  it("highlights the drop surface while a file drag is over the window", () => {
+    desktop.available = true;
+    setLibraryState({ projects: [], models: [] });
+    renderWorkspace({ dropActive: true });
+    expect(screen.getByRole("region", { name: "Import Models" })).toHaveAttribute("data-active");
+  });
+
+  it("opens the import dialog for a selection, defaulting its rows to the viewed Project", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => ({
+      selectionId,
+      items: [{
+        status: "ready", fileIndex: 0, fileName: "hook.stl", format: "stl", sizeBytes: 684, sha256: "e".repeat(64),
+        summary: { format: "stl", triangleCount: 12, boundsMm: { min: [0, 0, 0], max: [1, 1, 1] }, unitsAssumed: true },
+        unsupported: [], warnings: [], duplicates: [],
+      }],
+    }));
+    window.localStorage.setItem(VIEW_KEY, JSON.stringify({ kind: "project", id: "prj-web-calibration" }));
+    renderWorkspace({ importSelection: SELECTION });
+
+    const dialog = await screen.findByRole("dialog", { name: "Import Models" });
+    expect(libraryStoreMock.inspectSelection).toHaveBeenCalledWith("sel-1");
+    expect(await within(dialog).findByRole("button", { name: "Remove Calibration" })).toBeInTheDocument();
+  });
+
+  it("Done closes the import and selects the first imported Model", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => ({
+      selectionId,
+      items: [{
+        status: "ready", fileIndex: 0, fileName: "hook.stl", format: "stl", sizeBytes: 684, sha256: "e".repeat(64),
+        summary: { format: "stl", triangleCount: 12, boundsMm: { min: [0, 0, 0], max: [1, 1, 1] }, unitsAssumed: true },
+        unsupported: [], warnings: [], duplicates: [],
+      }],
+    }));
+    libraryStoreMock.importModels.mockImplementation(async () => ({
+      items: [{ fileIndex: 0, outcome: "imported", model: fixture.models[1]!, errors: [], warnings: [] }],
+    }));
+    const { onImportClose } = renderWorkspace({ importSelection: SELECTION });
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    expect(onImportClose).toHaveBeenCalled();
+    const target = navigation.target();
+    expect(target.destination === "library" && target.selection).toEqual({ kind: "model", id: fixture.models[1]!.id });
   });
 
   it("shows a filtered-empty view with Show all Models", async () => {

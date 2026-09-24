@@ -1,0 +1,281 @@
+/* A fixed-ish width so the dialog doesn't size itself to its rows; the rows
+   scroll inside the dialog instead (spec: 1024 × 700 must work). */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(48rem, 85vw);
+  min-width: 0;
+  min-height: 0;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 55vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.fileRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface);
+}
+
+.rowHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.fileName {
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  font-weight: var(--f3d-type-label-weight);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  white-space: nowrap;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.fields > * {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.projects {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.projects > :first-child {
+  align-self: stretch;
+}
+
+.choice {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.duplicate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.duplicateText,
+.rejected,
+.outcomeLine {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}
+
+.rejected {
+  color: var(--f3d-color-text-muted);
+}
+
+.outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.successIcon {
+  flex: none;
+  color: var(--f3d-color-success);
+}
+
+.dangerIcon {
+  flex: none;
+  color: var(--f3d-color-danger);
+}
+
+.warningIcon {
+  flex: none;
+  color: var(--f3d-color-warning);
+}
+
+.error {
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.unsupported {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0;
+  border: none;
+  border-radius: var(--f3d-radius-sm);
+  background: none;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  cursor: pointer;
+}
+
+.disclosure:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.disclosureIcon {
+  transition: transform 0.12s;
+}
+
+.disclosure[data-expanded] .disclosureIcon {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosureIcon {
+    transition: none;
+  }
+}
+
+.disclosureContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-left: 1.125rem;
+}
+
+.unsupportedList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.unsupportedList li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.part {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  overflow-wrap: anywhere;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--f3d-color-danger);
+  border-radius: var(--f3d-radius-sm);
+}
+
+.noticeText {
+  flex: 1;
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.footerText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.blocker {
+  display: block;
+}

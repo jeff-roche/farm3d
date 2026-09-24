@@ -11,8 +11,9 @@ import {
   reportLibraryError,
 } from "../library/library-store";
 import { modelsFor, SAVED_VIEW_IDS, searchModels, sortModels, type LibraryView } from "../library/saved-views";
-import type { ModelRecord } from "../library/types";
+import type { ImportSelectionSummary, ModelRecord } from "../library/types";
 import { navigation, type NavigationTarget } from "../navigation/navigation-store";
+import { ImportDialog } from "./ImportDialog";
 import { formatBytes, viewLabel } from "./library-presentation";
 import { LibrarySidebar } from "./LibrarySidebar";
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
@@ -24,8 +25,16 @@ export interface LibraryWorkspaceProps {
   /** App's navigation, so a selection is checked against every available
    *  id and lands in the URL fragment. */
   navigate: (target: NavigationTarget) => void;
-  /** Opens the import flow. */
+  /** Starts an import: App opens the native picker and, for a selection,
+   *  passes it back as `importSelection`. */
   onImport?: () => void;
+  /** The selection the import dialog is working on (picked or dropped);
+   *  `null` or absent while no import is open. */
+  importSelection?: ImportSelectionSummary | null;
+  /** The import dialog closed; App clears `importSelection`. */
+  onImportClose?: () => void;
+  /** A file drag is over the window (App's webview drag listener). */
+  dropActive?: boolean;
 }
 
 type LayoutMode = "grid" | "list";
@@ -189,6 +198,17 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     </Show>
   );
 
+  // New import rows start in the viewed Project, or Unfiled in a saved view.
+  const importProjectIds = () => {
+    const current = activeView();
+    return current.kind === "project" ? [current.id] : [];
+  };
+  const finishImport = (modelId: string | undefined) => {
+    props.onImportClose?.();
+    if (modelId) selectModel(modelId);
+  };
+  const importReasonId = "library-import-unavailable";
+
   const storedCopies = () => {
     const info = library.contentInfo();
     return info ? `Stored copies: ${formatBytes(info.totalBytes)}` : null;
@@ -211,6 +231,14 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         </div>
       </Show>
       <div class={styles.toolbar}>
+        <Button
+          variant="primary"
+          disabled={!desktopAvailable()}
+          aria-describedby={desktopAvailable() ? undefined : importReasonId}
+          onClick={() => props.onImport?.()}
+        >
+          Import…
+        </Button>
         <TextField
           type="search"
           aria-label="Search Models"
@@ -235,6 +263,9 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           ]}
         />
         <span class={styles.spacer} />
+        <Show when={!desktopAvailable()}>
+          <span id={importReasonId} class={styles.status}>{WEB_IMPORT_REASON}</span>
+        </Show>
         <Show when={storedCopies()}>{(text) => <span class={styles.status}>{text()}</span>}</Show>
         <Show when={narrow()}>
           <Button variant="ghost" aria-expanded={detailsOpen()} onClick={() => setDetailsOpen((open) => !open)}>
@@ -264,7 +295,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
                   <FileDropSurface
                     label="Import Models"
                     hint="Drop files here, or choose them."
-                    active={false}
+                    active={props.dropActive ?? false}
                     disabled={!desktopAvailable()}
                     disabledReason={WEB_IMPORT_REASON}
                     onChoose={() => props.onImport?.()}
@@ -335,6 +366,13 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           </KDialog>
         </Show>
       </div>
+      <ImportDialog
+        selection={props.importSelection ?? null}
+        defaultProjectIds={importProjectIds()}
+        onClose={() => props.onImportClose?.()}
+        onDone={finishImport}
+        onChooseAgain={() => props.onImport?.()}
+      />
     </div>
   );
 }

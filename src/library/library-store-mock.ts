@@ -8,7 +8,18 @@
  *  changes it with `setLibraryState`; the actions are spies. */
 import { createStore } from "solid-js/store";
 import { vi } from "vitest";
-import type { LibraryContentInfo, ModelRecord, ModelSourceRevisionRecord, ProjectRecord } from "./types";
+import type {
+  ImportInspection,
+  ImportItemRequest,
+  ImportModelsResult,
+  ImportProgress,
+  ImportSelectionSummary,
+  LibraryContentInfo,
+  ModelRecord,
+  ModelSourceRevisionRecord,
+  ProjectRecord,
+  SelectionPurpose,
+} from "./types";
 
 interface MockLibraryState {
   projects: ProjectRecord[];
@@ -30,6 +41,9 @@ const initialState = (): MockLibraryState => ({
 
 const [state, setState] = createStore<MockLibraryState>(initialState());
 
+const progressHandlers = new Set<(selectionId: string, progress: ImportProgress) => void>();
+const droppedHandlers = new Set<(summary: ImportSelectionSummary) => void>();
+
 export const libraryStoreMock = {
   library: {
     projects: () => state.projects,
@@ -50,17 +64,45 @@ export const libraryStoreMock = {
   reportLibraryError: vi.fn(),
   dismissLibraryError: vi.fn(),
   refreshLibrary: vi.fn(),
+  pickFiles: vi.fn(async (_purpose: SelectionPurpose): Promise<ImportSelectionSummary | null> => null),
+  inspectSelection: vi.fn(async (selectionId: string): Promise<ImportInspection> => ({ selectionId, items: [] })),
+  cancelSelection: vi.fn(async (_selectionId: string) => {}),
+  importModels: vi.fn(async (
+    _selectionId: string,
+    _items: ImportItemRequest[],
+    _operationId?: string,
+  ): Promise<ImportModelsResult> => ({ items: [] })),
+  onImportProgress: vi.fn((handler: (selectionId: string, progress: ImportProgress) => void) => {
+    progressHandlers.add(handler);
+    return () => progressHandlers.delete(handler);
+  }),
+  onSelectionDropped: vi.fn((handler: (summary: ImportSelectionSummary) => void) => {
+    droppedHandlers.add(handler);
+    return () => droppedHandlers.delete(handler);
+  }),
 };
+
+/** Delivers a `library.import.progress` event to the subscribed handlers. */
+export function emitImportProgress(selectionId: string, progress: ImportProgress): void {
+  for (const handler of progressHandlers) handler(selectionId, progress);
+}
+
+/** Delivers a `library.selection.dropped` event to the subscribed handlers. */
+export function emitSelectionDropped(summary: ImportSelectionSummary): void {
+  for (const handler of droppedHandlers) handler(summary);
+}
 
 export function setLibraryState(patch: Partial<MockLibraryState>): void {
   setState(patch);
 }
 
-/** Restores the empty ready state and clears every spy's calls, keeping
- *  the default implementations. */
+/** Restores the empty ready state and resets every spy: calls cleared,
+ *  and any implementation a test set replaced by the default above. */
 export function resetLibraryStoreMock(): void {
   setState(initialState());
+  progressHandlers.clear();
+  droppedHandlers.clear();
   for (const value of Object.values(libraryStoreMock)) {
-    if (typeof value === "function" && "mockClear" in value) value.mockClear();
+    if (typeof value === "function" && "mockReset" in value) value.mockReset();
   }
 }

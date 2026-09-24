@@ -43,6 +43,7 @@ export function Showcase() {
   const [switched, setSwitched] = createSignal(false);
   const [sliderValue, setSliderValue] = createSignal(40);
   const [radioValue, setRadioValue] = createSignal("b");
+  const [projects, setProjects] = createSignal(["Brackets"]);
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
   const [dropActive, setDropActive] = createSignal(false);
@@ -170,6 +171,14 @@ export function Showcase() {
               { label: "Elegoo", options: ["Centauri Carbon", "Neptune 4"] },
               { label: "Prusa", options: ["MK4", "CORE One"] },
             ]}
+          />
+          <Combobox
+            multiple
+            label="Projects (multiple)"
+            placeholder={projects().length === 0 ? "Unfiled" : undefined}
+            options={["Brackets", "Calibration", "Enclosure parts"]}
+            value={projects()}
+            onChange={setProjects}
           />
         </div>
       </Panel>

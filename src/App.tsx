@@ -7,7 +7,16 @@ import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { LibraryWorkspace } from "./screens/LibraryWorkspace";
 import { SpoolInventory } from "./screens/SpoolInventory";
 import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
-import { library, startLibrary } from "./library/library-store";
+import { desktopAvailable } from "./ipc/client";
+import {
+  cancelSelection,
+  library,
+  onSelectionDropped,
+  pickFiles,
+  reportLibraryError,
+  startLibrary,
+} from "./library/library-store";
+import type { ImportSelectionSummary } from "./library/types";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -98,6 +107,51 @@ function App() {
     window.location.hash = serializeNavigationTarget(target).slice(1);
   };
   const setActive = (destination: ScreenId) => navigate({ version: 1, destination });
+
+  // The import dialog's selection, from the picker or a window drop (D7).
+  const [importSelection, setImportSelection] = createSignal<ImportSelectionSummary | null>(null);
+  // A file drag is over the window: only the hover highlight. Rust observes
+  // the drop itself and announces it as `library.selection.dropped`.
+  const [dropActive, setDropActive] = createSignal(false);
+  const startImport = () => {
+    void pickFiles("import").then((selection) => {
+      if (selection) setImportSelection(selection);
+    }).catch(reportLibraryError);
+  };
+  const openDroppedSelection = (selection: ImportSelectionSummary) => {
+    if (importSelection()) {
+      // One import at a time: a drop onto an open import dialog is dropped
+      // again, and its staging released.
+      void cancelSelection(selection.selectionId).catch(reportLibraryError);
+      return;
+    }
+    navigate({ version: 1, destination: "library" });
+    setImportSelection(selection);
+  };
+
+  onMount(() => {
+    const stopDropped = onSelectionDropped(openDroppedSelection);
+    let stopDrag: (() => void) | undefined;
+    let dragDisposed = false;
+    if (desktopAvailable()) {
+      // Loaded on demand: the webview API pulls in the whole window module,
+      // which web mode never needs.
+      void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        setDropActive(event.payload.type === "enter" || event.payload.type === "over");
+      })).then((unlisten) => {
+        if (dragDisposed) unlisten();
+        else stopDrag = unlisten;
+      }).catch(() => {
+        // Without the listener there is no drag highlight; dropping still
+        // works, since Rust observes the drop itself.
+      });
+    }
+    onCleanup(() => {
+      dragDisposed = true;
+      stopDrag?.();
+      stopDropped();
+    });
+  });
 
   onMount(() => {
     let disposed = false;
@@ -246,7 +300,13 @@ function App() {
         fallback={
           <Switch>
             <Match when={active() === "library"}>
-              <LibraryWorkspace navigate={navigate} />
+              <LibraryWorkspace
+                navigate={navigate}
+                onImport={startImport}
+                importSelection={importSelection()}
+                onImportClose={() => setImportSelection(null)}
+                dropActive={dropActive()}
+              />
             </Match>
             <Match when={active() === "spools"}>
               <SpoolInventory />
