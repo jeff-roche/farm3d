@@ -224,9 +224,11 @@ MoveSpoolResult {
 
 The command runs as one IMMEDIATE transaction:
 
-1. If a movement with this `operationId` already exists, return the current
-   state of the Spools it recorded. This is an idempotent replay and writes
-   nothing.
+1. Claim `operationId` in the operations ledger (below). If it is already
+   there for the same request, return the current state of the Spools and
+   Printers its movements recorded. This is an idempotent replay: it writes
+   nothing, emits nothing, and runs before the revision check. If it is
+   there for a different request, fail with `VALIDATION` on `operationId`.
 2. Check `expectedSpoolRevision`. A mismatch fails with `CONFLICT`.
 3. For a slot destination, compare the slot's current occupant with
    `expectedOccupantSpoolId`. A mismatch fails with `CONFLICT`, with
@@ -251,6 +253,38 @@ one storage label to another is allowed and writes a movement row.
 - The destination: `toSlotId` or `toStorageLabel`.
 
 The only thing that removes movement rows is Printer deletion (D10).
+
+**Operations ledger.** `move_spool`, `archive_printer` (D10), and
+`set_spool_lifecycle` (D9, D13) are idempotent by a client-generated
+`operationId`. Each claims its id in the `operations` table as the first
+step of its transaction, with the command's kind and a SHA-256 digest of the
+request fields that define it:
+
+- `move_spool`: `spoolId`, `expectedSpoolRevision`, and `destination`
+  (including `expectedOccupantSpoolId` and `displacedStorageLabel`).
+- `archive_printer`: `id`, `expectedRevision`, and `spoolDispositions`.
+- `set_spool_lifecycle`: `id`, `expectedRevision`, `action`, and
+  `storageLabel`.
+
+A new id is recorded and the command applies. The same kind and digest is a
+replay: nothing is written and no event is emitted. The result has the same
+shape as the first call's, built from the recorded movements where the
+operation wrote any, and otherwise from the current records. A replay
+returns current state, not a snapshot of the first result. Any other reuse
+(a different command, or the same command with different fields) is
+`VALIDATION` on `operationId` with the message "operationId was already used
+for a different request". The claim rolls back with a failed transaction, so
+a rejected request never uses up its id.
+
+Printer create's initial loads (D12) use a server-generated id and are not
+claimed, since no client can retry them. The ledger is append-only in
+spirit, and Printer deletion leaves its rows in place: they hold no foreign
+keys, and a stale id only ever blocks its own reuse.
+
+The client retries `move_spool`, `set_spool_lifecycle`, and
+`archive_printer` once, with the same `operationId`, when the call fails
+with a transport error rather than a `CommandError`. A `CommandError` is
+never retried.
 
 ### D7. Amount ledger, confidence, and corrections
 
@@ -405,6 +439,10 @@ ArchivePrinterRequest {
   `stop_and_wait`, then `printer.status.removed`.
 - A disposition that fails (for example a `CONFLICT` on the destination slot)
   rolls back the whole archive. Nothing is half-applied.
+- `operationId` is claimed in the operations ledger (D6) before the revision
+  check. A retry of the same request returns the Printer's current state
+  without writing. This holds even when the archive moved no Spools, so a
+  retry is a replay, not a `CONFLICT`.
 - An archived Printer keeps its slot layout and its movement history, and
   can be viewed.
 - Unarchive restores it with empty slots.
@@ -492,7 +530,7 @@ New commands are registered in `generate_handler!`, `COMMAND_NAMES`,
 | `update_spool` | `{ id, expectedRevision, patch }` → `SpoolMutationResult` |
 | `record_spool_amount` | `{ id, expectedRevision, entry, note? }` → `SpoolMutationResult` |
 | `move_spool` | `MoveSpoolRequest` → `MoveSpoolResult` |
-| `set_spool_lifecycle` | `{ id, expectedRevision, action, storageLabel? }` → `SpoolMutationResult` |
+| `set_spool_lifecycle` | `{ operationId, id, expectedRevision, action, storageLabel? }` → `SpoolMutationResult` |
 | `create_tare`, `update_tare`, `delete_tare` | the usual revisioned shapes → `TareMutationResult` |
 | `set_material_slot_layout` | see D12 → `PrinterMutationResult` |
 
@@ -517,6 +555,11 @@ It includes every Printer whose occupancy changed.
 `SPOOLS_LOADED` and `SPOOL_RESERVED`. `LIFECYCLE_BLOCKED` gets a message
 that isn't specific to Printers.
 
+`move_spool`, `set_spool_lifecycle`, and `archive_printer` take a required,
+client-generated `operationId` and are idempotent by it through the
+operations ledger (D6). Reusing an id for a different request is
+`VALIDATION` on `operationId`.
+
 The revision `CONFLICT` shape follows P2 (`classify_entity_write`).
 `ReservationError` is a Rust-only type until P7 maps it to a command error.
 
@@ -531,6 +574,7 @@ The revision `CONFLICT` shape follows P2 (`classify_entity_write`).
 - `repository.rs`: SQL.
 - `movement.rs`: D6, shared by `move_spool`, archive dispositions, and
   initial loads.
+- `operations.rs`: the D6 operations ledger.
 - `ledger.rs`: D7.
 - `reservations.rs`: D8.
 - `slots.rs`: layout, D12.
@@ -637,6 +681,13 @@ CREATE TABLE spool_reservations (
 ) STRICT;
 CREATE INDEX spool_reservations_open ON spool_reservations(spool_id)
   WHERE state IN ('active','unresolved');
+
+CREATE TABLE operations (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('moveSpool','archivePrinter','spoolLifecycle')),
+  request_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
 ```
 
 - **Rust post-step:** insert one `Main` slot (`slt-<uuid>`, position 0) for
@@ -806,7 +857,7 @@ will be deleted."
 |---|---|
 | Two loads race for one slot | The loser gets `CONFLICT` with the current occupant. Its optimistic move reverts, and the dialog stays open showing the new occupant. |
 | Spool revision stale | `CONFLICT`. The Spool reloads and the user retries. |
-| Move retried after a lost response | The same `operationId` replays and returns current state without a duplicate movement. |
+| Move, lifecycle action, or archive retried after a lost response | The client retries once with the same `operationId`. It replays and returns current state without writing again. |
 | Scale gross < tare | `VALIDATION` on `grossMg`, inline. |
 | Removing an occupied slot | `SLOT_OCCUPIED`. **Unload first** is offered. |
 | Archive a Printer with loaded Spools, no dispositions | `LIFECYCLE_BLOCKED` / `SPOOLS_LOADED`. The UI always prompts first, so this is a safety check. |

@@ -393,16 +393,12 @@ a covering test.
 
 Deferred from the final review. None blocks P3's acceptance criteria.
 
-- Replay by `operationId` doesn't compare the request payload, and
-  move/archive/lifecycle share one `operationId` namespace. Fix before P7.
 - The repository helpers rewrite whole Spool rows.
 - The Printers-import error is mapped from a magic-string field path.
 - The initial-load and loaded-count Spool logic lives in
   `printers/repository.rs`.
 - Batch create doesn't validate the shared slot layout up front.
 - `notes` has no length cap.
-- The client never retries a lost move with the same `operationId`.
-- `set_spool_lifecycle` has no `operationId`.
 - The web-fixture cold-deep-link occupancy race (see "Deviations and
   findings").
 
