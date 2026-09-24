@@ -360,15 +360,9 @@ impl PrinterRepository {
                 &digest,
             )? == Claim::Replay
             {
-                let mut printer = load_for_write(transaction, id)?;
-                printer.material_slots = slots::live_slots(transaction, id)?;
-                let outcome =
-                    movement::find_operation(transaction, operation_id)?.unwrap_or(MoveOutcome {
-                        spool_ids: Vec::new(),
-                        printer_ids: Vec::new(),
-                        movements: Vec::new(),
-                        replayed: true,
-                    });
+                let printer = load_in(transaction, id)?;
+                let outcome = movement::find_operation(transaction, operation_id)?
+                    .unwrap_or_else(|| MoveOutcome::empty(true));
                 return Ok((printer, outcome));
             }
             let printer = load_for_write(transaction, id)?;

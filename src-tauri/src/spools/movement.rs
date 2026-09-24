@@ -107,6 +107,27 @@ pub struct MoveOutcome {
     pub replayed: bool,
 }
 
+impl MoveOutcome {
+    /// No Spool, Printer, or movement to report — two "nothing found under
+    /// this operationId" fallbacks that differ only in `replayed`:
+    /// `archive_with_outcome`'s replay branch (`printers/repository.rs`,
+    /// `replayed: true` — the archive's dispositions wrote no movement, but
+    /// the claim itself was still a replay), and [`apply_moves`]'s
+    /// defensive "no rows found for a batch it just wrote" fallback
+    /// (`replayed: false`, immediately confirmed by its caller regardless).
+    /// [`recorded_or_unmoved`] needs its own literal instead — its
+    /// `spool_ids` isn't empty (it still names the Spool the caller asked
+    /// about).
+    pub(crate) fn empty(replayed: bool) -> Self {
+        Self {
+            spool_ids: Vec::new(),
+            printer_ids: Vec::new(),
+            movements: Vec::new(),
+            replayed,
+        }
+    }
+}
+
 /// One move of [`apply_moves`]'s batch — the same arguments [`apply_move`]
 /// takes for a single move, packaged so several can share one
 /// `operation_id`.
@@ -210,10 +231,11 @@ pub fn apply_move(
 /// `operation_id` — `spool_ids`/`printer_ids` deduped, `movements` in
 /// write order — via the same [`find_operation`] query a replay uses.
 ///
-/// There is no replay check here: the caller claims `operation_id` in the
-/// operations ledger first (`archive_printer`'s dispositions), or uses a
-/// fresh server-generated id (`printers/repository.rs`'s
-/// `create_with_layout`, for `initialLoads`, D12).
+/// This function performs no replay check itself: the caller claims
+/// `operation_id` in the operations ledger first (`spools/operations.rs`'s
+/// `claim`, e.g. `archive_printer`'s dispositions), or uses a fresh
+/// server-generated id (`printers/repository.rs`'s `create_with_layout`,
+/// for `initialLoads`, D12).
 pub fn apply_moves(
     tx: &Transaction<'_>,
     operation_id: &str,
@@ -234,12 +256,8 @@ pub fn apply_moves(
             request.reason_override,
         )?;
     }
-    let mut outcome = find_operation(tx, operation_id)?.unwrap_or(MoveOutcome {
-        spool_ids: Vec::new(),
-        printer_ids: Vec::new(),
-        movements: Vec::new(),
-        replayed: false,
-    });
+    let mut outcome =
+        find_operation(tx, operation_id)?.unwrap_or_else(|| MoveOutcome::empty(false));
     outcome.replayed = false;
     Ok(outcome)
 }
