@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::dispositions::{apply_dispositions, SpoolDispositionInput};
-use crate::spools::movement::{self, MoveDestination, MoveOutcome, MoveRequest};
+use crate::spools::movement::{self, MoveOutcome};
 use crate::spools::operations::{self, Claim, OperationKind};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
 
@@ -215,35 +215,12 @@ impl PrinterRepository {
                 )?;
             }
             let created_slots = slots::insert_layout(transaction, &printer.id, slot_layout)?;
-            if !initial_loads.is_empty() {
-                // Server-generated, so no client can retry it: not claimed
-                // in the operations ledger (D12).
-                let operation_id = format!("op-{}", uuid::Uuid::new_v4());
-                let mut moves = Vec::with_capacity(initial_loads.len());
-                for load in initial_loads {
-                    let slot =
-                        created_slots
-                            .get(load.slot_index)
-                            .ok_or(RepositoryError::Validation {
-                                field_path: "initialLoads",
-                            })?;
-                    moves.push(MoveRequest {
-                        spool_id: load.spool_id.clone(),
-                        expected_spool_revision: load.expected_spool_revision,
-                        destination: MoveDestination::Slot {
-                            slot_id: slot.id.clone(),
-                            expected_occupant_spool_id: None,
-                            displaced_storage_label: None,
-                        },
-                        reason_override: None,
-                    });
-                }
-                movement::apply_moves(transaction, &operation_id, &moves)?;
-                let (revision, updated_at): (i64, String) = transaction.query_row(
-                    "SELECT revision, updated_at FROM printers WHERE id = ?1",
-                    [&printer.id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
+            if let Some((revision, updated_at)) = crate::spools::initial_loads::apply_initial_loads(
+                transaction,
+                &printer.id,
+                &created_slots,
+                initial_loads,
+            )? {
                 printer.revision = revision;
                 printer.updated_at = updated_at;
             }
