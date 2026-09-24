@@ -1206,8 +1206,8 @@ The following have an owning phase and may not be silently decided elsewhere:
 | Operational-state precedence/staleness | P1 | Adapter status fixtures and UX states |
 | `group` to location migration | P1/P2 | Existing persisted files and approved vocabulary — **Resolved (P2)**: no migration exists or is needed. P2's `location` is new, durable Printer data (migration `0003_p2_printer_lifecycle.sql`); it does not derive from or replace any persisted `group` value. |
 | Batch CSV and host matching | P2 | User workflow plus discovery fixtures — **Resolved (P2)**: see the P2 design's D2 (canonical host identity), D10 (CSV/paste intake format and rules), and D12 (discovery mapping). |
-| Slot count/topology source | P3 | Catalog and real-hardware evidence |
-| Weight precision/material taxonomy | P3 | Inventory and slicer requirements |
+| Slot count/topology source | P3 | Catalog and real-hardware evidence — **Resolved (P3)**: see the P3 design's D4. `supportsMultiFilament` does not establish slot count, names, or topology (only 12 of 971 catalog variants set it, and the catalog has no AMS/MMU data), so P3 derives no slot layout automatically. Every Printer gets a user-configured, ordered layout of 1–16 named Material Slots, defaulting to one slot named "Main". |
+| Weight precision/material taxonomy | P3 | Inventory and slicer requirements — **Resolved (P3)**: see the P3 design's D1 (integer milligrams everywhere below the UI, grams-only display, one-decimal entry) and D2 (`MaterialFamily` is a closed enum drawn from the OrcaSlicer `filament_type` values at the catalog's pinned `v2.4.2` tag, plus `OTHER`). |
 | Parser and watcher libraries | P4 | Representative STL/3MF/G-code/platform fixtures |
 | Managed-content layout and hashing | P4 | Duplicate, revision, cleanup, backup requirements |
 | Geometry renderer | P5 | Accessibility, performance, format, and plate needs |

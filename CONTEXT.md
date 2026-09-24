@@ -149,9 +149,23 @@ measured or estimated amount remaining. Reserved material is still part of
 the Spool until a Job consumes it.
 _Avoid_: Filament profile, material preset
 
+**Spool number**:
+A small sequential integer shown as `#12`, meant for writing on the physical
+Spool. The stable id stays internal.
+
+**Tare**:
+A reusable, named empty-spool weight (for example "Polymaker cardboard
+1 kg"). Subtracting it from a scale reading gives the net amount.
+
+**Storage label**:
+An optional free-text name for where a Spool sits when it is not in a
+Material Slot (for example "Dry box 2"). Like Printer Location, it is a
+label, not an entity.
+
 **Material Slot**:
 A named physical position on a Printer or attached feeder that can hold one
-Spool. A Printer has one or more Material Slots.
+Spool. A Printer has one or more Material Slots. Layouts are user-configured;
+there is no automatic AMS topology.
 _Avoid_: Bay, feeder (unless naming the hardware)
 
 **Incident**:
