@@ -227,11 +227,11 @@ export function SpoolInventory() {
           items={[{ label: "Manage tares…", onSelect: () => setTareOpen(true) }]}
         />
       </div>
-      <Show
-        when={spoolState.loaded}
-        fallback={<p class={styles.loadingNotice} role="status">Loading Spools…</p>}
-      >
-        <div ref={workspace} class={styles.workspace}>
+      <div ref={workspace} class={styles.workspace}>
+        <Show
+          when={spoolState.loaded}
+          fallback={<p class={styles.loadingNotice} role="status">Loading Spools…</p>}
+        >
           <div class={styles.content}>
             <DataTable
               label="Spools"
@@ -257,8 +257,8 @@ export function SpoolInventory() {
             />
           </div>
           <SpoolDetailDock spool={selectedSpool()} mode={dockMode()} onClose={() => goTo(null)} />
-        </div>
-      </Show>
+        </Show>
+      </div>
       <SpoolFormDialog open={addOpen()} onOpenChange={setAddOpen} />
       <TareManagerDialog open={tareOpen()} onOpenChange={setTareOpen} />
     </div>

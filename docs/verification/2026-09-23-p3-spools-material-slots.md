@@ -106,11 +106,17 @@ Checked, with screenshots in `docs/screenshots/p3-*.png`:
   non-matching string shows "No Spools match" and a **Clear filters**
   button, distinct from the (unshown, but code-reviewed) true empty state's
   "No Spools yet — Add Spool".
-- **Detail history** (`p3-detail-history-1440x900.png`): selecting a row
-  opens the right dock (`#nav=v1/spools/spool/spl-web-1`), showing the color
-  swatch, remaining amount, location, action row (Record amount / Move… /
-  Unload / Edit / Lifecycle…), and the `Timeline`-based History list with
-  its first "Initial 812 g" entry.
+- **Detail history** (`p3-detail-history-1440x900.png`,
+  `p3-detail-history-1024x700.png`): selecting a row opens the detail dock
+  (`#nav=v1/spools/spool/spl-web-1`), showing the color swatch, remaining
+  amount, location, action row (Record amount / Move… / Unload / Edit /
+  Lifecycle…), and the `Timeline`-based History list with its first
+  "Initial 812 g" entry. At 1440 wide it docks inline on the right, same as
+  `PrinterDashboard`'s 66rem threshold rule; at 1024 wide (below the
+  threshold) it correctly still overlays as a centered dialog. See
+  "Deviations and findings" below — the first pass of this screenshot was
+  taken before a dock-mode bug was fixed, and showed the overlay at 1440
+  wide instead.
 - **Move — swap** (`p3-move-swap-1440x900.png`): opening Move… on Spool `#2`
   (in storage), choosing Printer → "Elegoo Centauri Carbon — Bay 1" → "Slot
   1 (AMS 1) — occupied by #1 PLA Galaxy Black" surfaces "Swap: #1 PLA
@@ -316,6 +322,23 @@ verification:
   controller ledger at each task's completion line and are not repeated
   here; none of them affect the acceptance criteria above or block P7's
   consumption of the reservation primitives.
+- **Dock-mode bug found during this pass's browser verification, fixed in
+  this commit.** The first `p3-detail-history-1440x900.png` capture showed
+  the Spool detail dock as a centered overlay dialog at 1440 wide, not the
+  inline right dock the surrounding prose described. Root cause:
+  `SpoolInventory.tsx`'s `workspace` ref (the element the `onMount`
+  `ResizeObserver` measures to pick `"inline"` vs. `"overlay"`) lived inside
+  `<Show when={spoolState.loaded}>`, which is false at mount — so the
+  observer was never attached, and `dockMode` stayed at its `"overlay"`
+  default forever, regardless of actual window width, once the inventory
+  (and a deep-linked Spool) loaded in. Fixed by rendering the `workspace`
+  container unconditionally (moving `<Show>` inside it), mirroring
+  `PrinterDashboard.tsx`'s pattern, so the same 66rem threshold rule now
+  actually takes effect. A regression test was added to
+  `SpoolInventory.test.tsx` covering exactly this timing (inventory not yet
+  loaded at mount, wide workspace, dock renders inline once loaded). Both
+  `p3-detail-history-*.png` screenshots above were recaptured after the fix
+  and now correctly show inline-at-1440/overlay-at-1024.
 
 ## Files changed in this task
 
@@ -327,8 +350,15 @@ verification:
 - `docs/superpowers/plans/2026-09-16-complete-v1-implementation-approach.md`:
   marked the "Slot count/topology source" and "Weight precision/material
   taxonomy" known-unknowns resolved, pointing at spec D1, D2, and D4.
-- `docs/screenshots/p3-*.png` (new, 10 files): the visual/keyboard
-  verification screenshots listed above.
+- `docs/screenshots/p3-*.png` (new, 11 files): the visual/keyboard
+  verification screenshots listed above, including the fix-round-1
+  recapture of `p3-detail-history-1440x900.png` and the new
+  `p3-detail-history-1024x700.png`.
 - `docs/verification/2026-09-23-p3-spools-material-slots.md` (this file).
+- `src/screens/SpoolInventory.tsx`: fix-round-1 dock-mode bug fix (render
+  `workspace` unconditionally so the `ResizeObserver` attaches even while
+  the inventory is still loading at mount).
+- `src/screens/SpoolInventory.test.tsx`: fix-round-1 regression test for the
+  above.
 - 20 pre-existing Rust source/test files, reformatted only, in the separate
   `style: apply cargo fmt` commit (deferred from Task 4).

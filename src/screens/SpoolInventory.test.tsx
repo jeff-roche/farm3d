@@ -1,3 +1,4 @@
+import { createStore } from "solid-js/store";
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SpoolInventory } from "./SpoolInventory";
@@ -6,11 +7,29 @@ import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 
 const loadInventory = vi.fn();
 const loadHistory = vi.fn();
-let spools: SpoolRecord[] = [];
+
+interface MockSpoolStoreState {
+  spools: SpoolRecord[];
+  tares: unknown[];
+  loaded: boolean;
+  pending: Record<string, unknown>;
+}
+
+/** A real Solid store (not a plain getter) so `<Show when={spoolState.loaded}>`
+ *  reacts when a test flips `loaded` after the component has already
+ *  mounted -- exercising the same timing the real `spool-store.ts` module
+ *  produces while `loadInventory()`'s promise is still in flight. */
+const [spoolStoreState, setSpoolStoreState] = createStore<MockSpoolStoreState>({
+  spools: [], tares: [], loaded: true, pending: {},
+});
+
+function setSpools(list: SpoolRecord[]) {
+  setSpoolStoreState({ spools: list });
+}
 
 vi.mock("../spools/spool-store", () => ({
   get spoolState() {
-    return { spools, tares: [], loaded: true, pending: {} };
+    return spoolStoreState;
   },
   loadInventory: (...args: unknown[]) => loadInventory(...args),
   spoolStoreError: () => null,
@@ -54,28 +73,29 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  spools = [];
+  vi.unstubAllGlobals();
+  setSpoolStoreState({ spools: [], tares: [], loaded: true, pending: {} });
 });
 
 describe("SpoolInventory", () => {
   it("shows the fixture rows", () => {
-    spools = [
+    setSpools([
       spool({ id: "spl-1", spoolNumber: 1 }),
       spool({ id: "spl-2", spoolNumber: 2, colorName: "Clear" }),
-    ];
+    ]);
     render(() => <SpoolInventory />);
     expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getByText("#2")).toBeInTheDocument();
   });
 
   it("narrows the rows when the Low and Estimated chips are toggled", async () => {
-    spools = [
+    setSpools([
       spool({ id: "spl-1", spoolNumber: 1 }),
       spool({
         id: "spl-2", spoolNumber: 2,
         facets: { loaded: false, reserved: false, low: true, confidence: "estimated" },
       }),
-    ];
+    ]);
     render(() => <SpoolInventory />);
     expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getByText("#2")).toBeInTheDocument();
@@ -97,7 +117,7 @@ describe("SpoolInventory", () => {
   });
 
   it("shows 'No Spools match' and Clear filters when the filters exclude everything", async () => {
-    spools = [spool({ id: "spl-1", spoolNumber: 1 })];
+    setSpools([spool({ id: "spl-1", spoolNumber: 1 })]);
     render(() => <SpoolInventory />);
     await fireEvent.click(screen.getByRole("button", { name: "Low" }));
     expect(screen.getByText("No Spools match")).toBeInTheDocument();
@@ -105,17 +125,17 @@ describe("SpoolInventory", () => {
   });
 
   it("shows 'No Spools yet' and Add Spool with no Spools at all", () => {
-    spools = [];
+    setSpools([]);
     render(() => <SpoolInventory />);
     expect(screen.getByText("No Spools yet")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Add Spool" }).length).toBeGreaterThan(0);
   });
 
   it("sets the deep link and opens the detail dock when a row is selected by keyboard", async () => {
-    spools = [
+    setSpools([
       spool({ id: "spl-1", spoolNumber: 1 }),
       spool({ id: "spl-2", spoolNumber: 2 }),
-    ];
+    ]);
     render(() => <SpoolInventory />);
     const grid = screen.getByRole("grid", { name: "Spools" });
     grid.focus();
@@ -126,5 +146,39 @@ describe("SpoolInventory", () => {
     });
     expect(window.location.hash).toBe("#nav=v1/spools/spool/spl-1");
     expect(await screen.findByText("#1 PLA Black")).toBeInTheDocument();
+  });
+
+  it("keeps the dock inline on a wide workspace even when the inventory hasn't loaded yet at mount", async () => {
+    // Regression test: the workspace `ref` used to live inside
+    // `<Show when={spoolState.loaded}>`, so the `onMount` that measures the
+    // workspace width and attaches the `ResizeObserver` bailed out
+    // (`if (!workspace) return`) whenever the inventory was still loading
+    // at mount -- exactly the case here. `dockMode` was then stuck at its
+    // "overlay" default forever, even on a workspace wide enough for the
+    // inline dock, once the inventory (and the selected Spool) arrived.
+    class WideWorkspaceObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width: 1440 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", WideWorkspaceObserver);
+
+    setSpoolStoreState({ loaded: false, spools: [] });
+    navigation.navigate({
+      version: 1, destination: "spools", selection: { kind: "spool", id: "spl-1" },
+    }, { availableDestinations: ["spools"], availableIds: [] });
+
+    render(() => <SpoolInventory />);
+    expect(screen.getByText("Loading Spools…")).toBeInTheDocument();
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    setSpoolStoreState({ loaded: true, spools: [spool({ id: "spl-1", spoolNumber: 1 })] });
+
+    expect(await screen.findByRole("complementary", { name: "Spool 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
