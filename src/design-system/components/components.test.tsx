@@ -134,6 +134,15 @@ describe("Select", () => {
 
     expect(onChange).toHaveBeenCalledWith("Banana");
   });
+
+  it("renders an error message and describes the trigger with it", () => {
+    render(() => <Select label="Fruit" options={["Apple", "Banana"]} error="Pick another fruit" />);
+
+    const message = screen.getByText("Pick another fruit");
+    expect(message.id).not.toBe("");
+    const describedBy = screen.getByRole("button").getAttribute("aria-describedby") ?? "";
+    expect(describedBy.split(" ")).toContain(message.id);
+  });
 });
 
 describe("Combobox", () => {

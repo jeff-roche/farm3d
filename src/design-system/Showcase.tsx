@@ -150,7 +150,10 @@ export function Showcase() {
       </Panel>
 
       <Panel title="Select">
-        <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
+        <div class={styles.column}>
+          <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
+          <Select label="With error" options={["Apple", "Banana", "Cherry"]} error="That option no longer exists." />
+        </div>
       </Panel>
 
       <Panel title="Combobox">
