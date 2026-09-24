@@ -1781,6 +1781,9 @@ mod tests {
     /// OrcaSlicer's layout: the start part requires `p`, each object's mesh
     /// lives in its own part named through `3D/_rels/3dmodel.model.rels`,
     /// and `Metadata/model_settings.config` groups objects into plates.
+    /// The real `orca-two-plates.3mf` is checked by `tests/library_fixtures.rs`;
+    /// this one adds what headless Orca doesn't write: a plate name, a paint
+    /// attribute, a plate thumbnail, and embedded G-code.
     fn orca_layout() -> Vec<u8> {
         let root = model(
             &format!(" xmlns:p=\"{PRODUCTION_NS}\" requiredextensions=\"p\""),
