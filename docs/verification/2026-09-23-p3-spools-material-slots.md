@@ -207,7 +207,8 @@ Still **unavailable**:
   the user's own unrelated windows (this is a live workstation, not an
   isolated test display) — capturing and inspecting that would expose
   content outside the scope of this task, so it was not done. The process
-  was stopped afterward.
+  was stopped afterward. **Update (2026-09-24):** the user ran `just dev`
+  on the final branch and confirmed the desktop app renders correctly.
 - Live connected-Printer probing and supervision against real hardware. No
   hardware was available; this is unrelated to P3, which uses no printer
   Connections in its own tests (every P3 test Printer is Profile-only or
