@@ -18,6 +18,10 @@ test-rust:
 gen-contracts:
     cargo test --locked --manifest-path src-tauri/Cargo.toml --test export_contracts regenerate_contracts -- --ignored --exact
 
+# Regenerate the generated Library format fixtures (never the *.expected.json oracles)
+gen-library-fixtures:
+    cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
+
 # Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
 gen-catalog tag="v2.4.2":
     cargo run --manifest-path src-tauri/Cargo.toml --features catalog-generator --bin gen-catalog -- {{ tag }}
