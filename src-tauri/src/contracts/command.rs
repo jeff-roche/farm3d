@@ -708,6 +708,23 @@ impl CommandError {
         error
     }
 
+    /// P4 D2: a stored blob no longer matches its SHA-256 (or an existing
+    /// blob's size disagrees with bytes of the same hash). The Library shows
+    /// "Stored copy is damaged"; P4 offers no repair.
+    pub fn content_corrupt() -> Self {
+        let mut error = Self::typed(
+            ErrorCode::CorruptData,
+            "A stored copy is damaged.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "sourceName".to_string(),
+            JsonValue::String("content".to_string()),
+        )]));
+        error
+    }
+
     pub fn corrupt_import(source: &str) -> Self {
         let mut error = Self::typed(
             ErrorCode::CorruptData,

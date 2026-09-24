@@ -383,7 +383,10 @@ pub(super) fn classify_lock_error(error: std::fs::TryLockError) -> StorageError 
     }
 }
 
-fn create_contained_directory(base: &Path, relative: &Path) -> Result<PathBuf, StorageError> {
+pub(crate) fn create_contained_directory(
+    base: &Path,
+    relative: &Path,
+) -> Result<PathBuf, StorageError> {
     let mut candidate = base.to_path_buf();
     for component in relative.components() {
         candidate.push(component);

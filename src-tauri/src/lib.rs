@@ -219,6 +219,11 @@ fn build_runtime_services<R: tauri::Runtime>(
     settings::repository::SettingsRepository::new(Arc::clone(&storage))
         .ensure_default()
         .map_err(startup_error)?;
+    // P4 D4: reconcile the content store before any command is served. The
+    // store is dropped here; `LibraryServices` opens the long-lived one.
+    library::content::ContentStore::open(storage.paths().content_root())
+        .and_then(|content| content.startup_sweep(&storage))
+        .map_err(startup_error)?;
 
     let resource_path = app
         .path()

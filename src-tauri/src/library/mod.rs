@@ -10,6 +10,7 @@
 //! constraints mirror, the persisted `Project`/`Model`/`ModelSourceRevision`
 //! row shapes, and name validation (D1).
 
+pub mod content;
 pub mod repository;
 
 use serde::{Deserialize, Serialize};
