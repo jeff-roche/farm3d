@@ -28,10 +28,22 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just web` | `npm run dev` | Run just the frontend in a browser at `localhost:1420` (no Tauri/Rust) |
 | `just build` | `npm run build` | Type-check and build the frontend for production |
 | `just package` | `NO_STRIP=1 npm run tauri build` (Linux) | Build clean distributable bundles, then reject any bundle that contains the developer-only catalog generator; Linux disables linuxdeploy's legacy strip step because it cannot parse modern `.relr.dyn` sections |
+| `just package-arch` | — | Repackage the `.deb` from `just package` into an Arch Linux `.pkg.tar.zst` (Tauri's bundler has no pacman target); requires `just package` to have run first — see [`packaging/arch/PKGBUILD`](./packaging/arch/PKGBUILD) |
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
 | `just test-rust` | — | Run the Tauri backend's Rust test suite |
 | `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
 | `just gen-contracts` | — | Regenerate committed TypeScript contracts from Rust wire types |
+
+## Packaging
+
+`just package` builds `.deb`, `.rpm` and AppImage bundles. On Arch Linux,
+`just package-arch` repackages that `.deb` into a pacman package instead of
+building one from scratch (see [`packaging/arch/PKGBUILD`](./packaging/arch/PKGBUILD)
+for how). Install the result with:
+
+```sh
+sudo pacman -U packaging/arch/farm3d-bin-*.pkg.tar.zst
+```
 
 ## Project structure
 

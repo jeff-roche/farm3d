@@ -18,6 +18,13 @@ dist-ssr
 # Subagent-driven-development scratch workspace (ledgers, briefs, reports)
 .superpowers
 
+# makepkg build artifacts and the .deb staged by `just package-arch`
+# (packaging/arch/PKGBUILD itself stays tracked)
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/*.pkg.tar.zst
+packaging/arch/*.deb
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
