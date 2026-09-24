@@ -356,8 +356,9 @@ It never happens silently.
 
 - **Unset controls** take the chosen process preset's value, and the
   panel shows which value that is.
-- **Key check.** Before every run, each mapped key must be *known* to the
-  preset source. A key is known when it appears in at least one preset of
+- **Key check.** Before every run, each mapped key that the run actually
+  writes must be *known* to the preset source. Keys the run doesn't write
+  are not checked (Task 4 ruling). A key is known when it appears in at least one preset of
   the same kind in the index (D3).
   - A single flat preset is not a reliable test, because presets leave out
     keys that keep their default value. For example, v2.4.2's
