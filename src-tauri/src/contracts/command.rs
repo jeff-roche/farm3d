@@ -307,6 +307,20 @@ pub enum ErrorCode {
     SourceContentDiffers,
     SourceUnavailable,
     UnsupportedFormat,
+    /// P5 D2: no accepted OrcaSlicer engine is available.
+    SlicerUnavailable,
+    /// P5 D2: no readable preset source is available.
+    PresetSourceUnavailable,
+    /// P5 D3: the preset source has no preset by this name.
+    PresetNotFound,
+    /// P5 D3: a preset's `inherits` chain can't be resolved.
+    PresetInvalid,
+    /// P5 D3: the filament preset is not offered for the machine preset.
+    FilamentIncompatible,
+    /// P5 D4: a Printer Profile override has no row in the mapping table.
+    UnmappedProfileOverride,
+    /// P5 D4: a mapped key is unknown to the preset source.
+    UnsupportedSettingForRuntime,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -701,6 +715,104 @@ impl CommandError {
         }
         error.details = Some(details);
         error
+    }
+
+    fn with_string_details(mut self, details: &[(&str, &str)]) -> Self {
+        self.details = Some(
+            details
+                .iter()
+                .map(|(key, value)| (key.to_string(), JsonValue::String(value.to_string())))
+                .collect(),
+        );
+        self
+    }
+
+    /// P5 D2: no accepted engine. `reason` names no full path.
+    pub fn slicer_unavailable(reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::SlicerUnavailable,
+            format!("OrcaSlicer is not available: {reason}"),
+            vec![],
+            false,
+        )
+        .with_string_details(&[("reason", reason)])
+    }
+
+    /// P5 D2: no readable preset source. `reason` names no full path.
+    pub fn preset_source_unavailable(reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetSourceUnavailable,
+            format!("No OrcaSlicer presets are available: {reason}"),
+            vec![],
+            false,
+        )
+        .with_string_details(&[("reason", reason)])
+    }
+
+    /// P5 D3: `kind` is `machine`, `process`, or `filament`.
+    pub fn preset_not_found(kind: &str, preset: &str, preset_source_version: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetNotFound,
+            format!("OrcaSlicer {preset_source_version} has no {kind} preset named \"{preset}\"."),
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[
+            ("kind", kind),
+            ("preset", preset),
+            ("presetSourceVersion", preset_source_version),
+        ])
+    }
+
+    /// P5 D3: `preset` can't be flattened (a cycle, a chain deeper than
+    /// 20, a missing parent, or an unreadable file).
+    pub fn preset_invalid(kind: &str, preset: &str, reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetInvalid,
+            format!("The {kind} preset \"{preset}\" can't be used: {reason}"),
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[("kind", kind), ("preset", preset), ("reason", reason)])
+    }
+
+    /// P5 D3: OrcaSlicer would silently slice with this filament (Gate F),
+    /// so farm3d refuses it.
+    pub fn filament_incompatible(filament_preset: &str, machine_preset: &str) -> Self {
+        Self::typed(
+            ErrorCode::FilamentIncompatible,
+            format!(
+                "The filament preset \"{filament_preset}\" is not made for \"{machine_preset}\"."
+            ),
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[
+            ("filamentPreset", filament_preset),
+            ("machinePreset", machine_preset),
+        ])
+    }
+
+    /// P5 D4: `field` is the override's `PrinterProfile` field name.
+    pub fn unmapped_profile_override(field: &str) -> Self {
+        Self::typed(
+            ErrorCode::UnmappedProfileOverride,
+            format!("The Printer Profile override \"{field}\" can't be applied to a slice."),
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[("field", field)])
+    }
+
+    /// P5 D4: the preset source doesn't know the OrcaSlicer key `key`.
+    pub fn unsupported_setting_for_runtime(key: &str, preset_source_version: &str) -> Self {
+        Self::typed(
+            ErrorCode::UnsupportedSettingForRuntime,
+            format!("OrcaSlicer {preset_source_version} does not support the setting \"{key}\"."),
+            vec![],
+            false,
+        )
+        .with_string_details(&[("key", key), ("presetSourceVersion", preset_source_version)])
     }
 
     /// D7: an action (a Printer's archive/delete, or a Spool's archive/

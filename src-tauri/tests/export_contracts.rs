@@ -683,6 +683,13 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::SourceContentDiffers,
         ErrorCode::SourceUnavailable,
         ErrorCode::UnsupportedFormat,
+        ErrorCode::SlicerUnavailable,
+        ErrorCode::PresetSourceUnavailable,
+        ErrorCode::PresetNotFound,
+        ErrorCode::PresetInvalid,
+        ErrorCode::FilamentIncompatible,
+        ErrorCode::UnmappedProfileOverride,
+        ErrorCode::UnsupportedSettingForRuntime,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -706,7 +713,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "PRINTER_UNREACHABLE", "AUTHENTICATION_FAILED", "PROTOCOL_ERROR",
                 "TIMEOUT", "INCOMPATIBLE_CONTRACT_VERSION", "INTERNAL",
                 "SELECTION_EXPIRED", "SOURCE_CONTENT_DIFFERS", "SOURCE_UNAVAILABLE",
-                "UNSUPPORTED_FORMAT"
+                "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
+                "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
+                "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
