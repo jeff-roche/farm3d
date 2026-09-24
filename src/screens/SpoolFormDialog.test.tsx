@@ -100,6 +100,22 @@ describe("SpoolFormDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("shows a VALIDATION rejection inline under the Notes field and stays open", async () => {
+    createSpool.mockRejectedValue({
+      contractVersion: 1, code: "VALIDATION", message: "Notes must be at most 2000 characters.",
+      recovery: ["EDIT_FIELDS"], retryable: false, details: { fieldPath: "notes" },
+    });
+    const onOpenChange = vi.fn();
+    render(() => <SpoolFormDialog open onOpenChange={onOpenChange} />);
+
+    await fillRequiredFields();
+    await fireEvent.click(screen.getByRole("button", { name: "Add Spool" }));
+
+    expect(await screen.findByText("Notes must be at most 2000 characters.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Notes (optional)")).toHaveAttribute("aria-invalid", "true");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("lets the user correct a rejected gross weight and resubmit (fix round 2)", async () => {
     createSpool.mockRejectedValueOnce({
       contractVersion: 1, code: "VALIDATION", message: "The gross weight is less than the tare.",

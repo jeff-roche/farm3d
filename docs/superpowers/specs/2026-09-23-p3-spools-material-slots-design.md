@@ -140,6 +140,7 @@ invented.
 - The color name is required, 1–32 chars. The color swatch is optional,
   `#RRGGBB`. Color is supplemental: every list shows the color name, never the
   swatch alone.
+- Notes (optional) are free text, trimmed, at most 2000 Unicode scalar values.
 - Facet filtering is by family. Later slicer matching (P5/P7) uses the family
   plus diameter.
 

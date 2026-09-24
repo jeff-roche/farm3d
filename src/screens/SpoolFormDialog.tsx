@@ -53,7 +53,7 @@ const DIAMETER_OPTIONS: { value: FilamentDiameter; label: string }[] = [
  *  slot) falls back to the dialog-level message. */
 const FIELD_ERROR_PATHS = new Set([
   "manufacturer", "product", "materialOther", "colorName", "colorHex",
-  "nominalMg", "lowThresholdMg", "entry.netMg", "entry.grossMg",
+  "nominalMg", "lowThresholdMg", "notes", "entry.netMg", "entry.grossMg",
 ]);
 
 /** Add/Edit (D2/D3/D7 §Components: `SpoolFormDialog`). Add also collects
@@ -133,6 +133,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   const onColorHexChange = (value: string) => { setColorHex(value); clearServerFieldError("colorHex"); };
   const onNominalGramsChange = (value: number | undefined) => { setNominalGrams(value); clearServerFieldError("nominalMg"); };
   const onLowThresholdGramsChange = (value: number | undefined) => { setLowThresholdGrams(value); clearServerFieldError("lowThresholdMg"); };
+  const onNotesChange = (value: string) => { setNotes(value); clearServerFieldError("notes"); };
   const onMeasuredGramsChange = (value: number | undefined) => { setMeasuredGrams(value); clearServerFieldError("entry.netMg"); };
   const onGrossGramsChange = (value: number | undefined) => { setGrossGrams(value); clearServerFieldError("entry.grossMg"); };
   const onTareIdChange = (value: string) => {
@@ -300,7 +301,13 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
         <Show when={!isEdit()}>
           <TextField label="Storage label (optional)" value={storageLabel()} onChange={setStorageLabel} />
         </Show>
-        <Textarea label="Notes (optional)" value={notes()} onChange={setNotes} rows={2} />
+        <Textarea
+          label="Notes (optional)"
+          value={notes()}
+          onChange={onNotesChange}
+          rows={2}
+          errorMessage={serverFieldErrorFor("notes")}
+        />
         <Show when={!isEdit()}>
           <div class={styles.amount}>
             <Chip selected={weighed()} onSelectedChange={setWeighed}>I weighed it</Chip>

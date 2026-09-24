@@ -382,6 +382,9 @@ pub fn validate_fields(fields: &SpoolFields) -> Result<(), RepositoryError> {
     if let Some(color_hex) = &normalized.color_hex {
         validate_color_hex(color_hex)?;
     }
+    if let Some(notes) = &normalized.notes {
+        validate_len(notes, 1, 2000, "notes")?;
+    }
     if !weight::NOMINAL_MG_RANGE.contains(&normalized.nominal_mg) {
         return Err(RepositoryError::Validation {
             field_path: "nominalMg",
@@ -441,6 +444,29 @@ mod tests {
 
         fields.manufacturer = "x".repeat(64);
         assert!(validate_fields(&fields).is_ok());
+    }
+
+    #[test]
+    fn notes_are_optional_but_capped_at_two_thousand_chars() {
+        let mut fields = valid_fields();
+        assert!(fields.notes.is_none());
+        assert!(validate_fields(&fields).is_ok());
+
+        fields.notes = Some("x".repeat(2000));
+        assert!(validate_fields(&fields).is_ok());
+
+        // D2: Unicode scalar values, not bytes -- 2000 multi-byte characters
+        // must still pass.
+        fields.notes = Some("é".repeat(2000));
+        assert!(validate_fields(&fields).is_ok());
+
+        fields.notes = Some("x".repeat(2001));
+        assert!(matches!(
+            validate_fields(&fields),
+            Err(RepositoryError::Validation {
+                field_path: "notes"
+            })
+        ));
     }
 
     #[test]

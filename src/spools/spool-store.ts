@@ -503,6 +503,17 @@ function nextWebSpoolNumber(): number {
   return state.spools.reduce((max, s) => Math.max(max, s.spoolNumber), 0) + 1;
 }
 
+/** D2: `notes` is capped at 2000 Unicode scalar values (trimmed), the same
+ *  limit Rust's `validate_fields` enforces (`spools/mod.rs`). Web-only: the
+ *  desktop path never re-derives this -- it trusts the command's own
+ *  `VALIDATION` rejection. `[...text]` counts code points, not UTF-16 code
+ *  units, matching Rust's `chars().count()`. */
+function validateNotesCap(notes: string | undefined): void {
+  if (notes !== undefined && [...notes.trim()].length > 2000) {
+    throw commandError("VALIDATION", "Notes must be at most 2000 characters.", { fieldPath: "notes" });
+  }
+}
+
 /** Resolves a scale/net amount entry to milligrams. Web-only: the desktop
  *  path never computes this itself -- `record_spool_amount`/`create_spool`
  *  do (D3/D7). */
@@ -543,6 +554,7 @@ function webFacets(
 }
 
 async function webCreateSpool(fields: SpoolFields, initialAmount: AmountEntry, storageLabel?: string): Promise<SpoolRecord> {
+  validateNotesCap(fields.notes);
   const { mg, confidence } = resolveWebAmountEntry(initialAmount);
   const now = new Date().toISOString();
   const spool: SpoolRecord = {
@@ -586,6 +598,7 @@ export async function updateSpool(id: string, patch: SpoolFields): Promise<Spool
   if (!desktopAvailable()) {
     const existing = state.spools.find((s) => s.id === id);
     if (!existing) throw commandError("NOT_FOUND", "This Spool no longer exists.");
+    validateNotesCap(patch.notes);
     const updated: SpoolRecord = {
       ...existing,
       ...patch,

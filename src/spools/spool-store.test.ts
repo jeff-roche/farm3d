@@ -890,6 +890,29 @@ describe("web mode", () => {
     expect(spoolState.spools.find((s) => s.id === created!.id)?.tareId).toBeUndefined();
   });
 
+  it("caps notes at 2000 characters in the fixture, matching Rust's validate_fields", async () => {
+    const { loadInventory, createSpool, updateSpool, spoolState: state } = await import("./spool-store");
+    await loadInventory();
+
+    const baseFields = {
+      manufacturer: "Test Co", materialFamily: "PLA" as const, colorName: "Blue",
+      diameter: "1.75" as const, nominalMg: 1_000_000, lowThresholdMg: 100_000,
+    };
+    const initialAmount = { kind: "net" as const, netMg: 1_000_000, confidence: "estimated" as const };
+
+    await expect(createSpool(
+      { ...baseFields, notes: "x".repeat(2001) },
+      initialAmount,
+    )).rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "notes" } });
+
+    const created = await createSpool({ ...baseFields, notes: "x".repeat(2000) }, initialAmount);
+    expect(created?.notes).toBe("x".repeat(2000));
+
+    const target = state.spools[0];
+    await expect(updateSpool(target.id, { ...baseFields, notes: "x".repeat(2001) }))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "notes" } });
+  });
+
   it("recordAmount rejects a scale entry whose gross is less than its tare, with fieldPath entry.grossMg", async () => {
     const { loadInventory, recordAmount, spoolState: state } = await import("./spool-store");
     await loadInventory();
