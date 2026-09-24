@@ -2,7 +2,7 @@ pub mod inherits;
 pub mod shape;
 
 use crate::catalog::{CatalogModel, CatalogVariant, PointMm};
-use inherits::{resolve_machine_preset, InheritsError};
+use inherits::{resolve_preset, InheritsError};
 use serde_json::Value;
 use shape::{parse_printable_area, ShapeError};
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ impl std::fmt::Display for IngestError {
 
 impl From<InheritsError> for IngestError {
     fn from(e: InheritsError) -> Self {
-        IngestError::Json(e.0)
+        IngestError::Json(e.message)
     }
 }
 
@@ -104,7 +104,7 @@ pub fn ingest_profiles_dir(dir: &Path) -> Result<Vec<CatalogModel>, IngestError>
                     Some(n) => n,
                     None => continue,
                 };
-                let resolved = match resolve_machine_preset(&index, variant_name) {
+                let resolved = match resolve_preset(&index, variant_name) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
