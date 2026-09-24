@@ -7,10 +7,18 @@
 //!
 //! The generator never writes or deletes `*.expected.json`. Those files are
 //! hand-written oracles and must stay independent of any code under test.
+//!
+//! `every_fixture_matches_its_expected_inspection` runs detection and
+//! inspection over every fixture that has an oracle. A fixture without one
+//! (for example a slicer export that couldn't be produced) is skipped.
 
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+
+use farm3d_lib::library::content::CancelFlag;
+use farm3d_lib::library::formats::{self, InspectError, InspectOutcome};
+use serde_json::Value;
 
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
@@ -393,4 +401,121 @@ fn regenerate_library_fixtures() {
         );
         fs::write(dir.join(name), bytes).expect("write fixture");
     }
+}
+
+const EXPECTED_SUFFIX: &str = ".expected.json";
+const FLOAT_TOLERANCE: f64 = 1e-4;
+
+fn inspect_fixture(path: &Path) -> Result<InspectOutcome, InspectError> {
+    let detected = formats::detect(path)?;
+    formats::inspect(path, &detected, &CancelFlag::never())
+}
+
+/// Structural equality, with numbers equal within [`FLOAT_TOLERANCE`].
+fn assert_matches(actual: &Value, expected: &Value, at: &str, fixture: &str) {
+    match (actual, expected) {
+        (Value::Number(a), Value::Number(e)) => {
+            let (a, e) = (a.as_f64().unwrap(), e.as_f64().unwrap());
+            assert!(
+                (a - e).abs() <= FLOAT_TOLERANCE,
+                "{fixture} {at}: {a} != {e}"
+            );
+        }
+        (Value::Array(a), Value::Array(e)) => {
+            assert_eq!(a.len(), e.len(), "{fixture} {at}: array length\n{actual:#}");
+            for (index, (a, e)) in a.iter().zip(e).enumerate() {
+                assert_matches(a, e, &format!("{at}[{index}]"), fixture);
+            }
+        }
+        (Value::Object(a), Value::Object(e)) => {
+            let mut a_keys: Vec<_> = a.keys().collect();
+            let mut e_keys: Vec<_> = e.keys().collect();
+            a_keys.sort();
+            e_keys.sort();
+            assert_eq!(a_keys, e_keys, "{fixture} {at}: keys\n{actual:#}");
+            for (key, e) in e {
+                assert_matches(&a[key], e, &format!("{at}.{key}"), fixture);
+            }
+        }
+        _ => assert_eq!(actual, expected, "{fixture} {at}"),
+    }
+}
+
+#[test]
+fn every_fixture_matches_its_expected_inspection() {
+    let dir = fixture_dir();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .expect("read fixture dir")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.ends_with(EXPECTED_SUFFIX))
+        .collect();
+    names.sort();
+
+    let mut checked = Vec::new();
+    for name in names {
+        let expected_path = dir.join(format!("{name}{EXPECTED_SUFFIX}"));
+        if !expected_path.exists() {
+            continue;
+        }
+        let expected: Value =
+            serde_json::from_slice(&fs::read(&expected_path).unwrap()).expect("oracle is JSON");
+        let result = inspect_fixture(&dir.join(&name));
+        if let Some(code) = expected.get("error") {
+            let error = result.expect_err(&format!("{name} should be rejected"));
+            assert_eq!(error.code(), code.as_str().unwrap(), "{name}: {error:?}");
+            let reason = expected["reasonContains"].as_str().unwrap();
+            assert!(
+                error.message().contains(reason),
+                "{name}: {:?} lacks {reason:?}",
+                error.message()
+            );
+            if let Some(extensions) = expected.get("extensions") {
+                let InspectError::UnsupportedFormat {
+                    extensions: actual, ..
+                } = &error
+                else {
+                    panic!("{name}: extensions expected on {error:?}");
+                };
+                assert_eq!(&serde_json::to_value(actual).unwrap(), extensions, "{name}");
+            }
+        } else {
+            let outcome = result.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert!(
+                outcome.warnings.is_empty(),
+                "{name}: {:?}",
+                outcome.warnings
+            );
+            let actual = serde_json::to_value(&outcome.inspection).unwrap();
+            assert_matches(&actual, &expected, "$", &name);
+        }
+        checked.push(name);
+    }
+
+    for (name, _) in generated_fixtures() {
+        assert!(
+            checked.iter().any(|checked| checked == name),
+            "generated fixture {name} has no {EXPECTED_SUFFIX} oracle"
+        );
+    }
+}
+
+#[test]
+fn core_two_objects_yields_its_embedded_thumbnail() {
+    let outcome = inspect_fixture(&fixture_dir().join("core-two-objects.3mf")).unwrap();
+    let thumbnail = outcome
+        .thumbnail
+        .expect("Metadata/thumbnail.png is present");
+    assert_eq!(thumbnail.origin_part, "Metadata/thumbnail.png");
+    assert_eq!((thumbnail.width, thumbnail.height), (2, 2));
+    assert_eq!(thumbnail.bytes, THUMBNAIL_PNG);
+}
+
+#[test]
+fn prusa_project_dangling_thumbnail_relationship_is_no_thumbnail() {
+    let path = fixture_dir().join("prusa-project.3mf");
+    if !path.exists() {
+        return;
+    }
+    let outcome = inspect_fixture(&path).unwrap();
+    assert_eq!(outcome.thumbnail, None);
 }

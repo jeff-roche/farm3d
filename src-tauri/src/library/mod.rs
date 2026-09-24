@@ -11,6 +11,7 @@
 //! row shapes, and name validation (D1).
 
 pub mod content;
+pub mod formats;
 pub mod repository;
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,43 @@ pub enum RevisionOrigin {
     LinkedChange,
     Relocate,
     AddedRevision,
+}
+
+/// A non-blocking import note: the file is still imported. Messages carry
+/// basenames and package part names only, never a full path.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "command/ImportWarning.ts")]
+pub struct ImportWarning {
+    pub code: ImportWarningCode,
+    pub message: String,
+}
+
+impl ImportWarning {
+    pub fn new(code: ImportWarningCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Spec §Commands `ImportWarningCode`. Format inspection produces
+/// `EXTENSION_MISMATCH`, `TRAILING_BYTES`, `LONG_LINE`, and
+/// `THUMBNAIL_SKIPPED`; import and linking produce the others.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[ts(
+    rename_all = "SCREAMING_SNAKE_CASE",
+    export_to = "command/ImportWarningCode.ts"
+)]
+pub enum ImportWarningCode {
+    ExtensionMismatch,
+    TrailingBytes,
+    LongLine,
+    DuplicateName,
+    WatchUnavailable,
+    ThumbnailSkipped,
 }
 
 /// D1: a Project as the UI lists it. `model_count` is the number of

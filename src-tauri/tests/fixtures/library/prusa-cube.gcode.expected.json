@@ -1,0 +1,24 @@
+{
+  "format": "gcode",
+  "producer": { "name": "PrusaSlicer", "version": "2.9.6" },
+  "claims": [
+    { "key": "filament used [mm]", "value": "246.29", "line": 3805 },
+    { "key": "filament used [g]", "value": "0.73", "line": 3807 },
+    { "key": "estimated printing time (normal mode)", "value": "5m 9s", "line": 3812 },
+    { "key": "bed_temperature", "value": "60", "line": 3827 },
+    { "key": "filament_settings_id", "value": "\"Prusament PLA @MK4S\"", "line": 3908 },
+    { "key": "filament_type", "value": "PLA", "line": 3919 },
+    { "key": "layer_height", "value": "0.2", "line": 3971 },
+    { "key": "nozzle_diameter", "value": "0.4", "line": 4008 },
+    { "key": "printer_model", "value": "MK4S", "line": 4036 },
+    { "key": "printer_settings_id", "value": "Original Prusa MK4S 0.4 nozzle", "line": 4038 }
+  ],
+  "trusted": false,
+  "lineCount": 4170,
+  "commandCount": 2972,
+  "toolsUsed": [],
+  "relativePositioningSeen": false,
+  "relativeExtrusionSeen": true,
+  "observedBoundsMm": { "min": [0, -4, 0.05], "max": [241, 170, 40] },
+  "thumbnails": []
+}

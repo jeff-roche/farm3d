@@ -1,0 +1,11 @@
+{
+  "format": "gcode",
+  "claims": [],
+  "trusted": false,
+  "lineCount": 12,
+  "commandCount": 12,
+  "toolsUsed": [],
+  "relativePositioningSeen": false,
+  "relativeExtrusionSeen": false,
+  "thumbnails": []
+}
