@@ -121,12 +121,13 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
         class={styles.table}
         role="grid"
         aria-label={props.label}
-        aria-rowcount={props.rows.length}
+        aria-rowcount={1 + (props.rows.length > 0 ? props.rows.length : props.empty ? 1 : 0)}
         tabIndex={currentIndex() < 0 && props.rows.length > 0 ? 0 : -1}
         onKeyDown={handleKeyDown}
       >
         <thead class={styles.head}>
-          <tr role="row">
+          {/* The header row is row 1, so data rows start at 2. */}
+          <tr role="row" aria-rowindex={1}>
             <For each={props.columns}>
               {(column) => (
                 <th
@@ -156,7 +157,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
             when={props.rows.length > 0}
             fallback={
               <Show when={props.empty}>
-                <tr role="row">
+                <tr role="row" aria-rowindex={2}>
                   <td role="gridcell" class={styles.emptyCell} colSpan={props.columns.length}>
                     {props.empty}
                   </td>
@@ -174,7 +175,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
                     ref={(el) => rowRefs.set(id(), el)}
                     role="row"
                     class={styles.row}
-                    aria-rowindex={index() + 1}
+                    aria-rowindex={index() + 2}
                     aria-selected={props.selectedId == null ? undefined : selected()}
                     data-selected={selected() ? "" : undefined}
                     tabIndex={selected() ? 0 : -1}

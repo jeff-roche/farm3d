@@ -48,12 +48,12 @@
 
 .headerCell[aria-sort="ascending"] .sortButton::after {
   content: "▲";
-  font-size: 0.6em;
+  font-size: var(--f3d-type-label-size);
 }
 
 .headerCell[aria-sort="descending"] .sortButton::after {
   content: "▼";
-  font-size: 0.6em;
+  font-size: var(--f3d-type-label-size);
 }
 
 .row {

@@ -44,13 +44,23 @@ function SelectableTable(props: {
 }
 
 describe("DataTable", () => {
-  it("renders role=grid with aria-rowcount", () => {
+  it("renders role=grid with aria-rowcount counting the header row", () => {
     render(() => (
       <DataTable label="Rows" rows={rows} rowId={(row) => row.id} columns={columns} />
     ));
 
     const grid = screen.getByRole("grid", { name: "Rows" });
-    expect(grid.getAttribute("aria-rowcount")).toBe("3");
+    // Three data rows plus the header row.
+    expect(grid.getAttribute("aria-rowcount")).toBe("4");
+  });
+
+  it("gives the header row aria-rowindex 1 and data rows 2 onward", () => {
+    render(() => (
+      <DataTable label="Rows" rows={rows} rowId={(row) => row.id} columns={columns} />
+    ));
+
+    const allRows = screen.getAllByRole("row");
+    expect(allRows.map((row) => row.getAttribute("aria-rowindex"))).toEqual(["1", "2", "3", "4"]);
   });
 
   it("moves selection with ArrowDown/ArrowUp/Home/End and calls onActivate on Enter", async () => {
