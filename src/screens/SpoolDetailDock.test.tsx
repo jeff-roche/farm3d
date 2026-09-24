@@ -1,10 +1,12 @@
-import { render, screen } from "@solidjs/testing-library";
+import { render, screen, waitFor } from "@solidjs/testing-library";
+import { createStore } from "solid-js/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpoolDetailDock } from "./SpoolDetailDock";
 import type { SpoolHistory } from "../generated/contracts/command/SpoolHistory";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 
 const loadHistory = vi.fn();
+const reportSpoolError = vi.fn();
 
 vi.mock("../spools/spool-store", () => ({
   get spoolState() {
@@ -16,6 +18,7 @@ vi.mock("../spools/spool-store", () => ({
   createSpool: vi.fn(),
   updateSpool: vi.fn(),
   recordAmount: vi.fn(),
+  reportSpoolError: (...args: unknown[]) => reportSpoolError(...args),
 }));
 
 vi.mock("../printers/printer-store", () => ({
@@ -88,5 +91,59 @@ describe("SpoolDetailDock", () => {
     expect(titles[1]).toContain("Unloaded to");
     expect(titles[2]).toContain("Consumed 594 g");
     expect(titles[3]).toContain("Initial");
+  });
+
+  it("re-fetches history when the Spool's revision changes, showing the new event", async () => {
+    const newer: SpoolHistory = {
+      ...HISTORY,
+      amountEvents: [
+        ...HISTORY.amountEvents,
+        {
+          id: "evt-4", spoolId: "spl-1", sequence: 4, kind: "estimate",
+          beforeMg: 612_000, afterMg: 500_000, confidenceAfter: "estimated",
+          occurredAt: "2026-09-12T00:00:00Z", isCorrection: false,
+        },
+      ],
+    };
+    loadHistory.mockResolvedValueOnce(HISTORY).mockResolvedValueOnce(newer);
+    // A store, like `spoolState.spools`: a revision bump mutates the same
+    // proxied record in place rather than replacing it.
+    const [spool, setSpool] = createStore<SpoolRecord>({ ...ESTIMATED_SPOOL });
+    render(() => <SpoolDetailDock spool={spool} mode="inline" onClose={vi.fn()} />);
+    await screen.findByText("Measured 612 g (corrected +18 g from the estimate)");
+    expect(screen.queryByText("Estimated 500 g")).not.toBeInTheDocument();
+
+    setSpool("revision", 5);
+
+    expect(await screen.findByText("Estimated 500 g")).toBeInTheDocument();
+    expect(loadHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a history response for a revision that is no longer current", async () => {
+    let resolveStale!: (h: SpoolHistory) => void;
+    const newer: SpoolHistory = { ...HISTORY, movements: [] };
+    loadHistory
+      .mockReturnValueOnce(new Promise<SpoolHistory>((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce(newer);
+    // A store, like `spoolState.spools`: a revision bump mutates the same
+    // proxied record in place rather than replacing it.
+    const [spool, setSpool] = createStore<SpoolRecord>({ ...ESTIMATED_SPOOL });
+    render(() => <SpoolDetailDock spool={spool} mode="inline" onClose={vi.fn()} />);
+
+    setSpool("revision", 5);
+    await screen.findByText("Measured 612 g (corrected +18 g from the estimate)");
+    resolveStale(HISTORY);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The stale (revision 4) response carried the unload; it must not win.
+    expect(screen.queryByText(/Unloaded to/)).not.toBeInTheDocument();
+  });
+
+  it("routes a history load failure to the store banner", async () => {
+    const failure = { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "nope", recovery: [], retryable: true };
+    loadHistory.mockRejectedValue(failure);
+    render(() => <SpoolDetailDock spool={ESTIMATED_SPOOL} mode="inline" onClose={vi.fn()} />);
+    await waitFor(() => expect(reportSpoolError).toHaveBeenCalledWith(failure));
   });
 });

@@ -117,9 +117,17 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
   const [editOpen, setEditOpen] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
 
-  createEffect(on(() => props.spool.id, (id) => {
-    setHistory(null);
-    void loadHistory(id).then(setHistory);
+  /** Re-fetched on every revision bump, not just a new id: a move, amount
+   *  entry, or lifecycle change bumps the Spool's revision in place, and
+   *  history must show it. A response for an id/revision that is no longer
+   *  current is dropped, so an older fetch can never overwrite a newer one. */
+  createEffect(on(() => [props.spool.id, props.spool.revision] as const, ([id, revision], previous) => {
+    if (!previous || previous[0] !== id) setHistory(null);
+    const isCurrent = () => props.spool.id === id && props.spool.revision === revision;
+    loadHistory(id).then(
+      (loaded) => { if (isCurrent()) setHistory(loaded); },
+      (e) => { if (isCurrent()) reportSpoolError(e); },
+    );
   }));
 
   const location = () => {
