@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod connections;
 pub mod contracts;
 pub mod document_io;
+pub mod library;
 pub mod persistence;
 pub mod printers;
 pub mod settings;

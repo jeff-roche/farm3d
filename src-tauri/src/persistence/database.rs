@@ -149,6 +149,13 @@ impl Storage {
         })
     }
 
+    /// P4: lets `library::content::ContentStore` reach `content_root` (and
+    /// any other storage path) without duplicating `StoragePaths`'
+    /// construction/validation logic.
+    pub fn paths(&self) -> &StoragePaths {
+        &self.paths
+    }
+
     #[doc(hidden)]
     pub fn inject_failure_once(&self, point: FailurePoint) {
         match point {

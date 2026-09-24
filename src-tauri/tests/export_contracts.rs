@@ -28,6 +28,7 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::library::{ModelFormat, ProjectRecord, RevisionOrigin, SourceState, StorageMode};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -337,6 +338,11 @@ fn export_registry() -> Vec<Export> {
         export::<ConcreteCommandEnvelope>(),
         export::<ConcreteEventEnvelope>(),
         export::<EventEnvelopeTypeAssertions>(),
+        export::<ModelFormat>(),
+        export::<StorageMode>(),
+        export::<SourceState>(),
+        export::<RevisionOrigin>(),
+        export::<ProjectRecord>(),
     ]
 }
 

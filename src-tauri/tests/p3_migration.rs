@@ -10,7 +10,9 @@ use std::fs;
 use sha2::{Digest, Sha256};
 
 use farm3d_lib::persistence::test_support::{apply_through, apply_through_failing_before_commit};
-use farm3d_lib::persistence::{MetadataRootLease, Storage, StorageError, StoragePaths};
+use farm3d_lib::persistence::{
+    MetadataRootLease, Storage, StorageError, StoragePaths, CURRENT_SCHEMA_VERSION,
+};
 
 fn open_storage() -> (tempfile::TempDir, StoragePaths, MetadataRootLease, Storage) {
     let temp = tempfile::tempdir().expect("temporary root");
@@ -153,7 +155,7 @@ fn upgrading_v3_reaches_v4_and_backfills_one_main_slot_per_printer() {
         })
         .expect("post-upgrade state");
 
-    assert_eq!(version, 4);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
     assert_eq!(ledger_name, "0004_p3_spools_material_slots");
     let expected_checksum = format!(
         "{:x}",

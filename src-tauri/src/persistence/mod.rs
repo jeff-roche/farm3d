@@ -196,7 +196,7 @@ mod tests {
             })
             .expect("schema state");
 
-        assert_eq!(state, (4_i64, 0_i64));
+        assert_eq!(state, (CURRENT_SCHEMA_VERSION, 0_i64));
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
             })
             .expect("migrated state");
 
-        assert_eq!(state.0, 4_i64);
+        assert_eq!(state.0, CURRENT_SCHEMA_VERSION);
         assert_eq!(
             state.1,
             (
@@ -276,7 +276,7 @@ mod tests {
             })
             .expect("migration count");
 
-        assert_eq!(migration_count, 4_i64);
+        assert_eq!(migration_count, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
@@ -494,7 +494,10 @@ mod tests {
         drop(Storage::open(paths.clone(), &lease).expect("first open"));
         let connection = rusqlite::Connection::open(paths.database()).expect("database");
         connection
-            .execute_batch("PRAGMA user_version = 5")
+            .execute_batch(&format!(
+                "PRAGMA user_version = {}",
+                CURRENT_SCHEMA_VERSION + 1
+            ))
             .expect("future version");
         drop(connection);
 
@@ -1170,22 +1173,34 @@ mod tests {
             (names, all_tables_are_strict),
             (
                 vec![
+                    ("index", "library_models_linked"),
+                    ("index", "library_projects_name"),
                     ("index", "material_slots_live_name"),
                     ("index", "material_slots_live_position"),
                     ("index", "migration_warnings_dedup"),
+                    ("index", "model_revision_thumbnails_content"),
+                    ("index", "model_source_revisions_content"),
                     ("index", "printers_active_host_identity"),
+                    ("index", "project_models_model"),
                     ("index", "spool_movements_operation"),
                     ("index", "spool_movements_spool"),
                     ("index", "spool_reservations_open"),
                     ("index", "spool_tares_name"),
                     ("index", "spools_slot_occupancy"),
+                    ("table", "content_blobs"),
                     ("table", "legacy_imports"),
+                    ("table", "library_models"),
+                    ("table", "library_projects"),
                     ("table", "material_slots"),
                     ("table", "migration_warnings"),
+                    ("table", "model_revision_thumbnails"),
+                    ("table", "model_source_revisions"),
                     ("table", "operations"),
+                    ("table", "pending_blob_cleanup"),
                     ("table", "pending_credential_cleanup"),
                     ("table", "printer_status_snapshots"),
                     ("table", "printers"),
+                    ("table", "project_models"),
                     ("table", "schema_migrations"),
                     ("table", "settings"),
                     ("table", "spool_amount_events"),
@@ -1193,6 +1208,7 @@ mod tests {
                     ("table", "spool_reservations"),
                     ("table", "spool_tares"),
                     ("table", "spools"),
+                    ("trigger", "model_source_revisions_immutable"),
                     ("trigger", "spool_amount_events_no_delete"),
                     ("trigger", "spool_amount_events_no_update"),
                 ],
@@ -1235,6 +1251,9 @@ mod tests {
             })
             .expect("exact schema shape");
         let expected = [
+            ("content_blobs", "sha256", "TEXT", 1, None, 1),
+            ("content_blobs", "size_bytes", "INTEGER", 1, None, 0),
+            ("content_blobs", "created_at", "TEXT", 1, None, 0),
             ("legacy_imports", "source_name", "TEXT", 1, None, 1),
             ("legacy_imports", "source_present", "INTEGER", 1, None, 0),
             ("legacy_imports", "source_sha256", "TEXT", 0, None, 0),
@@ -1248,6 +1267,45 @@ mod tests {
             ),
             ("legacy_imports", "imported_rows", "INTEGER", 1, None, 0),
             ("legacy_imports", "completed_at", "TEXT", 1, None, 0),
+            ("library_models", "id", "TEXT", 1, None, 1),
+            ("library_models", "revision", "INTEGER", 1, None, 0),
+            ("library_models", "name", "TEXT", 1, None, 0),
+            ("library_models", "format", "TEXT", 1, None, 0),
+            ("library_models", "storage_mode", "TEXT", 1, None, 0),
+            ("library_models", "linked_path", "TEXT", 0, None, 0),
+            ("library_models", "link_state", "TEXT", 0, None, 0),
+            ("library_models", "link_checked_at", "TEXT", 0, None, 0),
+            (
+                "library_models",
+                "link_observed_size",
+                "INTEGER",
+                0,
+                None,
+                0,
+            ),
+            (
+                "library_models",
+                "link_observed_mtime_ns",
+                "INTEGER",
+                0,
+                None,
+                0,
+            ),
+            (
+                "library_models",
+                "link_observed_file_id",
+                "TEXT",
+                0,
+                None,
+                0,
+            ),
+            ("library_models", "created_at", "TEXT", 1, None, 0),
+            ("library_models", "updated_at", "TEXT", 1, None, 0),
+            ("library_projects", "id", "TEXT", 1, None, 1),
+            ("library_projects", "revision", "INTEGER", 1, None, 0),
+            ("library_projects", "name", "TEXT", 1, None, 0),
+            ("library_projects", "created_at", "TEXT", 1, None, 0),
+            ("library_projects", "updated_at", "TEXT", 1, None, 0),
             ("material_slots", "id", "TEXT", 1, None, 1),
             ("material_slots", "printer_id", "TEXT", 1, None, 0),
             ("material_slots", "position", "INTEGER", 1, None, 0),
@@ -1262,10 +1320,119 @@ mod tests {
             ("migration_warnings", "message", "TEXT", 1, None, 0),
             ("migration_warnings", "details_json", "TEXT", 1, None, 0),
             ("migration_warnings", "created_at", "TEXT", 1, None, 0),
+            (
+                "model_revision_thumbnails",
+                "revision_id",
+                "TEXT",
+                1,
+                None,
+                1,
+            ),
+            ("model_revision_thumbnails", "source", "TEXT", 1, None, 0),
+            (
+                "model_revision_thumbnails",
+                "origin_part",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            (
+                "model_revision_thumbnails",
+                "media_type",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("model_revision_thumbnails", "width", "INTEGER", 1, None, 0),
+            ("model_revision_thumbnails", "height", "INTEGER", 1, None, 0),
+            (
+                "model_revision_thumbnails",
+                "content_sha256",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("model_source_revisions", "id", "TEXT", 1, None, 1),
+            ("model_source_revisions", "model_id", "TEXT", 1, None, 0),
+            ("model_source_revisions", "sequence", "INTEGER", 1, None, 0),
+            (
+                "model_source_revisions",
+                "content_sha256",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            (
+                "model_source_revisions",
+                "size_bytes",
+                "INTEGER",
+                1,
+                None,
+                0,
+            ),
+            ("model_source_revisions", "format", "TEXT", 1, None, 0),
+            ("model_source_revisions", "origin", "TEXT", 1, None, 0),
+            (
+                "model_source_revisions",
+                "source_file_name",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("model_source_revisions", "source_path", "TEXT", 1, None, 0),
+            ("model_source_revisions", "source_mtime", "TEXT", 0, None, 0),
+            ("model_source_revisions", "captured_at", "TEXT", 1, None, 0),
+            (
+                "model_source_revisions",
+                "inspector_version",
+                "INTEGER",
+                1,
+                None,
+                0,
+            ),
+            (
+                "model_source_revisions",
+                "inspection_json",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             ("operations", "id", "TEXT", 1, None, 1),
             ("operations", "kind", "TEXT", 1, None, 0),
             ("operations", "request_digest", "TEXT", 1, None, 0),
             ("operations", "created_at", "TEXT", 1, None, 0),
+            ("pending_blob_cleanup", "sha256", "TEXT", 1, None, 1),
+            (
+                "pending_blob_cleanup",
+                "attempt_count",
+                "INTEGER",
+                1,
+                Some("0"),
+                0,
+            ),
+            (
+                "pending_blob_cleanup",
+                "last_error_code",
+                "TEXT",
+                0,
+                None,
+                0,
+            ),
+            ("pending_blob_cleanup", "created_at", "TEXT", 1, None, 0),
+            (
+                "pending_blob_cleanup",
+                "last_attempt_at",
+                "TEXT",
+                0,
+                None,
+                0,
+            ),
             (
                 "pending_credential_cleanup",
                 "credential_ref",
@@ -1365,6 +1532,9 @@ mod tests {
             ),
             ("printers", "archived_at", "TEXT", 0, None, 0),
             ("printers", "host_identity", "TEXT", 0, None, 0),
+            ("project_models", "project_id", "TEXT", 1, None, 1),
+            ("project_models", "model_id", "TEXT", 1, None, 2),
+            ("project_models", "added_at", "TEXT", 1, None, 0),
             ("schema_migrations", "version", "INTEGER", 0, None, 1),
             ("schema_migrations", "name", "TEXT", 1, None, 0),
             ("schema_migrations", "checksum", "TEXT", 1, None, 0),
@@ -1778,7 +1948,10 @@ mod tests {
             .expect("snapshot");
         let connection = rusqlite::Connection::open(snapshot.path()).expect("snapshot database");
         connection
-            .execute_batch("PRAGMA user_version = 5")
+            .execute_batch(&format!(
+                "PRAGMA user_version = {}",
+                CURRENT_SCHEMA_VERSION + 1
+            ))
             .expect("future schema");
         drop(connection);
 
