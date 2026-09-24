@@ -16,7 +16,7 @@ about Windows or macOS.
 
 | Gate | Result | Evidence summary |
 |---|---|---|
-| A: 3MF parsers | PASS, with one substitution | Every committed 3MF fixture read or was rejected as D10 requires. `orca-two-plates.3mf` is unavailable (no OrcaSlicer installed), so the two-plate Production-extension check ran against a spike-only stand-in with OrcaSlicer's package layout, and against 19 real Bambu-format project files already on the host. A 60.9 MB object part was inspected in 0.29 s with a 3.5 MB peak RSS. |
+| A: 3MF parsers | PASS | Every committed 3MF fixture read or was rejected as D10 requires. The two-plate Production-extension check first ran against a spike-only stand-in with OrcaSlicer's package layout and 19 real Bambu-format project files on the host. After the final review it also ran against the real `orca-two-plates.3mf` (OrcaSlicer 2.5.0-dev nightly): 2 objects, 2 plates, 24 triangles, and `requiredExtensions: ["p"]`, with both object parts reached through `3D/_rels/3dmodel.model.rels`. A 60.9 MB object part was inspected in 0.29 s with a 3.5 MB peak RSS. |
 | A: `stl_io` evidence for D9 | Partly reproduced | `cube-ascii-bare-solid.stl` fails in `stl_io` 0.11. `cube-binary-solid-header.stl` **parses**: `stl_io` falls back to binary when the first line is not valid UTF-8. It fails only when the bytes up to the first newline are valid UTF-8. |
 | B: hash throughput | PASS | SHA-256, 512 MiB, 1 MiB chunks, release build: 1,512.0 / 1,519.5 / 1,513.0 MB/s. |
 | C: watcher | PASS | Each of the six scenarios that should fire produced exactly 1 debounced batch within 2 s in 20 of 20 repetitions, and no late batch; the first batch arrived at 825–826 ms. The symlink whose target is in another directory produced 0 batches in 20 of 20 repetitions, as expected. |
@@ -33,7 +33,7 @@ about Windows or macOS.
 | Toolchain | rustc 1.98.0 (88d9e12ae 2026-08-18), cargo 1.98.0 |
 | Crates | `zip` 8.6.0 (`deflate-flate2-zlib-rs`, over `flate2` 1.1.10 and `zlib-rs` 0.6.8), `quick-xml` 0.42.0, `sha2` 0.10.9, `notify` 8.2.0, `notify-debouncer-full` 0.7.0, `file-id` 0.2.3, `stl_io` 0.11.0 |
 | PrusaSlicer | 2.9.6 (flatpak `com.prusa3d.PrusaSlicer`, system install), bundled vendor profile `PrusaResearch.ini` `config_version = 2.4.14` |
-| OrcaSlicer | Not installed: flatpak `com.orcaslicer.OrcaSlicer` is absent from `flatpak list` |
+| OrcaSlicer | 2.5.0-dev nightly AppImage (`OrcaSlicer_Linux_AppImage_Ubuntu2404_nightly.AppImage`, SHA-256 `23e42968dee9b6905491b801fb0da62c73d271a42c39689374b5c67856035de4`, binary dated 2026-09-20). It writes `Application` = `BambuStudio-02.08.01.55` and `OrcaSlicer` = `2.5.0-dev` into 3MF files. Printer, process and filament presets come from the bundled `Custom` and `OrcaFilamentLibrary` vendor profiles, version 02.04.00.03; see "OrcaSlicer exports". |
 | `fs.inotify.max_user_watches` | 524288 |
 
 Gates A to C ran in a throwaway crate outside the repository. `stl_io` and
@@ -99,8 +99,8 @@ Its model has these properties:
 |---|---|---|
 | `prusa-project.3mf` | Committed | PrusaSlicer 2.9.6 CLI, see below |
 | `prusa-cube.gcode` | Committed | PrusaSlicer 2.9.6 CLI, see below |
-| `orca-two-plates.3mf` | **Unavailable** | No OrcaSlicer is installed. |
-| `orca-cube.gcode` | **Unavailable** | No OrcaSlicer is installed. |
+| `orca-two-plates.3mf` | Committed | OrcaSlicer 2.5.0-dev nightly CLI, see "OrcaSlicer exports" |
+| `orca-cube.gcode` | Committed | OrcaSlicer 2.5.0-dev nightly CLI, see "OrcaSlicer exports" |
 
 The PrusaSlicer GUI was not driven: the desktop is shared and live. Both
 PrusaSlicer files come from the headless CLI, with an isolated `--datadir`
@@ -192,6 +192,132 @@ $P --load mk4s.ini --no-binary-gcode --export-3mf  -o prusa-project.3mf cube-for
 The ZIP entry dates are the export time, so the file is committed as
 produced and is not regenerated.
 
+### OrcaSlicer exports
+
+Both Orca files were added after the final review, from the user-approved
+nightly AppImage, through the headless CLI only. The AppImage was unpacked
+with `--appimage-extract` into a scratch directory. Every run cleared
+`DISPLAY` and `WAYLAND_DISPLAY` and pointed `HOME` and `XDG_CONFIG_HOME` at
+a scratch directory, so no window opened and the user's configuration was
+neither read nor written. Orca prints `Error: unable to open display` and
+then carries on in CLI mode. Each run exited 0, and `result.json` reported
+`"return_code": 0`.
+
+**Profiles.** The nightly ships its vendor profiles only as packed `.opc`
+files. Its CLI loader reads `<datadir>/system/<Vendor>.json` trees and
+cannot read an `.opc` in an empty `--datadir`: it fails with
+`Failed loading configuration file …/Custom.json` whether the `.opc` comes
+from the AppImage or from the GUI's cache. The runs therefore used a
+scratch `--datadir` whose `system/` holds a read-only copy of the JSON
+`Custom` and `OrcaFilamentLibrary` vendor trees, version 02.04.00.03. An
+earlier OrcaSlicer flatpak install had unpacked them under
+`~/.var/app/com.orcaslicer.OrcaSlicer/config/OrcaSlicer/system/`. The
+presets were passed as the system preset files themselves:
+
+- Printer: `MyKlipper 0.4 nozzle` (printer model `Generic Klipper Printer`)
+- Process: `0.20mm Standard @MyKlipper`
+- Filament: `Generic PLA @System`
+
+**Two plates.** The CLI has no option that puts an object on a given
+plate. `--arrange 1` fills plate 1 first, and two 10 mm cubes always fit
+there. The second plate therefore comes from a generated input 3MF that
+Orca loads and saves again:
+
+1. Orca exports both cubes onto plate 1 (`one-plate.3mf`).
+2. A script rewrites two parts of that package. In
+   `Metadata/model_settings.config` it moves object 4's `<model_instance>`
+   into a new `<plate>` with `plater_id` 2. In `3D/3dmodel.model` it adds
+   300 mm to object 4's build-item X translation, which is one 250 mm bed
+   width plus Orca's 20 % plate gap. Every other entry is copied unchanged.
+3. Orca loads that package with `--arrange 0` and exports
+   `orca-two-plates.3mf`. Orca writes every byte of the committed file. It
+   recomputed the transforms: each object part now holds the cube centred on
+   its origin, and the build items became `125 131 5` and `425 119 5`.
+4. Orca slices plate 1 of the committed project, which gives
+   `orca-cube.gcode`.
+
+```sh
+S=$SCRATCH/squashfs-root/AppRun            # from --appimage-extract
+D=$SCRATCH/data                            # system/{Custom,OrcaFilamentLibrary}{,.json}
+P=$D/system
+ORCA="env -u DISPLAY -u WAYLAND_DISPLAY HOME=$SCRATCH/home XDG_CONFIG_HOME=$SCRATCH/home/.config $S --datadir $D"
+SETTINGS="$P/Custom/machine/MyKlipper 0.4 nozzle.json;$P/Custom/process/0.20mm Standard @MyKlipper.json"
+FILAMENT="$P/OrcaFilamentLibrary/filament/Generic PLA @System.json"
+
+# 1. Both cubes, one plate
+$ORCA --load-settings "$SETTINGS" --load-filaments "$FILAMENT" --arrange 1 \
+  --outputdir step1 --export-3mf one-plate.3mf cube-for-slicers.stl cube-for-slicers.stl
+# 2. Split the plates (script above) -> step2/two-plate-input.3mf
+# 3. Re-save through Orca
+$ORCA --arrange 0 --outputdir step3 --export-3mf orca-two-plates.3mf step2/two-plate-input.3mf
+# 4. Slice plate 1 (writes step4/plate_1.gcode, committed as orca-cube.gcode)
+$ORCA --arrange 0 --slice 1 --outputdir step4 step3/orca-two-plates.3mf
+```
+
+| File | SHA-256 |
+|---|---|
+| `orca-two-plates.3mf` | `7b925aa66e2f1968ae1aef9cc3135dc606e48c529a454376b7c8efceaf388666` |
+| `orca-cube.gcode` | `2afa256122996660fc0940f9ed47bb5c07c4578e8454d22e9dc42c503b42a750` |
+
+`orca-two-plates.3mf` has these facts:
+
+- 10 entries:
+  - `[Content_Types].xml`
+  - `_rels/.rels`
+  - `3D/3dmodel.model`
+  - `3D/_rels/3dmodel.model.rels`
+  - `3D/Objects/cube-for-slicers.stl_1.model`
+  - `3D/Objects/cube-for-slicers.stl_2.model`
+  - `Metadata/project_settings.config`
+  - `Metadata/model_settings.config`
+  - `Metadata/slice_info.config`
+  - `Metadata/filament_sequence.json`
+- The start part declares `xmlns:p` and `requiredextensions="p"`. So does
+  each object part.
+- `Application` = `BambuStudio-02.08.01.55`. `Title` is empty.
+- Objects 2 and 4 each have one `p:path` component with an identity
+  transform. Those components point at object 1 in
+  `cube-for-slicers.stl_1.model` and object 3 in
+  `cube-for-slicers.stl_2.model`. `3D/_rels/3dmodel.model.rels` declares
+  both parts.
+- Each object part holds one 12-triangle cube from (−5,−5,−5) to (5,5,5).
+- The build items are object 2 at `1 0 0 0 1 0 0 0 1 125 131 5` and object
+  4 at `… 425 119 5`. The built geometry is 24 triangles, with bounds from
+  (120,114,0) to (430,136,10) mm.
+- `model_settings.config` has two plates: `plater_id` 1 holds object 2, and
+  `plater_id` 2 holds object 4. Both `plater_name` values are empty. Each
+  object also carries per-object metadata: `extruder`, and on its part
+  `matrix`, `source_file`, `source_object_id`, `source_volume_id` and
+  `source_offset_x/y/z`.
+- **No thumbnails.** Headless Orca renders no plate images. Even so,
+  `_rels/.rels` and the `Thumbnail_Middle` metadata both name
+  `/Metadata/plate_1.png`, and that entry is absent. As with
+  `prusa-project.3mf`, this dangling reference means "no thumbnail".
+
+`orca-cube.gcode` has these facts:
+
+- 132,594 bytes and 5,064 lines. Line endings are LF.
+- Line 2 is `; generated by OrcaSlicer 2.5.0-dev on 2026-09-24 at 16:42:43`.
+- The header block records `total layer number: 50` and
+  `max_z_height: 10.00`.
+- The trailer records the settings and results:
+  - `printer_model = Generic Klipper Printer`
+  - `printer_settings_id = MyKlipper 0.4 nozzle`
+  - `filament_settings_id = "Generic PLA @System"`
+  - `filament_type = PLA`
+  - `layer_height = 0.2`
+  - `nozzle_diameter = 0.4`
+  - `filament used [mm] = 245.37`
+  - `filament used [g] = 0.73`
+  - `estimated printing time (normal mode) = 3m 42s`
+- There is no `bed_temperature` key. Orca writes
+  `first_layer_bed_temperature = 35` instead.
+- `M83` is set, and there is no `G91` and no tool change.
+- Only plate 1's cube is present:
+  `EXCLUDE_OBJECT_DEFINE … CENTER=125,131`.
+- No thumbnail blocks, although the profile lists
+  `thumbnails = 48x48/PNG, 300x300/PNG`.
+
 ## Gate A: 3MF parsers
 
 The spike reader streams each part with `quick-xml` 0.42 (the
@@ -227,6 +353,7 @@ and bounds only. It implements D10's supported set:
 | `no-objects.3mf` | Rejected: `INVALID_CONTENT: This 3MF contains no objects.` |
 | `required-beam-lattice.3mf` | Rejected: `UNSUPPORTED_FORMAT`, extensions `["http://schemas.microsoft.com/3dmanufacturing/beamlattice/2017/02"]` |
 | `prusa-project.3mf` | OK. 1 object, 12 triangles, bounds (0,0,0)–(10,10,10). Producer `PrusaSlicer-2.9.6`. Unsupported: `Metadata/Prusa_Slicer_wipe_tower_information.xml`, `Metadata/Slic3r_PE_model.config`. Dangling thumbnail relationship `Metadata/thumbnail.png`. |
+| `orca-two-plates.3mf` (added after the final review, read by the shipped Task 4 inspector) | OK. 2 objects, 2 build items, 2 plates (`1` → object `2`, `2` → object `4`), 24 triangles, bounds (120,114,0)–(430,136,10), `requiredExtensions: ["p"]`. Both object parts are reached through `3D/_rels/3dmodel.model.rels`. Unsupported: `Metadata/filament_sequence.json`, per-object settings, `Metadata/project_settings.config`, `Metadata/slice_info.config`. Dangling `Thumbnail_Middle` `/Metadata/plate_1.png`. |
 | Orca-layout stand-in (spike only, not committed) | OK. 2 objects, 2 plates (`1` → object `2`, `2` "Second" → object `4`), 24 triangles, `requiredExtensions: ["p"]`. Parts through `3D/_rels/3dmodel.model.rels`: `3D/Objects/object_1.model`, `3D/Objects/object_2.model`. Unsupported: `perObjectSettings` (`extruder`, `part`), `Metadata/project_settings.config`. |
 | 22 real project files on the host (read-only, not committed, names not recorded) | 19 Bambu-format packages with `requiredextensions="p"` parsed OK in 76–201 ms, one of them with 2 plates. 2 PrusaSlicer projects parsed OK. 1 Orca filament-profile export was rejected as `This 3MF contains no objects.`, as D10 requires. 2 matches were directories, not files. |
 | Synthetic Production-extension package with a 60,915,354-byte object part (588,232 triangles; 4.85 MB compressed) | OK in 284–287 ms over 3 runs. |
@@ -457,8 +584,9 @@ Manual steps for a human:
 - **Task 4:**
   - Uses the committed generated fixtures, `prusa-project.3mf` and
     `prusa-cube.gcode`.
-  - `orca-two-plates.3mf` and `orca-cube.gcode` are unavailable, so
-    acceptance criterion 2 stays **partial** until they exist.
+  - `orca-two-plates.3mf` and `orca-cube.gcode` were unavailable during
+    Task 4. They were produced after the final review, and their
+    hand-written oracles are now in the fixture loop.
   - The reader must tolerate a dangling thumbnail relationship, as in
     `prusa-project.3mf`.
   - The `triangleCount` of `core-two-objects.3mf` depends on whether

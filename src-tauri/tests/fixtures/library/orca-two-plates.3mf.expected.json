@@ -1,0 +1,37 @@
+{
+  "format": "3mf",
+  "unit": "millimeter",
+  "producer": "BambuStudio-02.08.01.55",
+  "objectCount": 2,
+  "buildItemCount": 2,
+  "triangleCount": 24,
+  "boundsMm": { "min": [120, 114, 0], "max": [430, 136, 10] },
+  "plates": [
+    { "index": 1, "objectIds": [2] },
+    { "index": 2, "objectIds": [4] }
+  ],
+  "requiredExtensions": ["p"],
+  "unsupported": [
+    {
+      "code": "SLICER_METADATA",
+      "part": "Metadata/filament_sequence.json",
+      "detail": "Slicer metadata"
+    },
+    {
+      "code": "PER_OBJECT_SETTINGS",
+      "part": "Metadata/model_settings.config",
+      "detail": "Per-object settings: extruder, matrix, source_file, source_object_id, source_offset_x, source_offset_y, source_offset_z, source_volume_id"
+    },
+    {
+      "code": "SLICER_SETTINGS",
+      "part": "Metadata/project_settings.config",
+      "detail": "Slicer settings"
+    },
+    {
+      "code": "SLICER_METADATA",
+      "part": "Metadata/slice_info.config",
+      "detail": "Slicer metadata"
+    }
+  ],
+  "thumbnails": []
+}

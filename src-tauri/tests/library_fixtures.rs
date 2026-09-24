@@ -8,9 +8,13 @@
 //! The generator never writes or deletes `*.expected.json`. Those files are
 //! hand-written oracles and must stay independent of any code under test.
 //!
+//! The slicer exports (`orca-*`, `prusa-*`) are committed as produced by
+//! the slicers and are never written by the generator; the spike report
+//! records how each was made.
+//!
 //! `every_fixture_matches_its_expected_inspection` runs detection and
-//! inspection over every fixture that has an oracle. A fixture without one
-//! (for example a slicer export that couldn't be produced) is skipped.
+//! inspection over every fixture that has an oracle, and fails if a
+//! generated fixture or a slicer export lacks one.
 
 use std::fs;
 use std::io::{Cursor, Write};
@@ -404,6 +408,13 @@ fn regenerate_library_fixtures() {
 }
 
 const EXPECTED_SUFFIX: &str = ".expected.json";
+/// Slicer exports committed as produced (spike report, Step 2).
+const SLICER_FIXTURES: [&str; 4] = [
+    "orca-two-plates.3mf",
+    "orca-cube.gcode",
+    "prusa-project.3mf",
+    "prusa-cube.gcode",
+];
 const FLOAT_TOLERANCE: f64 = 1e-4;
 
 fn inspect_fixture(path: &Path) -> Result<InspectOutcome, InspectError> {
@@ -497,6 +508,12 @@ fn every_fixture_matches_its_expected_inspection() {
             "generated fixture {name} has no {EXPECTED_SUFFIX} oracle"
         );
     }
+    for name in SLICER_FIXTURES {
+        assert!(
+            checked.iter().any(|checked| checked == name),
+            "slicer fixture {name} is missing or has no {EXPECTED_SUFFIX} oracle"
+        );
+    }
 }
 
 #[test]
@@ -512,10 +529,16 @@ fn core_two_objects_yields_its_embedded_thumbnail() {
 
 #[test]
 fn prusa_project_dangling_thumbnail_relationship_is_no_thumbnail() {
-    let path = fixture_dir().join("prusa-project.3mf");
-    if !path.exists() {
-        return;
-    }
-    let outcome = inspect_fixture(&path).unwrap();
+    let outcome = inspect_fixture(&fixture_dir().join("prusa-project.3mf")).unwrap();
     assert_eq!(outcome.thumbnail, None);
+}
+
+/// Headless OrcaSlicer renders no plate images, so `Thumbnail_Middle` and
+/// the package thumbnail relationship both name a missing
+/// `Metadata/plate_1.png`.
+#[test]
+fn orca_two_plates_dangling_thumbnail_middle_is_no_thumbnail() {
+    let outcome = inspect_fixture(&fixture_dir().join("orca-two-plates.3mf")).unwrap();
+    assert_eq!(outcome.thumbnail, None);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
 }

@@ -1,0 +1,25 @@
+{
+  "format": "gcode",
+  "producer": { "name": "OrcaSlicer", "version": "2.5.0-dev" },
+  "claims": [
+    { "key": "total layer number", "value": "50", "line": 3 },
+    { "key": "max_z_height", "value": "10.00", "line": 6 },
+    { "key": "filament used [mm]", "value": "245.37", "line": 4338 },
+    { "key": "filament used [g]", "value": "0.73", "line": 4340 },
+    { "key": "estimated printing time (normal mode)", "value": "3m 42s", "line": 4345 },
+    { "key": "filament_settings_id", "value": "\"Generic PLA @System\"", "line": 4545 },
+    { "key": "filament_type", "value": "PLA", "line": 4558 },
+    { "key": "layer_height", "value": "0.2", "line": 4682 },
+    { "key": "nozzle_diameter", "value": "0.4", "line": 4740 },
+    { "key": "printer_model", "value": "Generic Klipper Printer", "line": 4807 },
+    { "key": "printer_settings_id", "value": "MyKlipper 0.4 nozzle", "line": 4810 }
+  ],
+  "trusted": false,
+  "lineCount": 5064,
+  "commandCount": 2697,
+  "toolsUsed": [],
+  "relativePositioningSeen": false,
+  "relativeExtrusionSeen": true,
+  "observedBoundsMm": { "min": [120.2, 126.2, 0.2], "max": [129.8, 135.8, 10.4] },
+  "thumbnails": []
+}
