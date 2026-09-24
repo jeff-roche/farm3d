@@ -13,10 +13,8 @@
 //! and verifies, and deleting a Project leaves every Model and revision in
 //! place.
 //!
-//! Fixture substitution (preflight S6, AC2 partial): `orca-two-plates.3mf`
-//! is unavailable, so the linked 3MF is `core-two-objects.3mf` rebuilt here
-//! with OrcaSlicer's `Metadata/model_settings.config` (two plates) and
-//! `Metadata/project_settings.config` (an unsupported entry).
+//! The linked 3MF is the real OrcaSlicer export `orca-two-plates.3mf`: two
+//! plates, and four unsupported entries to acknowledge.
 
 mod common;
 
@@ -59,42 +57,6 @@ fn fixture(name: &str) -> Vec<u8> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
-}
-
-/// `core-two-objects.3mf` with OrcaSlicer's plate and settings parts: plate
-/// 1 holds object 1 and plate 2 ("Second") holds object 2, and the project
-/// settings part is listed as unsupported.
-fn two_plate_3mf() -> Vec<u8> {
-    use std::io::{Cursor, Write};
-    let mut archive = zip::ZipArchive::new(Cursor::new(fixture("core-two-objects.3mf"))).unwrap();
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for index in 0..archive.len() {
-        writer
-            .raw_copy_file(archive.by_index_raw(index).unwrap())
-            .unwrap();
-    }
-    let stored =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let parts: [(&str, &[u8]); 2] = [
-        (
-            "Metadata/model_settings.config",
-            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><config>\
-              <plate><metadata key=\"plater_id\" value=\"1\"/><metadata key=\"plater_name\" value=\"\"/>\
-                <model_instance><metadata key=\"object_id\" value=\"1\"/></model_instance></plate>\
-              <plate><metadata key=\"plater_id\" value=\"2\"/><metadata key=\"plater_name\" value=\"Second\"/>\
-                <model_instance><metadata key=\"object_id\" value=\"2\"/></model_instance></plate>\
-              </config>",
-        ),
-        (
-            "Metadata/project_settings.config",
-            br#"{ "printer_model": "Bambu Lab X1 Carbon" }"#,
-        ),
-    ];
-    for (name, bytes) in parts {
-        writer.start_file(name, stored).unwrap();
-        writer.write_all(bytes).unwrap();
-    }
-    writer.finish().unwrap().into_inner()
 }
 
 /// Polls `probe` until it returns `Some`, or panics at the deadline.
@@ -267,7 +229,7 @@ fn the_tracer_imports_restarts_follows_a_linked_source_and_deletes_a_project() {
     let stl_bytes = fixture("cube-binary.stl");
     let stl_path = sources.path().join("cube-binary.stl");
     fs::write(&stl_path, &stl_bytes).unwrap();
-    let plates_bytes = two_plate_3mf();
+    let plates_bytes = fixture("orca-two-plates.3mf");
     let linked_dir = sources.path().join("linked");
     fs::create_dir(&linked_dir).unwrap();
     let linked_path = linked_dir.join("orca-two-plates.3mf");
@@ -293,7 +255,15 @@ fn the_tracer_imports_restarts_follows_a_linked_source_and_deletes_a_project() {
         .iter()
         .map(|entry| &entry["part"])
         .collect();
-    assert_eq!(unsupported, vec!["Metadata/project_settings.config"]);
+    assert_eq!(
+        unsupported,
+        vec![
+            "Metadata/filament_sequence.json",
+            "Metadata/model_settings.config",
+            "Metadata/project_settings.config",
+            "Metadata/slice_info.config",
+        ]
+    );
 
     let imported = running.ok(
         "import_models",
