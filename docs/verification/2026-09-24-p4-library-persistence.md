@@ -2,18 +2,19 @@
 
 **Date:** 2026-09-24
 **Platform:** Linux x86_64 (Linux 7.2.6-1-cachyos, btrfs `$HOME`)
-**Validated source:** the commit that corrects this document
-(`docs: correct the P4 verification record after the final fixes`) on
-`feature/p4-library-persistence`, directly on top of `35a1f30` (`fix: open
-staged sources without blocking and check the handle`). The automated
-evidence below was re-run on that tree. It includes the final review fix
-wave (see "Final review fixes"), which follows `b08802d` (`docs: record P4
-verification evidence`). That earlier commit added this document, the
+**Validated source:** the commit that records the post-review fixes in
+this document (`docs: record the Orca fixtures and the extension cap in P4
+verification`) on `feature/p4-library-persistence`, directly on top of
+`bcae02d` (`test: link the real OrcaSlicer project in the P4 tracer`). The
+automated evidence below was re-run on that tree. It includes the final
+review fix wave and the post-review fixes (see "Final review fixes"),
+which follow `b08802d` (`docs: record P4 verification evidence`). That earlier commit added this document, the
 tracer (`src-tauri/tests/p4_tracer.rs`), the `CONTEXT.md` vocabulary, the
 umbrella doc wording, and the `docs/screenshots/p4-*.png` captures, and
 changed no application source. The visual and keyboard checks and
-`just package` ran on `b08802d`. The fix wave changes only Rust
-back-end code, so they were not repeated.
+`just package` ran on `b08802d`. The fixes since then change only Rust
+back-end code, tests, fixtures, and docs, so those checks were not
+repeated.
 Covers Tasks 1–14 (P4 in full), for GitHub issue #14.
 
 **Final counts after the rebase onto P3:** `COMMAND_NAMES` holds **58**
@@ -27,11 +28,13 @@ array length. `CURRENT_SCHEMA_VERSION` is **5**, applied by migration
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build. The main chunk is `index-*.js` at 493.74 kB (150.85 kB gzip), with no Vite chunk-size warning. The Import, Locate, Delete Model, and Project dialogs are separate lazy chunks. |
 | `just test` | Passed: 64 files, 772 tests. The runner printed the same pre-existing jsdom `Window.scrollTo()` notices as P3, and exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 401 library tests (1 ignored), 28 export-contract tests (1 ignored), and 3 `library_fixtures` tests (1 ignored, the `gen-library-fixtures` generator). The P4 integration files ran 28 `p4_content`, 10 `p4_contract_path`, 28 `p4_import`, 10 `p4_links`, 8 `p4_migration`, and **1 `p4_tracer`**. Every F0–P3 file passed. Four of them were edited for P4, only to pin the new command count and schema version: `f1_contract_path.rs` (the count, plus P4's 17 commands in its inventory and handler lists), `f1_residual_acceptance.rs` and `p3_contract_path.rs` (the count), and `p3_migration.rs` (`CURRENT_SCHEMA_VERSION` in place of a literal 4). The files ran 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, 1 `p3_tracer`, and 3 `snapshot`. In all, 701 tests passed, 0 failed, and 3 were ignored. The build printed the existing `ts-rs` "failed to parse serde attribute" warnings (`transparent`, `double_option`), as before. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 405 library tests (1 ignored), 28 export-contract tests (1 ignored), and 4 `library_fixtures` tests (1 ignored, the `gen-library-fixtures` generator). The P4 integration files ran 28 `p4_content`, 10 `p4_contract_path`, 29 `p4_import`, 10 `p4_links`, 8 `p4_migration`, and **1 `p4_tracer`**. Every F0–P3 file passed. Four of them were edited for P4, only to pin the new command count and schema version: `f1_contract_path.rs` (the count, plus P4's 17 commands in its inventory and handler lists), `f1_residual_acceptance.rs` and `p3_contract_path.rs` (the count), and `p3_migration.rs` (`CURRENT_SCHEMA_VERSION` in place of a literal 4). The files ran 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, 1 `p3_tracer`, and 3 `snapshot`. In all, 707 tests passed, 0 failed, and 3 were ignored. The build printed the existing `ts-rs` "failed to parse serde attribute" warnings (`transparent`, `double_option`), as before. |
 | `source "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Passed (exit 0). |
 | `source "$HOME/.cargo/env" && just gen-contracts`, then `git diff --exit-code src/generated` | Passed: the regeneration ran clean under `--locked`, and the diff was empty. |
+| `source "$HOME/.cargo/env" && just gen-library-fixtures`, twice, then `git status --short` | Passed: both runs exited 0, and the tree stayed clean. The generator writes neither the slicer exports (`orca-*`, `prusa-*`) nor any `*.expected.json`. |
 | `source "$HOME/.cargo/env" && just package` | Passed: a release build, then three bundles: `farm3d_0.1.0_amd64.deb` (8.4 MB), `farm3d-0.1.0-1.x86_64.rpm` (8.4 MB), and `farm3d_0.1.0_amd64.AppImage` (111.5 MB). `scripts/assert-package-contents.sh` passed on all three: each carries `usr/bin/farm3d` and `printer-catalog.json`, and none carries source, tests, fixtures, build output, or metadata. Installing and exercising a bundle is **unavailable** (see below). |
 | `p4_tracer` alone, 20 consecutive runs | 20 of 20 passed, about 1.9 s each (on `b08802d`). |
+| `p4_tracer` alone after it switched to the real Orca project, 5 consecutive runs | 5 of 5 passed, about 1.9 s each (on `bcae02d`). |
 | Final-fix loops: the FIFO test, all of `p4_links`, and `p4_tracer` | `a_source_swapped_for_a_fifo_before_open_is_not_a_file_and_does_not_block` passed 12 of 12 runs. The whole `p4_links` file (which holds the new supervisor tests) passed 12 of 12. `p4_tracer` passed 10 of 10. |
 
 ### Final review fixes
@@ -66,6 +69,38 @@ The final review's findings, each fixed test-first after `b08802d`:
   non-regular file is `NotAFile`. The test is `p4_content.rs`
   `a_source_swapped_for_a_fifo_before_open_is_not_a_file_and_does_not_block`.
 
+Two more fixes followed the final re-review:
+
+- **3MF required extensions (Important).** Each model part now keeps each
+  `requiredextensions` prefix once, in document order. More than
+  `ZipLimits::max_extensions` (64) distinct prefixes in one part, or across
+  the package, fails with the "safety limit" `INVALID_CONTENT`. Only the
+  `xmlns:` declarations of required prefixes are kept, so the namespace
+  map and the per-part unsupported list are bounded by the same cap.
+  Before this fix, `requiredextensions="p p p …"` kept one string per token
+  until the inspection ended: a 236 KB file peaked at 770 MB. The unit
+  tests in `threemf.rs` are:
+  - `repeated_required_extension_prefixes_are_kept_once` (100,000 tokens
+    leave 2 prefixes in the part)
+  - `too_many_distinct_required_extension_prefixes_exceed_the_safety_limit`
+  - `only_the_namespaces_of_required_prefixes_are_kept` (1,000
+    declarations leave 1)
+  - `required_extensions_across_parts_are_merged_once_and_capped`
+- **The real OrcaSlicer fixtures.** `orca-two-plates.3mf` and
+  `orca-cube.gcode` come from the user-approved OrcaSlicer 2.5.0-dev
+  nightly, through its headless CLI. The spike report's "OrcaSlicer
+  exports" section records the build, the profiles, and the commands. Both
+  files are committed as produced, and their oracles were written by hand
+  from the files' own XML, config, and G-code text. They are now covered
+  by these tests:
+  - `library_fixtures.rs`: the fixture loop, which also fails if any slicer
+    export or its oracle is missing, and
+    `orca_two_plates_dangling_thumbnail_middle_is_no_thumbnail`.
+  - `p4_import.rs`: `the_real_orca_project_imports_its_plates_once_acknowledged`,
+    and `gcode_is_retained_byte_for_byte_with_its_claims_untrusted`, which
+    now also imports `orca-cube.gcode`.
+  - `p4_tracer.rs`: the tracer links the real project.
+
 ### The tracer (spec acceptance criteria 4, 5, 6, 7, and 15)
 
 `src-tauri/tests/p4_tracer.rs`,
@@ -76,11 +111,13 @@ real native `notify` watches.
 
 1. `create_project` for "Brackets" and for "Calibration".
 2. One import selection is registered exactly as the drop handler registers
-   one (clarification 2). It holds `cube-binary.stl` and a temp-dir file
-   named `orca-two-plates.3mf`, which is the in-test stand-in (see AC 2).
+   one (clarification 2). It holds `cube-binary.stl` and a temp-dir copy of
+   the real OrcaSlicer fixture `orca-two-plates.3mf`.
    `inspect_import_selection` reports both files `ready`. The 3MF has
-   `plateCount: 2`, and one unsupported entry,
-   `Metadata/project_settings.config`. `import_models` imports the STL as
+   `plateCount: 2` and four unsupported entries:
+   `Metadata/filament_sequence.json`, `Metadata/model_settings.config`
+   (per-object settings), `Metadata/project_settings.config`, and
+   `Metadata/slice_info.config`. `import_models` imports the STL as
    **managed** into both Projects, and the 3MF as **linked** into
    "Brackets" with `acknowledgeUnsupported: true`. The STL's `projectIds`
    are `[Brackets, Calibration]`, and the linked Model's `link.path` is the
@@ -136,7 +173,7 @@ stand in for it.
 | # | Criterion | Evidence |
 | --- | --- | --- |
 | 1 | The migration applies, is ledgered, survives crash-boundary injection, and leaves Printer and P3 data unchanged. Revisions reject `UPDATE`. | `p4_migration.rs`: `fresh_database_records_the_v5_ledger_row_with_a_matching_checksum`, `upgrading_v4_to_v5_leaves_printers_and_spools_unchanged`, `a_crash_before_commit_leaves_the_database_unchanged_at_v4`, `revisions_are_immutable_and_deleting_a_model_cascades_everything`, plus the CHECK, unique-index, and `RESTRICT` tests. |
-| 2 | **Partial.** Every D20 fixture's inspection equals its `*.expected.json`, and every rejection fixture returns its code. | `library_fixtures.rs`: `every_fixture_matches_its_expected_inspection` covers all 17 committed fixtures, including `prusa-project.3mf` and `prusa-cube.gcode`. There are also `core_two_objects_yields_its_embedded_thumbnail` and `prusa_project_dangling_thumbnail_relationship_is_no_thumbnail`. `orca-two-plates.3mf` and `orca-cube.gcode` are **unavailable** (see "Deviations and interpretations"). Plates are covered by the in-test stand-ins: the `threemf.rs` unit test `reads_orca_production_parts_plates_and_unsupported_settings`, `p4_import.rs`'s `rich_3mf`/`orca_style_gcode`, and the tracer's two-plate package. |
+| 2 | Every D20 fixture's inspection equals its `*.expected.json`, and every rejection fixture returns its code. | `library_fixtures.rs`: `every_fixture_matches_its_expected_inspection` covers all 19 committed fixtures, including the real slicer exports `orca-two-plates.3mf`, `orca-cube.gcode`, `prusa-project.3mf`, and `prusa-cube.gcode`. It fails if any of those four, or its oracle, is missing. `orca-two-plates.3mf` meets Task 1's Gate A expectation: 2 objects, 2 plates, 24 triangles, and `requiredExtensions: ["p"]`, with both object parts resolved through `3D/_rels/3dmodel.model.rels`. Other tests: `core_two_objects_yields_its_embedded_thumbnail`, `prusa_project_dangling_thumbnail_relationship_is_no_thumbnail`, and `orca_two_plates_dangling_thumbnail_middle_is_no_thumbnail`. |
 | 3 | Content store: identical content is stored once; an orphan blob is swept at startup; no row exists without its file; cleanup after `delete_model` removes only unreferenced blobs and survives a failed unlink. | `p4_content.rs`: `placement_creates_a_read_only_blob_and_commits_the_closure_rows`, `a_crash_between_placement_and_commit_leaves_an_orphan_the_sweep_removes`, `unreferenced_blobs_move_to_pending_cleanup_and_are_released`, `mark_unreferenced_blobs_keeps_blobs_a_revision_still_references`, `a_failed_unlink_stays_pending_until_the_startup_sweep`, `a_blob_reimported_before_release_is_kept`, `verified_reads_return_intact_bytes_and_reject_damaged_ones`. `p4_contract_path.rs`: `deleting_a_managed_model_releases_only_the_blobs_nothing_else_holds`. |
 | 4 | Managed and linked imports survive restart with identical hashes, and linked Models resume watching. | `p4_tracer.rs`, step 4. `p4_links.rs`: `a_linked_model_survives_a_restart_and_an_edit_while_stopped_is_captured`. |
 | 5 | Editing a linked file creates revision 2, and revision 1's bytes still verify. Deleting it sets `missing`; restoring it sets `ok` with no new revision. A mid-write change sets `changing`, then settles. | `p4_tracer.rs`, steps 5, 6, and 8. `p4_links.rs`: `an_atomic_save_adds_exactly_one_revision_and_keeps_revision_1_readable`, `a_deleted_source_goes_missing_and_recovers_when_restored`, `a_removed_parent_directory_is_followed_through_its_ancestor`. `library/links.rs` unit tests: `a_source_changing_during_the_copy_is_changing`, `a_changing_source_is_retried_at_2_4_and_8_seconds_then_left`, `retries_stop_once_the_source_settles`. |
@@ -253,8 +290,10 @@ screenshot the desktop.
 `docs/superpowers/baselines/2026-09-24-p4-format-watcher-spike.md` (Task 1)
 records:
 
-- **Gate A:** the 3MF reader passed with a substitution, since the Orca
-  fixture is unavailable.
+- **Gate A:** the 3MF reader passed. The spike ran against an Orca-layout
+  stand-in. After the final review, the real `orca-two-plates.3mf` (from
+  the OrcaSlicer 2.5.0-dev nightly) was checked against the same
+  expectation.
 - **Gate B:** SHA-256 ran at about 1.5 GB/s.
 - **Gate C:** native watches gave one debounced batch within 2 s, in 20 of
   20 repetitions for each of six scenarios. The watch limit fails with
@@ -352,16 +391,22 @@ evidence.
   `ModelLink` has no field for the `TOO_LARGE` reason. The UI therefore
   shows it as plain `unreadable`. A later phase needs a reason field, or a
   warning, to surface it.
-- **AC 2 is partial: the Orca fixtures are unavailable.**
-  - `orca-two-plates.3mf` and `orca-cube.gcode` were not produced. No
-    OrcaSlicer flatpak is installed; the only Orca binary on the host is an
-    unapproved nightly AppImage, and running it is the user's call.
-  - Plates and Orca's package layout are covered by in-test stand-ins
-    (listed in the AC table).
-  - As a real-world check, the Task 4 review ran the inspector over 35
-    `.3mf` files already on the host, read-only. 33 were accepted. One was
-    not a ZIP. One was a BambuStudio project with **no objects**, which D10
-    rejects with "This 3MF contains no objects."
+- **The Orca fixtures come from the nightly's CLI, with 2.4 profiles.**
+  - The nightly packs its bundled profiles as `.opc` files, and its CLI
+    can't load those into an empty data directory. The presets therefore
+    come from the JSON `Custom` and `OrcaFilamentLibrary` vendor trees,
+    version 02.04.00.03, which an earlier OrcaSlicer install had unpacked
+    on the host.
+  - The CLI can't put an object on plate 2. The two-plate project is a CLI
+    export whose `model_settings.config` was split into two plates, then
+    loaded and saved again by Orca, which wrote every committed byte.
+  - Headless Orca renders no thumbnails, so neither Orca file has one. The
+    embedded-thumbnail cases still use the generated and in-test fixtures.
+  - The spike report has the details.
+- **Real-world 3MF check.** The Task 4 review ran the inspector over 35
+  `.3mf` files already on the host, read-only. 33 were accepted. One was
+  not a ZIP. One was a BambuStudio project with **no objects**, which D10
+  rejects with "This 3MF contains no objects."
   - **Note for the product owner:** BambuStudio can save such an empty
     project, and farm3d will refuse it.
 - **Other rulings that shape behavior:**
@@ -505,3 +550,14 @@ never render. SegmentedControl, new in P4, was fixed in Task 9.
 - `docs/screenshots/p4-*.png` (new, 8 files): the web-mode visual and
   keyboard captures listed above.
 - `docs/verification/2026-09-24-p4-library-persistence.md` (this file).
+
+After the final re-review:
+
+- `src-tauri/src/library/formats/threemf.rs`: the required-extension cap
+  and deduplication, and their unit tests.
+- `src-tauri/tests/fixtures/library/orca-two-plates.3mf`,
+  `orca-cube.gcode`, and their `*.expected.json` (new).
+- `src-tauri/tests/library_fixtures.rs`, `p4_import.rs`, and
+  `p4_tracer.rs`: coverage with the real Orca fixtures.
+- `docs/superpowers/baselines/2026-09-24-p4-format-watcher-spike.md`: the
+  OrcaSlicer build, profiles, and commands.
