@@ -100,6 +100,45 @@ describe("SpoolFormDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("lets the user correct a rejected gross weight and resubmit (fix round 2)", async () => {
+    createSpool.mockRejectedValueOnce({
+      contractVersion: 1, code: "VALIDATION", message: "The gross weight is less than the tare.",
+      recovery: [], retryable: false, details: { fieldPath: "entry.grossMg" },
+    });
+    createSpool.mockResolvedValueOnce({ id: "spl-new" });
+    const onOpenChange = vi.fn();
+    render(() => <SpoolFormDialog open onOpenChange={onOpenChange} />);
+
+    await fillRequiredFields();
+    await fireEvent.click(screen.getByText("I weighed it"));
+    await fireEvent.click(screen.getByRole("radio", { name: "Scale" }));
+    const gross = screen.getByLabelText("Gross weight (g)") as HTMLInputElement;
+    await fireEvent.input(gross, { target: { value: "900" } });
+
+    const addButton = screen.getByRole("button", { name: "Add Spool" });
+    await fireEvent.click(addButton);
+
+    expect(await screen.findByText("The gross weight is less than the tare.")).toBeInTheDocument();
+
+    // Editing gross clears the server error and re-enables the button --
+    // without fix round 2, `grossError()`/`amountValid` would stay stuck on
+    // the stale server rejection forever.
+    await fireEvent.input(gross, { target: { value: "950" } });
+    expect(screen.queryByText("The gross weight is less than the tare.")).not.toBeInTheDocument();
+    expect(addButton).not.toBeDisabled();
+
+    await fireEvent.click(addButton);
+
+    expect(createSpool).toHaveBeenCalledTimes(2);
+    expect(createSpool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ manufacturer: "Prusament", colorName: "Black" }),
+      { kind: "scale", grossMg: 950_000 },
+      undefined,
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("shows a dialog-level message and stays open on an Edit CONFLICT", async () => {
     const spool: SpoolRecord = {
       id: "spl-1", revision: 3, spoolNumber: 7,

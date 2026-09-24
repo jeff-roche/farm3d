@@ -114,6 +114,46 @@ describe("RecordAmountDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("lets the user correct a rejected gross weight and resubmit (fix round 2)", async () => {
+    // Same setup as the VALIDATION test above: the first submit is rejected
+    // by Rust even though the client precheck passed.
+    recordAmount.mockRejectedValueOnce({
+      contractVersion: 1, code: "VALIDATION", message: "The gross weight is less than the tare.",
+      recovery: [], retryable: false, details: { fieldPath: "entry.grossMg" },
+    });
+    recordAmount.mockResolvedValueOnce({ ...SPOOL, availability: { currentMg: 950_000, reservedMg: 0, availableMg: 950_000 } });
+    const onOpenChange = vi.fn();
+    render(() => (
+      <RecordAmountDialog open onOpenChange={onOpenChange} spool={SPOOL} />
+    ));
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Scale" }));
+    const gross = screen.getByLabelText("Gross weight (g)") as HTMLInputElement;
+    await fireEvent.input(gross, { target: { value: "900" } });
+    const recordButton = screen.getByRole("button", { name: "Record" });
+    await fireEvent.click(recordButton);
+
+    expect(await screen.findByText("The gross weight is less than the tare.")).toBeInTheDocument();
+
+    // Editing gross clears the server error and re-enables the button --
+    // without fix round 2, `grossError()`/`canSubmit` would stay stuck on
+    // the stale server rejection forever.
+    await fireEvent.input(gross, { target: { value: "950" } });
+    expect(screen.queryByText("The gross weight is less than the tare.")).not.toBeInTheDocument();
+    expect(recordButton).not.toBeDisabled();
+
+    await fireEvent.click(recordButton);
+
+    expect(recordAmount).toHaveBeenCalledTimes(2);
+    expect(recordAmount).toHaveBeenNthCalledWith(
+      2,
+      "spl-1",
+      { kind: "scale", grossMg: 950_000 },
+      undefined,
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("shows a dialog-level message and stays open on a CONFLICT", async () => {
     recordAmount.mockRejectedValue({
       contractVersion: 1, code: "CONFLICT", message: "Someone else changed this Spool.",

@@ -53,6 +53,25 @@ export function TareManagerDialog(props: TareManagerDialogProps) {
     editFieldError()?.path === path ? editFieldError()!.message : undefined
   );
 
+  /** Fix round 2 consistency pass: neither `addFieldError` nor
+   *  `editFieldError` actually gates a submit button here (Add's `disabled`
+   *  only checks the trimmed name/grams; Save has no `disabled` at all), so
+   *  this dialog never had the deadlock bug the ruling found in the amount
+   *  dialogs. Still, a rejected field error should clear the moment the
+   *  user edits the field it names, the same as everywhere else, rather
+   *  than lingering (stale) until the next Add/Save attempt. */
+  function clearAddFieldError(path: string): void {
+    if (addFieldError()?.path === path) setAddFieldError(null);
+  }
+  function clearEditFieldError(path: string): void {
+    if (editFieldError()?.path === path) setEditFieldError(null);
+  }
+
+  const onNewNameChange = (value: string) => { setNewName(value); clearAddFieldError("name"); };
+  const onNewGramsChange = (value: number | undefined) => { setNewGrams(value); clearAddFieldError("weightMg"); };
+  const onEditNameChange = (value: string) => { setEditName(value); clearEditFieldError("name"); };
+  const onEditGramsChange = (value: number | undefined) => { setEditGrams(value); clearEditFieldError("weightMg"); };
+
   async function onAdd() {
     const name = newName().trim();
     if (!name || newGrams() === undefined) return;
@@ -128,13 +147,13 @@ export function TareManagerDialog(props: TareManagerDialogProps) {
                   <TextField
                     aria-label={`Tare name for ${tare.name}`}
                     value={editName()}
-                    onChange={setEditName}
+                    onChange={onEditNameChange}
                     error={editFieldErrorFor("name")}
                   />
                   <NumberField
                     aria-label={`Tare weight for ${tare.name}`}
                     value={editGrams()}
-                    onChange={setEditGrams}
+                    onChange={onEditGramsChange}
                     minValue={0}
                     maxValue={5_000}
                     step={0.1}
@@ -152,13 +171,13 @@ export function TareManagerDialog(props: TareManagerDialogProps) {
           <TextField
             label="New tare name"
             value={newName()}
-            onChange={setNewName}
+            onChange={onNewNameChange}
             error={addFieldErrorFor("name")}
           />
           <NumberField
             label="Weight (g)"
             value={newGrams()}
-            onChange={setNewGrams}
+            onChange={onNewGramsChange}
             minValue={0}
             maxValue={5_000}
             step={0.1}

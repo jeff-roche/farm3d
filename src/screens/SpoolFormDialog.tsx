@@ -114,6 +114,36 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
     serverFieldError()?.path === path ? serverFieldError()!.message : undefined
   );
 
+  /** Fix round 2: a server field error is display-only -- it must never
+   *  gate `canSubmit` on its own (only client-side validity does, via
+   *  `fieldsValid`/`amountValid`), and it clears the moment the user edits
+   *  any input that field's validation depends on. Without this, a
+   *  rejected field (say `entry.grossMg`) would leave `serverFieldError`
+   *  set forever -- `onSubmit` only clears it at the *start* of a submit,
+   *  and (for the amount fields) the button was disabled by the very
+   *  error that submit is supposed to clear, so it could never run again. */
+  function clearServerFieldError(path: string): void {
+    if (serverFieldError()?.path === path) setServerFieldError(null);
+  }
+
+  const onManufacturerChange = (value: string) => { setManufacturer(value); clearServerFieldError("manufacturer"); };
+  const onProductChange = (value: string) => { setProduct(value); clearServerFieldError("product"); };
+  const onMaterialOtherChange = (value: string) => { setMaterialOther(value); clearServerFieldError("materialOther"); };
+  const onColorNameChange = (value: string) => { setColorName(value); clearServerFieldError("colorName"); };
+  const onColorHexChange = (value: string) => { setColorHex(value); clearServerFieldError("colorHex"); };
+  const onNominalGramsChange = (value: number | undefined) => { setNominalGrams(value); clearServerFieldError("nominalMg"); };
+  const onLowThresholdGramsChange = (value: number | undefined) => { setLowThresholdGrams(value); clearServerFieldError("lowThresholdMg"); };
+  const onMeasuredGramsChange = (value: number | undefined) => { setMeasuredGrams(value); clearServerFieldError("entry.netMg"); };
+  const onGrossGramsChange = (value: number | undefined) => { setGrossGrams(value); clearServerFieldError("entry.grossMg"); };
+  const onTareIdChange = (value: string) => {
+    setTareId(value);
+    // The tare's weight is half of what makes a scale gross entry valid
+    // (D3) -- changing it can resolve (or newly create) a
+    // gross-below-tare condition, so it clears the same server error the
+    // gross field does.
+    clearServerFieldError("entry.grossMg");
+  };
+
   const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
   const tareLabel = (id: string): string => {
     if (id === NO_TARE) return "No default tare";
@@ -125,11 +155,16 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
     if (amountMode() !== "scale" || grossGrams() === undefined) return null;
     return gramsToMg(grossGrams()!) - selectedTareMg();
   });
-  const grossError = createMemo<string | undefined>(() => {
+  /** Client-known only -- the sole thing `amountValid` gates on (fix round
+   *  2: a server error must never gate submit on its own, only display). */
+  const clientGrossError = createMemo<string | undefined>(() => {
     const preview = netPreviewMg();
-    if (preview === null) return serverFieldErrorFor("entry.grossMg");
-    return preview < 0 ? "The gross weight is less than the tare." : serverFieldErrorFor("entry.grossMg");
+    if (preview === null) return undefined;
+    return preview < 0 ? "The gross weight is less than the tare." : undefined;
   });
+  /** What the Gross field's `error` prop shows: the client check first,
+   *  then a still-live server rejection. */
+  const grossError = createMemo<string | undefined>(() => clientGrossError() ?? serverFieldErrorFor("entry.grossMg"));
 
   const materialOtherValid = () => family() !== "OTHER" || materialOther().trim().length > 0;
 
@@ -145,7 +180,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
     if (isEdit()) return true;
     if (!weighed()) return true;
     if (amountMode() === "net") return measuredGrams() !== undefined && measuredGrams()! >= 0;
-    return grossGrams() !== undefined && grossGrams()! >= 0 && !grossError();
+    return grossGrams() !== undefined && grossGrams()! >= 0 && !clientGrossError();
   });
 
   const canSubmit = createMemo(() => fieldsValid() && amountValid() && !submitting());
@@ -200,8 +235,8 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   return (
     <Dialog title={isEdit() ? "Edit Spool" : "Add Spool"} open={props.open} onOpenChange={props.onOpenChange}>
       <div class={styles.body}>
-        <TextField label="Manufacturer" value={manufacturer()} onChange={setManufacturer} required error={serverFieldErrorFor("manufacturer")} />
-        <TextField label="Product (optional)" value={product()} onChange={setProduct} error={serverFieldErrorFor("product")} />
+        <TextField label="Manufacturer" value={manufacturer()} onChange={onManufacturerChange} required error={serverFieldErrorFor("manufacturer")} />
+        <TextField label="Product (optional)" value={product()} onChange={onProductChange} error={serverFieldErrorFor("product")} />
         <Select
           label="Material"
           options={MATERIAL_FAMILIES}
@@ -210,10 +245,10 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           optionLabel={materialFamilyLabel}
         />
         <Show when={family() === "OTHER"}>
-          <TextField label="Material (other)" value={materialOther()} onChange={setMaterialOther} required error={serverFieldErrorFor("materialOther")} />
+          <TextField label="Material (other)" value={materialOther()} onChange={onMaterialOtherChange} required error={serverFieldErrorFor("materialOther")} />
         </Show>
-        <TextField label="Color name" value={colorName()} onChange={setColorName} required error={serverFieldErrorFor("colorName")} />
-        <TextField label="Color hex (optional)" value={colorHex()} onChange={setColorHex} placeholder="#RRGGBB" error={serverFieldErrorFor("colorHex")} />
+        <TextField label="Color name" value={colorName()} onChange={onColorNameChange} required error={serverFieldErrorFor("colorName")} />
+        <TextField label="Color hex (optional)" value={colorHex()} onChange={onColorHexChange} placeholder="#RRGGBB" error={serverFieldErrorFor("colorHex")} />
         <RadioGroup
           label="Diameter"
           options={DIAMETER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
@@ -238,7 +273,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
         <NumberField
           label="Nominal weight (g)"
           value={nominalGrams()}
-          onChange={setNominalGrams}
+          onChange={onNominalGramsChange}
           minValue={1}
           maxValue={50_000}
           step={0.1}
@@ -248,7 +283,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
         <NumberField
           label="Low threshold (g)"
           value={lowThresholdGrams()}
-          onChange={setLowThresholdGrams}
+          onChange={onLowThresholdGramsChange}
           minValue={0}
           maxValue={50_000}
           step={0.1}
@@ -259,7 +294,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
           label="Default tare"
           options={tareOptions()}
           value={tareId()}
-          onChange={setTareId}
+          onChange={onTareIdChange}
           optionLabel={tareLabel}
         />
         <Show when={!isEdit()}>
@@ -283,7 +318,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
                 <NumberField
                   label="Measured net weight (g)"
                   value={measuredGrams()}
-                  onChange={setMeasuredGrams}
+                  onChange={onMeasuredGramsChange}
                   minValue={0}
                   maxValue={50_000}
                   step={0.1}
@@ -301,7 +336,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
                 <NumberField
                   label="Gross weight (g)"
                   value={grossGrams()}
-                  onChange={setGrossGrams}
+                  onChange={onGrossGramsChange}
                   minValue={0}
                   maxValue={55_000}
                   step={0.1}

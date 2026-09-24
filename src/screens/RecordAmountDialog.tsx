@@ -65,6 +65,33 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
     serverFieldError()?.path === path ? serverFieldError()!.message : undefined
   );
 
+  /** Fix round 2: a server field error is display-only -- it must never
+   *  gate `canSubmit` on its own (only client-side validity does), and it
+   *  clears the moment the user edits any input that field's validation
+   *  depends on. Without this, a rejected `entry.grossMg` (say) would
+   *  leave `serverFieldError` set forever -- `onSubmit` only clears it at
+   *  the *start* of a submit, and the button was disabled by the very
+   *  error that submit is supposed to clear, so it could never run again. */
+  function clearServerFieldError(path: string): void {
+    if (serverFieldError()?.path === path) setServerFieldError(null);
+  }
+
+  const onNetGramsChange = (value: number | undefined) => {
+    setNetGrams(value);
+    clearServerFieldError("entry.netMg");
+  };
+  const onGrossGramsChange = (value: number | undefined) => {
+    setGrossGrams(value);
+    clearServerFieldError("entry.grossMg");
+  };
+  const onTareIdChange = (value: string) => {
+    setTareId(value);
+    // The tare's weight is half of what makes gross valid (D3) -- changing
+    // it can resolve (or newly create) a gross-below-tare condition, so it
+    // clears the same server error the gross field does.
+    clearServerFieldError("entry.grossMg");
+  };
+
   const tareOptions = createMemo<string[]>(() => [NO_TARE, ...spoolState.tares.map((t) => t.id)]);
   const tareLabel = (id: string): string => {
     if (id === NO_TARE) return "No tare";
@@ -80,16 +107,21 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
     if (gross === undefined) return null;
     return gramsToMg(gross) - selectedTareMg();
   });
-  const grossError = createMemo<string | undefined>(() => {
+  /** Client-known only -- the sole thing that gates `canSubmit` (fix round
+   *  2: a server error must never gate submit on its own, only display). */
+  const clientGrossError = createMemo<string | undefined>(() => {
     const preview = netPreviewMg();
-    if (preview === null) return serverFieldErrorFor("entry.grossMg");
-    return preview < 0 ? "The gross weight is less than the tare." : serverFieldErrorFor("entry.grossMg");
+    if (preview === null) return undefined;
+    return preview < 0 ? "The gross weight is less than the tare." : undefined;
   });
+  /** What the Gross field's `error` prop shows: the client check first,
+   *  then a still-live server rejection. */
+  const grossError = createMemo<string | undefined>(() => clientGrossError() ?? serverFieldErrorFor("entry.grossMg"));
 
   const canSubmit = createMemo(() => {
     if (submitting()) return false;
     if (mode() === "net") return netGrams() !== undefined && netGrams()! >= 0;
-    return grossGrams() !== undefined && grossGrams()! >= 0 && !grossError();
+    return grossGrams() !== undefined && grossGrams()! >= 0 && !clientGrossError();
   });
 
   async function onSubmit() {
@@ -130,7 +162,7 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
           <NumberField
             label="Net weight (g)"
             value={netGrams()}
-            onChange={setNetGrams}
+            onChange={onNetGramsChange}
             minValue={0}
             maxValue={50_000}
             step={0.1}
@@ -149,13 +181,13 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
             label="Tare"
             options={tareOptions()}
             value={tareId()}
-            onChange={setTareId}
+            onChange={onTareIdChange}
             optionLabel={tareLabel}
           />
           <NumberField
             label="Gross weight (g)"
             value={grossGrams()}
-            onChange={setGrossGrams}
+            onChange={onGrossGramsChange}
             minValue={0}
             maxValue={55_000}
             step={0.1}
