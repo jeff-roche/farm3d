@@ -13,6 +13,11 @@ afterEach(() => {
 });
 
 describe("DeletePrinterDialog", () => {
+  it("warns that Spool movement history involving this Printer will be deleted (D10)", () => {
+    render(() => <DeletePrinterDialog open onOpenChange={vi.fn()} printerId="prn-1" printerName="North Bay" />);
+    expect(screen.getByText("Spool movement history involving this Printer will be deleted.")).toBeInTheDocument();
+  });
+
   it("keeps 'Delete permanently' disabled until the typed name matches exactly, then calls removePrinter", async () => {
     const onOpenChange = vi.fn();
     render(() => (

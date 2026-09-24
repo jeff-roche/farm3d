@@ -2,6 +2,7 @@ import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable, isCommandError } from "../ipc/client";
 import {
   printers as printerRecords,
+  registerWebDispositionApplier,
   registerWebSpoolLookup,
   spliceResolved,
   WEB_FIXTURE_EQUIPPED_PRINTER_ID,
@@ -22,6 +23,7 @@ import type { MoveDestination } from "../generated/contracts/domain/MoveDestinat
 import type { MoveSpoolData } from "../generated/contracts/command/MoveSpoolData";
 import type { MoveSpoolRequest } from "../generated/contracts/command/CommandContracts";
 import type { Reservation } from "../generated/contracts/domain/Reservation";
+import type { SpoolDispositionInput } from "../generated/contracts/domain/SpoolDispositionInput";
 import type { SpoolFields } from "../generated/contracts/domain/SpoolFields";
 import type { SpoolHistory } from "../generated/contracts/command/SpoolHistory";
 import type { SpoolLifecycleAction } from "../generated/contracts/domain/SpoolLifecycleAction";
@@ -315,6 +317,21 @@ export async function loadInventory(): Promise<void> {
     buffered = [];
     setState({ error: isCommandError(e) ? e.message : "Inventory could not load.", loaded: false });
   }
+}
+
+let inventoryLoad: Promise<void> | undefined;
+
+/** For screens outside the Spools destination that read `spoolState`
+ *  (the Printer Status tab's slots, the Material Slots editor, the wizard's
+ *  Equip step): loads the inventory once if nothing has yet, sharing an
+ *  in-flight load, and never reloads (or re-subscribes) one that's already
+ *  live. `SpoolInventory` keeps calling `loadInventory` itself on mount. */
+export function ensureInventoryLoaded(): Promise<void> {
+  if (state.loaded) return Promise.resolve();
+  inventoryLoad ??= loadInventory().finally(() => {
+    inventoryLoad = undefined;
+  });
+  return inventoryLoad;
 }
 
 // --- Movement (D6): optimistic ---------------------------------------------
@@ -630,7 +647,6 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
       revision: existing.revision + 1,
       updatedAt: now,
     };
-    if (wasLoaded && existing.location.kind === "slot") syncWebPrinterOccupancy(existing.location.printerId);
   } else if (action === "reactivate") {
     updated = {
       ...existing, lifecycle: "active",
@@ -645,8 +661,58 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
     updated = { ...existing, lifecycle: "active", revision: existing.revision + 1, updatedAt: now };
   }
   upsertSpool(updated);
+  // After the upsert, not before: the sync reads occupancy from
+  // `state.spools`, so a mark-empty that unloads must already be applied.
+  if (existing.location.kind === "slot" && updated.location.kind !== "slot") {
+    syncWebPrinterOccupancy(existing.location.printerId);
+  }
   return updated;
 }
+
+/** D10 in web mode, registered into printer-store's `archivePrinter` (see
+ *  `registerWebDispositionApplier`). Validates the whole set first -- every
+ *  loaded Spool named exactly once, each `slot` destination on a different,
+ *  non-archived Printer -- so a rejected set applies nothing, then moves
+ *  each Spool through this store's own web `moveSpool`/`setLifecycle`
+ *  paths. Unlike the desktop transaction, a failure part-way through (e.g.
+ *  a `CONFLICT` on a later destination) leaves the earlier moves applied;
+ *  web mode is a developer convenience, not a reimplementation. */
+async function applyWebArchiveDispositions(printerId: string, dispositions: SpoolDispositionInput[]): Promise<void> {
+  const loadedIds = new Set(
+    state.spools.filter((s) => s.location.kind === "slot" && s.location.printerId === printerId).map((s) => s.id),
+  );
+  const named = new Set(dispositions.map((d) => d.spoolId));
+  const coversExactly = named.size === dispositions.length && named.size === loadedIds.size && [...named].every((id) => loadedIds.has(id));
+  const validDestinations = dispositions.every((d) => {
+    if (d.disposition.kind !== "slot") return true;
+    const slotId = d.disposition.slotId;
+    const target = printerRecords().find((p) => p.materialSlots.some((slot) => slot.id === slotId));
+    return target !== undefined && target.id !== printerId && !target.archivedAt;
+  });
+  if (!coversExactly || !validDestinations) {
+    throw commandError("VALIDATION", "Choose where each loaded Spool goes before archiving.", { fieldPath: "spoolDispositions" });
+  }
+  for (const { spoolId, expectedSpoolRevision, disposition } of dispositions) {
+    if (disposition.kind === "markEmpty") {
+      await setLifecycle(spoolId, "markEmpty", disposition.storageLabel ?? undefined);
+    } else if (disposition.kind === "storage") {
+      await moveSpool({ spoolId, expectedSpoolRevision, destination: { kind: "storage", storageLabel: disposition.storageLabel ?? null } });
+    } else {
+      await moveSpool({
+        spoolId,
+        expectedSpoolRevision,
+        destination: {
+          kind: "slot",
+          slotId: disposition.slotId,
+          expectedOccupantSpoolId: disposition.expectedOccupantSpoolId,
+          ...(disposition.displacedStorageLabel !== undefined ? { displacedStorageLabel: disposition.displacedStorageLabel } : {}),
+        },
+      });
+    }
+  }
+}
+
+registerWebDispositionApplier(applyWebArchiveDispositions);
 
 /** Rejects for inline handling (fix round 1 ruling). `SpoolDetailDock`'s
  *  lifecycle menu and Unload are non-dialog callers -- they catch this

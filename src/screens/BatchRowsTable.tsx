@@ -23,6 +23,8 @@ export interface BatchRowsTableProps {
    *  unverified (results mode, D8). */
   unverified?: ReadonlySet<string>;
   onSaveAnyway?: (rowId: string) => void;
+  /** Results mode: Equip on a created row, with its Printer id (D12). */
+  onEquip?: (printerId: string) => void;
 }
 
 const OUTCOME_MARKERS: Record<BatchRowOutcome, { severity: SeverityMarkerProps["severity"]; label: string }> = {
@@ -44,6 +46,12 @@ const HEADERS: Record<BatchRowsTableProps["mode"], string[]> = {
   connect: ["Name", "Location", "Protocol", "Host", "Port", "TLS", "Credential", "Receives"],
   results: ["Name", "Location", "Host", "Port", "Outcome", "Details"],
 };
+
+/** Equip is offered on a row that became a Printer this batch. */
+function equipPrinterId(row: BatchRowDraft): string | undefined {
+  const outcome = row.result?.outcome;
+  return outcome === "created" || outcome === "createdSetupIncomplete" ? row.printerId : undefined;
+}
 
 function nameKey(name: string): string {
   return name.trim().toLowerCase();
@@ -181,6 +189,13 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
               </For>
               <For each={result().warnings}>{(warning) => <li class={styles.warn}>{warning.message}</li>}</For>
             </ul>
+          )}
+        </Show>
+        <Show when={props.onEquip && equipPrinterId(row)}>
+          {(printerId) => (
+            <Button variant="secondary" size="sm" aria-label={`Equip ${row.name}`} onClick={() => props.onEquip?.(printerId())}>
+              Equip
+            </Button>
           )}
         </Show>
         <Show when={props.unverified?.has(row.rowId) && !props.pending?.has(row.rowId)}>

@@ -46,8 +46,23 @@ export function registerWebSpoolLookup(lookup: (spoolId: string) => SpoolRecord 
   webSpoolLookup = lookup;
 }
 
-function lifecycleBlockedError(message: string): CommandError {
-  return { contractVersion: 1, code: "LIFECYCLE_BLOCKED", message, recovery: [], retryable: false };
+/** D10 in web mode: `spool-store.ts` registers this (the same seam as
+ *  `registerWebSpoolLookup`, for the same import-cycle reason) so a web
+ *  `archivePrinter` can move each loaded Spool off the Printer through that
+ *  store's own web move/mark-empty paths before archiving. */
+type WebDispositionApplier = (printerId: string, dispositions: SpoolDispositionInput[]) => Promise<void>;
+let webDispositionApplier: WebDispositionApplier | undefined;
+
+export function registerWebDispositionApplier(applier: WebDispositionApplier): void {
+  webDispositionApplier = applier;
+}
+
+function webCommandError(code: CommandError["code"], message: string): CommandError {
+  return { contractVersion: 1, code, message, recovery: [], retryable: false };
+}
+
+function hasLoadedSlot(printerId: string): boolean {
+  return Boolean(state.printers.find((p) => p.id === printerId)?.materialSlots.some((slot) => slot.occupantSpoolId !== undefined));
 }
 
 interface PrinterStoreState {
@@ -427,15 +442,23 @@ export async function updatePrinter(id: string, patch: PrinterPatch): Promise<vo
 
 /** D12: sets a Printer's Material Slot layout (array order is the new
  *  order; an entry without an `id` creates a slot; a live slot missing from
- *  the array is soft-removed). Used by the Setup tab's editor, the wizard's
- *  Equip step, and batch Shared -- none of which exist yet (Task 11); added
- *  now alongside `createPrinter`'s own `slotLayout`/`initialLoads` so this
- *  store's Material Slot surface is complete for them to build on. */
-export async function setSlotLayout(printerId: string, slots: SlotSpec[]): Promise<ResolvedPrinter | undefined> {
+ *  the array is soft-removed). Rejects rather than reporting into the
+ *  banner: the Setup tab's Material Slots editor shows `SLOT_OCCUPIED`
+ *  (`details: { slotId, spoolId }`, "Unload first") and `VALIDATION` inline,
+ *  and reloads on `CONFLICT`. */
+export async function setSlotLayout(printerId: string, slots: SlotSpec[]): Promise<ResolvedPrinter> {
   if (!desktopAvailable()) {
     const current = state.printers.find((p) => p.id === printerId);
-    if (!current) return undefined;
+    if (!current) throw webCommandError("NOT_FOUND", "This Printer no longer exists.");
     const existingById = new Map(current.materialSlots.map((slot) => [slot.id, slot]));
+    const kept = new Set(slots.flatMap((slot) => (slot.id !== undefined ? [slot.id] : [])));
+    const removedOccupied = current.materialSlots.find((slot) => !kept.has(slot.id) && slot.occupantSpoolId !== undefined);
+    if (removedOccupied) {
+      throw {
+        ...webCommandError("SLOT_OCCUPIED", `Unload the Spool in ${removedOccupied.name} before removing it.`),
+        details: { slotId: removedOccupied.id, spoolId: removedOccupied.occupantSpoolId! },
+      } satisfies CommandError;
+    }
     const materialSlots: MaterialSlot[] = slots.map((slot, index) => {
       const existing = slot.id !== undefined ? existingById.get(slot.id) : undefined;
       return {
@@ -450,19 +473,24 @@ export async function setSlotLayout(printerId: string, slots: SlotSpec[]): Promi
     spliceResolved(updated);
     return updated;
   }
-  try {
-    const { printer } = await command("set_material_slot_layout", {
-      printerId,
-      expectedRevision: state.printers.find((p) => p.id === printerId)?.revision ?? 1,
-      slots,
-    });
-    const resolved = resolvePrinterRecord(printer);
-    spliceResolved(resolved);
-    return resolved;
-  } catch (e) {
-    reportError(e);
-    return undefined;
-  }
+  const { printer } = await command("set_material_slot_layout", {
+    printerId,
+    expectedRevision: state.printers.find((p) => p.id === printerId)?.revision ?? 1,
+    slots,
+  });
+  const resolved = resolvePrinterRecord(printer);
+  spliceResolved(resolved);
+  return resolved;
+}
+
+/** `CONFLICT` recovery for one Printer (P2's "reload and retry"): there's
+ *  no single-Printer read command, so this re-reads `list_printers` and
+ *  splices in just this Printer -- keeping its live `runtimeStatus` and
+ *  leaving every other row alone. Rejects for its caller to report. */
+export async function reloadPrinter(id: string): Promise<void> {
+  if (!desktopAvailable()) return;
+  const fresh = (await command("list_printers")).find((record) => record.id === id);
+  if (fresh) spliceResolved(resolvePrinterRecord(fresh));
 }
 
 export type RemovePrinterResult = { ok: true } | { ok: false; message: string };
@@ -807,7 +835,7 @@ export async function createPrintersBatch(
         unknownOverrideKeys: [],
         location: row.location,
         startSafety: input.shared.startSafety,
-        materialSlots: defaultWebMaterialSlots(id),
+        materialSlots: webMaterialSlotsFromOptions(id, { name: row.name, catalogRef: input.shared.catalogRef, slotLayout: input.shared.slotLayout }),
         setupGaps: ["missingConnection"],
         createdAt: "",
         updatedAt: "",
@@ -845,41 +873,37 @@ export async function cancelBatch(batchId: string): Promise<void> {
 
 /** `dispositions` says where each loaded Spool goes (spec D10); it must
  *  cover every Spool in `lifecycleEligibility(id).loadedSpools`, and is
- *  empty for a Printer with nothing loaded. */
-/** Web mode has no transaction to apply D10's Spool dispositions atomically
- *  alongside the archive, and no reservation/ledger data to validate them
- *  against -- rather than half-implement that, it refuses outright whenever
- *  the Printer has an occupied slot, so a web-only session can never leave
- *  a Spool loaded on an archived Printer (D10). `materialSlots` is kept in
- *  sync with `spool-store.ts`'s own web fixture locations via
- *  `spliceResolved`, so this needs no dependency on that module.
+ *  empty for a Printer with nothing loaded. Each call sends a fresh
+ *  `operationId`.
  *
- *  Fix round 2 (finding B): this reports into the banner rather than
- *  rejecting -- unlike `testConnection`/`unarchivePrinter`, this function's
- *  one call site (`PrinterDetailDock`'s `onArchive`) `await`s it with no
- *  `catch`, matching every other store mutation that already reports its
- *  own failures this way (the desktop branch below has always done this). */
+ *  Rejects rather than reporting into the banner (Task 11 ruling):
+ *  `ArchivePrinterDialog` shows a disposition's `CONFLICT` inline on the
+ *  affected row and stays open. A caller with no inline surface (the Setup
+ *  tab's plain Archive) catches and routes to `reportError` itself.
+ *
+ *  Web mode has no transaction to apply the dispositions atomically, so it
+ *  hands them to the applier `spool-store.ts` registers (its own web
+ *  move/mark-empty paths), then archives only if every slot really is
+ *  empty afterwards -- a web session can never leave a Spool loaded on an
+ *  archived Printer (D10). */
 export async function archivePrinter(id: string, dispositions: SpoolDispositionInput[] = []): Promise<void> {
   if (!desktopAvailable()) {
-    const printer = state.printers.find((p) => p.id === id);
-    if (printer?.materialSlots.some((slot) => slot.occupantSpoolId !== undefined)) {
-      reportError(lifecycleBlockedError("Archiving a Printer with a loaded Spool needs the desktop app."));
-      return;
+    if (hasLoadedSlot(id) && dispositions.length > 0 && webDispositionApplier) {
+      await webDispositionApplier(id, dispositions);
+    }
+    if (hasLoadedSlot(id)) {
+      throw webCommandError("LIFECYCLE_BLOCKED", "Unload every Spool before archiving this Printer.");
     }
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
   }
-  try {
-    const { printer } = await command("archive_printer", {
-      id,
-      expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
-      operationId: crypto.randomUUID(),
-      spoolDispositions: dispositions,
-    });
-    spliceResolved(resolvePrinterRecord(printer));
-  } catch (e) {
-    reportError(e);
-  }
+  const { printer } = await command("archive_printer", {
+    id,
+    expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
+    operationId: crypto.randomUUID(),
+    spoolDispositions: dispositions,
+  });
+  spliceResolved(resolvePrinterRecord(printer));
 }
 
 /** Rejects rather than reporting into the banner: unarchiving re-checks the

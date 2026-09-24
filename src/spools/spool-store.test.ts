@@ -21,6 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 type InventoryEnvelope = EventEnvelope<InventoryEventType, InventoryEventPayload>;
@@ -582,6 +583,24 @@ describe("moveSpool: availability hints", () => {
   });
 });
 
+/** The web fallback resolves its seed Printers against the bundled catalog
+ *  via `fetch`; this stands in for it with just the Centauri Carbon model
+ *  the equipped fixture Printer (and its sibling) use. */
+function stubWebCatalog() {
+  const variant = (printerVariant: string) => ({
+    variant: `Elegoo Centauri Carbon ${printerVariant} nozzle`, printerVariant,
+    bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+    printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
+    nozzleDiameterMm: [Number(printerVariant)], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
+    hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true, suggestedHostType: "elegoolink",
+  });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    json: () => Promise.resolve({
+      models: [{ modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon", variants: [variant("0.4"), variant("0.6")] }],
+    }),
+  }));
+}
+
 describe("web mode", () => {
   beforeEach(() => {
     tauriMock.isTauri.mockReturnValue(false);
@@ -632,6 +651,57 @@ describe("web mode", () => {
     const occupants = spoolState.spools.filter((s) => s.location.kind === "slot" && s.location.slotId === slotId);
     expect(occupants).toHaveLength(1);
     expect(occupants[0].id).toBe(storedSpool.id);
+  });
+
+  it("ensureInventoryLoaded loads once and leaves an already-loaded inventory alone", async () => {
+    const { ensureInventoryLoaded, moveSpool, spoolState } = await import("./spool-store");
+    await Promise.all([ensureInventoryLoaded(), ensureInventoryLoaded()]);
+    expect(spoolState.loaded).toBe(true);
+    const stored = spoolState.spools.find((s) => s.lifecycle === "active" && s.location.kind === "storage")!;
+    await moveSpool({ spoolId: stored.id, expectedSpoolRevision: stored.revision, destination: { kind: "storage", storageLabel: "Moved" } });
+
+    await ensureInventoryLoaded();
+
+    expect(spoolState.spools.find((s) => s.id === stored.id)?.location).toEqual({ kind: "storage", storageLabel: "Moved" });
+  });
+
+  it("applies archive dispositions to the web fixture so a Printer with loaded Spools can be archived (D10)", async () => {
+    stubWebCatalog();
+    const printerStore = await import("../printers/printer-store");
+    const { loadInventory, spoolState } = await import("./spool-store");
+    await printerStore.loadPrinters();
+    await loadInventory();
+    const printerId = printerStore.WEB_FIXTURE_EQUIPPED_PRINTER_ID;
+    const loaded = spoolState.spools.find((s) => s.facets.loaded)!;
+
+    await printerStore.archivePrinter(printerId, [
+      { spoolId: loaded.id, expectedSpoolRevision: loaded.revision, disposition: { kind: "markEmpty", storageLabel: "Bin" } },
+    ]);
+
+    const after = spoolState.spools.find((s) => s.id === loaded.id)!;
+    expect(after.lifecycle).toBe("empty");
+    expect(after.location).toEqual({ kind: "storage", storageLabel: "Bin" });
+    const printer = printerStore.printers().find((p) => p.id === printerId)!;
+    expect(printer.materialSlots.every((slot) => slot.occupantSpoolId === undefined)).toBe(true);
+    expect(printer.archivedAt).toBeTruthy();
+  });
+
+  it("refuses web archive dispositions that miss a loaded Spool or target this Printer, applying nothing (D10)", async () => {
+    stubWebCatalog();
+    const printerStore = await import("../printers/printer-store");
+    const { loadInventory, spoolState } = await import("./spool-store");
+    await printerStore.loadPrinters();
+    await loadInventory();
+    const printerId = printerStore.WEB_FIXTURE_EQUIPPED_PRINTER_ID;
+    const loaded = spoolState.spools.find((s) => s.facets.loaded)!;
+    const ownSlot = printerStore.printers().find((p) => p.id === printerId)!.materialSlots[1];
+
+    await expect(printerStore.archivePrinter(printerId, [
+      { spoolId: loaded.id, expectedSpoolRevision: loaded.revision, disposition: { kind: "slot", slotId: ownSlot.id, expectedOccupantSpoolId: null } },
+    ])).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(spoolState.spools.find((s) => s.id === loaded.id)).toEqual(loaded);
+    expect(printerStore.printers().find((p) => p.id === printerId)?.archivedAt).toBeFalsy();
   });
 
   it("rejects loading an archived Spool into a slot, but still allows loading an empty one (D5)", async () => {

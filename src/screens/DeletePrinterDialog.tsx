@@ -55,6 +55,7 @@ export function DeletePrinterDialog(props: DeletePrinterDialogProps) {
           This permanently deletes "{props.printerName}" and cannot be undone. Its Connection,
           overrides, and history are removed with it.
         </p>
+        <p class={styles.note}>Spool movement history involving this Printer will be deleted.</p>
         <TextField
           label="Type the Printer name to confirm"
           value={typed()}

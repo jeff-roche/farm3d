@@ -3,6 +3,28 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import type { ResolvedPrinter } from "../printers/types";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
+
+const spools = vi.hoisted(() => [] as SpoolRecord[]);
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools, loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
+function storedSpool(overrides: Partial<SpoolRecord>): SpoolRecord {
+  return {
+    id: "spl-1", revision: 1, spoolNumber: 1,
+    manufacturer: "Prusament", materialFamily: "PLA", colorName: "Galaxy Black", diameter: "1.75",
+    nominalMg: 1_000_000, lowThresholdMg: 100_000, lifecycle: "active",
+    location: { kind: "storage", storageLabel: null },
+    availability: { currentMg: 812_000, reservedMg: 0, availableMg: 812_000 },
+    facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+    createdAt: "", updatedAt: "",
+    ...overrides,
+  };
+}
 
 const previewProfile = vi.hoisted(() =>
   vi.fn().mockImplementation((ref: { printerVariant: string }) => {
@@ -49,6 +71,7 @@ vi.mock("../printers/printer-store", () => ({
 afterEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  spools.length = 0;
 });
 
 const CENTAURI_MODEL = { vendor: "Elegoo", model: "Elegoo Centauri Carbon" };
@@ -210,9 +233,11 @@ describe("PrinterSetupWizard — Identify (ported from PrinterAddDialog)", () =>
 });
 
 describe("PrinterSetupWizard — Stepper", () => {
-  it("shows Identify, Connect, Operate, and Review, with Identify current", () => {
+  it("shows Identify, Connect, Equip, Operate, and Review, with Identify current", () => {
     render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
-    for (const label of ["Identify", "Connect", "Operate", "Review"]) {
+    const labels = [...document.querySelectorAll("li")].map((li) => li.textContent?.replace(/^\d+/, "").trim());
+    expect(labels).toEqual(["Identify", "Connect", "Equip", "Operate", "Review"]);
+    for (const label of ["Identify", "Connect", "Equip", "Operate", "Review"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(stepItem("Identify").getAttribute("aria-current")).toBe("step");
@@ -220,20 +245,21 @@ describe("PrinterSetupWizard — Stepper", () => {
 });
 
 describe("PrinterSetupWizard — Connect", () => {
-  it("Skip — save Profile-only goes to Operate", async () => {
+  it("Skip — save Profile-only goes to Equip", async () => {
     render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
     await pickCentauriCarbon();
     fireEvent.click(screen.getByRole("button", { name: "Next →" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Skip — save Profile-only" }));
-    expect(stepItem("Operate").getAttribute("aria-current")).toBe("step");
+    expect(stepItem("Equip").getAttribute("aria-current")).toBe("step");
   });
 
   it("shows the setup-incomplete notice on Review after skipping Connect", async () => {
     render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
     await pickCentauriCarbon();
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
-    fireEvent.click(screen.getByRole("button", { name: "Skip — save Profile-only" })); // operate
+    fireEvent.click(screen.getByRole("button", { name: "Skip — save Profile-only" })); // equip
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
     expect(
@@ -272,6 +298,7 @@ describe("PrinterSetupWizard — Operate", () => {
     render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
     await pickCentauriCarbon();
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
   }
 
@@ -330,6 +357,7 @@ describe("PrinterSetupWizard — Review", () => {
     await pickCentauriCarbon();
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
     if (host) fireEvent.input(screen.getByLabelText("Host"), { target: { value: host } });
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
   }
@@ -339,6 +367,7 @@ describe("PrinterSetupWizard — Review", () => {
     await pickCentauriCarbon();
     fireEvent.input(screen.getByLabelText("Location"), { target: { value: "  Bay 1  " } });
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
@@ -361,6 +390,7 @@ describe("PrinterSetupWizard — Review", () => {
     fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await waitFor(() => expect(probeCandidate).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
@@ -392,6 +422,7 @@ describe("PrinterSetupWizard — Review", () => {
     // it described "voron.local", not whatever the host field says now.
     fireEvent.input(screen.getByLabelText("Host"), { target: { value: "a-different-host.local" } });
 
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
@@ -411,6 +442,7 @@ describe("PrinterSetupWizard — Review", () => {
     await pickCentauriCarbon();
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
     fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
@@ -424,6 +456,8 @@ describe("PrinterSetupWizard — Review", () => {
       startSafety: "confirmBedClear",
       defaultBedType: undefined,
       connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
+      slotLayout: [{ name: "Main" }],
+      initialLoads: [],
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onCreated).toHaveBeenCalledWith(created);
@@ -456,5 +490,66 @@ describe("PrinterSetupWizard — keyboard", () => {
 
     fireEvent.keyDown(screen.getByLabelText("Name"), { key: "Enter" });
     expect(stepItem("Connect").getAttribute("aria-current")).toBe("step");
+  });
+});
+
+describe("PrinterSetupWizard — Equip", () => {
+  async function reachEquip() {
+    render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} onCreated={vi.fn()} />);
+    await pickCentauriCarbon();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
+  }
+
+  it("defaults to a single Main slot and shows the multi-material hint for a multi-material model", async () => {
+    await reachEquip();
+    expect(stepItem("Equip").getAttribute("aria-current")).toBe("step");
+    expect(screen.getByLabelText("Name for slot 1")).toHaveValue("Main");
+    expect(screen.queryByLabelText("Name for slot 2")).not.toBeInTheDocument();
+    expect(screen.getByText(/This model can feed more than one material/)).toBeInTheDocument();
+  });
+
+  it("offers only active storage Spools for an initial load", async () => {
+    spools.push(
+      storedSpool({ id: "spl-ok", spoolNumber: 2, materialFamily: "PETG", colorName: "Clear" }),
+      storedSpool({ id: "spl-loaded", spoolNumber: 3, location: { kind: "slot", slotId: "x", printerId: "p" } }),
+      storedSpool({ id: "spl-archived", spoolNumber: 4, lifecycle: "archived" }),
+    );
+    await reachEquip();
+
+    await fireEvent.pointerDown(screen.getByRole("button", { name: /Load into Main/ }), { button: 0, pointerType: "mouse" });
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["None", "#2 PETG Clear — 812 g"]);
+  });
+
+  it("disables Next while a slot name is invalid", async () => {
+    await reachEquip();
+    fireEvent.input(screen.getByLabelText("Name for slot 1"), { target: { value: " " } });
+    expect(screen.getByRole("button", { name: "Next →" })).toBeDisabled();
+  });
+
+  it("lists the slots and loads on Review, and Save sends slotLayout and initialLoads", async () => {
+    spools.push(storedSpool({ id: "spl-ok", revision: 5, spoolNumber: 2, materialFamily: "PETG", colorName: "Clear" }));
+    createPrinter.mockResolvedValueOnce(existingPrinter("Elegoo Centauri Carbon"));
+    await reachEquip();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add slot" }));
+    fireEvent.input(screen.getByLabelText("Feeder label for slot 2"), { target: { value: "AMS 1" } });
+    const trigger = screen.getByRole("button", { name: /Load into Slot 2/ });
+    await fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    const option = await screen.findByRole("option", { name: /#2 PETG Clear/ });
+    await fireEvent.pointerDown(option, { button: 0, pointerType: "mouse" });
+    await fireEvent.pointerUp(option, { button: 0, pointerType: "mouse" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
+    expect(screen.getByText("Material Slots: Main, Slot 2 (AMS 1)")).toBeInTheDocument();
+    expect(screen.getByText("Load at creation: Slot 2 — #2 PETG Clear")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(createPrinter).toHaveBeenCalledWith(expect.objectContaining({
+      slotLayout: [{ name: "Main" }, { name: "Slot 2", feederLabel: "AMS 1" }],
+      initialLoads: [{ slotIndex: 1, spoolId: "spl-ok", expectedSpoolRevision: 5 }],
+    })));
   });
 });

@@ -5,6 +5,15 @@ import type { ResolvedPrinter } from "../printers/types";
 import { PrinterSetupPanel } from "./PrinterSetupPanel";
 
 const updatePrinter = vi.fn();
+// PrinterSetupWizard (imported for START_SAFETY_OPTIONS) now pulls in the
+// Spool store through its Equip step.
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], loaded: true };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+
 vi.mock("../printers/printer-store", () => ({
   updatePrinter: (...args: unknown[]) => updatePrinter(...args),
   rebindPrinter: vi.fn(),

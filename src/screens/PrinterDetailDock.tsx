@@ -2,9 +2,12 @@ import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { Button, Tabs } from "../design-system";
 import { isCommandError } from "../ipc/client";
-import { archivePrinter, lifecycleEligibility, printers, unarchivePrinter } from "../printers/printer-store";
+import { archivePrinter, lifecycleEligibility, printers, reportError, unarchivePrinter } from "../printers/printer-store";
 import type { LifecycleEligibility, ResolvedPrinter } from "../printers/types";
+import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
+import { ArchivePrinterDialog } from "./ArchivePrinterDialog";
 import { DeletePrinterDialog } from "./DeletePrinterDialog";
+import { MATERIAL_SLOTS_ANCHOR_ID, MaterialSlotsSection } from "./MaterialSlotsEditor";
 import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import { PrinterSetupPanel } from "./PrinterSetupPanel";
@@ -21,6 +24,14 @@ export interface PrinterDetailDockProps {
    *  state the way it did for P1's direct removal. */
   onDeleted?: (id: string) => void;
   syncState?: "syncing" | "current" | "uncertain";
+  /** Opens the Setup tab at a section (batch Results' Equip). A new object
+   *  is a new request; one for another Printer is ignored. */
+  focusRequest?: DockFocusRequest;
+}
+
+export interface DockFocusRequest {
+  printerId: string;
+  section: "materialSlots";
 }
 
 export function PrinterDetailDock(props: PrinterDetailDockProps) {
@@ -31,6 +42,7 @@ export function PrinterDetailDock(props: PrinterDetailDockProps) {
       onClose={props.onClose}
       onDeleted={props.onDeleted}
       syncState={props.syncState}
+      focusRequest={props.focusRequest}
     />
   );
 
@@ -66,15 +78,40 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
   const [unarchiveError, setUnarchiveError] = createSignal<string | null>(null);
   const [actionPending, setActionPending] = createSignal(false);
   const [deleteOpen, setDeleteOpen] = createSignal(false);
+  const [archiveSpools, setArchiveSpools] = createSignal<SpoolRecord[] | null>(null);
+  const [tab, setTab] = createSignal("status");
+
+  createEffect(on(() => props.focusRequest, (request) => {
+    if (!request || request.printerId !== props.printer.id) return;
+    setTab("setup");
+    setTimeout(() => {
+      const section = document.getElementById(MATERIAL_SLOTS_ANCHOR_ID);
+      section?.scrollIntoView?.({ block: "start" });
+      section?.querySelector<HTMLElement>("h3")?.focus();
+    });
+  }));
 
   const archived = () => Boolean(props.printer.archivedAt);
   // Only explain actions the dock actually shows: Archive for an active
   // Printer, Unarchive for an archived one, Delete for either -- a blocker
   // for the hidden one ("not archived" / "already archived") is noise.
+  // SPOOLS_LOADED isn't shown: Archive handles it by asking where each
+  // loaded Spool goes.
   const visibleBlockers = () =>
     (eligibility()?.blockers ?? []).filter((blocker) =>
-      blocker.action === "delete" || blocker.action === (archived() ? "unarchive" : "archive"),
+      blocker.code !== "SPOOLS_LOADED" &&
+      (blocker.action === "delete" || blocker.action === (archived() ? "unarchive" : "archive")),
     );
+  /** Archive is offered when the backend allows it outright, or when its
+   *  only archive blocker is loaded Spools -- the dispositions dialog
+   *  resolves those (D10). Reads the backend's blockers; derives none. */
+  const archiveOffered = () => {
+    const current = eligibility();
+    if (!current) return false;
+    if (current.canArchive) return true;
+    const archiveBlockers = current.blockers.filter((blocker) => blocker.action === "archive");
+    return current.loadedSpools.length > 0 && archiveBlockers.every((blocker) => blocker.code === "SPOOLS_LOADED");
+  };
 
   const refreshEligibility = async (id: string) => {
     try {
@@ -135,7 +172,19 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
     if (actionPending()) return;
     setActionPending(true);
     try {
+      // Re-checked on click: a Spool may have been loaded or unloaded (e.g.
+      // from Material Slots) since the dock last asked.
+      const current = await lifecycleEligibility(props.printer.id);
+      setEligibility(current);
+      if (current.loadedSpools.length > 0) {
+        setArchiveSpools(current.loadedSpools);
+        return;
+      }
+      if (!current.canArchive) return;
+      // No inline surface for the plain archive: failures go to the banner.
       await archivePrinter(props.printer.id);
+    } catch (e) {
+      reportError(e);
     } finally {
       setActionPending(false);
     }
@@ -187,7 +236,8 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
         <Button variant="ghost" class={styles.close} onClick={props.onClose}>Close</Button>
       </header>
       <Tabs
-        defaultValue="status"
+        value={tab()}
+        onChange={setTab}
         items={[
           {
             value: "status",
@@ -200,6 +250,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
             content: (
               <div class={styles.setup}>
                 <PrinterSetupPanel printer={props.printer} />
+                <MaterialSlotsSection printer={props.printer} />
                 <PrinterProfilePanel printer={props.printer} />
                 <PrinterConnectionPanel printer={props.printer} />
                 <div class={styles.lifecycle}>
@@ -207,7 +258,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                     <Show when={!archived()}>
                       <Button
                         variant="ghost"
-                        disabled={!eligibility()?.canArchive || actionPending()}
+                        disabled={!archiveOffered() || actionPending()}
                         onClick={() => void onArchive()}
                       >
                         Archive
@@ -253,6 +304,16 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
           },
         ]}
       />
+      <Show when={archiveSpools()}>
+        {(loaded) => (
+          <ArchivePrinterDialog
+            open
+            onOpenChange={(open) => !open && setArchiveSpools(null)}
+            printer={props.printer}
+            loadedSpools={loaded()}
+          />
+        )}
+      </Show>
       <DeletePrinterDialog
         open={deleteOpen()}
         onOpenChange={setDeleteOpen}

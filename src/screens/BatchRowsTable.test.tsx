@@ -196,6 +196,26 @@ describe("BatchRowsTable — results mode", () => {
     expect(screen.queryByRole("button", { name: "Remove Voron 01" })).not.toBeInTheDocument();
   });
 
+  it("offers Equip only on rows that became Printers, with that Printer's id", () => {
+    const result = (outcome: "created" | "createdSetupIncomplete" | "rejected") =>
+      ({ rowId: "x", outcome, credentialStored: false, errors: [], warnings: [] });
+    const props = renderTable({
+      mode: "results",
+      onEquip: vi.fn(),
+      rows: [
+        row({ rowId: "r1", name: "Voron 01", printerId: "prn-1", result: { ...result("created"), rowId: "r1" } }),
+        row({ rowId: "r2", name: "Voron 02", printerId: "prn-2", result: { ...result("createdSetupIncomplete"), rowId: "r2" } }),
+        row({ rowId: "r3", name: "Voron 03", result: { ...result("rejected"), rowId: "r3" } }),
+      ],
+    });
+
+    expect(screen.queryByRole("button", { name: "Equip Voron 03" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Equip Voron 02" }));
+    expect(props.onEquip).toHaveBeenCalledWith("prn-2");
+    fireEvent.click(screen.getByRole("button", { name: "Equip Voron 01" }));
+    expect(props.onEquip).toHaveBeenCalledWith("prn-1");
+  });
+
   it("shows in-progress rows as pending", () => {
     renderTable({ mode: "results", rows: [row()], pending: new Set(["r1"]) });
     expect(screen.getByRole("status", { name: "In progress" })).toBeInTheDocument();
