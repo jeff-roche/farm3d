@@ -122,6 +122,13 @@ pub enum RepositoryError {
     /// `spools::repository::any_loaded`'s doc comment for why. `VALIDATION`
     /// on `printers`, with a message telling the user to unload first.
     SpoolsLoadedForImport,
+    /// P5 D10: a slice operation can't move from `from` to `to`. Nothing
+    /// was written.
+    IllegalSliceTransition {
+        operation_id: String,
+        from: crate::slicing::SliceOperationState,
+        to: crate::slicing::SliceOperationState,
+    },
     Storage(StorageError),
 }
 

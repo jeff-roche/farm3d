@@ -7,6 +7,7 @@ pub mod library;
 pub mod persistence;
 pub mod printers;
 pub mod settings;
+pub mod slicing;
 pub mod spools;
 
 use catalog::commands::{

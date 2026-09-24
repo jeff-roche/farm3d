@@ -78,6 +78,15 @@ use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
 };
+use farm3d_lib::slicing::{
+    BrimType, ClaimedEstimateSource, ClaimedEstimates, Fact, FactProvenance, InfillPattern,
+    InstanceDoc, InstanceTransform, PlateDoc, PreparationDocument, PreparationRecord,
+    ProfileSnapshot, RuntimeChannel, SliceControls, SliceEstimateSource, SliceEstimates,
+    SliceFacts, SliceFailure, SliceFailureCode, SliceOperationRecord, SliceOperationState,
+    SlicePlateRef, SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind,
+    SliceRevisionRecord, SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget,
+    SupportMode,
+};
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
 };
@@ -418,6 +427,37 @@ fn export_registry() -> Vec<Export> {
         export::<DeleteModelResult>(),
         export::<RevisionThumbnail>(),
         export::<LibraryContentInfo>(),
+        export::<FactProvenance>(),
+        export::<Fact<f64>>(),
+        export::<ProfileSnapshot>(),
+        export::<SliceFacts>(),
+        export::<SliceTarget>(),
+        export::<InfillPattern>(),
+        export::<SupportMode>(),
+        export::<BrimType>(),
+        export::<SliceControls>(),
+        export::<InstanceTransform>(),
+        export::<InstanceDoc>(),
+        export::<PlateDoc>(),
+        export::<PreparationDocument>(),
+        export::<PreparationRecord>(),
+        export::<SliceOperationState>(),
+        export::<SliceFailureCode>(),
+        export::<SliceFailure>(),
+        export::<SliceOperationRecord>(),
+        export::<SliceRevisionKind>(),
+        export::<SlicePlateRef>(),
+        export::<RuntimeChannel>(),
+        export::<SliceRuntimeInfo>(),
+        export::<SliceEstimateSource>(),
+        export::<ClaimedEstimateSource>(),
+        export::<SliceEstimates>(),
+        export::<ClaimedEstimates>(),
+        export::<SliceRevisionTarget>(),
+        export::<SliceRevisionBlobRole>(),
+        export::<SliceRevisionBlob>(),
+        export::<SliceRevisionSummary>(),
+        export::<SliceRevisionRecord>(),
     ]
 }
 

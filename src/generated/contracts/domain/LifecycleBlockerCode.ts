@@ -4,6 +4,7 @@
  * Why a `LifecycleAction` is currently blocked. P2 produces
  * `NotArchived`/`AlreadyArchived`; P3 adds `SpoolsLoaded` (a Printer still
  * holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
- * has open reservations, D8).
+ * has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
+ * still has Slice Revisions, D14).
  */
-export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED";
+export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST";

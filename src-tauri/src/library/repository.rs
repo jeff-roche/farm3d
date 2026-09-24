@@ -890,7 +890,9 @@ pub fn delete_project(
 }
 
 /// D18: every content hash Model `model_id`'s revisions and their
-/// thumbnails refer to, the candidates for cleanup once it is deleted.
+/// thumbnails refer to, plus the logs of its Preparation's slice operations
+/// (which cascade with it, P5 D14): the candidates for cleanup once it is
+/// deleted.
 pub(crate) fn model_content_hashes(
     connection: &Connection,
     model_id: &str,
@@ -901,6 +903,10 @@ pub(crate) fn model_content_hashes(
          SELECT t.content_sha256 FROM model_revision_thumbnails t
          JOIN model_source_revisions r ON r.id = t.revision_id
          WHERE r.model_id = ?1
+         UNION
+         SELECT o.log_sha256 FROM slice_operations o
+         JOIN slice_preparations p ON p.id = o.preparation_id
+         WHERE p.model_id = ?1 AND o.log_sha256 IS NOT NULL
          ORDER BY 1",
     )?;
     let hashes = statement

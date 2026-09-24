@@ -844,7 +844,9 @@ impl ContentStore {
 
 /// The in-transaction half of D4 cleanup, called by whatever deletes the
 /// rows that referenced `candidates`. Each candidate no longer referenced
-/// by any revision or thumbnail loses its `content_blobs` row and gains a
+/// by any Model Source Revision, thumbnail, Slice Revision (its G-code or
+/// an input blob), or slice operation log (P5 D13) loses its
+/// `content_blobs` row and gains a
 /// `pending_blob_cleanup` row. After commit, call
 /// [`ContentStore::release_unreferenced`] to unlink the files.
 pub fn mark_unreferenced_blobs(
@@ -855,7 +857,10 @@ pub fn mark_unreferenced_blobs(
     for sha256 in candidates {
         let referenced: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM model_source_revisions WHERE content_sha256 = ?1)
-                 OR EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = ?1)",
+                 OR EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_revisions WHERE gcode_sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_revision_blobs WHERE sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_operations WHERE log_sha256 = ?1)",
             [sha256],
             |row| row.get(0),
         )?;

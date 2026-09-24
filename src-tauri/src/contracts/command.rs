@@ -874,6 +874,10 @@ impl CommandError {
                 "operationId",
                 "operationId was already used for a different request",
             ),
+            // A move D10 doesn't allow is a caller bug until the slicing
+            // commands give it a user-facing code (e.g. cancelling a
+            // finished operation).
+            RepositoryError::IllegalSliceTransition { .. } => Self::internal(),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
