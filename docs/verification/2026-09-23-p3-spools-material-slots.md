@@ -393,12 +393,6 @@ a covering test.
 
 Deferred from the final review. None blocks P3's acceptance criteria.
 
-- The repository helpers rewrite whole Spool rows.
-- The Printers-import error is mapped from a magic-string field path.
-- The initial-load and loaded-count Spool logic lives in
-  `printers/repository.rs`.
-- Batch create doesn't validate the shared slot layout up front.
-- `notes` has no length cap.
 - The web-fixture cold-deep-link occupancy race (see "Deviations and
   findings").
 
