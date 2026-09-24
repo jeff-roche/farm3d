@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 55] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 58] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -227,9 +227,24 @@ contracts![
         "LibraryContentInfoRequest",
         "LibraryContentInfoResult"
     ),
+    (
+        "check_linked_sources",
+        "CheckLinkedSourcesRequest",
+        "CheckLinkedSourcesResult"
+    ),
+    (
+        "locate_linked_source",
+        "LocateLinkedSourceRequest",
+        "LocateLinkedSourceResult"
+    ),
+    (
+        "convert_model_to_managed",
+        "ConvertModelToManagedRequest",
+        "ConvertModelToManagedResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 55] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 58] {
     &COMMAND_CONTRACTS
 }
 
@@ -361,7 +376,13 @@ export type ListModelRevisionsResult = CommandSuccess<ModelSourceRevisionRecord[
 export type GetRevisionThumbnailRequest = ContractRequest & { revisionId: string };
 export type GetRevisionThumbnailResult = CommandSuccess<RevisionThumbnail | null>;
 export type LibraryContentInfoRequest = NoArgsRequest;
-export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;"#.to_string()
+export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;
+export type CheckLinkedSourcesRequest = ContractRequest & { modelIds?: string[] };
+export type CheckLinkedSourcesResult = CommandSuccess<ModelRecord[]>;
+export type LocateLinkedSourceRequest = ContractRequest & { modelId: string; expectedRevision: number; selectionId: string; fileIndex: number; acceptDifferentContent: boolean };
+export type LocateLinkedSourceResult = CommandSuccess<ModelMutationResult>;
+export type ConvertModelToManagedRequest = ContractRequest & { modelId: string; expectedRevision: number };
+export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -431,6 +452,7 @@ export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;"#.to_
         visitor.visit::<crate::library::ModelSourceRevisionRecord>();
         visitor.visit::<crate::library::commands::RevisionThumbnail>();
         visitor.visit::<crate::library::commands::LibraryContentInfo>();
+        visitor.visit::<crate::library::ModelRecord>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

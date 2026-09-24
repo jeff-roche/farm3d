@@ -29,6 +29,7 @@ use super::content::{self, ContentError};
 use super::events::{self, LibraryEventSpec};
 use super::import::{self, ImportItemRequest, ImportModelsResult, MAX_PROJECT_IDS};
 use super::inspection::{self, ImportInspection};
+use super::links;
 use super::repository;
 use super::selection::{CancelImportSelectionData, ImportSelectionSummary, SelectionPurpose};
 use super::{
@@ -655,6 +656,134 @@ pub fn library_content_info<R: tauri::Runtime>(
         blob_count: info.blob_count,
         total_bytes: info.total_bytes,
         pending_cleanup_count: info.pending_cleanup_count,
+    }))
+}
+
+/// D15 trigger 3: checks `modelIds` (every linked Model when absent) now
+/// and returns the records of those that changed. The frontend calls it
+/// when the Library becomes visible or regains focus, and from **Check
+/// sources**. Unknown and managed Models are skipped.
+#[tauri::command]
+pub async fn check_linked_sources<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    model_ids: Option<Vec<String>>,
+) -> Result<CommandSuccess<Vec<ModelRecord>>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let links = services
+        .library
+        .links
+        .get()
+        .cloned()
+        .ok_or_else(CommandError::internal)?;
+    Ok(CommandSuccess::new(links.check(model_ids).await?))
+}
+
+/// D16: relinks a linked Model to the file chosen through
+/// `pick_model_files { purpose: "locate" }`. The file must have the Model's
+/// format. The same content relinks without a revision; different content
+/// is `SOURCE_CONTENT_DIFFERS` unless `acceptDifferentContent`, which adds a
+/// `relocate` revision. The selection is discarded once the Model is
+/// relinked, and the new path is followed from then on.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn locate_linked_source<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    model_id: String,
+    expected_revision: i64,
+    selection_id: String,
+    file_index: u32,
+    accept_different_content: bool,
+) -> Result<CommandSuccess<ModelMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let entry = services.library.selections.get(&selection_id)?;
+    if entry.purpose != SelectionPurpose::Locate {
+        return Err(CommandError::validation_at(
+            "selectionId",
+            "This selection is for importing, not for locating a source.",
+        ));
+    }
+    let file = entry
+        .files
+        .get(file_index as usize)
+        .cloned()
+        .ok_or_else(|| {
+            CommandError::validation_at("fileIndex", "The selection has no file at this index.")
+        })?;
+    let located = {
+        let services = std::sync::Arc::clone(&services);
+        let file = file.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            links::locate_source(
+                &services.library,
+                &services.storage,
+                &model_id,
+                expected_revision,
+                &file,
+                accept_different_content,
+            )
+        })
+        .await
+        .map_err(|_| CommandError::internal())??
+    };
+    services.library.selections.discard(&selection_id);
+    let mut model = located.record;
+    let warnings: Vec<ImportWarning> = services
+        .library
+        .follow_link(&model.id, &file.path)
+        .into_iter()
+        .collect();
+    services.library.apply_watch_mode(&mut model);
+    let mut published = vec![events::model_changed(&model)];
+    published.extend(located.revision.as_ref().map(events::revision_created));
+    services.library.stream.publish(&app, published);
+    Ok(CommandSuccess::new(ModelMutationResult { model, warnings }))
+}
+
+/// D5: makes a linked Model managed and stops following its source. Every
+/// revision already holds its bytes, so nothing is copied, and it works in
+/// any source state, `missing` included.
+#[tauri::command]
+pub fn convert_model_to_managed<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    model_id: String,
+    expected_revision: i64,
+) -> Result<CommandSuccess<ModelMutationResult>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let model = services
+        .storage
+        .write_repo(|tx| {
+            let stored = repository::checked_model(tx, &model_id, expected_revision)?;
+            if stored.storage_mode != StorageMode::Linked {
+                return Err(RepositoryError::Validation {
+                    field_path: "modelId",
+                });
+            }
+            repository::convert_to_managed(tx, &model_id)?;
+            committed_record(&services, tx, &model_id)
+        })
+        .map_err(|error| match error {
+            RepositoryError::Validation {
+                field_path: "modelId",
+            } => CommandError::validation_at("modelId", "This Model is already managed."),
+            other => CommandError::from_repository(other),
+        })?;
+    services.library.unfollow_link(&model_id);
+    services
+        .library
+        .stream
+        .publish(&app, vec![events::model_changed(&model)]);
+    Ok(CommandSuccess::new(ModelMutationResult {
+        model,
+        warnings: Vec::new(),
     }))
 }
 

@@ -703,6 +703,100 @@ pub(crate) fn checked_model(
     Ok(model)
 }
 
+/// D15: every linked Model's id and path, by id. Served by the
+/// `library_models_linked` partial index.
+pub(crate) fn linked_models(
+    connection: &Connection,
+) -> Result<Vec<(String, String)>, StorageError> {
+    let mut statement = connection.prepare(
+        "SELECT id, linked_path FROM library_models
+         WHERE storage_mode = 'linked' ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The observed-stat columns for `stat`: size, modification time in
+/// nanoseconds, and file id.
+fn observed_columns(
+    stat: &SourceStat,
+) -> Result<(i64, Option<i64>, Option<&str>), RepositoryError> {
+    let size = i64::try_from(stat.size).map_err(|_| RepositoryError::Validation {
+        field_path: "sizeBytes",
+    })?;
+    Ok((size, stat.modified_ns(), stat.file_id.as_deref()))
+}
+
+/// D15: records a check of linked Model `id` that created no revision: its
+/// source state, when it was checked, and (when there was a file to
+/// observe) the observed stat. Bumps the Model's revision.
+pub(crate) fn record_link_check(
+    tx: &Transaction<'_>,
+    id: &str,
+    state: SourceState,
+    stat: Option<&SourceStat>,
+) -> Result<(), RepositoryError> {
+    let now = now_rfc3339();
+    match stat {
+        Some(stat) => {
+            let (size, mtime_ns, file_id) = observed_columns(stat)?;
+            tx.execute(
+                "UPDATE library_models
+                 SET link_state = ?2, link_checked_at = ?3, link_observed_size = ?4,
+                     link_observed_mtime_ns = ?5, link_observed_file_id = ?6,
+                     revision = revision + 1, updated_at = ?3
+                 WHERE id = ?1 AND storage_mode = 'linked'",
+                params![id, encode_enum(state), now, size, mtime_ns, file_id],
+            )?
+        }
+        None => tx.execute(
+            "UPDATE library_models
+             SET link_state = ?2, link_checked_at = ?3, revision = revision + 1, updated_at = ?3
+             WHERE id = ?1 AND storage_mode = 'linked'",
+            params![id, encode_enum(state), now],
+        )?,
+    };
+    Ok(())
+}
+
+/// D16: points linked Model `id` at `path`, observed at `stat`, with state
+/// `ok`. Bumps the Model's revision.
+pub(crate) fn relink_model(
+    tx: &Transaction<'_>,
+    id: &str,
+    path: &str,
+    stat: &SourceStat,
+) -> Result<(), RepositoryError> {
+    let now = now_rfc3339();
+    let (size, mtime_ns, file_id) = observed_columns(stat)?;
+    tx.execute(
+        "UPDATE library_models
+         SET linked_path = ?2, link_state = 'ok', link_checked_at = ?3,
+             link_observed_size = ?4, link_observed_mtime_ns = ?5, link_observed_file_id = ?6,
+             revision = revision + 1, updated_at = ?3
+         WHERE id = ?1 AND storage_mode = 'linked'",
+        params![id, path, now, size, mtime_ns, file_id],
+    )?;
+    Ok(())
+}
+
+/// D5: makes Model `id` managed, clearing every link field. Its revisions
+/// already hold their bytes (D2), so nothing is copied. Bumps the Model's
+/// revision.
+pub(crate) fn convert_to_managed(tx: &Transaction<'_>, id: &str) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE library_models
+         SET storage_mode = 'managed', linked_path = NULL, link_state = NULL,
+             link_checked_at = NULL, link_observed_size = NULL, link_observed_mtime_ns = NULL,
+             link_observed_file_id = NULL, revision = revision + 1, updated_at = ?2
+         WHERE id = ?1",
+        params![id, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
 /// D1: renames Model `id` and bumps its revision. The caller has checked
 /// the revision and validated `name`.
 pub(crate) fn rename_model(

@@ -18,9 +18,10 @@ use connections::commands::{
 };
 use connections::supervisor::ConnectionManager;
 use library::commands::{
-    cancel_import_selection, create_project, delete_model, delete_project, get_revision_thumbnail,
-    import_models, inspect_import_selection, library_content_info, list_library,
-    list_model_revisions, pick_model_files, rename_project, set_model_projects, update_model,
+    cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
+    delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
+    library_content_info, list_library, list_model_revisions, locate_linked_source,
+    pick_model_files, rename_project, set_model_projects, update_model,
 };
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
@@ -104,7 +105,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 55] = [
+pub const COMMAND_NAMES: [&str; 58] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -160,6 +161,9 @@ pub const COMMAND_NAMES: [&str; 55] = [
     "list_model_revisions",
     "get_revision_thumbnail",
     "library_content_info",
+    "check_linked_sources",
+    "locate_linked_source",
+    "convert_model_to_managed",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -178,6 +182,29 @@ pub fn restore_persisted_connections<R: tauri::Runtime>(
         ));
     }
     Ok(())
+}
+
+/// P4 D15: starts the Library's link supervisor for `services` and, in the
+/// background, its startup pass over every linked Model. Never blocks.
+/// `build_runtime_services` calls it on every successful start, including a
+/// bootstrap retry; tests call it the same way. A second call for the same
+/// services does nothing.
+pub fn start_library_runtime<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    app: &tauri::AppHandle<R>,
+    policy: library::links::WatchPolicy,
+) {
+    let supervisor = library::links::LinkSupervisor::start(
+        Arc::downgrade(&services.library),
+        Arc::clone(&services.storage),
+        app.clone(),
+        policy,
+    );
+    if services.library.links.set(Arc::clone(&supervisor)).is_err() {
+        supervisor.shutdown();
+        return;
+    }
+    tauri::async_runtime::spawn(async move { supervisor.reconcile_all().await });
 }
 
 enum StartupFailure {
@@ -304,7 +331,7 @@ fn build_runtime_services<R: tauri::Runtime>(
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?
         .take()
         .ok_or_else(|| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
-    Ok(RuntimeServices {
+    let services = RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
         manager,
@@ -317,7 +344,9 @@ fn build_runtime_services<R: tauri::Runtime>(
             Arc::new(library::selection::NativeModelFileIo::new(app.clone())),
         )),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
-    })
+    };
+    start_library_runtime(&services, app, library::links::WatchPolicy::native());
+    Ok(services)
 }
 
 #[cfg(test)]
@@ -504,6 +533,9 @@ pub fn run() {
             list_model_revisions,
             get_revision_thumbnail,
             library_content_info,
+            check_linked_sources,
+            locate_linked_source,
+            convert_model_to_managed,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

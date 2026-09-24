@@ -11,6 +11,7 @@ import type { DuplicateHostArchive } from "../domain/DuplicateHostArchive";
 import type { InventorySnapshot } from "../domain/InventorySnapshot";
 import type { LibrarySnapshot } from "../domain/LibrarySnapshot";
 import type { LifecycleEligibility } from "../domain/LifecycleEligibility";
+import type { ModelRecord } from "../domain/ModelRecord";
 import type { ModelSourceRevisionRecord } from "../domain/ModelSourceRevisionRecord";
 import type { MonitorDensity } from "../domain/MonitorDensity";
 import type { MonitorSection } from "../domain/MonitorSection";
@@ -168,3 +169,9 @@ export type GetRevisionThumbnailRequest = ContractRequest & { revisionId: string
 export type GetRevisionThumbnailResult = CommandSuccess<RevisionThumbnail | null>;
 export type LibraryContentInfoRequest = NoArgsRequest;
 export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;
+export type CheckLinkedSourcesRequest = ContractRequest & { modelIds?: string[] };
+export type CheckLinkedSourcesResult = CommandSuccess<ModelRecord[]>;
+export type LocateLinkedSourceRequest = ContractRequest & { modelId: string; expectedRevision: number; selectionId: string; fileIndex: number; acceptDifferentContent: boolean };
+export type LocateLinkedSourceResult = CommandSuccess<ModelMutationResult>;
+export type ConvertModelToManagedRequest = ContractRequest & { modelId: string; expectedRevision: number };
+export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;

@@ -1,6 +1,6 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 55);
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -59,6 +59,9 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
             "list_model_revisions",
             "get_revision_thumbnail",
             "library_content_info",
+            "check_linked_sources",
+            "locate_linked_source",
+            "convert_model_to_managed",
         ]
     );
 }
@@ -168,6 +171,9 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::library::commands::list_model_revisions,
             farm3d_lib::library::commands::get_revision_thumbnail,
             farm3d_lib::library::commands::library_content_info,
+            farm3d_lib::library::commands::check_linked_sources,
+            farm3d_lib::library::commands::locate_linked_source,
+            farm3d_lib::library::commands::convert_model_to_managed,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -332,6 +338,15 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ("list_model_revisions", json!({"modelId": "m"})),
         ("get_revision_thumbnail", json!({"revisionId": "r"})),
         ("library_content_info", json!({})),
+        ("check_linked_sources", json!({})),
+        (
+            "locate_linked_source",
+            json!({"modelId": "m", "expectedRevision": 1, "selectionId": "s", "fileIndex": 0, "acceptDifferentContent": false}),
+        ),
+        (
+            "convert_model_to_managed",
+            json!({"modelId": "m", "expectedRevision": 1}),
+        ),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

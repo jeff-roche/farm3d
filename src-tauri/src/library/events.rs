@@ -174,6 +174,15 @@ pub fn model_changed(model: &ModelRecord) -> LibraryEventSpec {
     )
 }
 
+/// `library.revision.created` for `revision`, on its Model's subject.
+pub fn revision_created(revision: &ModelSourceRevisionSummary) -> LibraryEventSpec {
+    (
+        LibraryEventType::RevisionCreated,
+        subject("model", &revision.model_id),
+        LibraryEventPayload::RevisionCreated(Box::new(revision.clone())),
+    )
+}
+
 /// `library.model.removed` for Model `id`.
 pub fn model_removed(id: &str) -> LibraryEventSpec {
     (

@@ -23,7 +23,7 @@ use crate::contracts::command::CommandError;
 use crate::persistence::{RepositoryError, Storage, StorageError};
 
 use super::content::{CancelFlag, ContentError, SourceStat, StagedFile};
-use super::events::{self, LibraryEventPayload, LibraryEventSpec, LibraryEventType};
+use super::events::{self, LibraryEventSpec};
 use super::formats::Inspection;
 use super::inspection::{ImportItemErrorCode, InspectedItem, ReadyItem};
 use super::repository::{self, LinkObservation, NewModel, RevisionSource};
@@ -612,13 +612,7 @@ impl Committed {
             library.apply_watch_mode(&mut self.model);
         }
         let mut events = vec![events::model_changed(&self.model)];
-        if let Some(revision) = &self.revision {
-            events.push((
-                LibraryEventType::RevisionCreated,
-                events::subject("model", &self.model.id),
-                LibraryEventPayload::RevisionCreated(Box::new(revision.clone())),
-            ));
-        }
+        events.extend(self.revision.as_ref().map(events::revision_created));
         events.extend(self.gained_projects.iter().map(events::project_changed));
         let result = ImportItemResult {
             file_index,

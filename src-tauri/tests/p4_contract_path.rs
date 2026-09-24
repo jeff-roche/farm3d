@@ -44,6 +44,9 @@ const P4_COMMANDS: &[&str] = &[
     "list_model_revisions",
     "get_revision_thumbnail",
     "library_content_info",
+    "check_linked_sources",
+    "locate_linked_source",
+    "convert_model_to_managed",
 ];
 
 const CORE_3MF_SHA256: &str = "0712090c29fed95a750f831dcb7be12a3372648719e3978d0a4cc83e45e3e0ab";

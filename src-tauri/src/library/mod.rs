@@ -18,10 +18,10 @@ pub mod events;
 pub mod formats;
 pub mod import;
 pub mod inspection;
+pub mod links;
 pub mod repository;
 pub mod selection;
 
-use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
@@ -35,6 +35,7 @@ use crate::persistence::StorageError;
 use content::ContentStore;
 use events::LibraryStream;
 use formats::InspectionSummary;
+pub use links::LinkSupervisor;
 use selection::{ModelFileIo, SelectionRegistry};
 
 /// The Library's runtime services, held in `RuntimeServices::library`.
@@ -49,8 +50,9 @@ pub struct LibraryServices<R: tauri::Runtime> {
     pub selections: Arc<SelectionRegistry>,
     /// D7: the native file picker.
     pub file_io: Arc<dyn ModelFileIo>,
-    /// D15: the linked-source supervisor. Task 8 starts it; until then the
-    /// slot stays empty and linked Models report `notWatched`.
+    /// D15: the linked-source supervisor, set by `start_library_runtime`.
+    /// Services built without it (`RuntimeServices::for_test`) leave the
+    /// slot empty, and their linked Models report `notWatched`.
     pub links: OnceLock<Arc<LinkSupervisor<R>>>,
 }
 
@@ -120,48 +122,39 @@ impl<R: tauri::Runtime> LibraryServices<R> {
         }
     }
 
-    /// D18 step 4: stops following a deleted linked Model's source. Task 8's
-    /// supervisor fills this in; until it is running it does nothing.
+    /// D5/D18: stops following a linked Model's source, once it is deleted
+    /// or converted to managed. Does nothing while no supervisor is running.
     pub fn unfollow_link(&self, model_id: &str) {
         if let Some(links) = self.links.get() {
             links.unregister(model_id);
         }
     }
 
-    /// D13/D15: starts following a newly linked Model's source after its
-    /// import commits. This is the one call site Task 8's supervisor fills
-    /// in (P14); until the supervisor is running it does nothing.
+    /// D13/D15/D16: starts following a linked Model's source after its
+    /// import or Locate commits (P14). Does nothing while no supervisor is
+    /// running.
     ///
-    /// Returns the warning to append to the import result, if any.
+    /// Returns `WATCH_UNAVAILABLE` when the source's folder could not be
+    /// watched natively and fell back to polling (or to no watch at all).
+    /// Polling by policy is not a degraded mode, so it gets no warning.
     pub fn follow_link(&self, model_id: &str, linked_path: &Path) -> Option<ImportWarning> {
         let links = self.links.get()?;
-        let _mode = links.register(model_id, linked_path);
-        // TODO(Task 8, P14): return `WATCH_UNAVAILABLE` when registration
-        // fell back to polling for this directory (but not when the global
-        // policy is `PollOnly`).
-        None
-    }
-}
-
-/// Placeholder for D15's `LinkSupervisor`, which Task 8 implements. It
-/// exists now so `LibraryServices` has its final shape, and its two
-/// methods are the calls Task 6 already makes.
-pub struct LinkSupervisor<R: tauri::Runtime> {
-    _runtime: PhantomData<fn() -> R>,
-}
-
-impl<R: tauri::Runtime> LinkSupervisor<R> {
-    /// Starts following `linked_path` for `model_id` (P14). Task 8.
-    pub fn register(&self, _model_id: &str, _linked_path: &Path) -> WatchMode {
-        WatchMode::NotWatched
-    }
-
-    /// Stops following `model_id`'s source (D18). Task 8.
-    pub fn unregister(&self, _model_id: &str) {}
-
-    /// How `model_id`'s source is being followed right now. Task 8.
-    pub fn watch_mode(&self, _model_id: &str) -> WatchMode {
-        WatchMode::NotWatched
+        let mode = links.register(model_id, linked_path);
+        match mode {
+            WatchMode::Watching => None,
+            _ if links.is_poll_only() => None,
+            WatchMode::Polling => Some(ImportWarning::new(
+                ImportWarningCode::WatchUnavailable,
+                format!(
+                    "farm3d can't watch this file's folder, so it checks the file for changes every {} seconds instead.",
+                    links::POLL_FALLBACK_INTERVAL.as_secs()
+                ),
+            )),
+            WatchMode::NotWatched => Some(ImportWarning::new(
+                ImportWarningCode::WatchUnavailable,
+                "farm3d can't watch this file's folder. Use Check sources to pick up changes.",
+            )),
+        }
     }
 }
 
