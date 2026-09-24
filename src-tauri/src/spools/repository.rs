@@ -318,7 +318,7 @@ pub fn update_spool_fields(
     spool.notes = fields.notes;
     spool.revision += 1;
     spool.updated_at = now_rfc3339();
-    replace(tx, &spool)?;
+    update_field_columns(tx, &spool)?;
     Ok(spool)
 }
 
@@ -348,7 +348,10 @@ pub fn check_and_bump_revision(
     }
     spool.revision += 1;
     spool.updated_at = now_rfc3339();
-    replace(tx, &spool)?;
+    tx.execute(
+        "UPDATE spools SET revision = ?2, updated_at = ?3 WHERE id = ?1",
+        params![spool.id, spool.revision, spool.updated_at],
+    )?;
     Ok(spool)
 }
 
@@ -541,21 +544,24 @@ fn insert(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError>
     Ok(())
 }
 
-fn replace(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError> {
+/// The targeted UPDATE behind [`update_spool_fields`]: only the columns a
+/// field-edit patch can change (never `spool_number`/`current_mg`/
+/// `confidence`/`lifecycle`/`archived_from`/`slot_id`/`storage_label`/
+/// `last_measured_at`/`created_at` — those change only through
+/// [`insert_spool`], [`ledger::append`], `lifecycle::set_lifecycle`, or
+/// `movement::set_location`), plus `revision`/`updated_at`. Not a whole-row
+/// rewrite of `spools` — see this module's doc comment.
+fn update_field_columns(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError> {
     let encoded = encode_columns(spool);
     tx.execute(
         "UPDATE spools SET
-            revision = ?2, spool_number = ?3, manufacturer = ?4, product = ?5,
-            material_family = ?6, material_other = ?7, color_name = ?8, color_hex = ?9,
-            diameter = ?10, nominal_mg = ?11, current_mg = ?12, confidence = ?13,
-            low_threshold_mg = ?14, tare_id = ?15, lifecycle = ?16, archived_from = ?17,
-            slot_id = ?18, storage_label = ?19, last_measured_at = ?20, notes = ?21,
-            created_at = ?22, updated_at = ?23
+            manufacturer = ?2, product = ?3, material_family = ?4, material_other = ?5,
+            color_name = ?6, color_hex = ?7, diameter = ?8, nominal_mg = ?9,
+            low_threshold_mg = ?10, tare_id = ?11, notes = ?12,
+            revision = ?13, updated_at = ?14
          WHERE id = ?1",
         params![
             spool.id,
-            spool.revision,
-            spool.spool_number,
             spool.manufacturer,
             spool.product,
             encoded.material_family,
@@ -564,17 +570,10 @@ fn replace(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError
             spool.color_hex,
             encoded.diameter,
             spool.nominal_mg,
-            spool.current_mg,
-            encoded.confidence,
             spool.low_threshold_mg,
             spool.tare_id,
-            encoded.lifecycle,
-            encoded.archived_from,
-            spool.slot_id,
-            spool.storage_label,
-            spool.last_measured_at,
             spool.notes,
-            spool.created_at,
+            spool.revision,
             spool.updated_at,
         ],
     )?;
