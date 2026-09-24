@@ -11,6 +11,7 @@
 //! [`LibraryServices::records_for`] are the one place a `ModelRecord` is
 //! assembled (clarification 3, P15).
 
+pub mod blockers;
 pub mod commands;
 pub mod content;
 pub mod events;
@@ -119,6 +120,14 @@ impl<R: tauri::Runtime> LibraryServices<R> {
         }
     }
 
+    /// D18 step 4: stops following a deleted linked Model's source. Task 8's
+    /// supervisor fills this in; until it is running it does nothing.
+    pub fn unfollow_link(&self, model_id: &str) {
+        if let Some(links) = self.links.get() {
+            links.unregister(model_id);
+        }
+    }
+
     /// D13/D15: starts following a newly linked Model's source after its
     /// import commits. This is the one call site Task 8's supervisor fills
     /// in (P14); until the supervisor is running it does nothing.
@@ -146,6 +155,9 @@ impl<R: tauri::Runtime> LinkSupervisor<R> {
     pub fn register(&self, _model_id: &str, _linked_path: &Path) -> WatchMode {
         WatchMode::NotWatched
     }
+
+    /// Stops following `model_id`'s source (D18). Task 8.
+    pub fn unregister(&self, _model_id: &str) {}
 
     /// How `model_id`'s source is being followed right now. Task 8.
     pub fn watch_mode(&self, _model_id: &str) -> WatchMode {
@@ -230,6 +242,16 @@ impl ImportWarning {
     }
 }
 
+/// D1's same-name warning (`repository::has_same_name_model`), from
+/// `update_model` and import. Names need not be unique, so this never
+/// blocks the write.
+pub fn duplicate_name_warning() -> ImportWarning {
+    ImportWarning::new(
+        ImportWarningCode::DuplicateName,
+        "Another Model with this name is in the same Project (or is also Unfiled).",
+    )
+}
+
 /// Spec §Commands `ImportWarningCode`. Format inspection produces
 /// `EXTENSION_MISMATCH`, `TRAILING_BYTES`, `LONG_LINE`, and
 /// `THUMBNAIL_SKIPPED`; import and linking produce the others.
@@ -299,6 +321,29 @@ pub struct ModelSourceRevisionSummary {
     pub captured_at: String,
     pub has_thumbnail: bool,
     pub summary: InspectionSummary,
+}
+
+/// Spec §Domain types: one revision in full, as `list_model_revisions`
+/// returns it — the summary plus where it was read from, the inspector that
+/// read it, the whole [`formats::Inspection`], and its warnings.
+/// `sourcePath` is the path the revision was captured from, shown in the
+/// revision history.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/ModelSourceRevisionRecord.ts"
+)]
+pub struct ModelSourceRevisionRecord {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub summary: ModelSourceRevisionSummary,
+    pub source_path: String,
+    pub source_mtime: Option<String>,
+    #[ts(type = "number")]
+    pub inspector_version: i64,
+    pub inspection: formats::Inspection,
+    pub warnings: Vec<ImportWarning>,
 }
 
 /// D1: a Model as the frontend sees it. `projectIds` is ordered by Project

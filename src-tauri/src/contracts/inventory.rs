@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 45] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 55] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -189,9 +189,47 @@ contracts![
         "CancelImportSelectionResult"
     ),
     ("import_models", "ImportModelsRequest", "ImportModelsResult"),
+    ("list_library", "ListLibraryRequest", "ListLibraryResult"),
+    (
+        "create_project",
+        "CreateProjectRequest",
+        "CreateProjectResult"
+    ),
+    (
+        "rename_project",
+        "RenameProjectRequest",
+        "RenameProjectResult"
+    ),
+    (
+        "delete_project",
+        "DeleteProjectRequest",
+        "DeleteProjectResult"
+    ),
+    ("update_model", "UpdateModelRequest", "UpdateModelResult"),
+    (
+        "set_model_projects",
+        "SetModelProjectsRequest",
+        "SetModelProjectsResult"
+    ),
+    ("delete_model", "DeleteModelRequest", "DeleteModelResult"),
+    (
+        "list_model_revisions",
+        "ListModelRevisionsRequest",
+        "ListModelRevisionsResult"
+    ),
+    (
+        "get_revision_thumbnail",
+        "GetRevisionThumbnailRequest",
+        "GetRevisionThumbnailResult"
+    ),
+    (
+        "library_content_info",
+        "LibraryContentInfoRequest",
+        "LibraryContentInfoResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 45] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 55] {
     &COMMAND_CONTRACTS
 }
 
@@ -303,7 +341,27 @@ export type InspectImportSelectionResult = CommandSuccess<ImportInspection>;
 export type CancelImportSelectionRequest = ContractRequest & { selectionId: string };
 export type CancelImportSelectionResult = CommandSuccess<CancelImportSelectionData>;
 export type ImportModelsRequest = ContractRequest & { selectionId: string; operationId: string; items: ImportItemRequest[] };
-export type ImportModelsResult = CommandSuccess<ImportModelsData>;"#.to_string()
+export type ImportModelsResult = CommandSuccess<ImportModelsData>;
+export type ListLibraryRequest = NoArgsRequest;
+export type ListLibraryResult = CommandSuccess<LibrarySnapshot>;
+export type CreateProjectRequest = ContractRequest & { name: string };
+export type CreateProjectResult = CommandSuccess<ProjectMutationResult>;
+export type RenameProjectRequest = ContractRequest & { id: string; expectedRevision: number; name: string };
+export type RenameProjectResult = CommandSuccess<ProjectMutationResult>;
+export type DeleteProjectRequest = ContractRequest & { id: string; expectedRevision: number };
+export type DeleteProjectResult = CommandSuccess<DeleteProjectData>;
+export type UpdateModelRequest = ContractRequest & { id: string; expectedRevision: number; patch: ModelPatch };
+export type UpdateModelResult = CommandSuccess<ModelMutationResult>;
+export type SetModelProjectsRequest = ContractRequest & { modelId: string; expectedRevision: number; add: string[]; remove: string[] };
+export type SetModelProjectsResult = CommandSuccess<ModelMutationResult>;
+export type DeleteModelRequest = ContractRequest & { id: string; expectedRevision: number };
+export type DeleteModelResult = CommandSuccess<DeleteModelData>;
+export type ListModelRevisionsRequest = ContractRequest & { modelId: string };
+export type ListModelRevisionsResult = CommandSuccess<ModelSourceRevisionRecord[]>;
+export type GetRevisionThumbnailRequest = ContractRequest & { revisionId: string };
+export type GetRevisionThumbnailResult = CommandSuccess<RevisionThumbnail | null>;
+export type LibraryContentInfoRequest = NoArgsRequest;
+export type LibraryContentInfoResult = CommandSuccess<LibraryContentInfo>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -364,6 +422,15 @@ export type ImportModelsResult = CommandSuccess<ImportModelsData>;"#.to_string()
         visitor.visit::<crate::library::selection::CancelImportSelectionData>();
         visitor.visit::<crate::library::import::ImportItemRequest>();
         visitor.visit::<crate::library::import::ImportModelsResult>();
+        visitor.visit::<crate::library::commands::LibrarySnapshot>();
+        visitor.visit::<crate::library::commands::ProjectMutationResult>();
+        visitor.visit::<crate::library::commands::DeleteProjectResult>();
+        visitor.visit::<crate::library::commands::ModelPatch>();
+        visitor.visit::<crate::library::commands::ModelMutationResult>();
+        visitor.visit::<crate::library::commands::DeleteModelResult>();
+        visitor.visit::<crate::library::ModelSourceRevisionRecord>();
+        visitor.visit::<crate::library::commands::RevisionThumbnail>();
+        visitor.visit::<crate::library::commands::LibraryContentInfo>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

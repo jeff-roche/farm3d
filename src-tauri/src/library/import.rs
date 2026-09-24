@@ -12,7 +12,7 @@
 //! `duplicateAction`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 use rusqlite::{Connection, Transaction};
 use serde::{Deserialize, Serialize};
@@ -23,14 +23,14 @@ use crate::contracts::command::CommandError;
 use crate::persistence::{RepositoryError, Storage, StorageError};
 
 use super::content::{CancelFlag, ContentError, SourceStat, StagedFile};
-use super::events::{subject, LibraryEventPayload, LibraryEventType};
+use super::events::{self, LibraryEventPayload, LibraryEventSpec, LibraryEventType};
 use super::formats::Inspection;
 use super::inspection::{ImportItemErrorCode, InspectedItem, ReadyItem};
-use super::repository::{self, LinkObservation, NewModel};
+use super::repository::{self, LinkObservation, NewModel, RevisionSource};
 use super::selection::{SelectedFile, SelectionEntry, SelectionPurpose};
 use super::{
-    new_id, validate_model_name, ImportWarning, LibraryServices, ModelRecord,
-    ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin, StorageMode,
+    duplicate_name_warning, new_id, validate_model_name, ImportWarning, LibraryServices,
+    ModelRecord, ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin, StorageMode,
 };
 
 /// D13: the most Projects one import row may name.
@@ -204,13 +204,15 @@ pub struct ImportModelsResult {
 #[derive(Default)]
 pub struct ImportLedger {
     state: Mutex<LedgerState>,
-    /// Held for a whole `import_models` run, so runs on one selection never
-    /// interleave.
-    run: Mutex<()>,
+    /// Signalled when a run ends, for a repeat of the same operation that
+    /// waits for it.
+    finished: Condvar,
 }
 
 #[derive(Default)]
 struct LedgerState {
+    /// The operation importing right now. Checked and claimed under one
+    /// lock, so runs on one selection never interleave.
     running: Option<String>,
     outcomes: HashMap<(String, u32), ImportItemResult>,
     committed: HashSet<u32>,
@@ -221,21 +223,26 @@ impl ImportLedger {
     /// on this selection is `CONFLICT`; the same operation waits for it and
     /// then replays.
     fn begin(&self, operation_id: &str) -> Result<ImportRun<'_>, CommandError> {
-        if lock(&self.state)
-            .running
-            .as_deref()
-            .is_some_and(|running| running != operation_id)
-        {
-            return Err(CommandError::conflict(
-                "These files are already being imported. Wait for that import to finish.",
-            ));
+        let mut state = lock(&self.state);
+        loop {
+            match state.running.as_deref() {
+                None => {
+                    state.running = Some(operation_id.to_string());
+                    return Ok(ImportRun { ledger: self });
+                }
+                Some(running) if running == operation_id => {
+                    state = self
+                        .finished
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+                Some(_) => {
+                    return Err(CommandError::conflict(
+                        "These files are already being imported. Wait for that import to finish.",
+                    ))
+                }
+            }
         }
-        let run = lock(&self.run);
-        lock(&self.state).running = Some(operation_id.to_string());
-        Ok(ImportRun {
-            ledger: self,
-            _run: run,
-        })
     }
 
     fn recorded(&self, operation_id: &str, file_index: u32) -> Option<ImportItemResult> {
@@ -262,14 +269,16 @@ impl ImportLedger {
     }
 }
 
+/// The claim on a selection's ledger for one `import_models` run; dropping
+/// it ends the run.
 struct ImportRun<'a> {
     ledger: &'a ImportLedger,
-    _run: MutexGuard<'a, ()>,
 }
 
 impl Drop for ImportRun<'_> {
     fn drop(&mut self) {
         lock(&self.ledger.state).running = None;
+        self.ledger.finished.notify_all();
     }
 }
 
@@ -487,6 +496,11 @@ impl<R: Runtime> Importer<'_, R> {
             .source
             .as_ref()
             .and_then(SourceStat::modified_rfc3339);
+        let source = RevisionSource {
+            path: &source_path,
+            file_name: &file.file_name,
+            mtime: source_mtime.as_deref(),
+        };
         let add_revision = |model_id: &str, origin| -> Result<(), RepositoryError> {
             let revision = repository::insert_revision(
                 tx,
@@ -494,8 +508,7 @@ impl<R: Runtime> Importer<'_, R> {
                 &ready.staged,
                 &ready.outcome,
                 origin,
-                &source_path,
-                source_mtime.as_deref(),
+                &source,
             )?;
             if let Some(thumbnail) = &ready.thumbnail {
                 repository::insert_thumbnail(tx, &revision.id, thumbnail)?;
@@ -538,6 +551,7 @@ impl<R: Runtime> Importer<'_, R> {
                 .ok_or_else(|| RepositoryError::NotFound {
                     entity_id: model_id.clone(),
                 })?;
+        let duplicate_name = repository::has_same_name_model(tx, &model_id)?;
         let revision = plan
             .writes_revision()
             .then(|| model.current_revision.clone());
@@ -551,6 +565,7 @@ impl<R: Runtime> Importer<'_, R> {
             revision,
             gained_projects,
             newly_linked: is_new_model && row.linked_path.is_some(),
+            duplicate_name,
         })
     }
 }
@@ -571,13 +586,10 @@ struct Committed {
     revision: Option<ModelSourceRevisionSummary>,
     gained_projects: Vec<ProjectRecord>,
     newly_linked: bool,
+    /// D1: another Model shares this one's name and a Project (or both are
+    /// Unfiled).
+    duplicate_name: bool,
 }
-
-type LibraryEventSpec = (
-    LibraryEventType,
-    crate::contracts::event::EventSubject,
-    LibraryEventPayload,
-);
 
 impl Committed {
     /// Starts following a new link (D15), then builds the item's result and
@@ -592,30 +604,22 @@ impl Committed {
         file_index: u32,
     ) -> (ImportItemResult, Vec<LibraryEventSpec>) {
         let mut warnings = ready.outcome.warnings.clone();
+        if self.duplicate_name {
+            warnings.push(duplicate_name_warning());
+        }
         if self.newly_linked {
             warnings.extend(library.follow_link(&self.model.id, &file.path));
             library.apply_watch_mode(&mut self.model);
         }
-        let model_subject = subject("model", &self.model.id);
-        let mut events = vec![(
-            LibraryEventType::ModelChanged,
-            model_subject.clone(),
-            LibraryEventPayload::ModelChanged(Box::new(self.model.clone())),
-        )];
+        let mut events = vec![events::model_changed(&self.model)];
         if let Some(revision) = &self.revision {
             events.push((
                 LibraryEventType::RevisionCreated,
-                model_subject,
+                events::subject("model", &self.model.id),
                 LibraryEventPayload::RevisionCreated(Box::new(revision.clone())),
             ));
         }
-        for project in self.gained_projects {
-            events.push((
-                LibraryEventType::ProjectChanged,
-                subject("project", &project.id),
-                LibraryEventPayload::ProjectChanged(project),
-            ));
-        }
+        events.extend(self.gained_projects.iter().map(events::project_changed));
         let result = ImportItemResult {
             file_index,
             outcome: self.outcome,
@@ -847,6 +851,92 @@ mod tests {
         assert_eq!(request.duplicate_action, None);
         assert_eq!(request.target_model_id, None);
         assert_eq!(request.target_expected_revision, None);
+    }
+
+    /// Task 6 review M1: operations that start together must not both pass
+    /// the "is another operation running?" check. Exactly one runs; every
+    /// other one is `CONFLICT` at once rather than waiting and running
+    /// after it.
+    #[test]
+    fn operations_that_start_together_run_one_and_conflict_the_rest() {
+        use std::sync::mpsc;
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        const RACERS: usize = 8;
+        for _ in 0..200 {
+            let ledger = Arc::new(ImportLedger::default());
+            let start = Arc::new(Barrier::new(RACERS));
+            let (outcomes, results) = mpsc::channel();
+            let (release, released) = mpsc::channel::<()>();
+            let released = Arc::new(Mutex::new(released));
+            let threads: Vec<_> = (0..RACERS)
+                .map(|racer| {
+                    let (ledger, start, outcomes, released) = (
+                        Arc::clone(&ledger),
+                        Arc::clone(&start),
+                        outcomes.clone(),
+                        Arc::clone(&released),
+                    );
+                    std::thread::spawn(move || {
+                        start.wait();
+                        match ledger.begin(&format!("op-{racer}")) {
+                            Ok(run) => {
+                                outcomes.send(true).unwrap();
+                                // Hold the run until every racer reported.
+                                let _ = released.lock().unwrap().recv();
+                                drop(run);
+                            }
+                            Err(error) => {
+                                assert_eq!(
+                                    error.code,
+                                    crate::contracts::command::ErrorCode::Conflict
+                                );
+                                outcomes.send(false).unwrap();
+                            }
+                        }
+                    })
+                })
+                .collect();
+            let reported: Vec<bool> = (0..RACERS)
+                .map_while(|_| results.recv_timeout(Duration::from_secs(2)).ok())
+                .collect();
+            drop(release);
+            for thread in threads {
+                thread.join().unwrap();
+            }
+            assert_eq!(
+                reported.len(),
+                RACERS,
+                "a racer waited for the running import instead of conflicting"
+            );
+            assert_eq!(reported.iter().filter(|ran| **ran).count(), 1);
+        }
+    }
+
+    #[test]
+    fn a_repeat_of_the_running_operation_waits_for_it_to_finish() {
+        use std::sync::mpsc;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let ledger = Arc::new(ImportLedger::default());
+        let run = ledger.begin("op-a").unwrap();
+        let (started, finished) = mpsc::channel();
+        let repeat = {
+            let ledger = Arc::clone(&ledger);
+            std::thread::spawn(move || {
+                let _run = ledger.begin("op-a").unwrap();
+                started.send(()).unwrap();
+            })
+        };
+        assert!(
+            finished.recv_timeout(Duration::from_millis(100)).is_err(),
+            "the repeat ran alongside the first run"
+        );
+        drop(run);
+        finished.recv_timeout(Duration::from_secs(2)).unwrap();
+        repeat.join().unwrap();
     }
 
     #[test]

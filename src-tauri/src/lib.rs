@@ -18,7 +18,9 @@ use connections::commands::{
 };
 use connections::supervisor::ConnectionManager;
 use library::commands::{
-    cancel_import_selection, import_models, inspect_import_selection, pick_model_files,
+    cancel_import_selection, create_project, delete_model, delete_project, get_revision_thumbnail,
+    import_models, inspect_import_selection, library_content_info, list_library,
+    list_model_revisions, pick_model_files, rename_project, set_model_projects, update_model,
 };
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
@@ -102,7 +104,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 45] = [
+pub const COMMAND_NAMES: [&str; 55] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -148,6 +150,16 @@ pub const COMMAND_NAMES: [&str; 45] = [
     "inspect_import_selection",
     "cancel_import_selection",
     "import_models",
+    "list_library",
+    "create_project",
+    "rename_project",
+    "delete_project",
+    "update_model",
+    "set_model_projects",
+    "delete_model",
+    "list_model_revisions",
+    "get_revision_thumbnail",
+    "library_content_info",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -482,6 +494,16 @@ pub fn run() {
             inspect_import_selection,
             cancel_import_selection,
             import_models,
+            list_library,
+            create_project,
+            rename_project,
+            delete_project,
+            update_model,
+            set_model_projects,
+            delete_model,
+            list_model_revisions,
+            get_revision_thumbnail,
+            library_content_info,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

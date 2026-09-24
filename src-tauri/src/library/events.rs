@@ -114,11 +114,7 @@ impl LibraryStream {
 
     /// Numbers and emits `events` in order, as one uninterrupted batch.
     /// Call only after the write they describe has committed.
-    pub fn publish<R: tauri::Runtime>(
-        &self,
-        app: &AppHandle<R>,
-        events: Vec<(LibraryEventType, EventSubject, LibraryEventPayload)>,
-    ) {
+    pub fn publish<R: tauri::Runtime>(&self, app: &AppHandle<R>, events: Vec<LibraryEventSpec>) {
         let _ordered = self
             .emit
             .lock()
@@ -146,6 +142,45 @@ impl LibraryStream {
             payload,
         })
     }
+}
+
+/// One event to publish: its type, subject, and payload.
+pub type LibraryEventSpec = (LibraryEventType, EventSubject, LibraryEventPayload);
+
+/// `library.project.changed` for `project`.
+pub fn project_changed(project: &ProjectRecord) -> LibraryEventSpec {
+    (
+        LibraryEventType::ProjectChanged,
+        subject("project", &project.id),
+        LibraryEventPayload::ProjectChanged(project.clone()),
+    )
+}
+
+/// `library.project.removed` for Project `id`.
+pub fn project_removed(id: &str) -> LibraryEventSpec {
+    (
+        LibraryEventType::ProjectRemoved,
+        subject("project", id),
+        LibraryEventPayload::Removed {},
+    )
+}
+
+/// `library.model.changed` for `model`.
+pub fn model_changed(model: &ModelRecord) -> LibraryEventSpec {
+    (
+        LibraryEventType::ModelChanged,
+        subject("model", &model.id),
+        LibraryEventPayload::ModelChanged(Box::new(model.clone())),
+    )
+}
+
+/// `library.model.removed` for Model `id`.
+pub fn model_removed(id: &str) -> LibraryEventSpec {
+    (
+        LibraryEventType::ModelRemoved,
+        subject("model", id),
+        LibraryEventPayload::Removed {},
+    )
 }
 
 /// An event subject such as `selection/<id>` or `model/<id>`.

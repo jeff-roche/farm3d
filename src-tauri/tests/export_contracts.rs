@@ -28,6 +28,10 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::library::commands::{
+    DeleteModelResult, DeleteProjectResult, LibraryContentInfo, LibrarySnapshot,
+    ModelMutationResult, ModelPatch, ProjectMutationResult, RevisionThumbnail,
+};
 use farm3d_lib::library::events::{LibraryEvent, LibraryEventPayload, LibraryEventType};
 use farm3d_lib::library::formats::{
     BoundsMm, GcodeClaim, GcodeInspection, GcodeSummary, Inspection, InspectionSummary, Plate,
@@ -47,7 +51,8 @@ use farm3d_lib::library::selection::{
 };
 use farm3d_lib::library::{
     ImportWarning, ImportWarningCode, ModelFormat, ModelLink, ModelRecord,
-    ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin, SourceState, StorageMode, WatchMode,
+    ModelSourceRevisionRecord, ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin,
+    SourceState, StorageMode, WatchMode,
 };
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
@@ -404,6 +409,15 @@ fn export_registry() -> Vec<Export> {
         export::<LibraryEventType>(),
         export::<LibraryEventPayload>(),
         export::<LibraryEvent>(),
+        export::<ModelSourceRevisionRecord>(),
+        export::<LibrarySnapshot>(),
+        export::<ProjectMutationResult>(),
+        export::<DeleteProjectResult>(),
+        export::<ModelPatch>(),
+        export::<ModelMutationResult>(),
+        export::<DeleteModelResult>(),
+        export::<RevisionThumbnail>(),
+        export::<LibraryContentInfo>(),
     ]
 }
 

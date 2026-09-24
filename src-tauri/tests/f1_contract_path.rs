@@ -1,6 +1,6 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 45);
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 55);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -49,6 +49,16 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
             "inspect_import_selection",
             "cancel_import_selection",
             "import_models",
+            "list_library",
+            "create_project",
+            "rename_project",
+            "delete_project",
+            "update_model",
+            "set_model_projects",
+            "delete_model",
+            "list_model_revisions",
+            "get_revision_thumbnail",
+            "library_content_info",
         ]
     );
 }
@@ -148,6 +158,16 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::library::commands::inspect_import_selection,
             farm3d_lib::library::commands::cancel_import_selection,
             farm3d_lib::library::commands::import_models,
+            farm3d_lib::library::commands::list_library,
+            farm3d_lib::library::commands::create_project,
+            farm3d_lib::library::commands::rename_project,
+            farm3d_lib::library::commands::delete_project,
+            farm3d_lib::library::commands::update_model,
+            farm3d_lib::library::commands::set_model_projects,
+            farm3d_lib::library::commands::delete_model,
+            farm3d_lib::library::commands::list_model_revisions,
+            farm3d_lib::library::commands::get_revision_thumbnail,
+            farm3d_lib::library::commands::library_content_info,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -293,6 +313,25 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             "import_models",
             json!({"selectionId": "s", "operationId": "o", "items": []}),
         ),
+        ("list_library", json!({})),
+        ("create_project", json!({"name": "p"})),
+        (
+            "rename_project",
+            json!({"id": "p", "expectedRevision": 1, "name": "p"}),
+        ),
+        ("delete_project", json!({"id": "p", "expectedRevision": 1})),
+        (
+            "update_model",
+            json!({"id": "m", "expectedRevision": 1, "patch": {"name": "m"}}),
+        ),
+        (
+            "set_model_projects",
+            json!({"modelId": "m", "expectedRevision": 1, "add": [], "remove": []}),
+        ),
+        ("delete_model", json!({"id": "m", "expectedRevision": 1})),
+        ("list_model_revisions", json!({"modelId": "m"})),
+        ("get_revision_thumbnail", json!({"revisionId": "r"})),
+        ("library_content_info", json!({})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

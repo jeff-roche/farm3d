@@ -6,8 +6,7 @@
 //! pattern for library-style writes: free functions over `&Transaction`
 //! that return `RepositoryError`, run through `Storage::write_repo`).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -21,9 +20,9 @@ use super::content::{SourceStat, StagedFile};
 use super::formats::{InspectOutcome, Inspection, INSPECTOR_VERSION};
 use super::inspection::StagedThumbnail;
 use super::{
-    new_id, ImportWarning, ModelFormat, ModelLink, ModelRecord, ModelSourceRevisionSummary,
-    ProjectRecord, RevisionOrigin, SourceState, StorageMode, StoredModel, StoredRevision,
-    WatchMode,
+    new_id, ImportWarning, ModelFormat, ModelLink, ModelRecord, ModelSourceRevisionRecord,
+    ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin, SourceState, StorageMode,
+    StoredModel, StoredRevision, WatchMode,
 };
 
 /// D1: a Project name is unique case-insensitively. 1-128 characters,
@@ -101,7 +100,8 @@ pub fn list_projects(connection: &Connection) -> Result<Vec<ProjectRecord>, Stor
     query_project_records(connection, "1 = 1", [])
 }
 
-fn load_project_record(
+/// The Project `id`, with its membership count, or `None`.
+pub fn load_project_record(
     connection: &Connection,
     id: &str,
 ) -> Result<Option<ProjectRecord>, StorageError> {
@@ -376,19 +376,26 @@ pub(crate) fn bump_model_revision(
     Ok(())
 }
 
+/// D2: where a revision's bytes were read from. `path` is the absolute path
+/// read; `file_name` is its basename as the selection recorded it
+/// (`SelectedFile.file_name`), the only part errors and lists show (D6).
+pub(crate) struct RevisionSource<'a> {
+    pub path: &'a str,
+    pub file_name: &'a str,
+    pub mtime: Option<&'a str>,
+}
+
 /// D2: appends a Model Source Revision for `staged` with the next
 /// `sequence` (`max(sequence) + 1`, so 1 for a new Model). The content blob
 /// row must exist in this transaction already (`place_and_commit` inserts
-/// it). `source_path` is the absolute path read, and its basename becomes
-/// `source_file_name`.
+/// it).
 pub(crate) fn insert_revision(
     tx: &Transaction<'_>,
     model_id: &str,
     staged: &StagedFile,
     outcome: &InspectOutcome,
     origin: RevisionOrigin,
-    source_path: &str,
-    source_mtime: Option<&str>,
+    source: &RevisionSource<'_>,
 ) -> Result<StoredRevision, RepositoryError> {
     let sequence: i64 = tx.query_row(
         "SELECT COALESCE(MAX(sequence), 0) + 1 FROM model_source_revisions WHERE model_id = ?1",
@@ -398,10 +405,6 @@ pub(crate) fn insert_revision(
     let size_bytes = i64::try_from(staged.size).map_err(|_| RepositoryError::Validation {
         field_path: "sizeBytes",
     })?;
-    let source_file_name = Path::new(source_path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| source_path.to_string());
     let inspection_json = serde_json::to_string(&StoredInspection {
         inspection: outcome.inspection.clone(),
         warnings: outcome.warnings.clone(),
@@ -417,9 +420,9 @@ pub(crate) fn insert_revision(
         size_bytes,
         format: inspection_format(&outcome.inspection),
         origin,
-        source_file_name,
-        source_path: source_path.to_string(),
-        source_mtime: source_mtime.map(str::to_string),
+        source_file_name: source.file_name.to_string(),
+        source_path: source.path.to_string(),
+        source_mtime: source.mtime.map(str::to_string),
         captured_at: now_rfc3339(),
         inspector_version: INSPECTOR_VERSION,
         inspection_json,
@@ -672,6 +675,240 @@ pub(crate) fn load_model_views(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(views)
+}
+
+/// P2's optimistic-concurrency check for Model `id`: `NotFound` when there
+/// is no such Model, `Conflict` when its `revision` isn't
+/// `expected_revision`. Returns the stored row.
+pub(crate) fn checked_model(
+    connection: &Connection,
+    id: &str,
+    expected_revision: i64,
+) -> Result<StoredModel, RepositoryError> {
+    if expected_revision <= 0 {
+        return Err(RepositoryError::Validation {
+            field_path: "expectedRevision",
+        });
+    }
+    let model = load_model(connection, id)?.ok_or_else(|| RepositoryError::NotFound {
+        entity_id: id.to_string(),
+    })?;
+    if model.revision != expected_revision {
+        return Err(RepositoryError::Conflict {
+            entity_id: id.to_string(),
+            expected_revision,
+            current_revision: model.revision,
+        });
+    }
+    Ok(model)
+}
+
+/// D1: renames Model `id` and bumps its revision. The caller has checked
+/// the revision and validated `name`.
+pub(crate) fn rename_model(
+    tx: &Transaction<'_>,
+    id: &str,
+    name: &str,
+) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE library_models SET name = ?2, revision = revision + 1, updated_at = ?3
+         WHERE id = ?1",
+        params![id, name, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// D1's same-name rule, shared by `update_model` and import: whether
+/// another Model has Model `model_id`'s name (compared case-insensitively,
+/// with full Unicode folding) and either shares one of its Projects or is,
+/// like it, Unfiled. Names need not be unique; this only drives the
+/// `DUPLICATE_NAME` warning.
+pub fn has_same_name_model(connection: &Connection, model_id: &str) -> Result<bool, StorageError> {
+    let Some(model) = load_model(connection, model_id)? else {
+        return Ok(false);
+    };
+    let folded = model.name.to_lowercase();
+    let mut statement = connection.prepare("SELECT id, name FROM library_models WHERE id != ?1")?;
+    let namesakes = statement
+        .query_map([model_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(_, name)| name.to_lowercase() == folded)
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    if namesakes.is_empty() {
+        return Ok(false);
+    }
+    let projects: HashSet<String> = project_ids_for(connection, model_id)?.into_iter().collect();
+    for other in namesakes {
+        let theirs = project_ids_for(connection, &other)?;
+        let both_unfiled = projects.is_empty() && theirs.is_empty();
+        if both_unfiled || theirs.iter().any(|project| projects.contains(project)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// D18 `delete_project` steps 1-3: bumps the revision of every Model in
+/// Project `id`, then deletes the Project, whose `project_models` rows
+/// cascade. No Model, revision, or blob is deleted. Returns the affected
+/// Model ids, ordered by Model name (case-insensitive), then id.
+pub fn delete_project(
+    tx: &Transaction<'_>,
+    id: &str,
+    expected_revision: i64,
+) -> Result<Vec<String>, RepositoryError> {
+    if expected_revision <= 0 {
+        return Err(RepositoryError::Validation {
+            field_path: "expectedRevision",
+        });
+    }
+    let project = load_project_record(tx, id)?.ok_or_else(|| RepositoryError::NotFound {
+        entity_id: id.to_string(),
+    })?;
+    if project.revision != expected_revision {
+        return Err(RepositoryError::Conflict {
+            entity_id: id.to_string(),
+            expected_revision,
+            current_revision: project.revision,
+        });
+    }
+    let affected = {
+        let mut statement = tx.prepare(
+            "SELECT m.id FROM project_models pm
+             JOIN library_models m ON m.id = pm.model_id
+             WHERE pm.project_id = ?1
+             ORDER BY lower(m.name), m.id",
+        )?;
+        let ids = statement
+            .query_map([id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
+    for model_id in &affected {
+        bump_model_revision(tx, model_id)?;
+    }
+    tx.execute("DELETE FROM library_projects WHERE id = ?1", [id])?;
+    Ok(affected)
+}
+
+/// D18: every content hash Model `model_id`'s revisions and their
+/// thumbnails refer to, the candidates for cleanup once it is deleted.
+pub(crate) fn model_content_hashes(
+    connection: &Connection,
+    model_id: &str,
+) -> Result<Vec<String>, StorageError> {
+    let mut statement = connection.prepare(
+        "SELECT r.content_sha256 FROM model_source_revisions r WHERE r.model_id = ?1
+         UNION
+         SELECT t.content_sha256 FROM model_revision_thumbnails t
+         JOIN model_source_revisions r ON r.id = t.revision_id
+         WHERE r.model_id = ?1
+         ORDER BY 1",
+    )?;
+    let hashes = statement
+        .query_map([model_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(hashes)
+}
+
+/// D18 step 2: deletes Model `model_id`. Its revisions, their thumbnail
+/// rows, and its `project_models` rows cascade; blobs are the caller's
+/// (`content::mark_unreferenced_blobs`).
+pub(crate) fn delete_model_row(
+    tx: &Transaction<'_>,
+    model_id: &str,
+) -> Result<(), RepositoryError> {
+    tx.execute("DELETE FROM library_models WHERE id = ?1", [model_id])?;
+    Ok(())
+}
+
+/// Every revision of Model `model_id` in full, newest (highest `sequence`)
+/// first.
+pub(crate) fn list_revision_records(
+    connection: &Connection,
+    model_id: &str,
+) -> Result<Vec<ModelSourceRevisionRecord>, StorageError> {
+    let mut statement = connection.prepare(
+        "SELECT r.id, r.sequence, r.content_sha256, r.size_bytes, r.format, r.origin,
+                r.source_file_name, r.captured_at, r.inspection_json,
+                EXISTS(SELECT 1 FROM model_revision_thumbnails t WHERE t.revision_id = r.id),
+                r.source_path, r.source_mtime, r.inspector_version
+         FROM model_source_revisions r
+         WHERE r.model_id = ?1
+         ORDER BY r.sequence DESC",
+    )?;
+    let records = statement
+        .query_map([model_id], |row| {
+            let inspection_json: String = row.get(8)?;
+            let stored: StoredInspection =
+                serde_json::from_str(&inspection_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(8, Type::Text, Box::new(error))
+                })?;
+            Ok(ModelSourceRevisionRecord {
+                summary: ModelSourceRevisionSummary {
+                    id: row.get(0)?,
+                    model_id: model_id.to_string(),
+                    sequence: row.get(1)?,
+                    sha256: row.get(2)?,
+                    size_bytes: row.get(3)?,
+                    format: decode_column(row, 4)?,
+                    origin: decode_column(row, 5)?,
+                    source_file_name: row.get(6)?,
+                    captured_at: row.get(7)?,
+                    has_thumbnail: row.get(9)?,
+                    summary: stored.inspection.summary(),
+                },
+                source_path: row.get(10)?,
+                source_mtime: row.get(11)?,
+                inspector_version: row.get(12)?,
+                inspection: stored.inspection,
+                warnings: stored.warnings,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(records)
+}
+
+/// A revision's stored thumbnail row (D12).
+pub(crate) struct ThumbnailRow {
+    pub media_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub content_sha256: String,
+}
+
+/// Revision `revision_id`'s thumbnail: `None` when there is no such
+/// revision, `Some(None)` when it has no thumbnail.
+pub(crate) fn load_thumbnail(
+    connection: &Connection,
+    revision_id: &str,
+) -> Result<Option<Option<ThumbnailRow>>, StorageError> {
+    connection
+        .query_row(
+            "SELECT t.media_type, t.width, t.height, t.content_sha256
+             FROM model_source_revisions r
+             LEFT JOIN model_revision_thumbnails t ON t.revision_id = r.id
+             WHERE r.id = ?1",
+            [revision_id],
+            |row| {
+                let media_type: Option<String> = row.get(0)?;
+                Ok(match media_type {
+                    None => None,
+                    Some(media_type) => Some(ThumbnailRow {
+                        media_type,
+                        width: row.get(1)?,
+                        height: row.get(2)?,
+                        content_sha256: row.get(3)?,
+                    }),
+                })
+            },
+        )
+        .optional()
+        .map_err(StorageError::from)
 }
 
 #[cfg(test)]
@@ -956,6 +1193,64 @@ mod tests {
         assert_eq!(json["warnings"][0]["code"], "LONG_LINE");
         let back: StoredInspection = serde_json::from_value(json).unwrap();
         assert_eq!(back, stored);
+    }
+
+    /// Task 6 review M2: the stored basename is the selection's, never a
+    /// path, even for a source path with no final component.
+    #[test]
+    fn insert_revision_stores_the_given_file_name_not_the_path() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_model(&storage, "mdl-a");
+        let sha = "b".repeat(64);
+        let inspection = Inspection::Gcode(crate::library::formats::GcodeInspection {
+            producer: None,
+            claims: vec![],
+            trusted: false,
+            line_count: 1,
+            command_count: 1,
+            tools_used: vec![],
+            relative_positioning_seen: false,
+            relative_extrusion_seen: false,
+            observed_bounds_mm: None,
+            thumbnails: vec![],
+        });
+        let outcome = InspectOutcome {
+            summary: inspection.summary(),
+            inspection,
+            thumbnail: None,
+            warnings: vec![],
+        };
+        let staged = StagedFile {
+            path: std::path::PathBuf::from("/staging/x.part"),
+            sha256: sha.clone(),
+            size: 3,
+            source: None,
+        };
+
+        let revision = storage
+            .write_repo(|tx| {
+                tx.execute(
+                    "INSERT INTO content_blobs (sha256, size_bytes, created_at)
+                     VALUES (?1, 3, '2026-01-01T00:00:00.000Z')",
+                    [&sha],
+                )?;
+                super::insert_revision(
+                    tx,
+                    "mdl-a",
+                    &staged,
+                    &outcome,
+                    RevisionOrigin::Import,
+                    &RevisionSource {
+                        path: "/",
+                        file_name: "part.gcode",
+                        mtime: None,
+                    },
+                )
+            })
+            .expect("insert revision");
+
+        assert_eq!(revision.source_file_name, "part.gcode");
+        assert_eq!(revision.source_path, "/");
     }
 
     #[test]
