@@ -30,6 +30,10 @@ function ProjectNameDialog(props: {
   const [name, setName] = createSignal(props.initialName);
   const [failure, setFailure] = createSignal<NameFailure>({});
   const [busy, setBusy] = createSignal(false);
+  // No closing mid-request (see DeleteProjectDialog).
+  const requestClose = () => {
+    if (!busy()) props.onClose();
+  };
 
   const submit: JSX.EventHandler<HTMLFormElement, SubmitEvent> = (event) => {
     event.preventDefault();
@@ -47,14 +51,14 @@ function ProjectNameDialog(props: {
       title={props.title}
       open
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (!open) requestClose();
       }}
     >
       <form class={styles.body} onSubmit={submit}>
         <TextField label="Name" value={name()} onChange={setName} error={failure().field} />
         <Show when={failure().form}>{(message) => <p class={styles.error} role="alert">{message()}</p>}</Show>
         <div class={styles.actions}>
-          <Button type="button" variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button type="button" variant="ghost" disabled={busy()} onClick={requestClose}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={busy()}>{props.submitLabel}</Button>
         </div>
       </form>
@@ -114,6 +118,11 @@ export function DeleteProjectDialog(props: {
 }) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  // No closing mid-request: a late result would act on whatever dialog
+  // the workspace had opened in the meantime.
+  const requestClose = () => {
+    if (!busy()) props.onClose();
+  };
   const text = createMemo(() => {
     const members = library.models().filter((model) => model.projectIds.includes(props.project.id));
     const onlyHere = members.filter((model) => model.projectIds.length === 1).length;
@@ -142,14 +151,14 @@ export function DeleteProjectDialog(props: {
       title="Delete Project"
       open
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (!open) requestClose();
       }}
     >
       <div class={styles.body}>
         <p class={styles.text}>{text()}</p>
         <Show when={error()}>{(message) => <p class={styles.error} role="alert">{message()}</p>}</Show>
         <div class={styles.actions}>
-          <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button variant="ghost" disabled={busy()} onClick={requestClose}>Cancel</Button>
           <Button variant="danger" disabled={busy()} onClick={() => void confirm()}>Delete Project</Button>
         </div>
       </div>

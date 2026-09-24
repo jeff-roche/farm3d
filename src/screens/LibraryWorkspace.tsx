@@ -248,13 +248,17 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
   };
   // D18: the Models stay. Only the view goes, if it was this Project's.
   const projectDeleted = (projectId: string) => {
-    closeDialog();
-    const current = view();
-    if (current.kind === "project" && current.id === projectId) selectView(ALL_MODELS);
+    const current = dialog();
+    if (current?.kind === "deleteProject" && current.projectId === projectId) closeDialog();
+    const viewed = view();
+    if (viewed.kind === "project" && viewed.id === projectId) selectView(ALL_MODELS);
   };
-  const modelDeleted = () => {
-    closeDialog();
-    selectView(activeView());
+  const modelDeleted = (modelId: string) => {
+    const current = dialog();
+    if (current?.kind === "deleteModel" && current.modelId === modelId) closeDialog();
+    // Clears the selection if it was this Model.
+    const selection = libraryTarget()?.selection;
+    if (selection?.kind === "model" && selection.id === modelId) selectView(activeView());
   };
   const selectModel = (modelId: string) => {
     props.navigate({ version: 1, destination: "library", selection: { kind: "model", id: modelId } });

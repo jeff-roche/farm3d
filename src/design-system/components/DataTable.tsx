@@ -1,11 +1,6 @@
 import { For, Show, createMemo, type JSX } from "solid-js";
 import styles from "./DataTable.module.css";
 
-/** Controls inside a row that handle their own keys. Rows and the table
- *  match none of these. */
-const INTERACTIVE_DESCENDANT =
-  "button, input, select, textarea, a[href], [contenteditable], [role='button'], [role='menuitem'], [role='combobox'], [aria-haspopup]";
-
 export interface DataTableColumn<T> {
   id: string;
   header: string;
@@ -68,15 +63,16 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
   };
 
   const handleKeyDown: JSX.EventHandler<HTMLTableElement, KeyboardEvent> = (event) => {
-    // Row navigation only. A header's sort button lives in `<thead>`, and a
-    // row may hold its own controls (a menu trigger, a button, an input);
-    // each handles its own keys, natively or through Kobalte. Without this
-    // guard, Enter or an arrow key on one of them would also move row
-    // selection or re-fire onActivate. Keys on the row itself (or the
-    // table) pass through.
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("thead")) return;
-    if (target?.closest(INTERACTIVE_DESCENDANT)) return;
+    // Row navigation only: keys pressed on the table itself or on one of
+    // its own body rows. Anything else -- a header's sort button, a control
+    // inside a cell, or content a cell portals elsewhere (a menu, a
+    // listbox), whose delegated keydown still bubbles here -- handles its
+    // own keys. Without this, ArrowDown in an open row menu would move the
+    // row selection and pull focus out of the menu.
+    if (event.defaultPrevented) return;
+    const target = event.target;
+    const onOwnRow = target instanceof HTMLTableRowElement && [...rowRefs.values()].includes(target);
+    if (target !== event.currentTarget && !onOwnRow) return;
 
     const ids = rowIds();
     if (ids.length === 0) return;

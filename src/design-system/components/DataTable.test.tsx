@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { Portal } from "solid-js/web";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DataTable, type DataTableColumn } from "./DataTable";
@@ -111,7 +112,7 @@ describe("DataTable", () => {
     expect(screen.getByRole("row", { name: /Bravo/ }).getAttribute("aria-selected")).toBe("false");
   });
 
-  it("ignores keys pressed on an interactive control inside a row, but still handles keys on the row itself", async () => {
+  it("handles keys only on the table or its own rows: controls in a cell and portaled menus keep theirs", async () => {
     const onActivate = vi.fn();
     const onMenu = vi.fn();
     function TableWithControls() {
@@ -131,6 +132,10 @@ describe("DataTable", () => {
                   <button type="button" onClick={onMenu}>Edit {row.name}</button>
                   <span role="button" tabIndex={0} aria-haspopup="menu">Menu {row.name}</span>
                   <input aria-label={`Note ${row.name}`} />
+                  <div role="menu" tabIndex={-1} aria-label={`Inline menu ${row.name}`} />
+                  <Portal>
+                    <div role="menu" tabIndex={-1} aria-label={`Portaled menu ${row.name}`} />
+                  </Portal>
                 </>
               ),
             },
@@ -148,6 +153,10 @@ describe("DataTable", () => {
       screen.getByRole("button", { name: "Edit Alpha" }),
       screen.getByRole("button", { name: "Menu Alpha" }),
       screen.getByRole("textbox", { name: "Note Alpha" }),
+      screen.getByRole("menu", { name: "Inline menu Alpha" }),
+      // Opened menu content lives in a portal, but Solid's delegated
+      // keydown still bubbles from it to the table.
+      screen.getByRole("menu", { name: "Portaled menu Alpha" }),
     ]) {
       await fireEvent.keyDown(control, { key: "Enter" });
       await fireEvent.keyDown(control, { key: "ArrowDown" });

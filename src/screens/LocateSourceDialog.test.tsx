@@ -110,6 +110,39 @@ describe("LocateSourceDialog", () => {
     expect(screen.queryByRole("button", { name: "Relink and import as a new revision" })).toBeNull();
   });
 
+  it("can't be closed while a locate is running", async () => {
+    let refuse!: (error: unknown) => void;
+    libraryStoreMock.pickFiles.mockResolvedValueOnce(LOCATED);
+    libraryStoreMock.locateSource.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    const { onClose } = renderLocate();
+    await fireEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+    await waitFor(() => expect(libraryStoreMock.locateSource).toHaveBeenCalled());
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    refuse(DIFFERS);
+    expect(await screen.findByRole("button", { name: "Relink and import as a new revision" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
+  it("releases the selection of a SOURCE_CONTENT_DIFFERS that arrives after the dialog unmounts", async () => {
+    let refuse!: (error: unknown) => void;
+    libraryStoreMock.pickFiles.mockResolvedValueOnce(LOCATED);
+    libraryStoreMock.locateSource.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    const onClose = vi.fn();
+    const { unmount } = render(() => <LocateSourceDialog model={CLIP} onClose={onClose} />);
+    await fireEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+    await waitFor(() => expect(libraryStoreMock.locateSource).toHaveBeenCalled());
+
+    unmount();
+    refuse(DIFFERS);
+    await waitFor(() => expect(libraryStoreMock.cancelSelection).toHaveBeenCalledWith("sel-locate"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("cancels an unused selection when closed after SOURCE_CONTENT_DIFFERS", async () => {
     libraryStoreMock.pickFiles.mockResolvedValueOnce(LOCATED);
     libraryStoreMock.locateSource.mockRejectedValueOnce(DIFFERS);

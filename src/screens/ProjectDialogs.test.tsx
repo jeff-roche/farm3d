@@ -96,6 +96,20 @@ describe("DeleteProjectDialog", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent("Delete Solo? It has no Models.");
   });
 
+  it("can't be closed while the delete is running", async () => {
+    let finish!: () => void;
+    libraryStoreMock.deleteProject.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    render(() => <DeleteProjectDialog project={BRACKETS} onClose={onClose} onDeleted={onDeleted} />);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete Project" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith(BRACKETS.id));
+  });
+
   it("shows a failure inline", async () => {
     libraryStoreMock.deleteProject.mockRejectedValueOnce({
       contractVersion: 1, code: "NOT_FOUND", message: "This Project no longer exists.", recovery: [], retryable: false,

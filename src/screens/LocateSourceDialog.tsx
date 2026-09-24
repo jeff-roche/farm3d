@@ -53,8 +53,16 @@ export function LocateSourceDialog(props: RecoveryDialogProps) {
     setDiffers(null);
     if (pending) release(pending.selectionId);
   };
-  onCleanup(discardPending);
+  // No closing mid-request. The dialog can still unmount under a request
+  // (its Model deleted elsewhere); a late result then only releases its
+  // selection and touches nothing else.
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    discardPending();
+  });
   const close = () => {
+    if (busy()) return;
     discardPending();
     props.onClose();
   };
@@ -62,10 +70,15 @@ export function LocateSourceDialog(props: RecoveryDialogProps) {
   const locate = async (located: Located, acceptDifferentContent: boolean) => {
     try {
       await locateSource(props.model.id, located.selectionId, located.fileIndex, acceptDifferentContent);
+      if (disposed) return;
       // The backend used the selection, so there's nothing left to cancel.
       setDiffers(null);
       props.onClose();
     } catch (failure) {
+      if (disposed) {
+        release(located.selectionId);
+        return;
+      }
       if (isCommandError(failure) && failure.code === "SOURCE_CONTENT_DIFFERS") {
         setDiffers(located);
       } else {
@@ -84,13 +97,17 @@ export function LocateSourceDialog(props: RecoveryDialogProps) {
     discardPending();
     try {
       const selection = await pickFiles("locate");
+      if (selection && disposed) {
+        release(selection.selectionId);
+        return;
+      }
       const file = selection?.files[0];
       if (!selection || !file) return;
       await locate({ selectionId: selection.selectionId, fileIndex: file.fileIndex, fileName: file.fileName }, false);
     } catch (failure) {
-      setError(failureMessage(failure));
+      if (!disposed) setError(failureMessage(failure));
     } finally {
-      setBusy(false);
+      if (!disposed) setBusy(false);
     }
   };
 
@@ -102,7 +119,7 @@ export function LocateSourceDialog(props: RecoveryDialogProps) {
     try {
       await locate(located, true);
     } finally {
-      setBusy(false);
+      if (!disposed) setBusy(false);
     }
   };
 
@@ -138,7 +155,7 @@ export function LocateSourceDialog(props: RecoveryDialogProps) {
           <p id={reasonId} class={styles.note}>{LOCATE_UNAVAILABLE}</p>
         </Show>
         <div class={styles.actions}>
-          <Button variant="ghost" onClick={close}>Cancel</Button>
+          <Button variant="ghost" disabled={busy()} onClick={close}>Cancel</Button>
           <Button
             variant={differs() ? "secondary" : "primary"}
             disabled={busy() || !desktopAvailable()}
@@ -168,6 +185,9 @@ export function ConvertToManagedDialog(props: RecoveryDialogProps) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const reasonId = createUniqueId();
+  const requestClose = () => {
+    if (!busy()) props.onClose();
+  };
 
   const convert = async () => {
     if (busy()) return;
@@ -188,7 +208,7 @@ export function ConvertToManagedDialog(props: RecoveryDialogProps) {
       title="Convert to managed"
       open
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (!open) requestClose();
       }}
     >
       <div class={styles.body}>
@@ -200,7 +220,7 @@ export function ConvertToManagedDialog(props: RecoveryDialogProps) {
           <p id={reasonId} class={styles.note}>{CONVERT_UNAVAILABLE}</p>
         </Show>
         <div class={styles.actions}>
-          <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button variant="ghost" disabled={busy()} onClick={requestClose}>Cancel</Button>
           <Button
             variant="primary"
             disabled={busy() || !desktopAvailable()}

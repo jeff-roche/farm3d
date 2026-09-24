@@ -19,7 +19,7 @@ describe("DeleteModelDialog", () => {
       .toHaveTextContent("Delete Cube? Its imported revisions are deleted. The original file on disk is not.");
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(libraryStoreMock.deleteModel).toHaveBeenCalledWith("mdl-cube");
-    await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("mdl-cube"));
   });
 
   it("lists the blockers of a LIFECYCLE_BLOCKED delete, and keeps the Model", async () => {
@@ -51,5 +51,25 @@ describe("DeleteModelDialog", () => {
     render(() => <DeleteModelDialog model={CUBE} onClose={vi.fn()} onDeleted={vi.fn()} />);
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("This Model changed. Try again.");
+  });
+
+  it("can't be closed while the delete is running", async () => {
+    let finish!: () => void;
+    libraryStoreMock.deleteModel.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    render(() => <DeleteModelDialog model={CUBE} onClose={onClose} onDeleted={onDeleted} />);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toBeDisabled();
+    await fireEvent.click(cancel);
+    await fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    finish();
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith("mdl-cube"));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 });

@@ -10,7 +10,7 @@ export interface DeleteModelDialogProps {
   onClose: () => void;
   /** The Model is gone; the caller closes the dialog and clears the
    *  selection. */
-  onDeleted: () => void;
+  onDeleted: (modelId: string) => void;
 }
 
 interface DeleteFailure {
@@ -36,6 +36,11 @@ function blockerMessages(details: Record<string, unknown> | undefined): string[]
 export function DeleteModelDialog(props: DeleteModelDialogProps) {
   const [busy, setBusy] = createSignal(false);
   const [failure, setFailure] = createSignal<DeleteFailure | null>(null);
+  // No closing mid-request: a late result would act on whatever dialog
+  // the workspace had opened in the meantime.
+  const requestClose = () => {
+    if (!busy()) props.onClose();
+  };
 
   const confirm = async () => {
     if (busy()) return;
@@ -46,7 +51,7 @@ export function DeleteModelDialog(props: DeleteModelDialogProps) {
     const { id, name } = props.model;
     try {
       await deleteModel(id);
-      props.onDeleted();
+      props.onDeleted(id);
     } catch (error) {
       if (isCommandError(error) && error.code === "LIFECYCLE_BLOCKED") {
         setFailure({ message: `${name} can't be deleted yet.`, blockers: blockerMessages(error.details) });
@@ -63,7 +68,7 @@ export function DeleteModelDialog(props: DeleteModelDialogProps) {
       title="Delete Model"
       open
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (!open) requestClose();
       }}
     >
       <div class={styles.body}>
@@ -83,7 +88,7 @@ export function DeleteModelDialog(props: DeleteModelDialogProps) {
           )}
         </Show>
         <div class={styles.actions}>
-          <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button variant="ghost" disabled={busy()} onClick={requestClose}>Cancel</Button>
           <Button variant="danger" disabled={busy()} onClick={() => void confirm()}>Delete</Button>
         </div>
       </div>
