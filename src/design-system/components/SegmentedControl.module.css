@@ -32,6 +32,7 @@
   font-size: var(--f3d-type-body-size);
   color: var(--f3d-color-text-muted);
   cursor: pointer;
+  outline: none;
   transition: color 0.12s;
 }
 
@@ -43,6 +44,16 @@
 
 .itemLabel[data-checked] {
   color: var(--f3d-color-on-accent);
+}
+
+/* Kobalte's `ItemInput` is the real, natively-focusable element — it is
+   always visually hidden (clip-rect), so its own outline is clipped too.
+   `ItemLabel` is its next sibling in the DOM, so a focus ring drawn on
+   the focused input's `:focus-visible` sibling shows the visible segment
+   as focused, without any JS focus-tracking. */
+.input:focus-visible + .itemLabel {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: 2px;
 }
 
 .icon {

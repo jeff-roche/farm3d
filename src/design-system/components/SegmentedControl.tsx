@@ -32,7 +32,7 @@ export function SegmentedControl<T extends string>(props: SegmentedControlProps<
       <For each={props.options}>
         {(option) => (
           <KSegmentedControl.Item value={option.value} class={styles.item}>
-            <KSegmentedControl.ItemInput />
+            <KSegmentedControl.ItemInput class={styles.input} />
             <KSegmentedControl.ItemLabel class={styles.itemLabel}>
               <Show when={option.icon}>
                 <span class={styles.icon} aria-hidden="true">

@@ -644,4 +644,29 @@ describe("SegmentedControl", () => {
     const names = new Set(Array.from(inputs).map((input) => (input as HTMLInputElement).name));
     expect(names.size).toBe(1);
   });
+
+  it("focuses a segment's real input, immediately followed by its visible label — the DOM state the adjacent-sibling :focus-visible focus-ring CSS keys on", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const listInput = document.querySelector('input[value="list"]') as HTMLInputElement;
+    const listLabel = screen.getByText("List");
+
+    // The focus-ring rule is `.input:focus-visible + .itemLabel`: it only
+    // works if the real (Kobalte-rendered) input is focusable and is the
+    // label's immediately preceding sibling.
+    expect(listInput.nextElementSibling).toBe(listLabel);
+
+    listInput.focus();
+    expect(document.activeElement).toBe(listInput);
+  });
 });
