@@ -564,6 +564,37 @@ describe("printer-store", () => {
       expect(calls[0][1].operationId).not.toBe(calls[1][1].operationId);
     });
 
+    it("archivePrinter retries a transport failure once with the same operationId", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter, printers } = await import("./printer-store");
+      await loadPrinters();
+      const archivedRecord = { ...structuredClone(A_PRINTER_RECORD), archivedAt: "2026-09-22T00:00:00.000Z" };
+      tauriMock.invoke
+        .mockRejectedValueOnce(new Error("IPC channel closed"))
+        .mockResolvedValueOnce({ contractVersion: 1, data: { printer: archivedRecord, warnings: [] } });
+
+      await archivePrinter("prn-1");
+
+      const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer");
+      expect(calls).toHaveLength(2);
+      expect(calls[1][1].operationId).toBe(calls[0][1].operationId);
+      expect(printers()[0].archivedAt).toBe("2026-09-22T00:00:00.000Z");
+    });
+
+    it("archivePrinter never retries a CommandError", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
+      const { loadPrinters, archivePrinter } = await import("./printer-store");
+      await loadPrinters();
+      tauriMock.invoke.mockRejectedValue({
+        contractVersion: 1, code: "LIFECYCLE_BLOCKED", message: "Unload every Spool first.",
+        recovery: [], retryable: false,
+      });
+
+      await expect(archivePrinter("prn-1")).rejects.toMatchObject({ code: "LIFECYCLE_BLOCKED" });
+
+      expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "archive_printer")).toHaveLength(1);
+    });
+
     it("archivePrinter rejects on error (e.g. a disposition CONFLICT) for inline handling instead of routing to the banner", async () => {
       tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: [A_PRINTER_RECORD] });
       const { loadPrinters, archivePrinter, printerStoreError, printers } = await import("./printer-store");

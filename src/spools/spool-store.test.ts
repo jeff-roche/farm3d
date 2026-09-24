@@ -436,6 +436,130 @@ describe("moveSpool: CONFLICT recovery", () => {
   });
 });
 
+// P3 follow-up: a transport failure (anything but a CommandError) may have
+// hidden a committed write, so the idempotent commands retry ONCE with the
+// same operationId; the operations ledger turns a committed first attempt
+// into a replay. A CommandError is a real answer and is never retried.
+describe("idempotent commands: one retry on a transport failure", () => {
+  const validation = { contractVersion: 1, code: "VALIDATION", message: "Bad request.", recovery: [], retryable: false };
+
+  it("moveSpool retries once with the same operationId, keeping one pending entry until it settles", async () => {
+    const moving = spool({ id: "spl-moving" });
+    let moveCalls = 0;
+    let resolveRetry!: (value: unknown) => void;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [moving]));
+      if (command === "move_spool") {
+        moveCalls += 1;
+        if (moveCalls === 1) return Promise.reject(new Error("IPC channel closed"));
+        return new Promise((resolve) => { resolveRetry = resolve; });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    const movePromise = moveSpool({
+      spoolId: moving.id, expectedSpoolRevision: moving.revision,
+      destination: { kind: "storage", storageLabel: "Shelf B" },
+    });
+    await vi.waitFor(() => expect(moveCalls).toBe(2));
+
+    // Still one pending entry, and the optimistic placement is still shown.
+    expect(Object.keys(spoolState.pending)).toHaveLength(1);
+    expect(spoolState.spools[0].location).toEqual({ kind: "storage", storageLabel: "Shelf B" });
+    const settled = { ...moving, revision: 2, location: { kind: "storage" as const, storageLabel: "Shelf B" } };
+    resolveRetry({ contractVersion: 1, data: { spools: [settled], printers: [], movements: [] } });
+    await movePromise;
+
+    const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "move_spool");
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1].operationId).toBe(calls[0][1].operationId);
+    expect(spoolState.spools).toEqual([settled]);
+    expect(spoolState.pending).toEqual({});
+  });
+
+  it("moveSpool rejects with the second transport failure and restores the Spool", async () => {
+    const moving = spool({ id: "spl-moving" });
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [moving]));
+      if (command === "move_spool") return Promise.reject(new Error("IPC channel closed"));
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, moveSpool, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(moveSpool({
+      spoolId: moving.id, expectedSpoolRevision: moving.revision,
+      destination: { kind: "storage", storageLabel: "Shelf B" },
+    })).rejects.toThrow("IPC channel closed");
+
+    expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "move_spool")).toHaveLength(2);
+    expect(spoolState.spools).toEqual([moving]);
+    expect(spoolState.pending).toEqual({});
+  });
+
+  it("moveSpool never retries a CommandError", async () => {
+    const moving = spool({ id: "spl-moving" });
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [moving]));
+      if (command === "move_spool") return Promise.reject(validation);
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, moveSpool } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(moveSpool({
+      spoolId: moving.id, expectedSpoolRevision: moving.revision,
+      destination: { kind: "storage", storageLabel: "Shelf B" },
+    })).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "move_spool")).toHaveLength(1);
+  });
+
+  it("setLifecycle sends an operationId and retries a transport failure once with the same one", async () => {
+    const target = spool({ id: "spl-1", revision: 4 });
+    const emptied = { ...target, revision: 5, lifecycle: "empty" as const };
+    let lifecycleCalls = 0;
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [target]));
+      if (command === "set_spool_lifecycle") {
+        lifecycleCalls += 1;
+        if (lifecycleCalls === 1) return Promise.reject(new Error("IPC channel closed"));
+        return Promise.resolve({ contractVersion: 1, data: { spool: emptied, printers: [], warnings: [] } });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, setLifecycle, spoolState } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(setLifecycle(target.id, "markEmpty")).resolves.toEqual(emptied);
+
+    const calls = tauriMock.invoke.mock.calls.filter(([name]) => name === "set_spool_lifecycle");
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1]).toEqual({
+      contractVersion: 1, id: target.id, expectedRevision: 4, action: "markEmpty",
+      operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(calls[1][1].operationId).toBe(calls[0][1].operationId);
+    expect(spoolState.spools).toEqual([emptied]);
+  });
+
+  it("setLifecycle never retries a CommandError", async () => {
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "list_spools") return Promise.resolve(snapshotResponse(0, [spool()]));
+      if (command === "set_spool_lifecycle") return Promise.reject(validation);
+      throw new Error(`unexpected command ${command}`);
+    });
+    const { loadInventory, setLifecycle } = await import("./spool-store");
+    await loadInventory();
+
+    await expect(setLifecycle("spl-1", "reactivate")).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "set_spool_lifecycle")).toHaveLength(1);
+  });
+});
+
 describe("moveSpool: validation", () => {
   it("rejects loading an archived Spool into a slot (D5), without calling move_spool", async () => {
     const archived = spool({ id: "spl-1", lifecycle: "archived" });

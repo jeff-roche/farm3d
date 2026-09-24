@@ -1,5 +1,5 @@
 import { createStore, produce } from "solid-js/store";
-import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
 import {
   printers as printerRecords,
   registerWebDispositionApplier,
@@ -449,7 +449,9 @@ function webMoveSpool(
  *  `CONFLICT` also refetches those same affected Spools (only) through
  *  `list_spools` before rethrowing, so the caller (an inline handler, not
  *  the banner -- this rejects rather than reporting) sees fresh state
- *  alongside the error. */
+ *  alongside the error. A transport failure is retried once with the same
+ *  `operationId` (`retryOnTransportFailure`) before any of that; the
+ *  pending entry and optimistic placement stay in place across the retry. */
 export async function moveSpool(req: Omit<MoveSpoolRequest, "operationId" | "contractVersion">): Promise<MoveSpoolData> {
   const spool = state.spools.find((s) => s.id === req.spoolId);
   if (!spool) throw commandError("NOT_FOUND", "This Spool no longer exists.");
@@ -477,7 +479,7 @@ export async function moveSpool(req: Omit<MoveSpoolRequest, "operationId" | "con
 
   try {
     const result = desktopAvailable()
-      ? await command("move_spool", { ...req, operationId })
+      ? await retryOnTransportFailure(() => command("move_spool", { ...req, operationId }))
       : webMoveSpool(req, spool, occupant, nextLocation, displacedLocation);
     settleMove(result);
     return result;
@@ -729,7 +731,9 @@ registerWebDispositionApplier(applyWebArchiveDispositions);
 /** Rejects for inline handling (fix round 1 ruling). `SpoolDetailDock`'s
  *  lifecycle menu and Unload are non-dialog callers -- they catch this
  *  themselves and route the failure to `reportSpoolError` (the banner),
- *  since they render no inline error UI of their own. */
+ *  since they render no inline error UI of their own. Each call sends a
+ *  fresh `operationId`, retried once on a transport failure
+ *  (`retryOnTransportFailure`). */
 export async function setLifecycle(
   id: string,
   action: SpoolLifecycleAction,
@@ -738,9 +742,8 @@ export async function setLifecycle(
   if (!desktopAvailable()) return webSetLifecycle(id, action, storageLabel);
   const expectedRevision = state.spools.find((s) => s.id === id)?.revision ?? 1;
   try {
-    const result = await command("set_spool_lifecycle", {
-      operationId: crypto.randomUUID(), id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}),
-    });
+    const request = { operationId: crypto.randomUUID(), id, expectedRevision, action, ...(storageLabel !== undefined ? { storageLabel } : {}) };
+    const result = await retryOnTransportFailure(() => command("set_spool_lifecycle", request));
     upsertSpool(result.spool);
     for (const printer of result.printers) spliceResolved(resolvePrinterRecord(printer));
     return result.spool;

@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { command, desktopAvailable, isCommandError } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
 import type { CreatePrintersBatchOutput } from "../generated/contracts/command/CreatePrintersBatchOutput";
@@ -878,7 +878,8 @@ export async function cancelBatch(batchId: string): Promise<void> {
 /** `dispositions` says where each loaded Spool goes (spec D10); it must
  *  cover every Spool in `lifecycleEligibility(id).loadedSpools`, and is
  *  empty for a Printer with nothing loaded. Each call sends a fresh
- *  `operationId`.
+ *  `operationId`, and a transport failure is retried once with that same
+ *  id (`retryOnTransportFailure`).
  *
  *  Rejects rather than reporting into the banner (Task 11 ruling):
  *  `ArchivePrinterDialog` shows a disposition's `CONFLICT` inline on the
@@ -901,12 +902,13 @@ export async function archivePrinter(id: string, dispositions: SpoolDispositionI
     setState("printers", (p) => p.id === id, "archivedAt", new Date().toISOString());
     return;
   }
-  const { printer } = await command("archive_printer", {
+  const request = {
     id,
     expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1,
     operationId: crypto.randomUUID(),
     spoolDispositions: dispositions,
-  });
+  };
+  const { printer } = await retryOnTransportFailure(() => command("archive_printer", request));
   spliceResolved(resolvePrinterRecord(printer));
 }
 

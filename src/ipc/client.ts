@@ -110,6 +110,22 @@ export async function command<K extends keyof CommandMap>(
   return response.data;
 }
 
+/** Runs `attempt`, and runs it once more if it fails with a transport error
+ *  (anything `command` rejects with that isn't a `CommandError`), since the
+ *  first call may have committed before the failure. Only for commands
+ *  idempotent by `operationId` (spec D6/D13): `attempt` must send the SAME
+ *  `operationId` both times, so the backend replays a committed first try
+ *  instead of applying it twice. A `CommandError` is the backend's answer
+ *  and is never retried. */
+export async function retryOnTransportFailure<T>(attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt();
+  } catch (error) {
+    if (isCommandError(error)) throw error;
+    return attempt();
+  }
+}
+
 export function desktopAvailable(): boolean {
   return isTauri();
 }
