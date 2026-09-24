@@ -870,9 +870,9 @@ mod tests {
         assert!(unavailable.retryable);
         assert_eq!(unavailable.recovery, vec![RecoveryCode::Retry]);
 
-        // Fix round 2: `SpoolsLoadedForImport` is a typed variant, not a
-        // magic-string `Validation { field_path: "printers" }` match, but it
-        // still maps to the same user-visible `CommandError`.
+        // `SpoolsLoadedForImport` is a typed variant, not a magic-string
+        // `Validation { field_path: "printers" }` match, but it still maps
+        // to the same user-visible `CommandError`.
         let spools_loaded = CommandError::from_repository(RepositoryError::SpoolsLoadedForImport);
         assert_eq!(spools_loaded.code, ErrorCode::Validation);
         assert_eq!(

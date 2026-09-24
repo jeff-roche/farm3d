@@ -511,9 +511,11 @@ and never for a rolled-back transaction or an idempotent replay.
   - Returns `PrinterMutationResult`.
 - **Batch:** `BatchShared` gains `slotLayout?`. It is copied into each row's
   `CreatePrinterOptions` as its own independent rows with fresh slot ids.
-  There is no batch or shared layout entity. Batch never loads Spools (user
-  decision 3). The Results step shows **Equip** on each created row, which
-  opens that Printer's Setup tab at its Material Slots section.
+  An invalid shared layout fails the whole batch up front with `VALIDATION`
+  on `slots`, creating no Printers. There is no batch or shared layout
+  entity. Batch never loads Spools (user decision 3). The Results step shows
+  **Equip** on each created row, which opens that Printer's Setup tab at its
+  Material Slots section.
 - **Export and import:** the Printers export becomes `schemaVersion: 3`, with
   `materialSlots: [{ name, feederLabel }]` per Printer and no occupancy.
   Import accepts v1, v2 (default layout), and v3.

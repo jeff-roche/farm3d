@@ -474,9 +474,9 @@ fn batch_create_copies_the_shared_layout_into_each_row_with_disjoint_ids() {
     }
 }
 
-/// Fix round 2: the shared layout is validated once, up front, before any
-/// row commits — a batch-wide `VALIDATION` on `slots`, not three
-/// independently-rejected rows, and no Printer is created.
+/// The shared layout is validated once, up front, before any row commits —
+/// a batch-wide `VALIDATION` on `slots`, not two independently-rejected
+/// rows, and no Printer is created.
 #[test]
 fn batch_create_rejects_an_invalid_shared_layout_up_front_and_creates_no_printers() {
     let (_temp, _lease, storage) = storage();
@@ -541,10 +541,9 @@ fn slot_removed_at(storage: &Storage, slot_id: &str) -> Option<String> {
         .unwrap()
 }
 
-/// Fix round 2: queries `material_slots` directly (not `live_slots`, which
-/// excludes removed rows) — a removed slot's real name must survive
-/// `set_layout`'s pass 1, not be left holding its `"tmp-<position>"`
-/// placeholder.
+/// Queries `material_slots` directly (not `live_slots`, which excludes
+/// removed rows) — a removed slot's real name must survive `set_layout`'s
+/// pass 1, not be left holding its `"tmp-<position>"` placeholder.
 fn slot_name(storage: &Storage, slot_id: &str) -> String {
     storage
         .read(|connection| {

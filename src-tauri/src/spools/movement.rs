@@ -234,7 +234,7 @@ pub fn apply_move(
 /// This function performs no replay check itself: the caller claims
 /// `operation_id` in the operations ledger first (`spools/operations.rs`'s
 /// `claim`, e.g. `archive_printer`'s dispositions), or uses a fresh
-/// server-generated id (`printers/repository.rs`'s `create_with_layout`,
+/// server-generated id (`spools/initial_loads.rs`'s `apply_initial_loads`,
 /// for `initialLoads`, D12).
 pub fn apply_moves(
     tx: &Transaction<'_>,

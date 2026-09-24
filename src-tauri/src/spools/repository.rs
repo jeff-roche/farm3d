@@ -566,7 +566,7 @@ fn insert(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError>
 /// `last_measured_at`/`created_at` — those change only through
 /// [`insert_spool`], [`ledger::append`], `lifecycle::set_lifecycle`, or
 /// `movement::set_location`), plus `revision`/`updated_at`. Not a whole-row
-/// rewrite of `spools` — see this module's doc comment.
+/// rewrite of `spools` — only these columns change on a field edit.
 fn update_field_columns(tx: &Transaction<'_>, spool: &StoredSpool) -> Result<(), StorageError> {
     let encoded = encode_columns(spool);
     tx.execute(
