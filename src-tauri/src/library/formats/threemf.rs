@@ -77,6 +77,9 @@ pub(crate) struct ZipLimits {
     /// Plates, object ids per plate, per-object setting keys, and paint
     /// attributes per part are only listed, so past this they're truncated.
     pub max_listed: usize,
+    /// Distinct `requiredextensions` prefixes in one model part, and across
+    /// the package. Past this the inspection is refused.
+    pub max_extensions: usize,
 }
 
 impl ZipLimits {
@@ -89,6 +92,7 @@ impl ZipLimits {
         max_placements: 1_000_000,
         max_objects: 1_000_000,
         max_listed: super::gcode::MAX_LISTED,
+        max_extensions: 64,
     };
 }
 
@@ -198,17 +202,23 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
     let unsupported = unsupported_entries(&entry_names, &parts, &per_object_keys);
     let (thumbnails, thumbnail, warnings) = package.thumbnails(root.thumbnail_middle.as_deref())?;
 
-    let mut required_extensions = root.required.clone();
+    // Each part's list is already distinct; the merge keeps the package's
+    // list distinct and under the same cap.
+    let mut required_extensions: Vec<String> = Vec::new();
     let mut other_parts: Vec<_> = parts
         .iter()
         .filter(|(name, _)| **name != start_part)
         .collect();
     other_parts.sort_by_key(|(name, _)| *name);
-    for (_, part) in other_parts {
+    for part in std::iter::once(root).chain(other_parts.into_iter().map(|(_, part)| part)) {
         for prefix in &part.required {
-            if !required_extensions.contains(prefix) {
-                required_extensions.push(prefix.clone());
+            if required_extensions.contains(prefix) {
+                continue;
             }
+            if required_extensions.len() == limits.max_extensions {
+                return Err(too_many_extensions(limits.max_extensions));
+            }
+            required_extensions.push(prefix.clone());
         }
     }
 
@@ -228,6 +238,60 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
         },
         thumbnail,
         warnings,
+    ))
+}
+
+/// A model element's `requiredextensions` prefixes, once each in document
+/// order, with the namespace each one's `xmlns:` declaration names, if any.
+/// Other namespace declarations aren't kept. More than `max_extensions`
+/// distinct prefixes is a safety-limit refusal.
+fn required_extensions(
+    element: &BytesStart<'_>,
+    part_name: &str,
+    max_extensions: usize,
+) -> Result<Vec<(String, Option<String>)>, InspectError> {
+    let mut required: Vec<(String, Option<String>)> = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|_| malformed(part_name))?;
+        let key: &str = attribute.key.as_ref();
+        if key != "requiredextensions" {
+            continue;
+        }
+        let value = attribute
+            .normalized_value(XmlVersion::Implicit1_0)
+            .map_err(|_| malformed(part_name))?;
+        for prefix in value.split_whitespace() {
+            if required.iter().any(|(kept, _)| kept == prefix) {
+                continue;
+            }
+            if required.len() == max_extensions {
+                return Err(too_many_extensions(max_extensions));
+            }
+            required.push((prefix.to_string(), None));
+        }
+    }
+    if required.is_empty() {
+        return Ok(required);
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|_| malformed(part_name))?;
+        let key: &str = attribute.key.as_ref();
+        let Some(prefix) = key.strip_prefix("xmlns:") else {
+            continue;
+        };
+        if let Some((_, namespace)) = required.iter_mut().find(|(kept, _)| kept == prefix) {
+            let value = attribute
+                .normalized_value(XmlVersion::Implicit1_0)
+                .map_err(|_| malformed(part_name))?;
+            *namespace = Some(value.into_owned());
+        }
+    }
+    Ok(required)
+}
+
+fn too_many_extensions(max_extensions: usize) -> InspectError {
+    limit_exceeded(format!(
+        "it has more than {max_extensions} distinct required extensions"
     ))
 }
 
@@ -1153,27 +1217,22 @@ impl ModelParser {
         Ok(())
     }
 
-    /// `unit`, namespace declarations, and `requiredextensions` (D10).
+    /// `unit` and `requiredextensions` (D10).
     fn model_attributes(&mut self, element: &BytesStart<'_>) -> Result<(), InspectError> {
-        let mut namespaces = HashMap::new();
-        let mut required = Vec::new();
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|_| malformed(&self.name))?;
             let key: &str = attribute.key.as_ref();
-            let value = attribute
-                .normalized_value(XmlVersion::Implicit1_0)
-                .map_err(|_| malformed(&self.name))?;
-            if let Some(prefix) = key.strip_prefix("xmlns:") {
-                namespaces.insert(prefix.to_string(), value.into_owned());
-            } else if key == "unit" {
+            if key == "unit" {
+                let value = attribute
+                    .normalized_value(XmlVersion::Implicit1_0)
+                    .map_err(|_| malformed(&self.name))?;
                 self.part.unit = value.trim().to_string();
-            } else if key == "requiredextensions" {
-                required = value.split_whitespace().map(str::to_string).collect();
             }
         }
+        let required = required_extensions(element, &self.name, self.limits.max_extensions)?;
         let mut unsupported = Vec::new();
-        for prefix in &required {
-            match namespaces.get(prefix).map(String::as_str) {
+        for (prefix, namespace) in &required {
+            match namespace.as_deref() {
                 Some(PRODUCTION_NS) => {}
                 Some(MATERIALS_NS) => self.part.materials = true,
                 _ => unsupported.push(prefix.clone()),
@@ -1188,7 +1247,7 @@ impl ModelParser {
                 extensions: unsupported,
             });
         }
-        self.part.required = required;
+        self.part.required = required.into_iter().map(|(prefix, _)| prefix).collect();
         Ok(())
     }
 
@@ -2337,5 +2396,151 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["3D/Objects/o.model".to_string()]
         );
+    }
+
+    // --- requiredextensions bounds (final re-review) ---------------------------
+
+    fn extension_limits(max_extensions: usize) -> ZipLimits {
+        ZipLimits {
+            max_extensions,
+            ..ZipLimits::SPEC
+        }
+    }
+
+    fn parse_part(xml: &str, limits: &ZipLimits) -> Result<ModelParser, InspectError> {
+        let mut parser = ModelParser::new("3D/3dmodel.model", true, limits, Counts::default());
+        let mut reader = quick_xml::Reader::from_str(xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Eof => return Ok(parser),
+                event => parser.event(event)?,
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_required_extension_prefixes_are_kept_once() {
+        let tokens = "p m ".repeat(50_000);
+        let xml = single_cube_model(
+            &format!(
+                " xmlns:p=\"{PRODUCTION_NS}\" xmlns:m=\"{MATERIALS_NS}\" requiredextensions=\"{tokens}\""
+            ),
+            "",
+        );
+        let parser = parse_part(&xml, &ZipLimits::SPEC).unwrap();
+        assert_eq!(parser.part.required, vec!["p".to_string(), "m".to_string()]);
+
+        let (inspection, _, _) = inspect_bytes(core_package(xml, vec![])).unwrap();
+        assert_eq!(
+            inspection.required_extensions,
+            vec!["p".to_string(), "m".to_string()]
+        );
+    }
+
+    #[test]
+    fn too_many_distinct_required_extension_prefixes_exceed_the_safety_limit() {
+        let limits = extension_limits(3);
+        let declared = |prefixes: &[&str]| {
+            let mut attributes = String::new();
+            for prefix in BTreeSet::from_iter(prefixes) {
+                attributes.push_str(&format!(" xmlns:{prefix}=\"{PRODUCTION_NS}\""));
+            }
+            attributes.push_str(&format!(" requiredextensions=\"{}\"", prefixes.join(" ")));
+            single_cube_model(&attributes, "")
+        };
+
+        // Three distinct prefixes, however often repeated, fit.
+        let xml = declared(&["a", "b", "c", "a", "b", "c", "a"]);
+        let (inspection, _, _) = inspect_with(core_package(xml, vec![]), &limits).unwrap();
+        assert_eq!(inspection.required_extensions, vec!["a", "b", "c"]);
+
+        let xml = declared(&["a", "b", "c", "d"]);
+        let reason = invalid_reason(inspect_with(core_package(xml, vec![]), &limits));
+        assert!(reason.contains("safety limit"), "{reason}");
+        assert!(reason.contains("required extensions"), "{reason}");
+
+        // Undeclared prefixes hit the cap before they are listed as unsupported.
+        let xml = single_cube_model(" requiredextensions=\"u1 u2 u3 u4 u5\"", "");
+        let reason = invalid_reason(inspect_with(core_package(xml, vec![]), &limits));
+        assert!(reason.contains("safety limit"), "{reason}");
+    }
+
+    #[test]
+    fn only_the_namespaces_of_required_prefixes_are_kept() {
+        let mut attributes = format!(" xmlns:p=\"{PRODUCTION_NS}\"");
+        for index in 0..1_000 {
+            attributes.push_str(&format!(" xmlns:n{index}=\"urn:farm3d:test:{index}\""));
+        }
+        attributes.push_str(" requiredextensions=\"p p p\"");
+        let xml = model(&attributes, "");
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        let element = loop {
+            match reader.read_event().unwrap() {
+                Event::Start(element) => break element.into_owned(),
+                Event::Eof => panic!("no model element"),
+                _ => {}
+            }
+        };
+        let required = required_extensions(&element, "3D/3dmodel.model", 64).unwrap();
+        assert_eq!(
+            required,
+            vec![("p".to_string(), Some(PRODUCTION_NS.to_string()))]
+        );
+    }
+
+    /// A start part that requires `root_prefix` and places one cube from each
+    /// object part; object part `i` requires `object_prefixes[i]`.
+    fn multi_part_requiring(root_prefix: &str, object_prefixes: &[&str]) -> Vec<u8> {
+        let mut components = String::new();
+        let mut entries = vec![
+            (
+                "[Content_Types].xml".to_string(),
+                CONTENT_TYPES.as_bytes().to_vec(),
+            ),
+            (
+                "_rels/.rels".to_string(),
+                rels(&[("/3D/3dmodel.model", MODEL_REL)]).into_bytes(),
+            ),
+        ];
+        for (index, prefix) in object_prefixes.iter().enumerate() {
+            let part = format!("3D/Objects/object_{index}.model");
+            components.push_str(&format!("<component p:path=\"/{part}\" objectid=\"1\"/>"));
+            let object = single_cube_model(
+                &format!(" xmlns:{prefix}=\"{PRODUCTION_NS}\" requiredextensions=\"{prefix}\""),
+                "",
+            );
+            entries.push((part, object.into_bytes()));
+        }
+        let mut root_attributes = format!(" xmlns:p=\"{PRODUCTION_NS}\"");
+        if root_prefix != "p" {
+            root_attributes.push_str(&format!(" xmlns:{root_prefix}=\"{PRODUCTION_NS}\""));
+        }
+        root_attributes.push_str(&format!(" requiredextensions=\"{root_prefix}\""));
+        let root = model(
+            &root_attributes,
+            &format!(
+                "<resources><object id=\"9\" type=\"model\"><components>{components}</components></object></resources>\
+                 <build><item objectid=\"9\"/></build>"
+            ),
+        );
+        entries.push(("3D/3dmodel.model".to_string(), root.into_bytes()));
+        let borrowed: Vec<(&str, Vec<u8>)> = entries
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), bytes.clone()))
+            .collect();
+        package(&borrowed)
+    }
+
+    #[test]
+    fn required_extensions_across_parts_are_merged_once_and_capped() {
+        let bytes = multi_part_requiring("p", &["p", "q", "p", "q"]);
+        let (inspection, _, _) = inspect_with(bytes, &extension_limits(2)).unwrap();
+        assert_eq!(inspection.required_extensions, vec!["p", "q"]);
+        assert_eq!(inspection.triangle_count, 48);
+
+        let bytes = multi_part_requiring("p", &["q", "r"]);
+        let reason = invalid_reason(inspect_with(bytes, &extension_limits(2)));
+        assert!(reason.contains("safety limit"), "{reason}");
+        assert!(reason.contains("required extensions"), "{reason}");
     }
 }
