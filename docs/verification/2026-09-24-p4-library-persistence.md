@@ -2,14 +2,18 @@
 
 **Date:** 2026-09-24
 **Platform:** Linux x86_64 (Linux 7.2.6-1-cachyos, btrfs `$HOME`)
-**Validated source:** the commit that adds this document
-(`docs: record P4 verification evidence`) on
-`feature/p4-library-persistence`, directly on top of `8e5e2d8` (`fix: scope
-DataTable keys to its rows and hold Library dialogs open mid-request`).
-Besides this document, that commit adds the tracer
-(`src-tauri/tests/p4_tracer.rs`), the `CONTEXT.md` vocabulary, the umbrella
-doc wording, and the `docs/screenshots/p4-*.png` captures. It changes no
-application source.
+**Validated source:** the commit that corrects this document
+(`docs: correct the P4 verification record after the final fixes`) on
+`feature/p4-library-persistence`, directly on top of `35a1f30` (`fix: open
+staged sources without blocking and check the handle`). The automated
+evidence below was re-run on that tree. It includes the final review fix
+wave (see "Final review fixes"), which follows `b08802d` (`docs: record P4
+verification evidence`). That earlier commit added this document, the
+tracer (`src-tauri/tests/p4_tracer.rs`), the `CONTEXT.md` vocabulary, the
+umbrella doc wording, and the `docs/screenshots/p4-*.png` captures, and
+changed no application source. The visual and keyboard checks and
+`just package` ran on `b08802d`. The fix wave changes only Rust
+back-end code, so they were not repeated.
 Covers Tasks 1–14 (P4 in full), for GitHub issue #14.
 
 **Final counts after the rebase onto P3:** `COMMAND_NAMES` holds **58**
@@ -23,11 +27,44 @@ array length. `CURRENT_SCHEMA_VERSION` is **5**, applied by migration
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build. The main chunk is `index-*.js` at 493.74 kB (150.85 kB gzip), with no Vite chunk-size warning. The Import, Locate, Delete Model, and Project dialogs are separate lazy chunks. |
 | `just test` | Passed: 64 files, 772 tests. The runner printed the same pre-existing jsdom `Window.scrollTo()` notices as P3, and exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 395 library tests (1 ignored), 28 export-contract tests (1 ignored), and 3 `library_fixtures` tests (1 ignored, the `gen-library-fixtures` generator). The P4 integration files ran 27 `p4_content`, 10 `p4_contract_path`, 27 `p4_import`, 8 `p4_links`, 8 `p4_migration`, and **1 `p4_tracer`**. Every F0–P3 file passed unchanged: 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, 1 `p3_tracer`, and 3 `snapshot`. In all, 691 tests passed, 0 failed, and 3 were ignored. The build printed the existing `ts-rs` "failed to parse serde attribute" warnings (`transparent`, `double_option`), as before. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 401 library tests (1 ignored), 28 export-contract tests (1 ignored), and 3 `library_fixtures` tests (1 ignored, the `gen-library-fixtures` generator). The P4 integration files ran 28 `p4_content`, 10 `p4_contract_path`, 28 `p4_import`, 10 `p4_links`, 8 `p4_migration`, and **1 `p4_tracer`**. Every F0–P3 file passed. Four of them were edited for P4, only to pin the new command count and schema version: `f1_contract_path.rs` (the count, plus P4's 17 commands in its inventory and handler lists), `f1_residual_acceptance.rs` and `p3_contract_path.rs` (the count), and `p3_migration.rs` (`CURRENT_SCHEMA_VERSION` in place of a literal 4). The files ran 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, 1 `p3_tracer`, and 3 `snapshot`. In all, 701 tests passed, 0 failed, and 3 were ignored. The build printed the existing `ts-rs` "failed to parse serde attribute" warnings (`transparent`, `double_option`), as before. |
 | `source "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Passed (exit 0). |
 | `source "$HOME/.cargo/env" && just gen-contracts`, then `git diff --exit-code src/generated` | Passed: the regeneration ran clean under `--locked`, and the diff was empty. |
 | `source "$HOME/.cargo/env" && just package` | Passed: a release build, then three bundles: `farm3d_0.1.0_amd64.deb` (8.4 MB), `farm3d-0.1.0-1.x86_64.rpm` (8.4 MB), and `farm3d_0.1.0_amd64.AppImage` (111.5 MB). `scripts/assert-package-contents.sh` passed on all three: each carries `usr/bin/farm3d` and `printer-catalog.json`, and none carries source, tests, fixtures, build output, or metadata. Installing and exercising a bundle is **unavailable** (see below). |
-| `p4_tracer` alone, 20 consecutive runs | 20 of 20 passed, about 1.9 s each. |
+| `p4_tracer` alone, 20 consecutive runs | 20 of 20 passed, about 1.9 s each (on `b08802d`). |
+| Final-fix loops: the FIFO test, all of `p4_links`, and `p4_tracer` | `a_source_swapped_for_a_fifo_before_open_is_not_a_file_and_does_not_block` passed 12 of 12 runs. The whole `p4_links` file (which holds the new supervisor tests) passed 12 of 12. `p4_tracer` passed 10 of 10. |
+
+### Final review fixes
+
+The final review's findings, each fixed test-first after `b08802d`:
+
+- **3MF inspector memory (I1).** `ZipLimits` gains `max_placements` and
+  `max_objects` (1,000,000 each, counted across every model part). Past
+  either, the inspection fails with the "safety limit" `INVALID_CONTENT`,
+  because dropping build items or components would misreport bounds. The
+  listed-only collections are truncated at `max_listed` (64, the G-code
+  `MAX_LISTED`): plates, each plate's object ids, per-object setting keys,
+  and paint attributes per part. `referenced_parts` is deduplicated, and a
+  relationships part is scanned for its first `3dmodel` target instead of
+  being collected. The unit tests are in `threemf.rs`. The
+  `library_fixtures` oracles are unchanged.
+- **`check_linked_sources` past a failure (M2).** A farm3d-side failure
+  is logged by Model id and the batch continues. The result lists only
+  changed records, so the error is returned only when every check failed.
+  The test is `p4_links.rs`
+  `a_failed_check_does_not_stop_check_linked_sources_checking_the_rest`.
+- **A check on registration (M3).** `follow_link` now schedules a check
+  right after registering, so an edit made between staging and
+  registration is captured. The test is `p4_links.rs`
+  `an_edit_between_staging_and_registration_is_captured_by_the_first_check`.
+- **Locate selections (M4).** `inspect_import_selection` rejects a Locate
+  selection with `VALIDATION` on `selectionId`, as `import_models` does.
+  The test is `p4_import.rs`
+  `a_locate_selection_cannot_be_inspected_for_import`.
+- **A FIFO swapped in (content store).** `stage_from_path` opens the
+  source with `O_NONBLOCK` on Unix and takes `before` from the handle. A
+  non-regular file is `NotAFile`. The test is `p4_content.rs`
+  `a_source_swapped_for_a_fifo_before_open_is_not_a_file_and_does_not_block`.
 
 ### The tracer (spec acceptance criteria 4, 5, 6, 7, and 15)
 
@@ -358,8 +395,6 @@ change unless marked.
 
 - `place()` checks containment with `starts_with`, so a `..` path would
   pass. `StagedFile` fields are `pub`.
-- The re-stat reads the path's metadata before opening it. A FIFO swapped
-  in blocks, so prefer `file.metadata()` with dev and inode.
 - A release racing a re-import can leak a blob until the next startup.
   Stray files directly under `blobs/sha256/` are never swept.
 - A poisoned placement lock breaks the store until restart.
@@ -390,7 +425,9 @@ change unless marked.
 - The drop handler calls `bootstrap.ready()`, which can trigger a
   bootstrap retry; `is_ready()` avoids that.
 - `remove_dir_all` runs off `spawn_blocking`. Expired selections are
-  reclaimed lazily; the supervisor tick could sweep them.
+  swept every 60 s, but only while a link supervisor runs, which excludes
+  `RuntimeServices::for_test`. Without one, they are reclaimed only when
+  the registry is next used.
 - Under cancellation, any failure is reported as cancelled. A concurrent
   inspect after a cancel returns `CANCELLED`, not `SELECTION_EXPIRED`.
 - Once every ready item has committed, staging is discarded, so a late
@@ -403,6 +440,15 @@ change unless marked.
   `library.model.changed`.
 - Locate inspects the file only after consent, so a corrupt file first
   reports `SOURCE_CONTENT_DIFFERS`.
+- A direct `run_check`, from `check_linked_sources` or a retry, clears
+  the Model's queued entry when it starts. A check already queued behind
+  it still runs, and a watch event meanwhile can queue another.
+- `check_linked_sources` returns `INTERNAL` when no link supervisor is
+  running (as under `RuntimeServices::for_test`).
+- `rename_project` rejects `expectedRevision <= 0` as `VALIDATION` on
+  `expectedRevision`. The spec doesn't say so, and no test covers it.
+- A Project's `modelCount` can go stale when publishes arrive out of order
+  (the M1 follow-up).
 
 **Frontend**
 
@@ -412,6 +458,8 @@ change unless marked.
 - The web thumbnail cache can pin `null` before `startLibrary`, and a
   thumbnail load failure falls back silently.
 - A whitespace-only name round-trips to the backend.
+- The details panel shows "No claims found." when the revision history
+  fails to load.
 - `SELECTION_EXPIRED` leaves Import enabled.
 - **Focus falls to `<body>`** after a Model delete (Task 13) and after a
   membership chip is removed by keyboard (this pass).
