@@ -30,7 +30,7 @@ Covers Tasks 1–12 (P3 in full), plus the 2026-09-24 follow-up batch.
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully (`dist/index.html`, `index-*.css`, `event-*.js`, `index-*.js`). |
-| `just test` | Passed: 49 files, 523 tests. The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
+| `just test` | Passed: 49 files, 523 tests (524 at `193cd88`, which adds one `Select` component test). The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
 | `source "$HOME/.cargo/env" && just test-rust` | Passed: 288 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 16 `p3_contract_path`, 11 `p3_ledger`, 20 `p3_lifecycle`, 8 `p3_migration`, 12 `p3_movement`, 10 `p3_reservations`, 13 `p3_setup`, **1 `p3_tracer`**, and 3 `snapshot` tests. That is 184 tests across the other integration files, and 500 passing tests in all. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
 | `source "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Passed (exit 0). |
 | `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0) -- `src/generated` already carries the one wire change this batch made (`set_spool_lifecycle`'s new `operationId` parameter, committed alongside its Rust source in `8bcde6e`); nothing later in the batch, including this final fix wave, touched a wire shape. `ReservationError::InvalidAmount` is Rust-only. |
@@ -429,7 +429,8 @@ issues, fixed in the same pass:
   mechanism `TextField`/`NumberField` already use -- so the
   design-system `Select` gained an `error` prop using it. A `tareId`
   `VALIDATION` now shows "That tare no longer exists.", the same way
-  `notes` already maps its generic message.
+  `notes` already maps its generic message. `193cd88` adds a
+  component-level test for the new `error` prop and a Showcase entry.
 - **Replay test coverage** (`dc46948`). Added command-level coverage in
   `p3_contract_path.rs`: `replaying_a_set_spool_lifecycle_operation_id_emits_no_events`,
   and `replaying_an_archive_with_loaded_spools_emits_no_events_and_writes_nothing`
