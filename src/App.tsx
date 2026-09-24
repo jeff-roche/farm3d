@@ -68,17 +68,23 @@ function App() {
     return (destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
   };
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
-  const navigationContext = () => ({
+  // Until the Library's first load settles, a Library selection is pending,
+  // not unavailable: counting it as available keeps the "no longer
+  // available" banner away, and the reconcile after `startLibrary`
+  // resolves decides for real.
+  const libraryPending = () => library.status() === "idle" || library.status() === "loading";
+  const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
     availableDestinations: ["monitor", "library", "spools"] as NavigationDestination[],
     availableIds: [
       ...printers().map((printer) => printer.id),
       ...spoolState.spools.map((spool) => spool.id),
       ...library.projects().map((project) => project.id),
       ...library.models().map((model) => model.id),
+      ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
     ],
   });
   const reconcileNavigation = () => {
-    navigation.navigate(navigation.target(), navigationContext());
+    navigation.navigate(navigation.target(), navigationContext(navigation.target()));
     const target = navigation.target();
     monitorStore()?.setSelectedPrinterId(
       navigation.availability() === "available" && target.destination === "monitor" && target.selection?.kind === "printer"
@@ -87,7 +93,7 @@ function App() {
     );
   };
   const navigate = (target: Parameters<typeof navigation.navigate>[0]) => {
-    navigation.navigate(target, navigationContext());
+    navigation.navigate(target, navigationContext(target));
     reconcileNavigation();
     window.location.hash = serializeNavigationTarget(target).slice(1);
   };

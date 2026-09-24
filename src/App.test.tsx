@@ -86,11 +86,15 @@ const libraryStore = vi.hoisted(() => ({
 }));
 vi.mock("./library/library-store", async () => {
   const { createStore } = await import("solid-js/store");
-  const [state, setState] = createStore({ projects: [] as { id: string }[], models: [] as { id: string }[] });
-  libraryStore.reset = () => setState({ projects: [], models: [] });
-  libraryStore.load = () => setState({ projects: [{ id: "prj-brackets" }], models: [{ id: "mdl-bracket" }] });
+  const [state, setState] = createStore({
+    projects: [] as { id: string }[],
+    models: [] as { id: string }[],
+    status: "idle" as "idle" | "loading" | "ready",
+  });
+  libraryStore.reset = () => setState({ projects: [], models: [], status: "idle" });
+  libraryStore.load = () => setState({ projects: [{ id: "prj-brackets" }], models: [{ id: "mdl-bracket" }], status: "ready" });
   return {
-    library: { projects: () => state.projects, models: () => state.models },
+    library: { projects: () => state.projects, models: () => state.models, status: () => state.status },
     startLibrary: libraryStore.startLibrary,
   };
 });
@@ -327,7 +331,8 @@ describe("App", () => {
     render(() => <App />);
 
     await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
-    expect(navigation.availability()).toBe("selectionUnavailable");
+    // Pending, not unavailable, while the Library loads: no banner.
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
     finishLoad?.();
     await waitFor(() => expect(navigation.availability()).toBe("available"));
     expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-bracket" });
@@ -345,12 +350,22 @@ describe("App", () => {
     expect(navigation.target().selection).toEqual({ kind: "project", id: "prj-brackets" });
   });
 
-  it("shows the no-longer-available banner for an unknown Model id", async () => {
+  it("shows the no-longer-available banner for an unknown Model id, once the Library has loaded", async () => {
     window.location.hash = "#nav=v1/library/model/mdl-gone";
+    let finishLoad: (() => void) | undefined;
+    libraryStore.startLibrary.mockImplementation(() => new Promise((resolve) => {
+      finishLoad = () => {
+        libraryStore.load?.();
+        resolve(libraryStore.dispose);
+      };
+    }));
     const { App, navigation } = await importAppAndNavigation();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     render(() => <App />);
 
     await waitFor(() => expect(libraryStore.startLibrary).toHaveBeenCalled());
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+    finishLoad?.();
     await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
     expect(navigation.availability()).toBe("selectionUnavailable");
   });

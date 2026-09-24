@@ -138,6 +138,13 @@ describe("ModelDetailsPanel", () => {
     expect(screen.queryByRole("button", { name: /Slice|Queue|Dispatch/ })).toBeNull();
   });
 
+  it("shows a failed history load on a G-code Model without throwing", async () => {
+    libraryStoreMock.loadRevisions.mockRejectedValueOnce(new Error("storage busy"));
+    renderPanel(fixtureModel("mdl-web-cube-gcode"));
+    expect(await screen.findByText("The revision history could not load.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "What the file says (not verified)" })).toHaveTextContent("No claims found.");
+  });
+
   it("shows a 3MF's Not used by farm3d list", async () => {
     renderPanel(fixtureModel("mdl-web-enclosure"));
     const unused = await screen.findByRole("region", { name: "Not used by farm3d" });

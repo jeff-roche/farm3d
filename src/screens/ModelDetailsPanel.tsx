@@ -56,8 +56,9 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
     () => loadRevisions(props.model.id),
   );
   const historyId = createUniqueId();
+  // Reading an errored resource throws, so check the error first.
   const currentInspection = (): Inspection | undefined =>
-    revisions()?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
+    revisions.error ? undefined : revisions()?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
 
   return (
     <div class={styles.panel}>

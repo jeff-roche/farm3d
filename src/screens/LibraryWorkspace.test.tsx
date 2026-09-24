@@ -155,6 +155,42 @@ describe("LibraryWorkspace", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Add to Project…" })).toHaveFocus());
   });
 
+  it("keeps the same details panel, draft and history when the selected record changes", async () => {
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-bracket" } });
+    renderWorkspace();
+    await waitFor(() => expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(1));
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await fireEvent.input(name, { target: { value: "Half" } });
+
+    setLibraryState({
+      models: fixture.models.map((m) => (m.id === "mdl-web-bracket"
+        ? { ...m, revision: m.revision + 1, projectIds: ["prj-web-brackets"] }
+        : m)),
+    });
+
+    expect(screen.getByRole("textbox", { name: "Name" })).toBe(name);
+    expect(name).toHaveValue("Half");
+    expect(libraryStoreMock.loadRevisions).toHaveBeenCalledTimes(1);
+  });
+
+  it("removing the viewed Project from the selected Model keeps the view", async () => {
+    libraryStoreMock.setModelProjects.mockImplementationOnce(async (id, change) => {
+      setLibraryState({
+        models: libraryStoreMock.library.models().map((m) => (m.id === id
+          ? { ...m, revision: m.revision + 1, projectIds: m.projectIds.filter((p) => !change.remove.includes(p)) }
+          : m)),
+      });
+    });
+    renderWorkspace();
+    await fireEvent.click(sidebarEntry(/^Brackets/));
+    await fireEvent.click(screen.getByRole("button", { name: /^Enclosure lid/ }));
+    const projects = within(screen.getByRole("complementary", { name: "Model details" })).getByRole("group", { name: "Projects" });
+    await fireEvent.click(within(projects).getByRole("button", { name: /Brackets/ }).querySelector("[aria-label='Remove']")!);
+
+    await waitFor(() => expect(libraryStoreMock.library.models().find((m) => m.id === "mdl-web-enclosure")?.projectIds).toEqual([]));
+    expect(sidebarEntry(/^Brackets/)).toHaveAttribute("aria-current", "page");
+  });
+
   it("a Project deep link opens that Project's view", () => {
     navigate({ version: 1, destination: "library", selection: { kind: "project", id: "prj-web-calibration" } });
     renderWorkspace();

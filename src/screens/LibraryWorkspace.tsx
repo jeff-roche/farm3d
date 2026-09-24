@@ -11,6 +11,7 @@ import {
   reportLibraryError,
 } from "../library/library-store";
 import { modelsFor, SAVED_VIEW_IDS, searchModels, sortModels, type LibraryView } from "../library/saved-views";
+import type { ModelRecord } from "../library/types";
 import { navigation, type NavigationTarget } from "../navigation/navigation-store";
 import { formatBytes, viewLabel } from "./library-presentation";
 import { LibrarySidebar } from "./LibrarySidebar";
@@ -127,9 +128,12 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
 
   // Deep links (D19): a Project target opens that Project's view; a Model
   // target keeps the current view if it contains the Model and otherwise
-  // switches to All Models. Re-checked when the Library loads, so a cold
-  // launch lands on the right view.
-  createEffect(on([() => libraryTarget()?.selection, () => library.projects(), selectedModel], ([selection]) => {
+  // switches to All Models. Runs when the target changes and once the
+  // Library first loads (a cold launch), never on an ordinary edit -- so
+  // removing the viewed Project from the selected Model keeps the view.
+  const loaded = createMemo(() => library.status() === "ready");
+  createEffect(on([() => libraryTarget()?.selection, loaded], ([selection, isLoaded]) => {
+    if (!isLoaded) return;
     if (selection?.kind === "project") {
       if (library.projects().some((project) => project.id === selection.id)) {
         setView({ kind: "project", id: selection.id });
@@ -162,20 +166,28 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     selectView(ALL_MODELS);
   };
 
-  const details = () => {
-    const model = selectedModel();
-    return model ? (
-      <ModelDetailsPanel
-        model={model}
-        projects={library.projects()}
-        onConvertToManaged={(id) => void convertToManaged(id).catch(reportLibraryError)}
-        focusRequest={focusRequest()}
-        onFocusHandled={() => setFocusRequest(0)}
-      />
-    ) : (
-      <p class={styles.detailsEmpty}>Select a Model to see its details.</p>
-    );
-  };
+  // Keyed on the id: each store update swaps in a new record object, and
+  // remounting the panel for it would discard a name draft, drop focus,
+  // and refetch the history. `shownModel` holds the last record so the
+  // panel never reads `undefined` while it unmounts.
+  const shownModel = createMemo<ModelRecord | undefined>((previous) => selectedModel() ?? previous);
+  const details = () => (
+    <Show
+      when={selectedModel()?.id}
+      keyed
+      fallback={<p class={styles.detailsEmpty}>Select a Model to see its details.</p>}
+    >
+      {(_id) => (
+        <ModelDetailsPanel
+          model={shownModel()!}
+          projects={library.projects()}
+          onConvertToManaged={(id) => void convertToManaged(id).catch(reportLibraryError)}
+          focusRequest={focusRequest()}
+          onFocusHandled={() => setFocusRequest(0)}
+        />
+      )}
+    </Show>
+  );
 
   const storedCopies = () => {
     const info = library.contentInfo();
