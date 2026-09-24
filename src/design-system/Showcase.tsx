@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { IconLayoutGrid, IconLayoutList } from "@tabler/icons-solidjs";
 import {
   useTheme,
   Panel,
@@ -28,6 +29,8 @@ import {
   DataTable,
   Timeline,
   ColorSwatch,
+  FileDropSurface,
+  SegmentedControl,
   type DataTableColumn,
   type DataTableSort,
 } from ".";
@@ -42,6 +45,8 @@ export function Showcase() {
   const [radioValue, setRadioValue] = createSignal("b");
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
+  const [dropActive, setDropActive] = createSignal(false);
+  const [viewMode, setViewMode] = createSignal<"grid" | "list">("grid");
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
   const [textareaValue, setTextareaValue] = createSignal("");
 
@@ -414,6 +419,36 @@ export function Showcase() {
             Farm Green (sm)
           </div>
         </div>
+      </Panel>
+
+      <Panel title="FileDropSurface">
+        <div class={styles.column}>
+          <FileDropSurface
+            label="Import models"
+            hint="Drag files here, or choose files to import."
+            active={dropActive()}
+            onChoose={() => setDropActive((value) => !value)}
+          />
+          <FileDropSurface
+            label="Import models (disabled)"
+            disabled
+            disabledReason="An import is already running."
+            active={false}
+            onChoose={() => {}}
+          />
+        </div>
+      </Panel>
+
+      <Panel title="SegmentedControl">
+        <SegmentedControl
+          label="View"
+          value={viewMode()}
+          onChange={setViewMode}
+          options={[
+            { value: "grid", label: "Grid", icon: <IconLayoutGrid size={14} /> },
+            { value: "list", label: "List", icon: <IconLayoutList size={14} /> },
+          ]}
+        />
       </Panel>
     </div>
   );

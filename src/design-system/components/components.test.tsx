@@ -19,6 +19,8 @@ import { SeverityMarker } from "./SeverityMarker";
 import { PrinterRoster } from "./PrinterRoster";
 import { Stepper, type StepperStep } from "./Stepper";
 import { Textarea } from "./Textarea";
+import { FileDropSurface } from "./FileDropSurface";
+import { SegmentedControl } from "./SegmentedControl";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -513,5 +515,133 @@ describe("Textarea", () => {
 
     expect(screen.getByText("Notes are required")).toBeInTheDocument();
     expect(screen.getByLabelText("Notes")).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("FileDropSurface", () => {
+  it("renders a region with the given accessible label", () => {
+    render(() => <FileDropSurface active={false} label="Import models" onChoose={vi.fn()} />);
+
+    expect(screen.getByRole("region", { name: "Import models" })).toBeInTheDocument();
+  });
+
+  it("calls onChoose when the Choose files… button is clicked, via a native button", async () => {
+    const onChoose = vi.fn();
+    render(() => <FileDropSurface active={false} label="Import models" onChoose={onChoose} />);
+
+    const button = screen.getByRole("button", { name: "Choose files…" }) as HTMLButtonElement;
+    expect(button.tagName).toBe("BUTTON");
+    expect(button).toHaveAttribute("type", "button");
+
+    await fireEvent.click(button);
+    expect(onChoose).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets data-active when active", () => {
+    render(() => <FileDropSurface active label="Import models" onChoose={vi.fn()} />);
+
+    expect(screen.getByRole("region")).toHaveAttribute("data-active");
+  });
+
+  it("disables the button and shows the disabled reason as visible text", () => {
+    render(() => (
+      <FileDropSurface
+        active={false}
+        disabled
+        disabledReason="Import already running"
+        label="Import models"
+        onChoose={vi.fn()}
+      />
+    ));
+
+    const button = screen.getByRole("button", { name: "Choose files…" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText("Import already running")).toBeVisible();
+  });
+});
+
+describe("SegmentedControl", () => {
+  it("renders a labelled group with each option's visible label", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    expect(screen.getByRole("radiogroup", { name: "View" })).toBeInTheDocument();
+    expect(screen.getByText("Grid")).toBeInTheDocument();
+    expect(screen.getByText("List")).toBeInTheDocument();
+  });
+
+  it("renders the option label as visible text even when an icon is supplied", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid", icon: <svg aria-hidden="true" /> },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const label = screen.getByText("Grid");
+    expect(label).toBeVisible();
+  });
+
+  it("marks the selected option with data-checked and updates it on selection", async () => {
+    function Harness() {
+      const [value, setValue] = createSignal<"grid" | "list">("grid");
+      return (
+        <SegmentedControl
+          label="View"
+          value={value()}
+          options={[
+            { value: "grid", label: "Grid" },
+            { value: "list", label: "List" },
+          ]}
+          onChange={setValue}
+        />
+      );
+    }
+    render(() => <Harness />);
+
+    expect(screen.getByText("Grid").closest("[role='group']")).toHaveAttribute("data-checked");
+    expect(screen.getByText("List").closest("[role='group']")).not.toHaveAttribute(
+      "data-checked",
+    );
+
+    await fireEvent.click(screen.getByText("List"));
+
+    expect(screen.getByText("List").closest("[role='group']")).toHaveAttribute("data-checked");
+    expect(screen.getByText("Grid").closest("[role='group']")).not.toHaveAttribute(
+      "data-checked",
+    );
+  });
+
+  it("renders each option as a native radio input sharing one name, so arrow-key and Space navigation between options is native browser behavior (not a hand-rolled keydown handler)", () => {
+    render(() => (
+      <SegmentedControl
+        label="View"
+        value="grid"
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+        onChange={vi.fn()}
+      />
+    ));
+
+    const inputs = document.querySelectorAll('input[type="radio"]');
+    expect(inputs).toHaveLength(2);
+    const names = new Set(Array.from(inputs).map((input) => (input as HTMLInputElement).name));
+    expect(names.size).toBe(1);
   });
 });

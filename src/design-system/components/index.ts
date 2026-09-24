@@ -36,3 +36,9 @@ export {
 } from "./DataTable";
 export { Timeline, type TimelineProps, type TimelineItem } from "./Timeline";
 export { ColorSwatch, type ColorSwatchProps } from "./ColorSwatch";
+export { FileDropSurface, type FileDropSurfaceProps } from "./FileDropSurface";
+export {
+  SegmentedControl,
+  type SegmentedControlProps,
+  type SegmentedControlOption,
+} from "./SegmentedControl";
