@@ -139,6 +139,17 @@ fn normalize_and_validate(layout: &[SlotSpec]) -> Result<Vec<NormalizedSlot>, Re
     Ok(normalized)
 }
 
+/// D4/D12: validates a submitted layout without writing it, in the same
+/// `Err(RepositoryError::Validation { field_path: "slots" })` shape
+/// [`insert_layout`]/[`set_layout`] fail with at write time. Batch create
+/// (`printers::batch::create_printers_batch_with`) runs this once for the
+/// whole batch's shared layout, up front, before creating any Printer —
+/// every row would otherwise fail the identical check independently inside
+/// its own transaction.
+pub fn validate_layout(layout: &[SlotSpec]) -> Result<(), RepositoryError> {
+    normalize_and_validate(layout).map(|_| ())
+}
+
 /// D4/D12: creates every slot of a brand-new layout for `printer_id`, in
 /// array order starting at position 0. Only for a Printer that has no live
 /// slots yet (`create_printer`/batch create, and import's per-row insert) —
@@ -370,6 +381,23 @@ mod tests {
             name: name.to_string(),
             feeder_label: None,
         }
+    }
+
+    #[test]
+    fn validate_layout_matches_normalize_and_validate() {
+        assert!(validate_layout(&[spec("Main")]).is_ok());
+        assert!(matches!(
+            validate_layout(&[]),
+            Err(RepositoryError::Validation {
+                field_path: "slots"
+            })
+        ));
+        assert!(matches!(
+            validate_layout(&[spec("Main"), spec("main")]),
+            Err(RepositoryError::Validation {
+                field_path: "slots"
+            })
+        ));
     }
 
     #[test]

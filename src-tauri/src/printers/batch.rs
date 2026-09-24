@@ -530,6 +530,20 @@ fn validate_correlation(input: &CreatePrintersBatchInput) -> Result<(), CommandE
     Ok(())
 }
 
+/// D4/D12: every row shares one Material Slot layout (`shared.slotLayout` —
+/// see [`BatchShared`]'s own doc comment; `None` is `slots::default_layout`,
+/// the same fallback [`commit_row`]'s `options` closure applies per row).
+/// Validated once, up front, in the same `VALIDATION`-on-`slots` shape the
+/// single-create path (`create_printer`) fails with at write time — so an
+/// invalid layout fails the whole batch before any row's probe or commit
+/// runs, rather than every row independently failing the identical check
+/// inside its own create transaction.
+fn validate_shared_layout(shared: &BatchShared) -> Result<(), CommandError> {
+    let default = crate::spools::slots::default_layout();
+    let layout = shared.slot_layout.as_deref().unwrap_or(&default);
+    crate::spools::slots::validate_layout(layout).map_err(CommandError::from_repository)
+}
+
 /// Tracks what earlier rows in the batch have claimed.
 struct PlanState<'a> {
     repository: PrinterRepository,
@@ -755,6 +769,7 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
     input: CreatePrintersBatchInput,
 ) -> Result<CreatePrintersBatchOutput, CommandError> {
     validate_correlation(&input)?;
+    validate_shared_layout(&input.shared)?;
     let CreatePrintersBatchInput {
         batch_id,
         shared,
@@ -974,6 +989,35 @@ mod tests {
             capability_mismatches(&polygon, &reported(None, None, Some(100.0))),
             ["Printable height: catalog says 256 mm, the printer reports 100 mm"]
         );
+    }
+
+    fn shared_with_layout(slot_layout: Option<Vec<crate::spools::slots::SlotSpec>>) -> BatchShared {
+        BatchShared {
+            catalog_ref: CatalogRef {
+                vendor: String::new(),
+                model: String::new(),
+                variant: String::new(),
+                model_id: String::new(),
+                printer_variant: String::new(),
+            },
+            default_bed_type: None,
+            start_safety: StartSafety::ConfirmBedClear,
+            slot_layout,
+        }
+    }
+
+    #[test]
+    fn validate_shared_layout_rejects_an_invalid_layout_and_defaults_a_missing_one() {
+        let error = validate_shared_layout(&shared_with_layout(Some(vec![]))).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Validation);
+        assert_eq!(
+            error.details.unwrap().get("fieldPath"),
+            Some(&crate::contracts::command::JsonValue::String(
+                "slots".to_string()
+            ))
+        );
+
+        assert!(validate_shared_layout(&shared_with_layout(None)).is_ok());
     }
 
     #[test]

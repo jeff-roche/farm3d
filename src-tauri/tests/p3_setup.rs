@@ -474,6 +474,47 @@ fn batch_create_copies_the_shared_layout_into_each_row_with_disjoint_ids() {
     }
 }
 
+/// Fix round 2: the shared layout is validated once, up front, before any
+/// row commits — a batch-wide `VALIDATION` on `slots`, not three
+/// independently-rejected rows, and no Printer is created.
+#[test]
+fn batch_create_rejects_an_invalid_shared_layout_up_front_and_creates_no_printers() {
+    let (_temp, _lease, storage) = storage();
+    let (_app, webview, _services) =
+        runtime(Arc::clone(&storage), Arc::new(InjectedDocuments::default()));
+
+    // Two slots named "Main" case-insensitively -- `slots::normalize_and_validate`
+    // rejects a duplicate name.
+    let invalid_layout = json!([slot_spec("Main", None), slot_spec("main", None)]);
+    let body = json!({
+        "contractVersion": 1,
+        "input": {
+            "batchId": format!("batch-{}", uuid::Uuid::new_v4()),
+            "shared": {
+                "catalogRef": a_ref_json(),
+                "startSafety": "confirmBedClear",
+                "slotLayout": invalid_layout,
+            },
+            "probe": false,
+            "rows": [
+                { "rowId": "r1", "name": "Row 1" },
+                { "rowId": "r2", "name": "Row 2" },
+            ],
+        },
+    });
+
+    let error = error_of(invoke(&webview, "create_printers_batch", body));
+    assert_eq!(error["code"], json!("VALIDATION"));
+    assert_eq!(error["details"]["fieldPath"], json!("slots"));
+
+    let count: i64 = storage
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM printers", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(count, 0, "no Printer row was created");
+}
+
 // --- 4. Layout editing --------------------------------------------------------
 
 fn printer_revision(storage: &Storage, printer_id: &str) -> i64 {
