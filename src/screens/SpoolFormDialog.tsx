@@ -204,7 +204,7 @@ export function SpoolFormDialog(props: SpoolFormDialogProps) {
   function buildInitialAmount(): AmountEntry {
     if (!weighed()) return { kind: "net", netMg: gramsToMg(nominalGrams()!), confidence: "estimated" };
     if (amountMode() === "net") return { kind: "net", netMg: gramsToMg(measuredGrams()!), confidence: confidence() };
-    return { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : {}) };
+    return { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : { tareMg: 0 }) };
   }
 
   async function onSubmit() {

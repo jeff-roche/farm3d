@@ -506,7 +506,19 @@ function nextWebSpoolNumber(): number {
  *  do (D3/D7). */
 function resolveWebAmountEntry(entry: AmountEntry): { mg: number; confidence: AmountConfidence } {
   if (entry.kind === "net") return { mg: entry.netMg, confidence: entry.confidence };
-  const tareMg = entry.tareMg ?? state.tares.find((t) => t.id === entry.tareId)?.weightMg ?? 0;
+  // Exactly one of `tareId`/`tareMg`, as Rust's `resolve_entry` requires
+  // (D3); a scale entry with no tare sends `tareMg: 0`.
+  const hasTareId = entry.tareId !== undefined;
+  const hasTareMg = entry.tareMg !== undefined;
+  if (hasTareId === hasTareMg) throw commandError("VALIDATION", "Choose a tare, or enter no tare.", { fieldPath: "entry.tareId" });
+  let tareMg: number;
+  if (hasTareMg) {
+    tareMg = entry.tareMg!;
+  } else {
+    const tare = state.tares.find((t) => t.id === entry.tareId);
+    if (!tare) throw commandError("VALIDATION", "That tare no longer exists.", { fieldPath: "entry.tareId" });
+    tareMg = tare.weightMg;
+  }
   // "entry.grossMg", not "grossMg": matches the real `record_spool_amount`/
   // `create_spool` field path (`spools/ledger.rs`'s `resolve_entry`), so a
   // dialog's field-path-to-field mapping behaves identically in web mode.

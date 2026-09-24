@@ -133,7 +133,7 @@ describe("SpoolFormDialog", () => {
     expect(createSpool).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ manufacturer: "Prusament", colorName: "Black" }),
-      { kind: "scale", grossMg: 950_000 },
+      { kind: "scale", grossMg: 950_000, tareMg: 0 },
       undefined,
     );
     expect(onOpenChange).toHaveBeenCalledWith(false);

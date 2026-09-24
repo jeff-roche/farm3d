@@ -128,7 +128,7 @@ export function RecordAmountDialog(props: RecordAmountDialogProps) {
     if (!canSubmit()) return;
     const entry: AmountEntry = mode() === "net"
       ? { kind: "net", netMg: gramsToMg(netGrams()!), confidence: confidence() }
-      : { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : {}) };
+      : { kind: "scale", grossMg: gramsToMg(grossGrams()!), ...(tareId() !== NO_TARE ? { tareId: tareId() } : { tareMg: 0 }) };
     setSubmitting(true);
     setDialogError(null);
     setServerFieldError(null);

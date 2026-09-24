@@ -154,6 +154,7 @@ invented.
 - A tare can be deleted at any time. Spools that referenced it get
   `tareId = null` through `ON DELETE SET NULL`. History keeps its snapshots.
 - Scale entry rejects gross < tare with a `VALIDATION` error on `grossMg`.
+- A scale entry with no tare sends `tareMg: 0`.
 
 ### D4. Slot capability source
 

@@ -72,6 +72,48 @@ describe("RecordAmountDialog", () => {
     expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
   });
 
+  it("sends tareMg: 0 for a Scale entry with No tare selected", async () => {
+    recordAmount.mockResolvedValue(SPOOL);
+    render(() => (
+      <RecordAmountDialog open onOpenChange={vi.fn()} spool={SPOOL} />
+    ));
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Scale" }));
+    const gross = screen.getByLabelText("Gross weight (g)") as HTMLInputElement;
+    await fireEvent.input(gross, { target: { value: "700" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    // Rust's `resolve_entry` requires exactly one of `tareId`/`tareMg` (D3).
+    expect(recordAmount).toHaveBeenCalledWith(
+      "spl-1",
+      { kind: "scale", grossMg: 700_000, tareMg: 0 },
+      undefined,
+    );
+  });
+
+  it("sends only tareId for a Scale entry with a named tare selected", async () => {
+    recordAmount.mockResolvedValue(SPOOL);
+    render(() => (
+      <RecordAmountDialog open onOpenChange={vi.fn()} spool={SPOOL} />
+    ));
+
+    await fireEvent.click(screen.getByRole("radio", { name: "Scale" }));
+    const tareSelect = screen.getByRole("button", { name: /Tare/ });
+    await fireEvent.pointerDown(tareSelect);
+    const cardboardOption = await screen.findByRole("option", { name: /Cardboard/ });
+    await fireEvent.pointerDown(cardboardOption, { button: 0, pointerType: "mouse" });
+    await fireEvent.pointerUp(cardboardOption, { button: 0, pointerType: "mouse" });
+    const gross = screen.getByLabelText("Gross weight (g)") as HTMLInputElement;
+    await fireEvent.input(gross, { target: { value: "700" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    expect(recordAmount).toHaveBeenCalledWith(
+      "spl-1",
+      { kind: "scale", grossMg: 700_000, tareId: "tar-cardboard" },
+      undefined,
+    );
+  });
+
   it("calls recordAmount with mg values in Net mode and closes on success", async () => {
     recordAmount.mockResolvedValue({ ...SPOOL, availability: { currentMg: 612_000, reservedMg: 0, availableMg: 612_000 } });
     const onOpenChange = vi.fn();
@@ -148,7 +190,7 @@ describe("RecordAmountDialog", () => {
     expect(recordAmount).toHaveBeenNthCalledWith(
       2,
       "spl-1",
-      { kind: "scale", grossMg: 950_000 },
+      { kind: "scale", grossMg: 950_000, tareMg: 0 },
       undefined,
     );
     expect(onOpenChange).toHaveBeenCalledWith(false);

@@ -778,6 +778,20 @@ describe("web mode", () => {
     await expect(recordAmount(target.id, { kind: "scale", grossMg: 100, tareMg: 500 }))
       .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "entry.grossMg" } });
   });
+
+  it("recordAmount rejects a scale entry with neither or both of tareId/tareMg, like Rust's resolve_entry", async () => {
+    const { loadInventory, recordAmount, spoolState: state } = await import("./spool-store");
+    await loadInventory();
+    const target = state.spools[0];
+    const tareId = state.tares[0]?.id ?? "tar-any";
+
+    await expect(recordAmount(target.id, { kind: "scale", grossMg: 500_000 }))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "entry.tareId" } });
+    await expect(recordAmount(target.id, { kind: "scale", grossMg: 500_000, tareId, tareMg: 0 }))
+      .rejects.toMatchObject({ code: "VALIDATION", details: { fieldPath: "entry.tareId" } });
+    const zeroTare = await recordAmount(target.id, { kind: "scale", grossMg: 500_000, tareMg: 0 });
+    expect(zeroTare?.availability.currentMg).toBe(500_000);
+  });
 });
 
 describe("other mutations against the desktop command path", () => {
