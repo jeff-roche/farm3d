@@ -225,7 +225,8 @@ pub async fn pick_model_files<R: tauri::Runtime>(
 
 /// D13 step 2: stages, hashes, and inspects every file of the selection,
 /// emitting `library.import.progress`. A repeat call returns the stored
-/// result. An unknown or expired selection is `SELECTION_EXPIRED`.
+/// result. An unknown or expired selection is `SELECTION_EXPIRED`; a Locate
+/// selection is `VALIDATION`.
 #[tauri::command]
 pub async fn inspect_import_selection<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -236,6 +237,7 @@ pub async fn inspect_import_selection<R: tauri::Runtime>(
     contract_version.validate()?;
     let services = bootstrap.ready()?;
     let entry = services.library.selections.get(&selection_id)?;
+    import::require_import_purpose(&entry)?;
     inspection::inspect_selection(&app, &services.storage, &services.library, entry)
         .await
         .map(CommandSuccess::new)

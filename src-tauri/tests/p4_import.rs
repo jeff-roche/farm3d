@@ -1386,6 +1386,25 @@ fn a_blank_operation_id_or_an_unknown_file_index_is_rejected_before_any_write() 
     assert_eq!(env.count("SELECT COUNT(*) FROM library_models"), 0);
 }
 
+#[test]
+fn a_locate_selection_cannot_be_inspected_for_import() {
+    let env = new_env(None);
+    let summary = env.services.library.selections.register(
+        SelectionPurpose::Locate,
+        vec![env.source("cube-binary.stl")],
+    );
+    let error = env.err(
+        "inspect_import_selection",
+        json!({ "selectionId": summary.selection_id }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "selectionId");
+    assert!(
+        !env.staging(&summary.selection_id).exists(),
+        "nothing is staged"
+    );
+}
+
 // --- T6 6. G-code retention (D11) ------------------------------------------------------------
 
 #[test]

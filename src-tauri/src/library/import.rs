@@ -289,6 +289,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// `VALIDATION` on `selectionId` unless `entry` was picked for import: a
+/// Locate selection is neither inspected nor imported.
+pub fn require_import_purpose(entry: &SelectionEntry) -> Result<(), CommandError> {
+    if entry.purpose != SelectionPurpose::Import {
+        return Err(CommandError::validation_at(
+            "selectionId",
+            "This selection is for locating a source, not for importing.",
+        ));
+    }
+    Ok(())
+}
+
 /// The request-level checks, before any side effect: a non-blank
 /// `operationId` (mirroring P3's `operations::claim`), an import selection,
 /// and file indexes that each name one of its files once.
@@ -303,12 +315,7 @@ pub fn validate_request(
             "operationId is required.",
         ));
     }
-    if entry.purpose != SelectionPurpose::Import {
-        return Err(CommandError::validation_at(
-            "selectionId",
-            "This selection is for locating a source, not for importing.",
-        ));
-    }
+    require_import_purpose(entry)?;
     let mut seen = HashSet::new();
     for (position, request) in requests.iter().enumerate() {
         let field = format!("items[{position}].fileIndex");
