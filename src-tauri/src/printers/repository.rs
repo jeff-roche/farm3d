@@ -498,10 +498,10 @@ impl PrinterRepository {
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
-    /// D4/D12: sets `id`'s Material Slot layout — `set_material_slot_layout`
-    /// (Task 7 registers the command; this task builds and tests it, per
-    /// ruling R2). Bumps the Printer's revision like any other mutation, so
-    /// concurrent layout edits are still guarded by `expectedRevision`.
+    /// D4/D12: sets `id`'s Material Slot layout. The
+    /// `set_material_slot_layout` command in `printers::commands` calls this.
+    /// Bumps the Printer's revision like any other mutation, so concurrent
+    /// layout edits are still guarded by `expectedRevision`.
     pub fn set_material_slot_layout(
         &self,
         id: &str,

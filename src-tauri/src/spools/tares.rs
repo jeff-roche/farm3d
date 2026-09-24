@@ -5,8 +5,8 @@
 //! snapshot.
 //!
 //! Every function here takes the caller's `&Transaction`, matching
-//! `repository`/`ledger` — a higher-level write (e.g. a future
-//! `TareManagerDialog` command) opens the transaction and composes these.
+//! `repository`/`ledger`. The `create_tare`/`update_tare`/`delete_tare`
+//! commands in `spools::commands` open the transaction and call these.
 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
