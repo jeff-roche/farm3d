@@ -174,19 +174,21 @@ Home/End, Enter-to-open) is exercised by `DataTable.test.tsx` and
 additionally confirmed click-driven row selection updates the deep link
 (`#nav=v1/spools/spool/<id>`) live in the browser.
 
-**A timing-order finding surfaced during this pass** (see "Deviations and
-findings" below): landing directly on a `#nav=v1/spools/...` deep link (a
-hard reload) can race `SpoolInventory`'s own `loadInventory()` call ahead of
+**A timing-order finding surfaced during this pass, since fixed (Task 3
+follow-up):** landing directly on a `#nav=v1/spools/...` deep link (a hard
+reload) could race `SpoolInventory`'s own `loadInventory()` call ahead of
 `printer-store`'s async catalog resolution in web mode, leaving Printer
 occupancy metadata (`materialSlots[].occupantSpoolId`) unsynced until the
 next remount or mutation — even though the Spool's own `location`/`loaded`
-facet (driving the inventory table and detail dock) is unaffected and stays
-correct throughout. It self-heals on the next navigation into the Spools
-destination or Printer Status/Setup tab, and does not touch the Rust
-backend (proven correct by the tracer and the full `p3_movement.rs`/
-`p3_setup.rs` suites) or the P2-established shell architecture. Screenshots
-above were taken after confirming (and, where needed, working around) this
-race, so they reflect the intended, synced rendering.
+facet (driving the inventory table and detail dock) was unaffected and
+stayed correct throughout, and the Rust backend (proven correct by the
+tracer and the full `p3_movement.rs`/`p3_setup.rs` suites) was never
+involved. `printer-store.ts` now tells `spool-store.ts` when a web-mode
+`loadPrinters()` finishes (`registerWebPrintersLoaded`), so whichever of the
+two stores' independent mount-time loads settles last re-applies the
+occupancy sync, making the two orders equivalent. Screenshots above were
+taken after confirming (and, at the time, working around) this race, so
+they reflect the intended, synced rendering.
 
 Still **unavailable**:
 
@@ -285,39 +287,6 @@ verification:
     through leaves the earlier moves applied. So "Nothing moves unless the
     whole archive succeeds" holds only on the real backend (proven by
     `p3_lifecycle.rs::a_failing_disposition_rolls_back_the_whole_archive`).
-- **Newly observed in this pass: `SpoolInventory`'s own `loadInventory()`
-  call can race `printer-store`'s async catalog resolution in web mode.**
-  `SpoolInventory.tsx` intentionally calls `loadInventory()` on every mount
-  (rather than the shared, load-once `ensureInventoryLoaded()` that
-  `PrinterStatusPanel`/`MaterialSlotsEditor` use), per its own code comment.
-  `App.tsx`'s startup sequence awaits `loadPrinters()` before its own
-  `ensureInventoryLoaded()` call, but a user who deep-links or hard-reloads
-  directly into `#nav=v1/spools/...` mounts `SpoolInventory` independently
-  of that sequencing. If `printer-store`'s async
-  `resolveWebCatalogVariant` calls haven't resolved yet at that moment,
-  `syncWebPrinterOccupancy` (which reads `printerRecords()`) silently no-ops
-  for that Printer, and its `materialSlots[].occupantSpoolId` stays unset
-  until the next remount of `SpoolInventory` or the next Spool mutation
-  re-triggers the sync. Observed effect: the Move dialog's slot picker and
-  (transiently) the Printer Status/Setup tabs can show an occupied slot as
-  "empty" right after a cold deep-link load. The Spool's own `location` and
-  `loaded` facet — which drive the inventory table's Location column and
-  the detail dock, and are what the Rust backend and the tracer actually
-  assert — are unaffected throughout; only the *Printer-side* occupancy
-  mirror used by the Move/Setup slot pickers can be transiently stale. This
-  is a **web-fixture-only** issue (it does not exist on the real backend:
-  `create_printer`/`set_material_slot_layout`/`move_spool` all read
-  occupancy from the same SQLite `spools`/`material_slots` join in one
-  transaction, so there is no analogous two-store race), is closely related
-  to the already-deferred Task 11 ledger item ("web SpoolInventory
-  `loadInventory` rebuilds fixture, losing Printer-screen web moves"), and
-  is not gated by any spec acceptance criterion. It is recorded here rather
-  than fixed, since a fix touches the two stores' independent mount-time
-  loading strategy — a design-level ordering decision beyond this task's
-  scope — and the existing screenshots in this document were taken from a
-  correctly-synced state (confirmed via a genuine full reload, then
-  cross-checked by remounting the Spools screen) to accurately depict the
-  intended UI.
 - **The Printers-import-blocked-while-loaded rule.** `import_printers`
   (`replace_all`) is rejected with `VALIDATION` ("Unload every Spool before
   importing Printers") while any Spool is loaded; with no Spools loaded, an
@@ -391,10 +360,8 @@ a covering test.
 
 ## Known follow-ups
 
-Deferred from the final review. None blocks P3's acceptance criteria.
-
-- The web-fixture cold-deep-link occupancy race (see "Deviations and
-  findings").
+Deferred from the final review. None blocks P3's acceptance criteria. None
+remain open as of this task (Task 3).
 
 ## Files changed in this task
 
