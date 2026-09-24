@@ -586,7 +586,8 @@ operations start in FIFO order within the process lifetime.
 queued ──start──> running ──ok──> succeeded
    │                 ├──error──> failed
    │                 ├──cancel─> cancelled
-   └──cancel──> cancelled
+   ├──cancel──> cancelled
+   └──spawnFailed──> failed   (no pid was ever recorded)
 (any non-terminal) ──app restart──> interrupted
 ```
 
@@ -668,7 +669,8 @@ keys:
 - `max_z_height` becomes `maxZMm`.
 
 Each estimate is `null` when its claim is missing. The record is
-`{ …, source: "farm3dSlice" }`.
+`{ …, source: "farm3dSlice" }`. An external revision's `estimates` is
+`null`, never an all-null record labelled `farm3dSlice`.
 
 External revisions keep the file's own values separately, as
 `claimedEstimates { …, source: "fileClaim", trusted: false }`. They are
@@ -800,7 +802,11 @@ Notes:
   P4 deletes them only by cascading from the Model, and the blocker above
   runs first.
 - **Where facts live.** `target_json`, `facts_json`, `estimates_json`, and
-  `runtime_json` hold the wire shapes from D12, D15, and D16. The G-code content and the
+  `runtime_json` hold the wire shapes from D12, D15, and D16.
+  - `estimates_json` is a stored envelope `{ estimates, claimedEstimates?,
+    producer? }`. `estimates` is `null` for external revisions (D12); the
+    external revision's claims and producer live in the same envelope.
+  - An external revision stores `target_json` as JSON `null`. The G-code content and the
   input blobs are in the content store.
 
 ### D15. Facts and provenance
@@ -821,7 +827,8 @@ Every Slice Revision carries `facts: SliceFacts`. Each field is a
 - **An external revision can never hold `farm3dInput`.** This is enforced
   by the Rust constructor, and by a property test over every G-code
   fixture, which checks that claims never flow into facts.
-- `target` (`SliceTarget`, farm3d revisions only) records the Printer id,
+- `target` (`SliceRevisionTarget`, farm3d revisions only; distinct from
+  D5's `SliceTarget` enum) records the Printer id,
   if the target was a Printer, plus the snapshot above, the preset names,
   and the controls.
 - **Matching Farm Printer count.** The preparation panel shows the number
