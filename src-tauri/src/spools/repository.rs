@@ -146,6 +146,22 @@ pub fn loaded_on_printer(
     query_records(tx, "ms.printer_id = ?1", [printer_id])
 }
 
+/// Whether any Spool, anywhere, is currently loaded into a slot. The guard
+/// `printers::repository::replace_all` (the Printers-import path) checks
+/// before replacing every Printer row: `spools.slot_id` has no `ON DELETE`
+/// action (unlike `spool_movements`'s slot columns, which cascade), so an
+/// import must reject up front while any Spool is loaded, rather than let
+/// the replace's `DELETE FROM printers` hit that foreign key and surface as
+/// an opaque `PERSISTENCE_UNAVAILABLE`.
+pub fn any_loaded(tx: &Transaction<'_>) -> Result<bool, StorageError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM spools WHERE slot_id IS NOT NULL)",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(StorageError::from)
+}
+
 /// One Spool as [`list_spools`] derives it, or `None` if there is no such
 /// Spool. Takes `&Connection` so the inventory commands can use it both
 /// inside their write transaction and from a post-commit read.

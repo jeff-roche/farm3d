@@ -623,15 +623,8 @@ impl PrinterRepository {
                     current_count: current.len(),
                 });
             }
-            let loaded_spools: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM spools WHERE slot_id IS NOT NULL",
-                [],
-                |row| row.get(0),
-            )?;
-            if loaded_spools > 0 {
-                return Err(RepositoryError::Validation {
-                    field_path: "printers",
-                });
+            if crate::spools::repository::any_loaded(transaction)? {
+                return Err(RepositoryError::SpoolsLoadedForImport);
             }
             let revisions: std::collections::HashMap<_, _> = current.into_iter().collect();
             let old_references = transaction.prepare("SELECT DISTINCT json_extract(connection_json, '$.credentialRef') FROM printers WHERE json_extract(connection_json, '$.credentialRef') IS NOT NULL")?

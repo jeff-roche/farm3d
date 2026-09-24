@@ -1098,6 +1098,13 @@ fn importing_printers_is_rejected_while_any_spool_is_loaded() {
     ));
     assert_eq!(error["code"], json!("VALIDATION"));
     assert_eq!(error["details"]["fieldPath"], json!("printers"));
+    // Fix round 2: `RepositoryError::SpoolsLoadedForImport` is a typed
+    // variant now, not a magic-string `field_path` match -- the mapped
+    // `CommandError` must still read exactly as it did before.
+    assert_eq!(
+        error["message"],
+        json!("Unload every Spool before importing Printers.")
+    );
 
     // Nothing changed: the Printer, its slot, and the loaded Spool are all
     // untouched — the whole import rolled back inside the transaction.

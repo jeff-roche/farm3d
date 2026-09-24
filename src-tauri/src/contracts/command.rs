@@ -748,11 +748,11 @@ impl CommandError {
     pub fn from_repository(error: crate::persistence::RepositoryError) -> Self {
         use crate::persistence::{RepositoryError, StorageError};
         match error {
-            RepositoryError::Validation {
-                field_path: "printers",
-            } => Self::validation_at("printers", "Unload every Spool before importing Printers."),
             RepositoryError::Validation { field_path } => {
                 Self::validation_at(field_path, "The submitted value is invalid.")
+            }
+            RepositoryError::SpoolsLoadedForImport => {
+                Self::validation_at("printers", "Unload every Spool before importing Printers.")
             }
             RepositoryError::NotFound { entity_id } => Self::not_found(entity_id),
             RepositoryError::Conflict {
@@ -869,6 +869,20 @@ mod tests {
         assert_eq!(unavailable.code, ErrorCode::PersistenceUnavailable);
         assert!(unavailable.retryable);
         assert_eq!(unavailable.recovery, vec![RecoveryCode::Retry]);
+
+        // Fix round 2: `SpoolsLoadedForImport` is a typed variant, not a
+        // magic-string `Validation { field_path: "printers" }` match, but it
+        // still maps to the same user-visible `CommandError`.
+        let spools_loaded = CommandError::from_repository(RepositoryError::SpoolsLoadedForImport);
+        assert_eq!(spools_loaded.code, ErrorCode::Validation);
+        assert_eq!(
+            spools_loaded.message,
+            "Unload every Spool before importing Printers."
+        );
+        assert_eq!(
+            spools_loaded.details.unwrap().get("fieldPath"),
+            Some(&JsonValue::String("printers".to_string()))
+        );
 
         let duplicate_host = CommandError::from_repository(RepositoryError::DuplicateHost {
             conflicting_printer_id: "printer-a".to_string(),

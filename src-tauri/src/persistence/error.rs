@@ -117,6 +117,11 @@ pub enum RepositoryError {
     /// different request (another kind of operation, or different fields).
     /// Nothing was written. `VALIDATION` on `operationId`.
     OperationIdReused,
+    /// P3: `PrinterRepository::replace_all` (the Printers-import path)
+    /// refuses to run while any Spool is loaded into a slot — see
+    /// `spools::repository::any_loaded`'s doc comment for why. `VALIDATION`
+    /// on `printers`, with a message telling the user to unload first.
+    SpoolsLoadedForImport,
     Storage(StorageError),
 }
 
