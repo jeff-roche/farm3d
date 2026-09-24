@@ -2,13 +2,23 @@
 
 **Date:** 2026-09-23
 **Platform:** Linux
-**Validated source:** `547cc5d` (`style: apply cargo fmt`), the last commit on
-`feature/p3-spools-material-slots` at the time of this pass. It follows
-`e886d5b` (`test: add the P3 tracer and resolve the P3 known-unknowns`),
-which is the last commit that changes behavior or tests. `cargo fmt` changed
-formatting only in 20 pre-existing files (deferred from Task 4, per the
-controller ledger); `just test-rust` was re-run after it (see below) and
-shows no change in test counts.
+**Validated source:** `bf86002` (`docs: correct stale P3 doc comments`) on
+`feature/p3-spools-material-slots`. The commit that adds this revision of
+the document changes only this file. The automated evidence below was
+re-run at `bf86002`, after the final whole-branch review fixes:
+
+- `ff16953` fix: dock Spool detail inline on wide windows (the dock-mode
+  bug from the browser pass, below)
+- `5f1ca30` fix: send a zero tare for scale entries without one
+- `47a49e1` fix: refresh Spool history after changes
+- `99ee59f` fix: validate reservation amounts and tare ids
+- `30da68f` fix: count the DataTable header row and tokenize the sort glyph
+- `f71fd92` fix: guard printer records and tidy dialogs
+- `bf86002` docs: correct stale P3 doc comments
+
+The browser pass and its screenshots were taken earlier, before those
+fixes. "Visual and keyboard verification" notes where the UI has changed
+since.
 Covers Tasks 1–12 (P3 in full).
 
 ## Automated evidence
@@ -16,9 +26,10 @@ Covers Tasks 1–12 (P3 in full).
 | Command | Result |
 | --- | --- |
 | `just build` | Passed: TypeScript type check and Vite production build completed successfully (`dist/index.html`, `index-*.css`, `event-*.js`, `index-*.js`). |
-| `just test` | Passed: 49 files, 499 tests. The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
-| `source "$HOME/.cargo/env" && just test-rust` | Passed: 285 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 13 `p3_contract_path`, 10 `p3_ledger`, 17 `p3_lifecycle`, 8 `p3_migration`, 11 `p3_movement`, 8 `p3_reservations`, 12 `p3_setup`, **1 `p3_tracer`**, and 3 `snapshot` tests — 448 integration tests total, all passing. Re-run again after the `cargo fmt` commit with identical counts. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
-| `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0). |
+| `just test` | Passed: 49 files, 511 tests. The runner emitted the same pre-existing jsdom `Window.scrollTo()` notices as P2; exited 0. |
+| `source "$HOME/.cargo/env" && just test-rust` | Passed: 285 library tests (1 ignored); 28 export-contract tests (1 ignored); plus 5 `f0_tauri_path`, 3 `f1_contract_path`, 12 `f1_import_export`, 5 `f1_migration`, 7 `f1_repositories`, 12 `f1_residual_acceptance`, 15 `p2_batch`, 14 `p2_contract_path`, 10 `p2_lifecycle`, 6 `p2_migration`, 1 `p2_tracer`, 14 `p3_contract_path`, 11 `p3_ledger`, 17 `p3_lifecycle`, 8 `p3_migration`, 11 `p3_movement`, 10 `p3_reservations`, 12 `p3_setup`, **1 `p3_tracer`**, and 3 `snapshot` tests. That is 177 tests across the other integration files, and 490 passing tests in all. Two existing `ts-rs` transparent/`double_option`-serde-attribute warnings were emitted, as before. |
+| `source "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Passed (exit 0). |
+| `source "$HOME/.cargo/env" && just gen-contracts` then `git diff --exit-code src/generated` | Passed: regeneration ran clean and the diff against the committed `src/generated` tree was empty (exit 0). The review fixes changed no wire types. `ReservationError::InvalidAmount` is Rust-only. |
 
 ### The tracer (spec acceptance criterion 14)
 
@@ -73,12 +84,12 @@ setup helpers).
 | 5 | Replaying a `move_spool` `operationId` writes nothing new and returns current state | `p3_movement.rs`: `replaying_an_operation_id_returns_the_recorded_outcome_and_writes_nothing`; `p3_contract_path.rs`: `move_into_an_occupied_slot_emits_both_spools_the_printer_and_one_broadcast` (replay assertion at the end), `reusing_an_operation_id_for_a_different_spool_is_a_validation_error` |
 | 6 | After restart, a Spool's amount ledger (initial, estimate, measurement correction) and movement history are intact and ordered; cached `current_mg`/`confidence` equal the last ledger row | `p3_ledger.rs`: `ledger_history_and_the_cache_survive_a_restart`; `p3_tracer.rs` (restart step) |
 | 7 | Ledger rows cannot be updated or deleted; a tare edit after a measurement doesn't change that measurement's snapshot | `p3_migration.rs`: `spool_amount_events_reject_update_and_delete_as_append_only`; `p3_ledger.rs`: `scale_entry_snapshots_gross_and_tare_without_ever_changing_the_spools_default_tare` |
-| 8 | Reservation primitives: over-`availableMg` reserve fails; `release` restores availability; `consume` writes one `consumption` row and clamps at 0; `unresolved` stays unavailable; a reserved Spool can't be archived/marked empty; the availability broadcast fires after commit only | `p3_reservations.rs` (all 8 tests): `reserving_tracks_available_mg_and_rejects_amounts_over_it`, `releasing_frees_the_amount_and_cannot_be_repeated`, `consuming_writes_one_estimated_consumption_event_carrying_the_reservation_id`, `consuming_more_than_the_current_amount_clamps_to_zero_and_notes_the_shortfall`, `marking_unresolved_keeps_the_amount_counted_against_availability`, `a_measurement_below_the_reserved_total_makes_availability_negative_and_blocks_further_reserves`, `reserving_on_an_empty_or_archived_spool_is_rejected`, `a_reservation_inside_a_failing_transaction_leaves_no_row`; `p3_lifecycle.rs`: `archiving_or_marking_empty_a_reserved_spool_is_blocked_by_its_reservation`; `p3_contract_path.rs`'s events tests confirm post-commit-only emission for ordinary mutations, and `debug_seed_reservation_reserves_and_reports_the_spool` demonstrates the demo-only fixture path |
+| 8 | Reservation primitives: over-`availableMg` reserve fails; `release` restores availability; `consume` writes one `consumption` row and clamps at 0; `unresolved` stays unavailable; a reserved Spool can't be archived/marked empty; the availability broadcast fires after commit only | `p3_reservations.rs` (all 10 tests): `reserving_tracks_available_mg_and_rejects_amounts_over_it`, `releasing_frees_the_amount_and_cannot_be_repeated`, `consuming_writes_one_estimated_consumption_event_carrying_the_reservation_id`, `consuming_more_than_the_current_amount_clamps_to_zero_and_notes_the_shortfall`, `marking_unresolved_keeps_the_amount_counted_against_availability`, `a_measurement_below_the_reserved_total_makes_availability_negative_and_blocks_further_reserves`, `reserving_on_an_empty_or_archived_spool_is_rejected`, `a_reservation_inside_a_failing_transaction_leaves_no_row`, `reserving_a_zero_or_negative_amount_is_rejected`, `consuming_a_negative_amount_is_rejected_but_zero_is_allowed`; `p3_lifecycle.rs`: `archiving_or_marking_empty_a_reserved_spool_is_blocked_by_its_reservation`; `p3_contract_path.rs`'s events tests confirm post-commit-only emission for ordinary mutations, `publish_ids_broadcasts_the_ids_even_when_the_record_read_fails` confirms the broadcast survives a failed post-commit read, and `debug_seed_reservation_reserves_and_reports_the_spool` demonstrates the demo-only fixture path |
 | 9 | Single create with a 4-slot layout + 1 initial load, and batch create of 3 rows with a shared 4-slot layout, produce independent slot rows (differing ids); no batch row has an occupant; editing one Printer's layout leaves others unchanged | `p3_setup.rs`: `create_printer_with_a_layout_and_several_initial_loads_occupies_every_target_slot`, `batch_create_copies_the_shared_layout_into_each_row_with_disjoint_ids`, `set_material_slot_layout_reorders_renames_adds_and_removes_an_empty_slot` |
 | 10 | Archive with dispositions (storage, another Printer's occupied slot with displacement, mark-empty) commits atomically; the Printer's slot/movement history is viewable after restart; a failing disposition rolls back everything | `p3_lifecycle.rs`: `archiving_applies_every_disposition_atomically_then_stops_supervision`, `a_failing_disposition_rolls_back_the_whole_archive`, `an_archived_printer_keeps_its_slots_and_every_spool_keeps_its_history_across_a_restart`, `a_mark_empty_disposition_on_a_reserved_spool_blocks_the_whole_archive` |
 | 11 | Deleting that archived Printer removes its slots and every movement row touching them, leaves every Spool/ledger/reservation intact, no dangling references (`PRAGMA foreign_key_check` clean) | `p3_lifecycle.rs`: `deleting_an_archived_printer_cascades_its_slot_movements_and_leaves_every_spool_intact`; `p3_migration.rs`: `deleting_a_printer_cascades_its_slots_and_touching_movements` |
 | 12 | Printers export v3 round-trips the slot layout without occupancy; v1/v2 imports get the default layout | `p3_setup.rs`: `export_v3_carries_material_slots_without_occupancy`, `importing_v1_and_v2_documents_gives_each_printer_the_default_main_layout`, `importing_v3_recreates_the_layout_with_new_ids` |
-| 13 | Frontend tests cover inventory facets/filters/empty-states, add/record-amount/move/lifecycle, the slot editor in all three hosts, Status tab slots, wizard Equip, batch Shared+Results, and the archive disposition dialog | `src/screens/SpoolInventory.test.tsx`, `src/screens/SpoolDetailDock.test.tsx`, `src/screens/SpoolFormDialog.test.tsx`, `src/screens/RecordAmountDialog.test.tsx`, `src/screens/MoveSpoolDialog.test.tsx`, `src/screens/TareManagerDialog.test.tsx`, `src/screens/MaterialSlotsEditor.test.tsx`, `src/screens/PrinterStatusPanel.test.tsx`, `src/screens/PrinterSetupPanel.test.tsx`, `src/screens/PrinterSetupWizard.test.tsx`, `src/screens/PrinterDashboard.equip.test.tsx`, `src/screens/PrinterBatchDialog.test.tsx`, `src/screens/BatchRowsTable.test.tsx`, `src/screens/ArchivePrinterDialog.test.tsx`, `src/screens/PrinterDetailDock.test.tsx`, `src/spools/spool-store.test.ts`, `src/spools/facets.test.ts`, `src/spools/web-fixtures.test.ts`, `src/design-system/components/Timeline.test.tsx` (and the `DataTable`/`ColorSwatch` component tests) — a subset of the 499-test `just test` run above, all passing |
+| 13 | Frontend tests cover inventory facets/filters/empty-states, add/record-amount/move/lifecycle, the slot editor in all three hosts, Status tab slots, wizard Equip, batch Shared+Results, and the archive disposition dialog | `src/screens/SpoolInventory.test.tsx`, `src/screens/SpoolDetailDock.test.tsx`, `src/screens/SpoolFormDialog.test.tsx`, `src/screens/RecordAmountDialog.test.tsx`, `src/screens/MoveSpoolDialog.test.tsx`, `src/screens/TareManagerDialog.test.tsx`, `src/screens/MaterialSlotsEditor.test.tsx`, `src/screens/PrinterStatusPanel.test.tsx`, `src/screens/PrinterSetupPanel.test.tsx`, `src/screens/PrinterSetupWizard.test.tsx`, `src/screens/PrinterDashboard.equip.test.tsx`, `src/screens/PrinterBatchDialog.test.tsx`, `src/screens/BatchRowsTable.test.tsx`, `src/screens/ArchivePrinterDialog.test.tsx`, `src/screens/PrinterDetailDock.test.tsx`, `src/spools/spool-store.test.ts`, `src/spools/facets.test.ts`, `src/spools/web-fixtures.test.ts`, `src/design-system/components/Timeline.test.tsx` (and the `DataTable`/`ColorSwatch` component tests) — a subset of the 511-test `just test` run above, all passing |
 | 14 | The tracer completes through the Tauri command path: creates a Spool, loads it into one Material Slot, moves an existing loaded Spool to storage, reopens storage on the same paths (simulated restart), and reads movement and confidence history | `p3_tracer.rs` (new; see above) |
 | 15 | Keyboard and viewport checks pass at 1440 × 900 and 1024 × 700, with screenshots in the P3 verification document | **Passed in a browser against `just web`** — see "Visual and keyboard verification" below. The native Tauri window's process launch was confirmed; its rendering is **unavailable** for visual confirmation (see below). |
 
@@ -120,8 +131,11 @@ Checked, with screenshots in `docs/screenshots/p3-*.png`:
 - **Move — swap** (`p3-move-swap-1440x900.png`): opening Move… on Spool `#2`
   (in storage), choosing Printer → "Elegoo Centauri Carbon — Bay 1" → "Slot
   1 (AMS 1) — occupied by #1 PLA Galaxy Black" surfaces "Swap: #1 PLA
-  Galaxy Black goes to storage" with the required displaced-Spool storage
-  label field, and the **Move** button stays disabled until it's filled.
+  Galaxy Black goes to storage" with a displaced-Spool storage label field.
+  The screenshot predates `f71fd92`. It shows the label as required and
+  **Move** disabled until it's filled. Since `f71fd92` the label is optional
+  (D6: blank means storage with no label) and **Move** is enabled once a
+  slot is chosen (`MoveSpoolDialog.test.tsx`).
 - **Printer Status tab slots** (`p3-status-slots-1440x900.png`,
   `p3-status-slots-1024x700.png`): the Material Slots list shows Slot 1's
   occupant (`#1`, material, color swatch/name, remaining) and Slots 2–4 as
@@ -141,9 +155,12 @@ Checked, with screenshots in `docs/screenshots/p3-*.png`:
 - **Archive dispositions** (`p3-archive-dispositions-1440x900.png`):
   archiving "Elegoo Centauri Carbon — Bay 1" (which has Spool `#1` loaded)
   opens `ArchivePrinterDialog` with one row per loaded Spool and a
-  disposition Select offering exactly the three D10 kinds (**Storage**,
-  **Another Printer's slot**, **Mark empty (used up)**); choosing Storage
-  reveals the optional storage-label field and enables **Archive**.
+  disposition Select offering the three D10 kinds (**Storage**,
+  **Another Printer's slot**, **Mark empty (used up)**) for Spool `#1`,
+  which is active; choosing Storage reveals the optional storage-label field
+  and enables **Archive**. Since `f71fd92`, **Mark empty (used up)** is
+  offered only for an `active` Spool. An empty Spool can stay loaded (D5)
+  and gets only the other two kinds (`ArchivePrinterDialog.test.tsx`).
 
 **Keyboard-only interaction** confirmed: `Escape` closes the Spool detail
 dock and reverts navigation to the inventory (checked from both an
@@ -254,15 +271,19 @@ verification:
     slot's `occupantSpoolId` locally but don't relocate the fixture Spool
     itself (there's no create-time seam into `spool-store` from
     `printer-store`).
-  - Unarchiving a web-fixture Printer always restores it to `active`
-    (real `archived_from` isn't modeled).
-  - `setSlotLayout` in web mode silently drops occupied slots rather than
-    rejecting with `SLOT_OCCUPIED`.
-  - Archiving a web-mode Printer with loaded Spools shows the disposition
-    dialog (so the UI can be demonstrated) but submitting reports "needs
-    the desktop app" rather than applying a fixture-side atomic archive —
-    "Nothing moves unless the whole archive succeeds" is not literally true
-    in web mode, only on the real backend (proven by
+  - Unarchiving a web-fixture Spool always restores it to `active`
+    (the wire `SpoolRecord` has no `archivedFrom`, so the fixture can't
+    model it).
+  - `setSlotLayout` in web mode rejects removing an occupied slot with
+    `SLOT_OCCUPIED` (`details: { slotId, spoolId }`), like the desktop
+    command.
+  - Archiving a web-mode Printer with loaded Spools applies the chosen
+    dispositions. `spool-store.ts` registers
+    `applyWebArchiveDispositions` through `registerWebDispositionApplier`.
+    It validates the whole set first, then moves or marks empty each Spool
+    through the store's own web paths. It is not atomic: a failure part-way
+    through leaves the earlier moves applied. So "Nothing moves unless the
+    whole archive succeeds" holds only on the real backend (proven by
     `p3_lifecycle.rs::a_failing_disposition_rolls_back_the_whole_archive`).
 - **Newly observed in this pass: `SpoolInventory`'s own `loadInventory()`
   call can race `printer-store`'s async catalog resolution in web mode.**
@@ -323,7 +344,7 @@ verification:
   here; none of them affect the acceptance criteria above or block P7's
   consumption of the reservation primitives.
 - **Dock-mode bug found during this pass's browser verification, fixed in
-  this commit.** The first `p3-detail-history-1440x900.png` capture showed
+  `ff16953`.** The first `p3-detail-history-1440x900.png` capture showed
   the Spool detail dock as a centered overlay dialog at 1440 wide, not the
   inline right dock the surrounding prose described. Root cause:
   `SpoolInventory.tsx`'s `workspace` ref (the element the `onMount`
@@ -339,6 +360,51 @@ verification:
   loaded at mount, wide workspace, dock renders inline once loaded). Both
   `p3-detail-history-*.png` screenshots above were recaptured after the fix
   and now correctly show inline-at-1440/overlay-at-1024.
+
+## Final review fixes
+
+The final whole-branch review found the issues below. Each is fixed, with
+a covering test.
+
+- **Scale entry with "No tare" always failed on desktop** (`5f1ca30`). The
+  Record amount and Add Spool dialogs sent neither `tareId` nor `tareMg`,
+  which `ledger::resolve_entry` rejects. They now send `tareMg: 0`, and the
+  web fixture rejects neither/both like Rust. Spec D3 now says so.
+- **Spool history never refreshed** (`47a49e1`). The detail dock now
+  reloads on `[id, revision]`, drops stale responses, and routes a load
+  failure to the store banner.
+- **Reservation amounts** (`99ee59f`). `reserve` rejects `amount_mg <= 0`
+  and `consume` rejects `used_mg < 0` with `ReservationError::InvalidAmount`.
+- **Unknown default `tareId`** (`99ee59f`). Spool insert and update return
+  `VALIDATION` on `tareId` instead of a foreign-key failure
+  (`PERSISTENCE_UNAVAILABLE`).
+- **`publish_ids` broadcast** (`99ee59f`). The `InventoryChange` broadcast
+  goes out from the ids even when the post-commit record read fails.
+- **DataTable** (`30da68f`). The header row is `aria-rowindex` 1, data rows
+  start at 2, and `aria-rowcount` includes the header. The sort glyph uses
+  a type token.
+- **Printer records and dialogs** (`f71fd92`). `spliceResolved` keeps a
+  Printer whose revision is newer than the incoming record. The Move dialog
+  forgets a `CONFLICT` occupant when the slot or Printer changes, and its
+  displaced storage label is optional. The Archive dialog offers Mark empty
+  only for an active Spool.
+
+## Known follow-ups
+
+Deferred from the final review. None blocks P3's acceptance criteria.
+
+- Replay by `operationId` doesn't compare the request payload, and
+  move/archive/lifecycle share one `operationId` namespace. Fix before P7.
+- The repository helpers rewrite whole Spool rows.
+- The Printers-import error is mapped from a magic-string field path.
+- The initial-load and loaded-count Spool logic lives in
+  `printers/repository.rs`.
+- Batch create doesn't validate the shared slot layout up front.
+- `notes` has no length cap.
+- The client never retries a lost move with the same `operationId`.
+- `set_spool_lifecycle` has no `operationId`.
+- The web-fixture cold-deep-link occupancy race (see "Deviations and
+  findings").
 
 ## Files changed in this task
 
