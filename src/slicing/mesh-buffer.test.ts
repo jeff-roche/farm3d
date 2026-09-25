@@ -30,6 +30,24 @@ describe("decodeMeshBuffer", () => {
     expect(mesh.indices).toBeInstanceOf(Uint32Array);
   });
 
+  it("decodes the exact bytes the Rust test the_mesh_buffer_has_the_d6_layout pins", () => {
+    // geometry.rs `one_triangle(0.5)`: vertices (0.5,0,0), (1,0,0), (0,1,0).
+    const hex = [
+      "4633444d", "01000000", "03000000", "03000000", // F3DM, version 1, 3 vertices, 3 indices
+      "0000003f", "00000000", "00000000", // 0.5, 0, 0
+      "0000803f", "00000000", "00000000", // 1, 0, 0
+      "00000000", "0000803f", "00000000", // 0, 1, 0
+      "00000000", "01000000", "02000000", // 0, 1, 2
+    ].join("");
+    const bytes = Uint8Array.from(hex.match(/../g)!.map((pair) => parseInt(pair, 16)));
+    expect(bytes).toHaveLength(64);
+    const mesh = decodeMeshBuffer(bytes.buffer);
+    expect(mesh).toMatchObject({ vertexCount: 3, indexCount: 3, triangleCount: 1 });
+    expect([...mesh.positions]).toEqual([0.5, 0, 0, 1, 0, 0, 0, 1, 0]);
+    expect([...mesh.indices]).toEqual([0, 1, 2]);
+    expect(new Uint8Array(encodeMeshBuffer(mesh.positions, mesh.indices))).toEqual(bytes);
+  });
+
   it("decodes an empty mesh", () => {
     const mesh = decodeMeshBuffer(handWritten([], []));
     expect(mesh).toMatchObject({ vertexCount: 0, indexCount: 0, triangleCount: 0 });
