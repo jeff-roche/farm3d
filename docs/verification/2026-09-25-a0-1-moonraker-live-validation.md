@@ -31,8 +31,8 @@ committed. Each run writes JSON evidence to `FARM3D_MOONRAKER_OUT` (default
 | Test | Recipe | Sends to the printer |
 | --- | --- | --- |
 | `live_probe` | `just moonraker-live probe` | `server.info`, `printer.info`, `printer.objects.list`, `printer.objects.query`, `machine.system_info`, plus probes with no key and with a wrong key. Read-only. |
-| `live_watch` | `just moonraker-live watch` | Subscriptions only. Read-only. Runs the production `ConnectionManager` for `FARM3D_MOONRAKER_WATCH_SECS` while a person causes events. |
-| `live_lifecycle_drive` | `FARM3D_MOONRAKER_ALLOW_CONTROL=1 just moonraker-live drive` | **M112, FIRMWARE_RESTART, and a 1 °C heater target.** Idle printers only; it refuses a printing or paused one. Checks D1–D9, below. |
+| `live_watch` | `just moonraker-live watch` | Subscriptions and `printer.objects.list`/`query` only. Read-only. Runs the production `ConnectionManager` for `FARM3D_MOONRAKER_WATCH_SECS` while a person causes events, then records the D10 tool check. |
+| `live_lifecycle_drive` | `FARM3D_MOONRAKER_ALLOW_CONTROL=1 just moonraker-live drive` | **M112, FIRMWARE_RESTART, and a 1 °C heater target.** Loopback hosts only (the local simulator): it refuses any other host before sending anything, because real printers are read-only. It also refuses a printing or paused printer. Checks D1–D10, below. |
 
 All three drive the production adapter and the production supervisor under
 a mock Tauri runtime, and they log every `farm3d-event-v1` envelope. A second
@@ -46,6 +46,7 @@ just moonraker-sim build              # once; builds the simulavr image (several
 just moonraker-sim up                 # trusted mode, full printer
 just moonraker-sim up apikey          # every request needs the key
 just moonraker-sim up trusted no-bed  # no [heater_bed]: the missing-object case
+just moonraker-sim up trusted multi-tool  # adds [extruder1]: the multi-tool case
 just moonraker-sim api-key > key.txt  # then FARM3D_MOONRAKER_API_KEY_FILE=key.txt
 just moonraker-sim restart klipper    # a Klippy disconnect as Moonraker sees it
 just moonraker-sim down
@@ -91,8 +92,10 @@ FARM3D_MOONRAKER_PORT=17125`.
 
 ### Lifecycle, disconnect, reconnect (SIM unless stated)
 
-`live_lifecycle_drive` results after the fixes, on both the full and no-bed
-simulator: **D1–D9 all Pass.**
+`live_lifecycle_drive` results after the fixes and decisions, on the full,
+no-bed, and multi-tool simulator: **D1 and D3–D10 Pass on every variant; D2
+Passes on no-bed** and is Inconclusive on the others, which report every
+field.
 
 | Check | Before fixes | After |
 | --- | --- | --- |
@@ -105,6 +108,7 @@ simulator: **D1–D9 all Pass.**
 | D7 Klippy restart → `notify_klippy_ready` → online | Pass | Pass |
 | D8 readings resume after the Klipper restart | **Fail**: tap saw updates; supervisor saw none and kept reporting `fresh` | Pass |
 | D9 backfill equals the last event (stream id, sequence, status) | Pass | Pass |
+| D10 every extruder in `printer.objects.list` is a tool reading (added for B2) | n/a | Pass (multi-tool: T0 and T1; single-tool: no tool list) |
 
 Client-side network faults through `netfault.py`, **U1**, read-only:
 
@@ -112,6 +116,26 @@ Client-side network faults through `netfault.py`, **U1**, read-only:
 | --- | --- | --- |
 | `drop` for 25 s | `error` ("could not be reached") within 0.3 s; retries at 2, 4, 8, 16 s backoff; online again 5–6 s after the path returned | Same |
 | `freeze` for 70 s | **Stayed `online`/`fresh` for the whole 70 s** while `lastObservedAt` aged past 100 s | `error` ("did not respond in time") 30 s into the freeze; online again after the path returned |
+
+A hung server, **SIM**: `podman pause` (SIGSTOP) on the Moonraker container
+for 50 s keeps the socket open while nothing answers, not even Pings. The
+status went to `error` ("did not respond in time") 30 s after the pause and
+back to `online` 20 s after the resume (reconnect backoff). This is the same
+code path as `freeze`: M4 covers both. Detection takes between 25 and 35 s
+(the 25 s silence limit, checked on the 10 s liveness tick); until then the
+status still reads `online`.
+
+### Multi-tool readings (decision B2)
+
+- **U1**, read-only `live_watch` after the B2 change: `printer.objects.list`
+  names `extruder` … `extruder3`, and the published telemetry carries four
+  tool readings, T0–T3, each with a temperature and target (D10 Pass).
+- **SIM multi-tool**: T0 and T1 both reported, and both return after a
+  Klipper restart, because the adapter lists the objects again before it
+  re-subscribes (D8, D10 Pass).
+- The same U1 watch showed the finished-job state from decision B1:
+  operational state `finished`, readiness `notReady`, reason
+  `bedNeedsClearing`, where before it showed `unknown`.
 
 ## Mismatches
 
@@ -129,7 +153,10 @@ Client-side network faults through `netfault.py`, **U1**, read-only:
 Also added: `an_object_the_printer_lacks_reads_as_absent_not_zero` pins the
 observed null-object behavior.
 
-### Recorded as blockers or decisions (not changed here)
+### Recorded as blockers or decisions
+
+B1–B4 were decided by the owner on 2026-09-25 and are implemented on this
+branch (see "Decisions" below). B5 and B6 stay open.
 
 | # | Observation | Target | Proposed owner |
 | --- | --- | --- | --- |
@@ -139,6 +166,32 @@ observed null-object behavior.
 | B4 | `useTls` is offered in the Connection fields, but `tokio-tungstenite` is built without a TLS feature. A `wss://` Connection fails and is reported as "could not be reached". Either enable a TLS feature or remove the option. Not observed live (no TLS Moonraker available); confirmed from the build's feature set. | Build | P1 or P6 |
 | B5 | On a trusted-client Moonraker a wrong key is accepted (see Authentication), so a "key verified" message would be false there. | U1 | P1 (setup wording) |
 | B6 | The U1 runs vendor forks (Klipper `1.5.2.13…`, Moonraker `1.5.2`) with extra components (`snapmakercloud`, `mqtt`, `exception_manager`, `client_manager`, `timelapse`, `repeater`) and objects (`machine_state_manager`, `print_task_config`, `filament_detect`, `defect_detection`, …). None is needed for monitoring today. The simulator reproduces none of them. | U1 | P6 (command research) |
+
+## Decisions (2026-09-25)
+
+The owner decided B1–B4 on 2026-09-25.
+
+| # | Decision | Implemented as | Tests |
+| --- | --- | --- | --- |
+| B1 | Never map `complete`, `cancelled`, or `error` to Idle or Ready. Show a truthful non-ready state instead of Unknown, and keep finished, cancelled, and failed apart: P6 will offer Start after a finished or cancelled job once a person acknowledges a clear bed, and keep it blocked after a failed one. | `HostActivity` and `OperationalState` gain `finished`, `cancelled`, and `failed`. Readiness is `notReady` with reason `bedNeedsClearing` (finished, cancelled) or `printFailed` (failed). The Monitor labels them "Finished", "Cancelled", and "Print failed", with the summary "Bed needs clearing" or "Check the printer". No Start UI; that is P6. | `an_ended_job_is_never_ready_and_says_how_it_ended`, `ended_job_states_use_camel_case_on_the_wire`, `normalizes_moonraker_activity_inside_the_adapter_boundary`, monitor-store "presents an ended … job as a distinct non-ready state" |
+| B2 | Support multi-toolhead printers: discover every `extruder`, `extruder1` … `extruderN`, subscribe to all, carry per-tool current and target temperatures in the adapter-neutral status and the cache, and render them with "—" for absent readings. Single-extruder printers look the same as before. | `PrinterTelemetry.tools: ToolTemperature[]` (`index`, `tempC?`, `targetC?`), filled only for a multi-tool printer; `nozzleTempC`/`nozzleTargetC` still carry tool 0. The subscription runs `printer.objects.list` first, including after every Klipper restart. The cache validates the list. Cards, compact rows, and the status panel show T0, T1, … instead of "Nozzle". | `discovers_every_extruder_in_tool_order_and_ignores_look_alikes` (fixture from the U1's object names), `the_subscription_names_every_discovered_tool`, `a_multi_tool_printer_reports_every_tool_and_leaves_missing_readings_absent`, `a_single_tool_printer_reports_no_tool_list`, `a_failed_objects_list_falls_back_to_the_single_tool_subscription`, `per_tool_temperatures_round_trip_through_the_cache`, `invalid_per_tool_temperatures_are_rejected`, `nozzleReadings`, and card, compact-row, status-panel, and monitor-store tests; live D10 on the U1 and the multi-tool simulator |
+| B3 | Do not flag a build-volume mismatch because reported axis limits exceed the catalog volume. Warn only when the host reports less than the catalog on some axis. | `buildMismatches` ignores any reported extent at or above the catalog value (1 mm tolerance). | "does not warn when the host reports more travel than the catalog volume" (271 × 335 × 281 against 270³), "warns only for the axes where the host reports less than the catalog" |
+| B4 | Remove the "Use TLS" option while no adapter supports TLS, and keep the backend rejection clear. | The batch dialog's "Use TLS" checkbox and TLS column are gone; a pasted row with a truthy TLS column is an intake error. `probe_connection`, `create_printer`, `set_printer_connection`, `test_printer_connection`, and the batch planner return `VALIDATION` at `useTls`: "TLS connections are not supported yet." The adapter refuses a Connection stored with TLS before this change with the same message. | `every_connection_entry_point_rejects_tls_as_a_validation_error_at_use_tls`, `a_tls_row_keeps_the_printer_but_drops_its_connection`, `a_stored_tls_connection_is_refused_with_a_clear_reason_before_connecting`, batch-intake, batch-dialog, and rows-table tests |
+
+Follow-ups:
+
+- **OctoPrint (PR #27):** map OctoPrint's `tool0` … `toolN` onto
+  `PrinterTelemetry.tools` (index N), fill `nozzleTempC`/`nozzleTargetC` from
+  `tool0`, and leave `tools` empty for a single tool. Map OctoPrint's job
+  outcomes onto `finished`/`cancelled`/`failed` rather than Idle. Not changed
+  on this branch.
+- A Connection stored with `useTls: true` before B4 now reports "The Printer
+  returned an unexpected response." in the status (the specific TLS reason
+  is in the adapter error, not the status message). Printers import has not
+  been checked for TLS rows.
+- During a hang the status reads `online` for up to 35 s. Suppressing the
+  liveness `online` once nothing has arrived for a full tick would shorten
+  that; not changed here.
 
 ## Simulator fidelity
 
@@ -150,8 +203,9 @@ Where it differs from the U1:
 
 - Upstream Moonraker `v0.11.0` (API 1.5.0) versus the U1's fork `1.5.2`
   (API 1.4.0); upstream Klipper versus the Snapmaker fork.
-- One extruder, no enclosure sensors, none of the Snapmaker objects or
-  components listed in B6.
+- One extruder (two in the multi-tool variant, against the U1's four), no
+  enclosure sensors, none of the Snapmaker objects or components listed in
+  B6.
 - Temperatures are constant (the thermistor ADC inputs are not driven), so
   status updates happen only when something changes a field. The U1's idle
   bed flicker produces a steady trickle of real partial updates.
@@ -172,6 +226,10 @@ Where it differs from the U1:
      the card shows live temperatures.
    - `just moonraker-sim down`, then `up trusted no-bed`: the Bed reading
      shows "—", never "0 °C".
+   - `just moonraker-sim down`, then `up trusted multi-tool`: the card shows
+     T0 and T1 instead of one Nozzle reading.
+   - Add the U1 itself (read-only): the card shows T0–T3 and, while its last
+     print is still `complete`, "Finished" with "Bed needs clearing".
    - Send M112 to the simulator with
      `curl -X POST 127.0.0.1:7125/printer/emergency_stop`: the card turns
      Offline. `just moonraker-sim restart klipper`: it returns Online and
@@ -187,4 +245,4 @@ Where it differs from the U1:
 3. **Optional: lifecycle on the U1 by hand.** The owner ruled the simulator
    sufficient. For extra confidence, run the same watch and trigger
    FIRMWARE_RESTART from the U1's screen or Fluidd.
-4. **Decisions B1–B5** above.
+4. **Decisions B5 and B6** above. B1–B4 are decided and implemented.
