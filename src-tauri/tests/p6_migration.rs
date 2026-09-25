@@ -499,6 +499,68 @@ fn terminal_rows_reject_every_update_but_non_terminal_rows_accept_one() {
         .expect("a non-terminal row accepts an update");
 }
 
+/// 5b. D2/D7: the one update a terminal row accepts is an `ON DELETE SET
+///     NULL` unlinking it from a deleted row. A link can only become NULL,
+///     and nothing else may change alongside it.
+#[test]
+fn a_terminal_row_can_only_be_unlinked_by_its_set_null_actions() {
+    let (_temp, connection) = migrated();
+    seed_printer(&connection, "prn-a");
+    insert_host_operation(&connection, &HostOperationRow::upload("hop-up")).expect("upload");
+    connection
+        .execute(
+            "UPDATE host_operations SET state = 'succeeded', resolution_json = '{}' WHERE id = 'hop-up'",
+            [],
+        )
+        .expect("resolve upload");
+    insert_host_operation(
+        &connection,
+        &HostOperationRow {
+            kind: "start",
+            history_mark: Some(0),
+            source_host_operation_id: Some("hop-up"),
+            ..HostOperationRow::upload("hop-start")
+        },
+    )
+    .expect("start");
+    connection
+        .execute(
+            "UPDATE host_operations SET state = 'succeeded', resolution_json = '{}' WHERE id = 'hop-start'",
+            [],
+        )
+        .expect("resolve start");
+
+    let relink = connection
+        .execute(
+            "UPDATE host_operations SET source_host_operation_id = 'hop-start' WHERE id = 'hop-start'",
+            [],
+        )
+        .expect_err("a terminal row's link can't be re-pointed");
+    assert!(relink.to_string().contains("host operation is terminal"));
+    let unlink_and_edit = connection
+        .execute(
+            "UPDATE host_operations SET source_host_operation_id = NULL, abandon_note = 'x'
+             WHERE id = 'hop-start'",
+            [],
+        )
+        .expect_err("nothing else may change alongside an unlink");
+    assert!(unlink_and_edit
+        .to_string()
+        .contains("host operation is terminal"));
+
+    connection
+        .execute("DELETE FROM host_operations WHERE id = 'hop-up'", [])
+        .expect("ON DELETE SET NULL unlinks the terminal start");
+    let source: Option<String> = connection
+        .query_row(
+            "SELECT source_host_operation_id FROM host_operations WHERE id = 'hop-start'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("start kept");
+    assert_eq!(source, None);
+}
+
 /// 6. `RESTRICT`: a Printer with any Host Operation row (even terminal)
 ///    can't be deleted. `SET NULL`: `source_host_operation_id` clears when
 ///    the referenced row is deleted.

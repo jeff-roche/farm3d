@@ -46,10 +46,41 @@ CREATE UNIQUE INDEX host_operations_printer_unresolved
 CREATE INDEX host_operations_printer_created ON host_operations(printer_id, created_at);
 
 -- D3: a terminal row (succeeded, failed, abandoned) never accepts another
--- UPDATE.
+-- UPDATE, with one exception D2 relies on: the ON DELETE SET NULL actions
+-- may unlink a terminal row from a deleted Slice Revision or source row
+-- (D7: a revision, or a Printer's terminal rows, can be deleted once they
+-- are terminal). Every other column must stay exactly as it was, and a
+-- link may only ever become NULL.
 CREATE TRIGGER host_operations_terminal_immutable
 BEFORE UPDATE ON host_operations
 WHEN OLD.state IN ('succeeded','failed','abandoned')
+  AND NOT (
+    (NEW.slice_revision_id IS OLD.slice_revision_id OR NEW.slice_revision_id IS NULL)
+    AND (NEW.source_host_operation_id IS OLD.source_host_operation_id
+         OR NEW.source_host_operation_id IS NULL)
+    AND NEW.id IS OLD.id
+    AND NEW.operation_id IS OLD.operation_id
+    AND NEW.printer_id IS OLD.printer_id
+    AND NEW.kind IS OLD.kind
+    AND NEW.gcode_sha256 IS OLD.gcode_sha256
+    AND NEW.gcode_size IS OLD.gcode_size
+    AND NEW.host_path IS OLD.host_path
+    AND NEW.history_mark IS OLD.history_mark
+    AND NEW.endpoint_json IS OLD.endpoint_json
+    AND NEW.state IS OLD.state
+    AND NEW.failure_json IS OLD.failure_json
+    AND NEW.resolution_json IS OLD.resolution_json
+    AND NEW.attempts IS OLD.attempts
+    AND NEW.last_attempt_at IS OLD.last_attempt_at
+    AND NEW.last_attempt_reason IS OLD.last_attempt_reason
+    AND NEW.no_longer_pending IS OLD.no_longer_pending
+    AND NEW.abandoned_at IS OLD.abandoned_at
+    AND NEW.abandon_note IS OLD.abandon_note
+    AND NEW.created_at IS OLD.created_at
+    AND NEW.dispatched_at IS OLD.dispatched_at
+    AND NEW.uncertain_since IS OLD.uncertain_since
+    AND NEW.resolved_at IS OLD.resolved_at
+  )
 BEGIN
   SELECT RAISE(ABORT, 'host operation is terminal');
 END;
