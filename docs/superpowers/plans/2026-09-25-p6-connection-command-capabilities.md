@@ -1,449 +1,287 @@
 # P6 Connection Command Capabilities Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. One fresh implementer per `### Task N` section, and a review after each task. Every task section is written to stand alone. It still binds you to **§Global Constraints**, which the controller hands to every implementer with the task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Draft; the open questions are answered, and the plan is not yet
-approved. GitHub issue #16. Written on 2026-09-25 against `main` at
-`5c9ead7`, with P5 (#15) merged and closed. A0.1 (#9, Moonraker live
-validation) is **open**, so no Moonraker command behavior in this plan is
-evidenced yet.
+**Status:** Final. GitHub issue #16. It was written on 2026-09-25 and
+rebased onto `main` at `eba01b5`, which includes:
 
-**User answers (2026-09-25).** These are fixed:
+- #27 (OctoPrint status adapter, `SUPPORTED_KINDS`, public
+  `supervisor::build_connection`);
+- #28 (the printer simulator harness `sim/`, ADR-0012, Toxiproxy);
+- #29 (#9 Moonraker validation: `HostActivity`/`OperationalState`
+  `Finished`/`Cancelled`/`Failed`, `ReadinessReason::BedNeedsClearing` and
+  `PrintFailed`, `PrinterTelemetry.tools`, and TLS rejected everywhere).
 
-1. **Start in the P6 UI:** yes. **Start…** is on the Job tab, always
-   behind a "bed is clear" confirmation (D9).
-2. **Exclusivity:** at most one unresolved write per Printer (D2).
-3. **Archive while a write is unresolved:** blocked (D7).
-4. **Credential replacement while a write is unresolved:** allowed on the
-   same endpoint, still probed (D7).
-5. **Permanent Printer delete:** also deletes that Printer's finished
-   (terminal) Host Operation rows, in the same transaction (D7).
-6. **TLS:** staging over a `useTls` Connection stays unsupported until a
-   TLS host is tested (D6).
-7. **Evidence source:** a containerized Klipper + Moonraker with a
-   simulated board counts as live evidence for #9 and for P6's Moonraker
-   gates. The shared simulator harness is being built on
-   `feature/printer-simulation-harness` (`sim/compose.yaml`,
-   `just sim-up`, `just test-sim`, and its own ADR). The owner's
-   Snapmaker U1 running Moonraker at `<U1 host>:7125` is available as
-   a real-hardware tier (§Test tiers).
-8. **The U1 is read-only (owner decision).** Agents must never write to
-   the real U1. That rules out file uploads, interrupted uploads, file
-   deletion, and `start`, `pause`, `resume`, and `cancel`, with or without
-   an opt-in. The U1 is used only for read-only corroboration: probe,
-   subscribe, status and file-list queries, and identity and capability
-   detection. Every write gate runs on the simulator only.
+Issues #7, #8, #9, and #10 are closed. #8 closed **without** a go decision,
+so ElegooLink is out of P6.
 
-**Further owner decisions (2026-09-25, later the same day):**
+**Approval.** The owner told the controller to finalise the plan and go
+straight to implementation. There are no user approval stops. Where this
+plan says **controller approves**, the controller (the orchestrating agent
+running subagent-driven development) reviews the output, records the
+approval in the document's own `Status` line, and continues. That applies
+to the spike report (Task 3) and to the focused spec and ADR-0011
+(Task 4).
 
-9. **Multi-toolhead printers are supported.** #9 adds multi-extruder
-   monitoring. Every P6 capability that touches tools handles N extruders
-   (`extruder`, `extruder1`, … as the host reports them). No code or test
-   assumes a single `extruder` object. The sim tier's "no heater target
-   set" safety precondition checks **every** extruder and the bed (D6,
-   §Global constraints).
-10. **ElegooLink is the Centauri Carbon only**; the CC2 is dropped from v1.
-    After #8 records a go decision, the ElegooLink P6 path may use the
-    in-repo **fake SDCP server** as its command evidence tier. That fake's
-    behavior is modeled on real passive captures of *other* clients'
-    commands. farm3d never sends commands to a real Carbon (§Other
-    adapters).
-11. **PR #27** (`feature/a0-2-octoprint-monitoring`, open) already
-    consolidates the five supported-kind checks into a `SUPPORTED_KINDS`
-    list, makes `supervisor::build_connection` public, and adds `reqwest`
-    0.13 as a direct dependency. Task 3 builds on it rather than redoing
-    it.
-12. **#9 readiness and TLS:**
-    - `print_stats` `complete`, `cancelled`, and `error` become explicit
-      non-ready states, never Ready.
-    - "Use TLS" is hidden from the Connection fields while no adapter
-      supports TLS.
+## Owner decisions (fixed)
 
-    P6 follows both (D5, D6, D9).
-13. **The bed-clear confirmation acknowledges a finished or cancelled
-    print.** Start is offered when the Printer is Ready, **or** when the
-    host reports `complete` or `cancelled`.
-    - In the `complete` or `cancelled` case the confirmation is mandatory
-      and names the prior state, for example "The previous print finished.
-      The bed is clear."
-    - After `error`, Start stays disabled until the error is cleared on the
-      printer and the host no longer reports `error`.
-    - Reason: Klipper stays `complete` until the next print, so a
-      Ready-only rule would block every print after the first (D9).
-
-P6 is planned and gated **per adapter**. This plan covers the shared
-foundation plus the **Moonraker** path only. OctoPrint and ElegooLink get
-their own short adapter plans later (see §Other adapters). Like P5, the
-work has three stages, and each ends with an approval stop:
-
-| Stage | Output | Stop |
-|---|---|---|
-| A. Moonraker command spike (Task 1) | `docs/superpowers/baselines/2026-09-2x-p6-moonraker-command-spike.md` | The user approves the spike report |
-| B. Focused spec (Task 2) | `docs/superpowers/specs/2026-09-2x-p6-connection-command-capabilities-design.md` and ADR-0011 | The user approves the spec |
-| C. Implementation (Tasks 3–13) | Code, tests, docs, verification record | Exit gate below |
-
-Some Stage C tasks do not depend on live evidence and may start before
-Stage A finishes. §Delivery order marks each task **Ready now**,
-**After spec**, or **Needs the sim harness**. The U1 is used for read-only
-checks only (answer 8).
+1. **Start** ships in the P6 UI, always behind a bed-clear confirmation.
+2. At most **one unresolved write per Printer**.
+3. **Archive** is blocked while a write is unresolved.
+4. **Credential replacement** on the same endpoint is allowed while a
+   write is unresolved, and still probed. Clearing the credential or
+   changing the endpoint is blocked.
+5. Permanent Printer **delete** also deletes that Printer's *terminal*
+   Host Operation rows.
+6. **TLS** stays unsupported. #29 already rejects `useTls` everywhere and
+   hides the control, and P6 adds no TLS.
+7. The local **container simulators** (`sim/`) are live evidence for
+   Moonraker (ADR-0012).
+8. **Real printers are read-only.** Agents never write to a real printer:
+   no upload, no interrupted upload, no file delete, no
+   start/pause/resume/cancel, no G-code, no service restart, with or
+   without an opt-in. The real-hardware tier only probes, subscribes, and
+   queries.
+9. **Multi-toolhead printers** are supported. Anything that touches tools
+   handles N tools.
+10. **ElegooLink:** out of P6. #8 closed without a go decision.
+11. **The adapter registry** builds on #27's `SUPPORTED_KINDS` and
+    `build_connection`.
+12. **#9 readiness:** `Finished`, `Cancelled`, and `Failed` are never
+    Ready.
+13. **Start is offered** when the Printer is Ready, **or** when it is
+    `Finished` or `Cancelled`. In the latter two cases the bed-clear
+    confirmation is mandatory and names the prior state ("The previous
+    print finished. The bed is clear."). After `Failed`, Start stays
+    disabled until the host no longer reports an error.
+14. **Simulators do not run in CI** (too expensive). Evidence gates run
+    locally with `just sim-up && just test-sim`. CI runs only the
+    in-process fakes.
 
 **Goal:** For Moonraker, farm3d can:
 
-- upload (stage) one immutable Slice Revision to a Printer **without
-  starting it**;
-- start a staged file, and pause, resume, and cancel the host's print;
-- read the host state and artifact identity it needs to reconcile;
-- report camera availability as a capability (no media; that is P8).
+- **stage** (upload without starting) one immutable Slice Revision to a
+  Printer;
+- **start** a staged file, and **pause**, **resume**, and **cancel** the
+  host's print;
+- read the **host state** and **artifact identity** it needs to reconcile;
+- report **camera** availability as a capability only (no media; that is
+  P8).
 
-Every write to a host carries a durable **Host Operation** identity. When a
-response is lost, the operation becomes **uncertain**, and farm3d
-reconciles it against the host after reconnect or restart. It never
-re-uploads or re-starts blindly. Printer archive/delete, Printer import,
-Connection changes, and credential deletion cannot orphan an unresolved
-operation. For a host that is gone for good, the operator can explicitly
-**abandon reconciliation**, and that choice is recorded durably.
+Every host write carries a durable **Host Operation** identity. A lost
+response makes the operation **uncertain**, and farm3d reconciles it
+against the host after reconnect or restart. It never re-uploads or
+re-starts blindly. Archive/delete, Printer import, Connection changes, and
+credential deletion cannot orphan an unresolved operation. For a host that
+is gone for good, the operator can explicitly **abandon reconciliation**,
+and that is recorded durably.
 
-P6 ends at capability-aware, operator-invoked host control. It creates no
-Queue Entries or Jobs, has no scheduling or unattended start, and does no
-material accounting (P7).
+**Out of scope (P7):** Queue Entries, Jobs, scheduling, unattended start,
+retry policy, and material accounting.
 
-**Architecture:** Rust owns the operation record, the adapters, and
-reconciliation.
+## Evidence: the code on `main` at `eba01b5`
 
-- **Adapter seam.** The observation-only `PrinterConnection` trait stays as
-  it is. P6 adds small **capability traits** (artifact staging, print
-  control, host-state query, camera discovery). An **adapter registry**
-  builds them per Connection kind and derives an evidence-backed
-  **capability matrix** (D1, D6).
-- **Host Operations.** A new `src-tauri/src/host_ops/` module holds the
-  `host_operations` table, a pure state machine, the executor
-  (write-ahead intent, then wire I/O, then resolution), the reconciler, and
-  a `hostOperations` event stream (D2–D5).
-- **Guards.** New `LifecycleBlockerSource`, `SliceRevisionDeletionBlocker`,
-  and Connection-mutation checks run inside the transactions they gate
-  (D7).
-- **Frontend.** A capability store and a host-operations store in
-  `src/host-ops/`. A new **Job** tab in `PrinterDetailDock`, a
-  **Stage on Printer…** action in `SliceRevisionReview`, an Abandon dialog,
-  and a capabilities section in Setup (D9).
+**Connections** (`src-tauri/src/connections/`):
 
-**Tech stack:** Rust, Tauri 2, rusqlite/SQLite, tokio, tokio-tungstenite
-(existing WebSocket), `reqwest` 0.13 for HTTP upload and download (PR #27
-makes it a direct dependency with `default-features = false`; P6 adds only
-the `multipart` and `stream` features), ts-rs, SolidJS, TypeScript, Kobalte, CSS
-Modules, Vitest, and Rust unit and integration tests.
-
-## Evidence gathered while planning
-
-These facts come from the repository at `5c9ead7` and from the issues on
-2026-09-25. Moonraker API facts below come from its documentation and are
-**not** live evidence. Task 1 must confirm each one on a real instance.
-
-**Issue state.**
-
-- #15 (P5) is closed. P5 landed `slice_revisions` (`slr-*` ids, immutable
-  by trigger), content-addressed G-code in `content_blobs`
-  (`gcode_sha256`, `gcode_size`), `ContentStore::open_verified`, and the
-  empty `slicing::blockers::slice_revision_blocker_sources()` registry.
-  That is the artifact identity P6 builds on.
-- #9 (A0.1 Moonraker live validation) is open. Nothing records a real
-  Moonraker instance, versions, or behavior. P6's Moonraker command work is
-  blocked on it (approach doc, issue #16).
-- #10 (OctoPrint) is open. Its status-only adapter is in PR #27
-  (`feature/a0-2-octoprint-monitoring`, open, not on `main`). That PR also
-  consolidates the kind checks described below.
-- #8 (ElegooLink, Centauri Carbon only) is open with no go decision.
-
-**The connection seam today** (`src-tauri/src/connections/`):
-
-- `PrinterConnection` has two methods, `probe` and `subscribe`. It is
-  observation-only, and its doc comment already expects reshaping.
-- `MoonrakerConnection` speaks JSON-RPC over WebSocket only. It has no HTTP
-  client. It sends the API key as `X-Api-Key` on the upgrade.
-- Framing and parsing are pure and live in `moonraker/protocol.rs`. The
-  subscription already asks for `print_stats.filename`, `print_stats.state`,
-  `print_duration`, and `message`.
-- Construction goes through one factory, `supervisor::build`, and
-  `ConnectionManager::connection_for` reuses it for probes. But the
-  "is this kind supported?" check is repeated in five places:
-  - `connections/commands.rs:300` (`set_printer_connection`);
-  - `printers/create.rs:297`;
+- `PrinterConnection` (in `mod.rs`) is observation-only: `probe` and
+  `subscribe`.
+- `SUPPORTED_KINDS = [MOONRAKER_KIND, OCTOPRINT_KIND]` and
+  `is_supported_kind` are in `mod.rs`. Every kind check calls
+  `is_supported_kind`:
+  - `connections/commands.rs:301`;
+  - `printers/create.rs:298`;
   - `printers/batch.rs:567`;
-  - `printers/setup.rs:48` (`SetupGap::UnsupportedAdapter`);
-  - `connections/supervisor.rs:963` (`build`).
+  - `printers/setup.rs:47`.
+- `supervisor::build_connection` (public, `supervisor.rs:964`) builds the
+  observer. A supervisor test keeps it in step with `SUPPORTED_KINDS`.
+- `reject_tls` and `TLS_UNSUPPORTED_MESSAGE` are in `mod.rs`, called from
+  `set_printer_connection` and `test_printer_connection`.
+- `MoonrakerConnection` is WebSocket JSON-RPC only; the pure framing is in
+  `moonraker/protocol.rs`.
+- `OctoPrintConnection` uses `reqwest` 0.13 (a direct dependency with
+  `default-features = false`). It does not follow redirects and bypasses
+  the system proxy.
 
-  "Centralize adapter construction" in the issue therefore means one
-  registry that owns both the kind check and every per-capability builder.
+**Status vocabulary (#29)** (`printers/operational.rs`,
+`connections/status_repository.rs`):
 
-  PR #27 already collapses these five sites into one
-  `connections::SUPPORTED_KINDS` list (Moonraker and OctoPrint) with an
-  `is_supported_kind` helper. It also renames `supervisor::build` to a
-  public `supervisor::build_connection`, and adds a test that keeps
-  `SUPPORTED_KINDS` and the factory in step. P6's registry starts from
-  that code, not from `main` as of `5c9ead7` (Task 3).
-- The subscription asks only for `extruder`. #9 adds multi-extruder
-  monitoring, so P6 must read tool state from however many `extruder*`
-  objects #9's code subscribes to (answer 9).
-- `ConnectionManager::reconciliation_guard()` already exists. It
-  serializes *supervisor* reconciliation. P6's reconciliation is a
-  different thing, so this plan always says **host-operation
-  reconciliation** to avoid confusion.
+- `HostActivity`: `Idle`, `Printing`, `Paused`, `Busy`, `Finished`,
+  `Cancelled`, `Failed`, `Unknown`.
+- `OperationalState` adds `Finished`, `Cancelled`, and `Failed` (never
+  `Ready`).
+- `ReadinessReason::BedNeedsClearing` (after Finished or Cancelled) and
+  `ReadinessReason::PrintFailed` (after Failed).
+- `PrinterTelemetry.tools: Vec<ToolTemperature { index, temp_c, target_c }>`,
+  in index order. It is **empty for a single-tool printer**, whose one
+  nozzle is `nozzle_temp_c`/`nozzle_target_c`. On a multi-tool printer
+  `nozzle_*` repeats tool 0. The bed is `bed_temp_c`/`bed_target_c`.
 
-**TLS.** `tokio-tungstenite` is built without a TLS feature, so a
-`useTls: true` Connection cannot connect today. P6 must not claim TLS
-support for staging until the same TLS policy covers WebSocket and HTTP.
-The user decided that staging over TLS stays unsupported until a TLS host
-is tested (answer 6).
+**Persistence and guards:**
 
-**Persistence and guards.**
+- The highest migration is `0006_p5_slicing.sql`, and
+  `CURRENT_SCHEMA_VERSION = 6` is in `persistence/migrations.rs`.
+- Printer lifecycle blockers: `printers::lifecycle::blocker_sources()`.
+- Slice Revision deletion blockers:
+  `slicing::blockers::slice_revision_blocker_sources()` (empty).
+- The operations ledger is `spools::operations` (`OperationKind`, `claim`).
+- `PrinterRepository::set_connection` and `replace_all` (import) have no
+  operation guard.
+- Credential cleanup: `retry_pending_credential_cleanup_locked` skips any
+  reference a Printer row still holds.
 
-- Printer lifecycle eligibility runs through
-  `printers::lifecycle::blocker_sources()` inside the gating transaction.
-  P2 and P3 registered sources there, and the doc comment reserves the
-  slot for later phases.
-- Archive keeps the Connection but stops supervision. An archived Printer
-  no longer holds its host identity (the partial unique index
-  `printers_active_host_identity`), so another Printer may take the same
-  host.
-- `PrinterRepository::delete` enqueues the credential for cleanup.
-  `replace_all` (Printer import) deletes **every** Printer and enqueues
-  orphaned credentials. That is a destructive path the issue does not
-  name, but it can orphan an operation just as delete can.
-- `set_connection` has no blocker hook. Credential cleanup
-  (`retry_pending_credential_cleanup_locked`) deletes any queued reference
-  that no Printer row still points at.
-- The operations ledger (`spools::operations`, `OperationKind`, `claim`)
-  gives idempotent command replay by `operationId`. Adding kinds means
-  rebuilding the table's CHECK, as `0006_p5_slicing.sql` did.
-- The highest migration is `0006_p5_slicing.sql`.
+**Content:** a Slice Revision has an `slr-*` id, `gcode_sha256`, and
+`gcode_size`, and its bytes come from `ContentStore::open_verified`.
 
-**Frontend.** `PrinterDetailDock` has only **Status** and **Setup** tabs.
-The umbrella UI spec calls for **Job** and **Camera** tabs too.
-`SliceRevisionReview` shows a disabled **Add to Queue…** with the reason
-"The Queue arrives in a later version." The P5 slicing store uses the
-sequenced stream (`src/ipc/sequenced-stream.ts`), which listens before it
-backfills.
+**Commands:** `lib.rs` `COMMAND_NAMES` has 79 entries today.
 
-**Moonraker surface to verify in Task 1** (from Moonraker's documentation,
-not observed):
+**Simulator harness (#28, ADR-0012, `sim/README.md`):**
 
-- **Upload:** `POST /server/files/upload`, multipart, with fields `file`,
-  `root` (`gcodes`), `path`, an optional `checksum` (SHA-256, checked by the
-  server), and `print`. farm3d must **never** send `print=true`.
-- **Identity:** `server.files.metadata` or `GET /server/files/metadata`
-  (size, modified time), `server.files.list`, and a download at
-  `GET /server/files/gcodes/<path>`.
-- **Control:** `printer.print.start` (with a filename),
-  `printer.print.pause`, `printer.print.resume`, and `printer.print.cancel`.
-- **Host state:** `print_stats` (`state`, `filename`),
-  `virtual_sdcard`, and `server.history.list` (per-job `filename`,
-  `start_time`, `status`).
-- **Camera:** `server.webcams.list`.
-
-## Proposed decisions
-
-The Task 2 spec makes these final. **(Decided)** marks a point the user
-settled on 2026-09-25 (§Status). Moonraker-specific details in D3–D5 may
-change with the spike. A change in product behavior needs the user.
-
-### D1. Adapter seam: composable capability interfaces (the issue's decision gate)
-
-The approach doc forbids adding methods before comparing three seams.
-
-| Option | What it is | For | Against |
+| Simulator | Adapter target (through Toxiproxy) | Control path | Env vars (`sim/simctl env`) |
 |---|---|---|---|
-| **A. Extend `PrinterConnection`** | Add `upload`, `start`, `pause`, … with default "unsupported" bodies | Smallest diff; one object per Printer | A default body makes "not implemented" look the same as "the protocol can't". Every fake must grow. Observation and writes share one boxed object whose `subscribe` owns a long-lived socket. The trait keeps widening with every adapter. |
-| **B. One separate `PrinterCommands` trait** | Read and write are separate; all eight commands in one trait | Clean read/write split | Still all-or-nothing per adapter: OctoPrint may upload but lack camera, and the gaps become `Unsupported` returns again. Camera and host-state queries are not commands. |
-| **C. Composable capability traits plus a registry** (recommended) | Small traits, each built only when the adapter provides it | A capability is *present* when a builder exists, so unsupported is structural and cannot be confused with failure. Each trait has its own small fake. Adapters land one row at a time. | More types; a registry to keep honest. |
+| `moonraker`: one extruder, heated bed, `virtual_sdcard`, `pause_resume` | `127.0.0.1:27125` | `127.0.0.1:27126` | `FARM3D_SIM_MOONRAKER`, `FARM3D_SIM_MOONRAKER_CONTROL` |
+| `moonraker-multi`: four tools, `extruder` to `extruder3` | `127.0.0.1:27135` | `127.0.0.1:27136` | `FARM3D_SIM_MOONRAKER_MULTI`, `FARM3D_SIM_MOONRAKER_MULTI_CONTROL` |
+| `octoprint`: 1.11.8 with Virtual Printer | `127.0.0.1:25000` | `127.0.0.1:25001` | `FARM3D_SIM_OCTOPRINT`, `FARM3D_SIM_OCTOPRINT_CONTROL`, `FARM3D_SIM_OCTOPRINT_API_KEY` |
+| `toxiproxy` | — | `127.0.0.1:28474` | `FARM3D_SIM_TOXIPROXY` |
 
-**Recommendation: C, kept small.** No plugin framework and no dynamic
-discovery beyond the host checks in D6.
+- **Recipes:** `just sim-up`, `just sim-down`, `just sim-status`,
+  `just sim <args>`, and `just test-sim`. `just test-sim` runs `--test
+  sim_moonraker --test sim_octoprint --test sim_elegoolink` with
+  `--include-ignored --test-threads=1`, and writes `manifest.json` and
+  `test.log` to `src-tauri/target/sim-runs/<UTC>/`.
+  `FARM3D_SIM_REQUIRED=1` turns a skip into a failure.
+- **Rust harness:** `src-tauri/tests/sim/`.
+  - `require_sim!`, `sim::exclusive()`, and a loopback-only guard.
+  - `MoonrakerSim::discover_variant(Variant::{Single, MultiTool})`,
+    `.reset()`, `.gcode()`, `.query()`, `.heaters()`, and
+    `.restart_klipper()`.
+  - `Toxiproxy::{set_enabled, slow, cut_after, hang}`. Toxics are
+    **downstream** (responses) only.
+- **Sim gaps P6 needs filled:**
+  - The sim Moonraker trusts loopback, so API keys are not covered.
+  - `moonraker.conf` has no `[history]` section.
+  - There is no no-bed variant.
+  - There is no upstream (request-side) cut.
+- **Retiring:** `scripts/moonraker-sim/` and the `just moonraker-sim`
+  recipe predate `sim/`. They offer `apikey` mode, a `no-bed` variant, a
+  `multi-tool` variant, and `netfault.py`.
+- **Pending test:** `src-tauri/tests/sim_octoprint.rs` still has
+  `octoprint_adapter_against_the_simulator_is_pending_10`, a placeholder
+  test.
 
-```rust
-// connections/capabilities.rs (sketch; Task 2 fixes the exact signatures)
-#[async_trait]
-pub trait ArtifactStaging: Send + Sync {
-    /// Uploads without starting. Must never ask the host to print.
-    async fn upload(&self, artifact: &StagedArtifact, body: ArtifactBody) -> Result<UploadReceipt, CommandFailure>;
-    /// Finds a staged artifact by its farm3d identity (D4).
-    async fn locate(&self, artifact: &StagedArtifact) -> Result<ArtifactPresence, CommandFailure>;
-}
-#[async_trait]
-pub trait PrintControl: Send + Sync {
-    async fn start(&self, artifact: &StagedArtifact) -> Result<(), CommandFailure>;
-    async fn pause(&self) -> Result<(), CommandFailure>;
-    async fn resume(&self) -> Result<(), CommandFailure>;
-    async fn cancel(&self) -> Result<(), CommandFailure>;
-}
-#[async_trait]
-pub trait HostStateQuery: Send + Sync {
-    async fn host_job_state(&self) -> Result<HostJobState, CommandFailure>;
-    /// Host-recorded job starts for `artifact` at or after `since`.
-    async fn job_history(&self, artifact: &StagedArtifact, since: DateTime<Utc>) -> Result<Vec<HostJobRecord>, CommandFailure>;
-}
-#[async_trait]
-pub trait CameraDiscovery: Send + Sync {
-    async fn cameras(&self) -> Result<Vec<CameraEndpoint>, CommandFailure>;
-}
+**Real-hardware read-only tier (#29):**
 
-// connections/adapters.rs
-pub struct AdapterDescriptor {
-    pub kind: &'static str,
-    pub observe: fn(&ConnectionConfig, Option<Zeroizing<String>>) -> Box<dyn PrinterConnection>,
-    pub staging: Option<fn(&ConnectionConfig, Option<Zeroizing<String>>) -> Box<dyn ArtifactStaging>>,
-    pub control: Option<fn(...) -> Box<dyn PrintControl>>,
-    pub host_state: Option<fn(...) -> Box<dyn HostStateQuery>>,
-    pub camera: Option<fn(...) -> Box<dyn CameraDiscovery>>,
-    pub evidence: CapabilityEvidence, // the recorded row (D6)
-}
-pub fn registry() -> &'static [AdapterDescriptor];
-pub fn descriptor(kind: &str) -> Option<&'static AdapterDescriptor>;
-```
+- `src-tauri/tests/a0_moonraker_live.rs` runs through `just moonraker-live
+  probe|watch|drive`. It reads `FARM3D_MOONRAKER_HOST` (required),
+  `FARM3D_MOONRAKER_PORT` (default 7125), `FARM3D_MOONRAKER_API_KEY`, and
+  `FARM3D_MOONRAKER_API_KEY_FILE`.
+- `drive` writes and is guarded to loopback.
+- `scripts/check-private-hosts.sh` (`just check-hosts`) fails on owner
+  hosts listed in `FARM3D_PRIVATE_HOSTS` or an untracked `.private-hosts`.
 
-- **Wire code stays adapter-local and pure.** Multipart construction,
-  RPC framing, and response parsing go in `moonraker/protocol.rs` (or a
-  sibling `moonraker/files.rs`) with no I/O. The I/O layer stays thin, as
-  today.
-- **The supervisor keeps observing.** Command traits are built per
-  operation, not held by the supervisor task. A command never shares the
-  subscription's socket.
-- **The registry grows out of PR #27's `SUPPORTED_KINDS`** (answer 11).
-  - PR #27 already made the five call sites share one list and one public
-    `supervisor::build_connection`.
-  - P6 turns that list into `registry()`. `is_supported_kind` becomes
-    `descriptor(kind).is_some()`, and `build_connection` becomes the
-    descriptor's `observe` builder.
-  - PR #27's "list and factory stay in step" test becomes the
-    descriptor-consistency test below.
-  - `ConnectionManager::with_clock_and_factory` keeps its test-injection
-    seam by taking a registry instead of one factory function.
-- A test asserts that each descriptor's `evidence` row agrees with which
-  builders are present. A capability marked supported with no builder, or
-  a builder with no evidence, fails the build.
-- **ADR-0011** records this choice. ADR-0002 (pluggable connectivity)
-  stays binding.
+**CI** (`.github/workflows/pr-validation.yml`) runs:
 
-### D2. Durable Host Operation identity
+- `npm run build`, `npm test`;
+- `just gen-contracts` with a diff check;
+- `cargo test --locked --features test-support`.
 
-A new STRICT table in `0007_p6_host_operations.sql`:
+No simulator runs there.
+
+## Design reference
+
+Tasks restate what they need from here. This section is the single place
+the design is argued.
+
+### D1. Composable capability interfaces (the issue's decision gate)
+
+| Option | For | Against |
+|---|---|---|
+| A. Add methods to `PrinterConnection` with default "unsupported" bodies | Smallest diff | "Not implemented" looks the same as "the protocol can't". Every fake grows. Observation and writes share the subscription's object. |
+| B. One `PrinterCommands` trait | Read/write split | All-or-nothing per adapter; host-state and camera are not commands |
+| **C. Small capability traits + a registry (chosen)** | Present when built, so unsupported is structural. Small fakes. Adapters land one capability at a time. | More types; a registry to keep honest |
+
+The four traits are `ArtifactStaging` (`upload`, `locate`),
+`PrintControl` (`start`, `pause`, `resume`, `cancel`), `HostStateQuery`
+(`host_job_state`, `job_history`), and `CameraDiscovery` (`cameras`). An
+`AdapterDescriptor { kind, observe, staging?, control?, host_state?,
+camera?, evidence }` lives in `connections/adapters.rs`. The descriptor
+row grows out of `SUPPORTED_KINDS`.
+
+Commands build their capability objects per operation and never share the
+supervisor's socket. Wire code stays pure and adapter-local. ADR-0011
+records the choice. ADR-0012 is taken by the simulator harness.
+
+### D2. Host Operation record
+
+The `host_operations` table (migration `0007_p6_host_operations.sql`):
 
 | Column | Meaning |
 |---|---|
-| `id` | `hop-<uuid>`; the durable identity P7 Jobs will reference |
-| `printer_id` | FK → `printers(id)` `ON DELETE RESTRICT` |
+| `id` | `hop-<uuid>` |
+| `printer_id` | FK `ON DELETE RESTRICT` |
 | `kind` | `upload`, `start`, `pause`, `resume`, `cancel` |
-| `slice_revision_id` | For `upload` and `start`; FK → `slice_revisions(id)` `ON DELETE SET NULL` |
-| `gcode_sha256`, `gcode_size` | Copied from the revision so identity survives revision deletion |
-| `host_path` | The deterministic staged path (D4) |
-| `endpoint_json` | Snapshot of `kind`, `host`, `port`, `useTls` at dispatch. **Never** the credential value, and not the `credentialRef` either (see D7). |
+| `slice_revision_id` | FK `ON DELETE SET NULL` |
+| `gcode_sha256`, `gcode_size` | Copied from the revision |
+| `host_path` | `farm3d/<slr-id>.gcode` |
+| `endpoint_json` | `kind`, `host`, `port`, never a credential or `credentialRef` |
 | `state` | See D3 |
-| `failure_json`, `resolution_json` | Structured, credential-free evidence |
+| `failure_json`, `resolution_json` | Credential-free evidence |
 | `attempts`, `last_attempt_at`, `last_attempt_error` | Reconciliation bookkeeping |
 | `abandoned_at`, `abandon_note` | D8 |
 | `created_at`, `dispatched_at`, `resolved_at` | Timestamps |
 
-Rules:
+- **Write-ahead:** the row is committed as `dispatching` before any byte
+  goes to the host.
+- At most one unresolved row per Printer, enforced by a partial unique
+  index `WHERE state IN ('dispatching','uncertain','reconciling')`.
+- Terminal rows are immutable (trigger).
+- Commands are idempotent by client `operationId`, through the operations
+  ledger.
 
-- **Write-ahead.** The row is committed in state `dispatching` **before**
-  any byte goes to the host. A crash after that commit can only produce
-  `uncertain` on restart, never "not sent".
-- **One unresolved write per Printer.** A partial unique index on
-  `printer_id WHERE state IN ('dispatching','uncertain','reconciling')`.
-  This keeps reconciliation unambiguous and makes a second upload while
-  one is uncertain structurally impossible. Pause, resume, and cancel for
-  an active print are still possible after the upload has resolved.
-  **(Decided)**: one per Printer, not one per kind.
-- **Idempotent commands.** Every write command takes a client
-  `operationId` and claims it in the existing operations ledger (new
-  `OperationKind`s, CHECK rebuild as in 0006). A replay returns the
-  existing Host Operation.
-- Rows are never updated after they reach a terminal state, and nothing
-  deletes them except permanent Printer deletion (D7, decided). They are
-  history for P7–P9.
-
-### D3. Operation state machine
+### D3. State machine
 
 ```text
-dispatching ──(host confirms)──────────────> succeeded
-     │  └────(host definitively rejects, no side effect)──> failed
-     └──(timeout / lost response / crash / restart)──> uncertain
-uncertain ──(reconcile begins)──> reconciling
-reconciling ──(proved applied)───────> succeeded
-            ──(proved not applied)───> failed { notApplied }
-            ──(host unreachable, auth, inconclusive)──> uncertain
-uncertain ──(operator, risk-confirmed)──> abandoned
+dispatching ─ host confirms ─────────────> succeeded
+dispatching ─ definitive rejection ──────> failed
+dispatching ─ timeout / lost / restart ──> uncertain
+uncertain ─ reconcile begins ────────────> reconciling
+reconciling ─ proved applied ────────────> succeeded
+reconciling ─ proved not applied ────────> failed{notApplied}
+reconciling ─ unreachable / inconclusive ─> uncertain
+uncertain ─ operator, risk-confirmed ────> abandoned
 ```
 
-- `succeeded`, `failed`, and `abandoned` are terminal and immutable
-  (trigger, as for Slice Revisions).
-- "Definitively rejects" means the protocol says the command had no effect,
-  for example an HTTP 4xx before the body is accepted, or a JSON-RPC error
-  for `printer.print.start` when Klipper is not ready. Task 1 records
-  which responses qualify. Anything else is `uncertain`.
-- The state machine is a pure module with an exhaustive transition-table
-  test. Illegal transitions are unrepresentable in the repository API.
-- **Unsupported is not a state.** A command for a capability the adapter
-  lacks never creates a row. It fails before the write-ahead commit with
-  `CAPABILITY_UNSUPPORTED` (D6).
+An unsupported capability never creates a row
+(`CAPABILITY_UNSUPPORTED`).
 
-### D4. Artifact identity and upload without start
+### D4. Staging
 
-- **Staged path:** `farm3d/<slice-revision-id>.gcode` under the host's
-  `gcodes` root. It is deterministic, so a retry targets the same path
-  and cannot create a second copy. The id is a UUID, so collisions with
-  user files are not a practical concern. The spike confirms Moonraker
-  accepts a subdirectory in `path`.
-- **Bytes** come from `ContentStore::open_verified(gcode_sha256)` and are
-  streamed. farm3d never uploads bytes that fail verification.
-- **Integrity at upload:** send `checksum=<sha256>` when the host supports
-  it (spike Gate B), so the host rejects a corrupted body.
-- **Never start.** The pure request builder has no way to set `print`. A
-  unit test asserts the multipart body never contains a `print` field,
-  and the fake Moonraker fails any test that sends one.
-- **Presence check** (`locate`): metadata at `host_path`. It matches when
-  the size equals `gcode_size` and, if the host offers no checksum, a
-  download-and-hash equals `gcode_sha256`. Size alone is not proof. Whether
-  the hash download is needed depends on spike Gate C.
-- **Re-upload after `failed { notApplied }`** is allowed, but only as an
-  explicit operator action that creates a new Host Operation. P6 never
-  retries a write automatically.
+- The host path is `farm3d/<slr-id>.gcode` in the `gcodes` root.
+- Bytes are streamed from `open_verified(gcode_sha256)`.
+- The upload sends `checksum=<sha256>` if the host accepts it (spike Gate
+  B).
+- The request builder has **no way** to set Moonraker's `print` field.
+- `locate`: present at `host_path` with size == `gcode_size`. If the host
+  gives no hash, a download-and-hash must equal `gcode_sha256`. Size alone
+  is never proof.
+- A re-upload happens only as a new operator-initiated operation.
 
-### D5. Reconciliation (per kind, Moonraker)
+### D5. Reconciliation
 
-The reconciler runs:
+It runs at startup (after `restore_persisted_connections`), when the
+supervisor reports Online, and on **Check again**.
 
-- at startup, after `restore_persisted_connections`, for every
-  unresolved row (a `dispatching` row becomes `uncertain` first);
-- when the supervisor reports the Printer `Online` again (a hook on the
-  existing health observation);
-- when the operator presses **Check again**.
+| Kind | Proved applied | Proved not applied |
+|---|---|---|
+| upload | `locate` matches | absent at `host_path` |
+| start | `print_stats.filename == host_path` and the state is printing, paused, or complete, **or** a history job for `host_path` started after `dispatched_at` (the spike sets the skew tolerance) | host standby with no such history job |
+| pause/resume/cancel | observed state matches | observed state proves no effect |
 
-It serializes per Printer and backs off (reusing
-`supervisor::backoff_delay`).
+Anything else stays `uncertain`. A host printing a *different* file stays
+`uncertain`. A start is never retried automatically. The raw
+`print_stats` `complete` is evidence that a start ran; it does not make
+the Printer Ready (answer 12).
 
-| Kind | Proved applied | Proved not applied | Otherwise |
-|---|---|---|---|
-| `upload` | `locate` = present and matching (D4) | Absent at `host_path` | `uncertain` |
-| `start` | `print_stats.filename` = `host_path` and state is printing, paused, or complete, **or** a history record for `host_path` starting after `dispatched_at` | Host standby with no such history record | `uncertain`; if the host is running a *different* file, stays uncertain with a "host is busy with another print" note |
-| `pause` / `resume` / `cancel` | Observed state matches the request | Observed state proves the request did not take effect | `uncertain` |
-
-- The `start` row reads the host's raw `print_stats.state` as *evidence*
-  that a start took effect. That is separate from farm3d's readiness
-  vocabulary. There, `complete`, `cancelled`, and `error` are explicit
-  non-ready states and never Ready (answer 12). A `complete` host state
-  after `dispatched_at` proves our start applied. It does not make the
-  Printer Ready.
-- **A start is never retried automatically** (umbrella UI spec: "never
-  automatically starts when it cannot prove the prior command did not take
-  effect"). The operator may start again only after `failed { notApplied }`.
-- Clock skew between farm3d and the host matters for the history rule. The
-  spike measures it, and the spec picks a tolerance.
-- A partially written upload: Gate D records whether an interrupted upload
-  can leave a file at `host_path`. If it can, a size mismatch counts as
-  "not applied" only after farm3d deletes the partial file, and that
-  deletion is itself recorded on the operation.
-
-### D6. Capability matrix contract (SolidJS and Jobs)
+### D6. Capability matrix
 
 ```ts
 type CapabilityKey = "upload" | "start" | "pause" | "resume" | "cancel"
@@ -454,967 +292,1186 @@ type CapabilityState =
 type PrinterCapabilities = {
   printerId: string;
   adapterKind: string | null;
-  evidence: {
-    source: string;
-    tier: "sim" | "fakeFromCaptures" | "readOnlyHardware";
-    verifiedHostVersions: string[];
-  } | null;
+  evidence: { source: string; tier: "sim" | "readOnlyHardware"; verifiedHostVersions: string[] } | null;
   capabilities: Record<CapabilityKey, CapabilityState>;
   observedAt: string | null;
 };
 ```
 
-- `adapter`: the protocol cannot do it (recorded with evidence).
-- `notVerified`: nobody has produced live evidence yet. OctoPrint and
-  ElegooLink rows start here. The UI reads it as unsupported, never as
-  "try it".
-- `host`: the adapter can, but this host lacks it. Examples: no
-  `virtual_sdcard`, `pause_resume` not configured, no webcam configured.
-  Derived from the probe and cached with `observedAt`.
-- **Failure is not a capability state.** A failed command is a
-  `CommandError`, or a Host Operation in `failed` or `uncertain`. The UI
-  shows the two in different places with different copy.
-- Rust exposes `capabilities_for(printer, host_facts) -> PrinterCapabilities`
-  for P7's eligibility check, so Jobs do not go through the IPC type.
-- Commands: `printer_capabilities(printerId)` and
-  `adapter_capability_matrix()` (the static rows, for Setup and docs).
-- Moonraker's row starts at `notVerified` everywhere. Task 11 flips each
-  entry to `supported` or `adapter` only with live evidence from Task 1 or
-  Task 11. Simulator evidence counts (answer 7). `evidence.verifiedHostVersions`
-  names each source, for example "Moonraker vX / Klipper vY (sim)" and
-  "Snapmaker U1 (Moonraker vZ)", so the row shows which tier proved it.
-- **Evidence tier.** Each write capability records its tier:
-  - `sim`: Moonraker, the container simulator.
-  - `fakeFromCaptures`: ElegooLink after #8's go (answer 10). The in-repo
-    fake SDCP server, modeled on passive captures of other clients'
-    commands. farm3d never sends a command to a real Carbon.
-  - `readOnlyHardware`: may corroborate `hostState`, `artifactIdentity`,
-    and `camera` only. It never supports a write capability.
+- `readOnlyHardware` evidence can never make a write capability
+  `supported`.
+- OctoPrint's row is `notVerified` for every write capability (see §Out of
+  scope).
+- A `useTls` Connection (possible only from old data or import) reports
+  every write capability as `notVerified`.
+- Host facts list every tool, and are never collapsed into one nozzle.
+- Rust exposes `capabilities_for(printer, host_facts)` for P7.
 
-  The Setup Capabilities list shows the tier in its detail text, so an
-  operator can see when a capability was proven only against a model of
-  the protocol.
-- **Multiple toolheads (answer 9).** `HostJobState` and the host facts
-  carry a list of tools: each `extruder*` object's name, temperature, and
-  target, plus the bed. They are never collapsed into one nozzle value.
-  - Capability detection enumerates every `extruder*` object from
-    `printer.objects.list`.
-  - No capability assumes a single tool or a preheat of "the" nozzle. P6
-    issues no preheat commands at all.
-- **TLS (decided).** For a Connection with `useTls: true`, `upload`,
-  `start`, `pause`, `resume`, and `cancel` report
-  `unsupported { reason: "notVerified", detail: "TLS connections are not verified for staging yet" }`
-  until a TLS host passes the spike's TLS gate. No TLS feature is added to
-  `reqwest` or `tokio-tungstenite` in P6.
-  - #9 hides "Use TLS" from the Connection fields while no adapter
-    supports TLS (answer 12). A `useTls` Connection can therefore reach
-    P6 only from existing data or an import.
-  - The rule above covers that case. P6 adds no TLS control to the UI.
+### D7. Guards (run inside the gated transaction)
 
-### D7. Guards: archive/delete, import, Connection, credential, revision
+| Mutation while unresolved | Result |
+|---|---|
+| Archive, delete | `LIFECYCLE_BLOCKED` with `HOST_OPERATION_UNRESOLVED` |
+| Printer import | Rejected as a whole |
+| Endpoint change, Connection clear, credential clear | `CONNECTION_IN_USE` |
+| Credential replace, same endpoint | Allowed (probed) |
+| Delete a referenced Slice Revision | `LIFECYCLE_BLOCKED` with `HOST_OPERATION_UNRESOLVED` |
 
-All guards run inside the transaction of the write they gate. "Unresolved"
-means `dispatching`, `uncertain`, or `reconciling`.
-
-| Mutation | While unresolved | New code |
-|---|---|---|
-| Archive Printer | **Blocked (decided).** Archive stops supervision and releases the host identity, so reconciliation could end up talking to a host another Printer now owns. | `HOST_OPERATION_UNRESOLVED` (a `LifecycleBlockerCode`) |
-| Delete Printer | Blocked | same |
-| Import Printers (`replace_all`) | Rejected | same, as a whole-document error |
-| Change endpoint (kind, host, port, TLS) or clear the Connection | Blocked | `CONNECTION_IN_USE` |
-| Clear the credential | Blocked | `CONNECTION_IN_USE` |
-| Replace the credential on the same endpoint | **Allowed (decided)**, still probed, so an operator can recover from a key rotated on the host. Reconciliation uses the Printer's *current* credential, so it needs no snapshot of the old one. | — |
-| Delete a Slice Revision referenced by an unresolved upload or start | Blocked (register a `SliceRevisionDeletionBlocker`) | `HOST_OPERATION_UNRESOLVED` |
-
-- Terminal rows never block anything. `ON DELETE RESTRICT` would still
-  block deleting a Printer that has only terminal rows, so **(decided)**
-  permanent delete also deletes that Printer's terminal Host Operations in
-  the same transaction. P6 owns no history view. P7 and P9 revisit this
-  when Jobs and history exist.
-- Credential cleanup needs no new rule: the endpoint guard keeps the
-  Printer's current `credentialRef` referenced, and cleanup already skips
-  referenced credentials. A test proves that a queued cleanup never
-  deletes a credential that an unresolved operation's Printer uses.
-- The existing eligibility UI (Archive/Delete buttons and their blocker
-  messages) shows the new blocker with no new component.
+Permanent delete removes the Printer's terminal rows in the same
+transaction.
 
 ### D8. Abandon reconciliation
 
-For a host that is gone for good.
+`abandon_host_operation(operationId, hostOperationId, acknowledgement:
+"hostStateUnknown", note?)`:
 
-- **Command:** `abandon_host_operation(operationId, hostOperationId,
-  acknowledgement: "hostStateUnknown", note?: string)`.
-- **Allowed** only from `uncertain`, and only after at least one
-  reconciliation attempt has failed. The operator can see what farm3d
-  tried.
-- **Confirmation:** a Kobalte `AlertDialog`. The operator must tick
-  "I understand the printer may still have this file or be printing it."
-  Copy draft: "farm3d can't reach *Voron 1* to find out whether
-  *cube.gcode* was uploaded. If you abandon this check, farm3d stops
-  checking and treats the result as unknown. The printer may still be
-  printing."
-- **Durable result:** state `abandoned`, `abandoned_at`, the optional
-  note, and the last reconciliation evidence. The row is kept. Guards
-  treat it as resolved, so Connection changes, archive, and delete become
-  available.
-- Abandoned is **not** success. P7 must treat any Job whose operation was
-  abandoned as reconciliation-required, and P8 projects it into an
-  Attention Event. P6 records the state only.
+- It is allowed only from `uncertain`, after at least one failed
+  reconciliation attempt.
+- It needs a Kobalte `AlertDialog` with a required acknowledgement
+  checkbox.
+- The result is the terminal `abandoned` state, and the row is kept.
+  Guards treat it as resolved.
+- Abandoned is not success: P7 treats it as reconciliation-required.
 
-### D9. Frontend
+### D9. Start rule (answers 1, 12, 13)
 
-- **Printer detail → new Job tab** (the umbrella spec's tab; P7 fills in
-  Jobs later):
-  - the host's current print from telemetry (file, state, progress), with
-    **Pause**, **Resume**, and **Cancel print…** when the capability is
-    supported. Cancel asks for confirmation;
-  - **Staged on this Printer:** the Host Operations list with the states
-    Uploading, Staged, Uncertain, Checking, Failed, and Abandoned;
-  - per-row actions: **Check again**, **Abandon check…**, and
-    **Start…** for a staged artifact.
-- **Start… ships in P6 (decided)** and always asks the operator to
-  confirm the bed is clear, whatever the Printer's start-safety rule says.
-  The confirm button stays disabled until the operator ticks "The bed is
-  clear". P6 never starts unattended; the `Unattended` rule stays for P7.
-- **When Start is offered (decided, answer 13).** Readiness keeps #9's
-  meaning: `complete`, `cancelled`, and `error` are explicit non-ready
-  states, never Ready (answer 12). Start's rule is separate:
+| `OperationalState` (readiness reason) | Start | Required checkbox |
+|---|---|---|
+| `Ready` | Offered | "The bed is clear." |
+| `Finished` (`BedNeedsClearing`) | Offered | "The previous print finished. The bed is clear." |
+| `Cancelled` (`BedNeedsClearing`) | Offered | "The previous print was cancelled. The bed is clear." |
+| `Failed` (`PrintFailed`) | Disabled: "Clear the error on the printer first." | — |
+| Printing, Paused, Busy, Offline, Connecting, Unknown, Error, SetupIncomplete, or stale telemetry | Disabled, with the state as the reason | — |
 
-  | Host / readiness | Start | Confirmation |
-  |---|---|---|
-  | Ready (standby) | Offered | "The bed is clear." |
-  | `complete` | Offered | Mandatory, and names the prior state: "The previous print finished. The bed is clear." |
-  | `cancelled` | Offered | Mandatory, and names the prior state: "The previous print was cancelled. The bed is clear." |
-  | `error` | **Disabled.** The reason tells the operator to clear the error on the printer. It becomes available only once the host no longer reports `error`. | — |
-  | Printing, paused, busy, offline, unknown, or stale telemetry | Disabled, with that state as the reason | — |
+- This applies whatever the Printer's `StartSafety` rule is. P6 never
+  starts unattended.
+- `start_staged_artifact` takes `priorState: "ready" | "finished" |
+  "cancelled"`.
+- Before the write-ahead commit, it re-reads the Printer's current status
+  and rejects with no row written:
+  - `START_NOT_ALLOWED`, carrying the observed state, when the state is
+    not in the offered set;
+  - `START_PRECONDITION_CHANGED` when `priorState` no longer matches.
+- P6 sends no reset command (no `SDCARD_RESET_FILE`).
 
-  - The confirmation *is* the acknowledgement of the finished or cancelled
-    print. P6 adds no separate "clear" action, and it never sends a host
-    command (such as `SDCARD_RESET_FILE`) to reset the state.
-  - Klipper stays `complete` until the next print, so this rule is what
-    lets a second print start at all.
-- **The backend enforces the same rule.** `start_staged_artifact` takes
-  `bedClearAcknowledgement: { priorState: "ready" | "complete" | "cancelled" }`.
-  Inside the command, before the write-ahead commit, it re-reads fresh host
-  state and rejects the start (with no Host Operation row) when either:
-  - the host is in `error`, printing, paused, busy, or its telemetry is
-    stale → `START_NOT_ALLOWED`, carrying the observed state;
-  - the acknowledged `priorState` no longer matches the observed state →
-    `START_PRECONDITION_CHANGED`. Example: the operator confirmed "finished"
-    but the host now reports `error`, or another client started a print.
+## Global Constraints
 
-  The UI then re-renders the dialog for the new state. A stale
-  confirmation is never reused.
-- **Multi-tool display.** The Job tab lists each tool's temperature and
-  target from the host facts. It never shows a single "nozzle" value for a
-  multi-extruder Printer (answer 9).
-- **Slice Revision review:** a **Stage on Printer…** dialog (Kobalte
-  Dialog and Select). Printers whose `upload` is unsupported are listed
-  but disabled, with the reason. Offline Printers are disabled with
-  "Offline", which is a different message. **Add to Queue…** stays
-  disabled.
-- **Setup tab:** a read-only **Capabilities** list (Supported / Not
-  supported by *Moonraker* / Not verified yet / Not available on this
-  printer). Connection edit and clear show `CONNECTION_IN_USE` with a
-  link to the Job tab.
-- **Unsupported vs failed.** An unsupported control is not rendered as an
-  enabled button. It is either absent with a text explanation or disabled
-  with `aria-describedby` giving the reason. A failure is an inline
-  `role="alert"` with a recovery action. Tests assert the two never share
-  copy or styling tokens.
-- The Camera tab is P8. P6 shows camera only as a capability row.
-- `just web` uses deterministic mock fixtures:
-  - one supported Moonraker Printer;
-  - one two-extruder Moonraker Printer;
-  - one `notVerified` OctoPrint Printer;
-  - one Printer in the `complete` non-ready state with a staged artifact
-    (Start is offered with the "previous print finished" confirmation);
-  - one Printer in `error` (Start disabled);
-  - one Printer with an uncertain upload.
-- Tokens only, CSS Modules, Kobalte primitives, and the editor aesthetic
-  (AGENTS.md).
+These rules bind every task. The controller gives this section to every
+implementer.
 
-### D10. What P6 leaves to P7
+1. **No writes to real printers.** Every write test (upload, control,
+   G-code, faults) runs against the in-process fakes or the loopback
+   simulators. The real-hardware tier (`FARM3D_MOONRAKER_HOST`) may only
+   probe, subscribe, and query, through a read-only client. No variable
+   enables writes to a non-loopback host.
+2. **No owner network details in the repository.** Never commit an owner
+   IP address, hostname, serial, MAC address, token, or local filesystem
+   path. Use environment variables, placeholders like `<U1 host>`, or RFC
+   5737 addresses (`192.0.2.x`). Scrub captured responses before they
+   become fixtures. Run `just check-hosts` before committing.
+3. **Credentials** never enter frontend state, events, errors, logs,
+   `host_operations`, fixtures, or snapshots. Every new path gets a
+   seeded-secret test.
+4. **Frontend conventions** (AGENTS.md, DESIGN.md):
+   - `--f3d-*` tokens only, with no hard-coded colors, font sizes, or
+     radii.
+   - CSS Modules next to components.
+   - Kobalte primitives for anything interactive. Check
+     `node_modules/@kobalte/core/src/<name>/` for props; don't guess.
+   - The dense editor aesthetic.
+   - Kobalte Select and Menu tests use `fireEvent.pointerDown` and
+     `fireEvent.pointerUp`.
+   - New design-system components go in `components/index.ts` and
+     `Showcase.tsx`.
+5. **Test-first.** Write the failing test, make it pass, then refactor.
+   Commit per task with a conventional message.
+6. **Gates** before a task is done. Run the ones the task touches; the
+   controller runs all of them at review.
 
-No Queue Entry, Job, reservation, start-safety automation, retry policy,
-material accounting, or product-level Job transition. `host_operations` has
-no `job_id` column; P7 adds one. P6's operator-invoked Stage and Start are
-explicit manual host actions, not Jobs.
+   ```sh
+   export PATH="$HOME/.cargo/bin:$PATH"   # cargo is not on PATH in non-interactive shells
+   just build
+   just test
+   just test-rust
+   just check-hosts
+   ```
 
-## Global constraints
+   If a Rust type exported to TypeScript changed, also run
+   `just gen-contracts && git diff --exit-code src/generated`. Never
+   hand-edit `src/generated/**`.
+7. **Contract registration.** A new Tauri command goes in:
+   - `lib.rs` `COMMAND_NAMES` and `generate_handler!`;
+   - `contracts/inventory.rs` (`COMMAND_CONTRACTS`, its length, the
+     declaration, and the visitor);
+   - `tests/export_contracts.rs`;
+   - `src/ipc/client.ts` `CommandMap`.
 
-**Carried over from P4 and P5:**
+   Count assertions add P6's commands to whatever `main` has, never a
+   hard-coded total. Events are emitted after commit only.
+8. **Simulators never run in CI.** Container-backed tests are
+   `#[ignore]`, use `require_sim!`, and run locally through
+   `just sim-up && just test-sim`. Evidence cites the run's
+   `src-tauri/target/sim-runs/<UTC>/manifest.json`. Anything CI must
+   check needs an in-process fake.
+9. **No TLS, no P7.** Don't add TLS features. Don't add Queue, Job,
+   scheduling, or material-accounting code.
 
-- **Contract registration.** Every new command goes in:
-  - `lib.rs` `COMMAND_NAMES` and `generate_handler!`;
-  - `contracts/inventory.rs` (`COMMAND_CONTRACTS`, its array length, and
-    the `CommandContracts` declaration and visitor);
-  - `tests/export_contracts.rs`;
-  - `src/ipc/client.ts` `CommandMap`.
+## Test tiers
 
-  Count assertions are updated by adding P6's count to whatever `main`
-  has; never hard-code a total.
-- **Schema version.** `0007_p6_host_operations.sql` (if 0006 is still the
-  highest), with `CURRENT_SCHEMA_VERSION` matching it. Tests read the
-  constant.
-- **Generated contracts.** Never hand-edit `src/generated/contracts/**`.
-  Run `just gen-contracts`.
-- **Events** are emitted after commit only, on the `hostOperations` stream
-  (type prefix `hostOperations.`), with listen-before-backfill.
-- **Frontend conventions:** Kobalte primitives, CSS Modules, `--f3d-*`
-  tokens, the editor aesthetic, and `pointerDown`/`pointerUp` in Select
-  and Menu tests.
+| Tier | What | How it runs | Counts as evidence | Writes |
+|---|---|---|---|---|
+| Unit and in-process fakes | Pure protocol functions; `FakeMoonraker` (Task 8) for server-internal faults: file stored then response lost, partial file, definitive rejections, host restart with state, detecting a `print` field | `just test-rust`, and CI | No (regression) | Yes (in-process) |
+| Simulator | Real Klipper and Moonraker in `sim/`, with Toxiproxy for network faults (host down, slow, response cut, hang, request cut) | `just sim-up && just test-sim` (local only) | **Yes**, for every write gate | Yes (loopback only) |
+| Real hardware, read-only | A real Moonraker named by `FARM3D_MOONRAKER_HOST`, `_PORT`, `_API_KEY`, `_API_KEY_FILE` | `just p6-readonly` (Task 12) | Read-side corroboration only | **Never** |
 
-**P6-specific:**
+## Out of scope for P6
 
-- **Credentials** never enter `host_operations`, events, errors, logs, or
-  `resolution_json`. A seeded-secret scan test covers every new path.
-- **No automatic write retries.** Only the reconciler's *read* queries run
-  on their own.
-- **Test tiers.** The write tests run on the fake and the sim only. The U1
-  runs a separate **read-only** suite.
+- **OctoPrint command capabilities.** A future OctoPrint P6 path first
+  needs these #10 follow-ups, recorded here as its prerequisites:
+  - OctoPrint reports `Operational` after a finished print, which the
+    adapter maps to `Idle`, so the Printer shows **Ready** instead of
+    Finished (it never reaches `BedNeedsClearing`).
+  - Only `tool0` is read, so multi-tool OctoPrint printers show one tool.
 
-  | Tier | Target | How it runs | Counts as live evidence | Writes allowed |
-  |---|---|---|---|---|
-  | Fake | `tests/p6_harness/fake_moonraker.rs` | `just test-rust`, in CI | No | Yes (no hardware) |
-  | Sim | The shared container harness (`sim/compose.yaml`) | `just sim-up`, then `just test-sim` | **Yes** (answer 7), and the only tier for any write gate | Yes (simulated board) |
-  | Real (read-only) | The owner's Snapmaker U1, Moonraker at `<U1 host>:7125` | A P6 recipe (`just test-moonraker-real`, name to confirm with the harness) that runs only the read-only suite | As read-only corroboration only | **Never** (answer 8) |
+  After those, it needs its own command-research spike against the
+  OctoPrint simulator, and a short adapter plan. Its matrix row stays
+  `notVerified`.
+- **ElegooLink:** needs a future spike and a go decision (#8 closed
+  without one).
+- Camera media, snapshots, and the Camera tab (P8).
+- Everything listed under P7.
 
-- **Endpoint variables come from the shared harness.** The harness branch
-  (`feature/printer-simulation-harness`) owns the Moonraker endpoint and
-  API-key variable names and the `test-sim` recipe. It had not landed when
-  this plan was revised, so its names are not yet known. P6 does **not**
-  define its own. The live-host tests read whatever the harness exports,
-  and until then this plan calls them *the harness endpoint* and *the
-  harness key*. P6 registers its `#[ignore]` live tests with
-  `just test-sim` rather than adding a separate sim recipe. The real tier
-  reuses the same variables, pointed at the U1. Task 11 records the final
-  names here.
-- **The owner's real network details are never committed.** `<U1 host>`
-  stands for the U1's address. At run time it comes only from the harness's
-  real-tier endpoint variable. Code, fixtures, spike reports, verification
-  records, and screenshots never contain the owner's real IPs, hostnames,
-  serials, MAC addresses, or tokens. Captured U1 responses are scrubbed
-  before they become fixtures: identifiers are replaced, and any example
-  address uses the RFC 5737 documentation range (`192.0.2.x`). A test scans
-  `tests/fixtures/` and the P6 docs for private-range addresses outside an
-  allowlist of the generic fixtures already on `main`.
-- **The U1 is read-only, and the code enforces it.** The real-tier suite
-  is a separate test module whose tests may use only read APIs:
-  - probe;
-  - subscribe;
-  - `print_stats` and other status queries;
-  - `server.files.list` and `metadata`;
-  - `server.history.list`;
-  - `server.webcams.list`;
-  - capability detection.
+## File map
 
-  Two safeguards back this up:
-  - The module builds its client through a read-only wrapper that exposes
-    no `ArtifactStaging::upload`, no `PrintControl`, and no file delete.
-  - A test that sends any HTTP `POST` or `DELETE`, or any
-    `printer.print.*` RPC, through that wrapper fails.
+**Backend (new):**
 
-  There is no opt-in variable that enables writes on the real tier. Writes
-  on the sim need no safety opt-in (the board is simulated), but the sim
-  write fixture still has no heating or motion (comments and `M117`
-  only). The fixture contains no `M104`, `M109`, `M140`, `M190`, or
-  tool-change (`T<n>`) command for any tool.
-- **Sim safety precondition: every heater (answer 9).** Before any sim
-  test that starts a print, the test reads every `extruder*` object and
-  `heater_bed`. It refuses to run if **any** of them has a nonzero target,
-  if a print is printing or paused, or if the host reports `error`. A
-  `complete` or `cancelled` host is an allowed starting state (answer 13):
-  the test passes the matching `priorState`, exactly as the UI would.
-  A unit test feeds a two-extruder status where only `extruder1` has a
-  target and asserts the check refuses. The sim tier also runs the
-  executor and reconciler tests against a multi-extruder config variant,
-  if the harness offers one.
-- **The U1 is a vendor build.** Snapmaker's firmware may run a modified
-  Moonraker and Klipper. A difference between the sim and the U1 is
-  recorded as a finding for that host. It is not averaged away, and it
-  becomes a `host` reason in the capability row (D6) when it applies.
+- `connections/adapters.rs`, `connections/capabilities.rs`;
+- `connections/moonraker/files.rs` (pure) and
+  `connections/moonraker/control.rs` (I/O);
+- `host_ops/{mod,state,repository,executor,reconciler,guards,start_rule,events,commands}.rs`;
+- `migrations/0007_p6_host_operations.sql`.
 
-## File and module map
+**Backend (modified):**
 
-### Backend
+- `connections/mod.rs`, `connections/supervisor.rs`;
+- `printers/lifecycle.rs`, `printers/repository.rs`;
+- `slicing/blockers.rs`, `spools/operations.rs`;
+- `contracts/command.rs`, `contracts/inventory.rs`;
+- `lib.rs`, `Cargo.toml` (`reqwest` features `multipart` and `stream`).
 
-| File | Responsibility |
-|---|---|
-| `connections/adapters.rs` | `AdapterDescriptor`, `registry()`, `descriptor(kind)`; the single "is this kind supported" answer |
-| `connections/capabilities.rs` | The four capability traits, `CommandFailure` (definitive vs indeterminate), `CapabilityKey`, `CapabilityState`, `PrinterCapabilities`, `capabilities_for` |
-| `connections/moonraker/files.rs` | Pure: upload request parts, metadata and history parsing, `print_stats` → `HostJobState` |
-| `connections/moonraker/control.rs` | Thin I/O for `ArtifactStaging`, `PrintControl`, `HostStateQuery`, and `CameraDiscovery` |
-| `host_ops/mod.rs` | `HostOperationServices` wired into `RuntimeServices` |
-| `host_ops/state.rs` | Pure state machine and transition table |
-| `host_ops/repository.rs` | SQL for `host_operations` |
-| `host_ops/executor.rs` | Write-ahead, dispatch, and resolve, with injectable fault points |
-| `host_ops/reconciler.rs` | Startup, on-Online, and manual reconciliation; backoff |
-| `host_ops/guards.rs` | The lifecycle blocker source, the revision deletion blocker, the Connection-mutation check, and the import check |
-| `host_ops/events.rs` | The `hostOperations` stream and backfill |
-| `host_ops/commands.rs` | The Tauri commands |
-| `migrations/0007_p6_host_operations.sql` | Table, indexes, terminal-state trigger, operations-ledger CHECK rebuild |
+**Tests:**
 
-Also modified:
+- `tests/common/fake_moonraker.rs`;
+- `tests/p6_*.rs`;
+- `tests/sim_moonraker.rs` (the P6 section), `tests/sim_octoprint.rs`;
+- `tests/p6_moonraker_readonly.rs`;
+- `tests/sim/toxiproxy.rs` (the upstream cut).
 
-- `connections/mod.rs` (docs), `connections/supervisor.rs` (registry and
-  the on-Online hook);
-- `connections/commands.rs`, `printers/create.rs`, `printers/batch.rs`,
-  `printers/setup.rs` (registry lookups);
-- `printers/lifecycle.rs` (new code and source registration);
-- `printers/repository.rs` (`set_connection` and `replace_all` checks);
-- `slicing/blockers.rs` (register the revision blocker);
-- `spools/operations.rs` (new `OperationKind`s);
-- `contracts/command.rs` (`CAPABILITY_UNSUPPORTED`, `CONNECTION_IN_USE`,
-  `HOST_OPERATION_UNRESOLVED`, `HOST_OPERATION_NOT_ABANDONABLE`,
-  `START_NOT_ALLOWED`, `START_PRECONDITION_CHANGED`);
-- `lib.rs` (startup order), `contracts/inventory.rs`, `Cargo.toml`
-  (`reqwest`).
+**Frontend:**
 
-Test support: `tests/p6_harness/fake_moonraker.rs` (HTTP and WebSocket on
-one `TcpListener`, scripted faults) and `tests/p6_harness/cut_proxy.rs` (a
-TCP proxy that forwards a request and then drops the response, for
-failure injection against the sim only; it is never pointed at the U1). The
-container harness itself
-(`sim/`, `just sim-up`, `just test-sim`) belongs to
-`feature/printer-simulation-harness`, and P6 does not modify it. If P6
-needs a harness change, such as a `pause_resume` or webcam variant of the
-Klipper config, it asks that branch's owner rather than forking `sim/`.
+- `src/host-ops/{capabilities-store,host-operations-store,host-operations-store-mock,web-fixtures,presentation,start-rule}.ts`;
+- `src/screens/{PrinterJobPanel,StageOnPrinterDialog,StartStagedDialog,AbandonReconciliationDialog,CapabilityList}.tsx`,
+  each with a `.module.css`.
 
-### Frontend
+**Sim:** `sim/moonraker/*`, `sim/simctl`, `sim/README.md`; delete
+`scripts/moonraker-sim/`.
 
-| File | Responsibility |
-|---|---|
-| `src/host-ops/capabilities-store.ts` | `PrinterCapabilities` per Printer; refetch on status change |
-| `src/host-ops/host-operations-store.ts` (+ `-mock.ts`, `web-fixtures.ts`) | Host Operations; sequenced stream |
-| `src/host-ops/presentation.ts` | State → label and severity; unsupported vs failed copy (pure, unit-tested) |
-| `src/screens/PrinterJobPanel.tsx` | The Job tab |
-| `src/screens/StageOnPrinterDialog.tsx` | Stage from Slice Revision review |
-| `src/screens/AbandonReconciliationDialog.tsx` | D8 |
-| `src/screens/StartStagedDialog.tsx` | The required "bed is clear" confirmation for Start |
-| `src/screens/CapabilityList.tsx` | The Setup capabilities list |
+**Docs:**
 
-Also modified: `PrinterDetailDock.tsx` (the Job tab),
-`SliceRevisionReview.tsx` (Stage on Printer…), `PrinterConnectionPanel.tsx`
-(`CONNECTION_IN_USE`), `App.tsx` (store startup), and `src/ipc/client.ts`.
-
-### Docs
-
-- ADR-0011, "Composable connection capability interfaces".
-- `CONTEXT.md`: add **Host Operation**, **Staged artifact**,
-  **Uncertain outcome**, **Abandon reconciliation**, and **Capability**.
-  Update **Connection** ("command capabilities per adapter").
-- The approach doc: close the "Adapter command/camera capabilities" row
-  for Moonraker only.
-- `docs/verification/2026-09-2x-p6-moonraker-commands.md` and
-  `docs/screenshots/p6-*.png`.
+- `docs/adr/0011-composable-connection-capabilities.md`;
+- the spec `docs/superpowers/specs/2026-09-2x-p6-connection-command-capabilities-design.md`;
+- the spike `docs/superpowers/baselines/2026-09-2x-p6-moonraker-command-spike.md`;
+- `docs/verification/2026-09-2x-p6-moonraker-commands.md`;
+- `CONTEXT.md`.
 
 ## Tasks
 
-### Task 1: Moonraker command spike (Stage A)
+### Task 1: Retire `scripts/moonraker-sim` into `sim/` and enable the OctoPrint simulator tests
 
-**Owner:** Protocol. **Prerequisites:** the shared sim harness for every
-gate, and the U1 for the read-only corroboration column. Running #9
-against the same sim in the same session is recommended, since the sim now
-counts for #9 too.
-**Status:**
+**Owner:** Wiring. **Depends on:** nothing. **Status:** ready now.
 
-- The U1's **read-only** checks (Gates A, C, and H, all reads) are **ready
-  now**.
-- Every gate's required sim column, which includes every write, **needs
-  the harness** to land.
-- Nothing in this task writes to the U1 (answer 8).
+**Why:** `scripts/moonraker-sim/` (`just moonraker-sim`) predates the
+shared harness `sim/` (ADR-0012). It has features `sim/` lacks, and P6's
+spike needs them:
 
-**Output:** the spike report, with one row per gate **per tier** (PASS,
-FAIL, or Unavailable), its evidence, the decision taken, and the versions.
-For the sim, record the harness commit, the Klipper and Moonraker versions,
-and the config variant. For the U1, record the firmware, Moonraker and
-Klipper versions as reported, and whether `pause_resume`,
-`virtual_sdcard`, and webcams are configured. Scratch code lives in a
-throwaway crate outside the repo, as in P4 and P5.
+- an API-key mode (`sim/` Moonraker trusts loopback, so API-key handling
+  is untested);
+- a `no-bed` variant.
 
-Which tier must pass each gate before the spec is approved:
+P6 also needs Moonraker's `[history]` component, which neither has. The
+OctoPrint adapter is now on `main`, but `sim_octoprint.rs` still has a
+PENDING placeholder.
 
-| Gate | Sim (required: answer 7) | U1 (read-only corroboration, answer 8) |
-|---|---|---|
-| A Auth | Required, with the harness's auth setting on and off | Ready now: read-only requests (`server.info`, a file list) with and without a key |
-| B Upload without start | Required | **Not run** (write) |
-| C Identity | Required, on the file B staged | Ready now: `list` and `metadata` shapes for files already on the U1, read-only |
-| D Interrupted upload | Required (`cut_proxy`) | **Not run** (write) |
-| E Control | Required (simulated board, so no hardware risk) | **Not run** (write) |
-| F Start reconciliation | Required | Read-only part only: the `print_stats` and `server.history.list` shapes for jobs the owner has already run |
-| G Host restart | Required (restart the containers) | **Not run** (restarting host services is a write) |
-| H Capability detection | Required, for each config variant the harness offers | Ready now: `server.info`, `printer.objects.list`, `server.webcams.list` |
-| I TLS | Expected Unavailable (TLS stays unsupported, answer 6) | Expected Unavailable (read-only check of whether TLS is offered) |
+**Files:**
 
-A gate that passes on the sim but whose read-only shapes differ on the U1
-is recorded as a U1 finding (§Global constraints). It does not fail the
-gate. A "Not run" U1 cell is reported as **Not run (read-only host)**,
-never as passed.
+- `sim/moonraker/moonraker.conf`, `sim/moonraker/moonraker-multi.conf`:
+  add `[history]`.
+- `sim/moonraker/` and `sim/simctl`: add the two variants as a **mode of
+  the existing `moonraker` service**, not new containers, because each
+  simulavr pins a CPU core. Command:
+  `sim/simctl variant moonraker default|no-bed|apikey`. It swaps
+  `printer.cfg` (no-bed drops `[heater_bed]`, the same awk rule as
+  `scripts/moonraker-sim/sim.sh`) or `moonraker.conf`, then restarts that
+  service.
+  - In `apikey` mode loopback is **not** trusted
+    (`trusted_clients: 192.0.2.0/24`, as the old script does).
+  - `simctl env` also exports `FARM3D_SIM_MOONRAKER_API_KEY` in `apikey`
+    mode. Read it from Moonraker's database the way
+    `scripts/moonraker-sim/sim.sh api-key` does.
+  - `simctl reset` returns to `default`.
+- `src-tauri/tests/sim/moonraker.rs`: add
+  `MoonrakerSim::set_variant(Variant...)` or an equivalent
+  `use_mode(Mode::{Default, NoBed, ApiKey})`. Make `connection()` pass the
+  API key in `apikey` mode. `reset()` restores `default`.
+- `src-tauri/tests/sim_moonraker.rs`: add tests for no-bed (the bed
+  reading is absent, not zero) and apikey (no key gives an auth error,
+  the right key works).
+- `src-tauri/tests/sim_octoprint.rs`: replace
+  `octoprint_adapter_against_the_simulator_is_pending_10` with tests that
+  drive the production `OctoPrintConnection` (`sim.config()` plus
+  `FARM3D_SIM_OCTOPRINT_API_KEY`):
+  - `probe` returns OctoPrint 1.11.8;
+  - `subscribe` yields telemetry and an Online health;
+  - a disabled proxy makes `subscribe` end with an error;
+  - a wrong key gives `ConnectionError::Auth`.
 
-- [ ] **Gate A — Auth for HTTP.** Does `X-Api-Key` work on the HTTP file
-  endpoints as on the WebSocket? Record the 401 and 403 shapes. Try
-  trusted-client access with no key.
-- [ ] **Gate B — Upload without start.** Upload the no-motion fixture to
-  `farm3d/<id>.gcode` with no `print` field. Confirm:
-  - the directory is created;
-  - `print_stats` does not change;
-  - the response shape;
-  - whether `checksum` is accepted and a wrong checksum is rejected (and
-    with which status).
-- [ ] **Gate C — Identity.** What `metadata` and `list` return for the
-  staged file (size, modified, any hash). Time the download of a 20 MB file
-  to decide whether download-and-hash is acceptable during reconciliation.
-- [ ] **Gate D — Interrupted upload.** Drop the TCP connection mid-body,
-  and separately right after the full body but before the response (with
-  `cut_proxy`). Record whether a file exists and its size in each case.
-- [ ] **Gate E — Control.** `start`, `pause`, `resume`, and `cancel` from
-  each relevant state. Record the error shapes for wrong-state calls
-  (start while printing, pause while idle) and for Klipper not ready.
-  Classify each response as definitive or indeterminate (D3).
-- [ ] **Gate F — Start reconciliation evidence.** After a start whose
-  response was cut: the `print_stats` sequence, and whether
-  `server.history.list` records the job with a `start_time` usable against
-  `dispatched_at`. Measure the host clock skew.
-- [ ] **Gate G — Host restart.** Restart Moonraker, then Klipper, mid-upload
-  and mid-print. Record what persists (files, history, state) and how the
-  WebSocket reports it.
-- [ ] **Gate H — Capability detection.** How to tell from `server.info`,
-  `printer.objects.list`, and `server.webcams.list` that a host lacks
-  `virtual_sdcard`, `pause_resume`, or a webcam. These are the `host`
-  reasons in D6.
-- [ ] **Gate I — TLS.** Whether any test instance offers TLS. If none
-  does, record TLS as unavailable. The spec keeps `useTls` staging
-  unsupported (answer 6).
-- [ ] **Write the report** and stop for approval.
+  Update the module doc comment.
+- Delete `scripts/moonraker-sim/` (`sim.sh`, `printer.cfg`,
+  `extruder1.cfg`, `moonraker.conf.in`, `netfault.py`) and the
+  `moonraker-sim` recipe in `justfile`.
+  - `netfault.py`'s drop, freeze, and pass map to Toxiproxy's
+    `set_enabled(false)`, `hang`, and `reset`.
+  - The old `multi-tool` variant is covered by `moonraker-multi`.
+- `sim/README.md`: document `variant` and the new env var.
+- `docs/verification/2026-09-25-a0-1-moonraker-live-validation.md`: it is a
+  historical record, so don't rewrite its steps. Add one note at the top
+  mapping `just moonraker-sim …` to the `sim/` equivalents, and
+  `FARM3D_MOONRAKER_RESTART_CMD` to `sim/simctl fault klipper-restart
+  moonraker`.
+- Update any `FARM3D_MOONRAKER_RESTART_CMD` example in
+  `src-tauri/tests/a0_moonraker_live.rs` doc comments that names the old
+  script.
 
-### Task 2: Focused spec and ADR-0011 (Stage B)
+**Acceptance criteria:**
 
-**Owner:** Wiring, with Protocol. **Prerequisites:** Task 1 approved for the
-Moonraker-specific decisions. The adapter-neutral parts (D1, D2, D3, D6,
-D7, D8, D9, D10) **may be drafted now**.
+- `grep -rn "moonraker-sim" --exclude-dir=node_modules --exclude-dir=target .`
+  finds only the note in the A0.1 verification record.
+- `sim/simctl variant moonraker no-bed` then `sim/simctl status` shows
+  Moonraker ready with no `heater_bed` object.
+- `sim/simctl variant moonraker apikey` makes an unauthenticated
+  `/server/info` on port 27125 return 401. `simctl env` exports the key.
+- `sim/simctl reset` restores the default config.
+- `just test-sim` passes with the simulators up (new tests included), and
+  skips cleanly with them down.
+- `just test-rust` still passes. The container tests stay `#[ignore]`.
 
-- [ ] Write the spec in the form of the P5 spec: status, goal, scope and
-  non-goals, vocabulary, decisions D1…Dn (finalizing this plan's D1–D10
-  with the spike outcomes), backend model, wire types, commands and events,
-  frontend architecture, errors, accessibility, acceptance criteria, and
-  delivery.
-- [ ] Write ADR-0011 for D1. The simulator harness adds its own ADR under
-  a different number. Before committing, check `docs/adr/` on `main` and
-  take the next free number if 0011 is taken.
-- [ ] Carry the user's answers (§Status) into the spec as fixed
-  decisions. There are no open questions left from this plan. Any new
-  question the spike raises goes to the user before approval.
-- [ ] Update this plan's tasks if the spike changed an interface. Stop for
-  approval.
+**TDD:** write the new `sim_moonraker.rs` and `sim_octoprint.rs` tests
+first. With the simulators up, the no-bed and apikey tests fail until the
+variant exists.
 
-### Task 3: Adapter registry (refactor, no behavior change)
+**Commands:**
 
-**Owner:** Backend. **Prerequisites:** PR #27 merged to `main`, or this
-branch rebased onto `feature/a0-2-octoprint-monitoring` (answer 11).
-**Status: Ready once PR #27 lands.** It needs no spec decision beyond "one
-registry", which D1 options B and C both require. Starting before #27 would
-redo that PR's consolidation and conflict with it, so don't.
-
-PR #27 already did the consolidation half: one `SUPPORTED_KINDS` list,
-`is_supported_kind`, a public `supervisor::build_connection`, and a
-list-and-factory consistency test. This task only turns that into the
-registry shape D1 needs.
-
-- [ ] Add `connections/adapters.rs`. Moonraker and OctoPrint descriptors
-  have only `observe`, which wraps `build_connection`'s per-kind arms.
-- [ ] Re-point `SUPPORTED_KINDS` and `is_supported_kind` at `registry()`.
-  Either keep them as thin wrappers or replace their call sites; don't
-  re-edit each site's logic.
-- [ ] Change `ConnectionManager::with_clock_and_factory` to take a registry
-  (or keep the closure and build it from the registry). The injected-fake
-  tests keep working.
-- [ ] Turn PR #27's list-and-factory test into the descriptor-consistency
-  test.
-- **Acceptance:** an unsupported kind still produces `UNSUPPORTED_ADAPTER`
-  for set, create, and batch, `SetupGap::UnsupportedAdapter`, and the
-  supervisor's "not supported by this build" status. Both Moonraker and
-  OctoPrint still build and monitor exactly as after PR #27.
-- **Tests:** the existing suite, including PR #27's OctoPrint tests,
-  passes unchanged. Add one registry test with a third fake kind, to prove
-  the registry and not the list decides.
-
-### Task 4: Capability model, matrix, and contracts
-
-**Owner:** Backend and Wiring. **Prerequisites:** Task 2 (D1, D6 approved),
-Task 3. **Status: After spec.**
-
-- [ ] Add `connections/capabilities.rs` with the four traits,
-  `CommandFailure { Definitive(..) | Indeterminate(..) }`, and the ts-rs
-  types from D6.
-- [ ] Add `evidence` to `AdapterDescriptor`. The Moonraker row is
-  `notVerified` everywhere.
-- [ ] Add `capabilities_for` and the host-fact derivation from probe
-  results (Gate H). Before Gate H, host facts are empty and never produce
-  `supported`.
-- [ ] Add the commands `printer_capabilities` and
-  `adapter_capability_matrix`.
-- [ ] Apply the TLS rule from D6: a `useTls` Connection reports the five
-  write capabilities as `notVerified`.
-- **Acceptance:** a Printer with no Connection, an unsupported kind, a
-  Moonraker Connection, and a Moonraker Connection with `useTls` each
-  return the expected matrix. `notVerified` is never reported as
-  `supported`.
-- [ ] Carry the evidence `tier` (D6). Host facts carry every tool
-  (`extruder*` objects plus the bed), with no single-nozzle field.
-- **Tests:** the descriptor-consistency test (D1); serialization snapshots;
-  a contract export; each `CapabilityState` variant round-trips.
-  Host-fact derivation with one extruder, and with three extruders
-  (`extruder`, `extruder1`, `extruder2`) in a non-contiguous report
-  order. A `readOnlyHardware` tier can never mark a write capability
-  `supported`.
-
-### Task 5: Schema, state machine, and repository
-
-**Owner:** Backend. **Prerequisites:** Task 2 (D2, D3). **Status: After
-spec.**
-
-- [ ] Add `0007_p6_host_operations.sql`: the table, the partial unique
-  index, the terminal-state immutability trigger, and the operations
-  ledger CHECK rebuild with the new kinds. Bump `CURRENT_SCHEMA_VERSION`.
-- [ ] Add `host_ops/state.rs` with a pure transition function and an
-  exhaustive table.
-- [ ] Add repository functions: `insert_dispatching`, `transition`,
-  `list_unresolved`, `list_for_printer`, `load`, and
-  `mark_dispatching_uncertain` (the startup step).
-- **Acceptance:** every legal transition in D3 persists, and every illegal
-  one is rejected. A terminal row cannot be updated. A second unresolved
-  row for the same Printer violates the index.
-- **Tests:**
-  - A migration over a P5-shaped database, and a restart.
-  - The transition table (every pair).
-  - The trigger fires.
-  - The partial unique index.
-  - Operation-ledger replay returns the same `hop-*`.
-  - No column can hold a credential (a schema-level assertion that no
-    `credential` column exists, plus the seeded-secret scan in Task 8).
-
-### Task 6: Guards
-
-**Owner:** Backend. **Prerequisites:** Task 5. **Status: After spec.** It
-needs no live evidence.
-
-- [ ] Register `HostOperationBlockers` in
-  `printers::lifecycle::blocker_sources()` for Archive and Delete, with
-  `LifecycleBlockerCode::HostOperationUnresolved`.
-- [ ] Register `UnresolvedHostOperationBlocksRevisionDeletion` in
-  `slicing::blockers::slice_revision_blocker_sources()`.
-- [ ] Add the endpoint/clear/credential-clear check inside
-  `PrinterRepository::set_connection`'s transaction →
-  `RepositoryError::ConnectionInUse` → `CONNECTION_IN_USE`.
-- [ ] Add the `replace_all` check → a whole-import rejection.
-- [ ] On permanent delete, delete that Printer's terminal rows in the same
-  transaction (decided, answer 5). The unresolved-row blocker runs first,
-  so only terminal rows are ever deleted this way.
-- **Acceptance:** each row of the D7 table, in both directions. Blocked
-  while unresolved, allowed after `succeeded`, `failed`, or `abandoned`.
-- **Tests:**
-  - One test per mutation per terminal state.
-  - A race test: an operation inserted concurrently with delete. Exactly
-    one wins, and no orphan remains.
-  - A credential-cleanup test: a queued cleanup of the Printer's current
-    ref is skipped while an operation is unresolved.
-  - Credential replacement on the same endpoint is allowed and probed.
-  - `printer_lifecycle_eligibility` reports the new blocker.
-  - Archive is blocked while a write is unresolved (answer 3).
-  - Permanent delete removes the Printer's terminal rows and leaves every
-    other Printer's rows alone.
-
-### Task 7: Moonraker capability adapter and fake Moonraker
-
-**Owner:** Protocol. **Prerequisites:** Task 1 approved (its sim column),
-Task 4. **Status: Needs the sim harness**, through Task 1. The fake and the
-pure functions can start after Task 2 from the documented API. The U1's
-read-only captures from Task 1 (file list, metadata, `print_stats`,
-history, webcams, `server.info`) can seed the **read-side** parser
-fixtures now. Every write-side fixture (upload responses, control
-responses, error shapes) comes from the sim only. The fake's behavior must
-be corrected to match the sim before this task is done. Nothing in this
-task runs against the U1.
-
-- [ ] Add `moonraker/files.rs` (pure): upload parts builder with no
-  `print` field, the checksum field, metadata, history and `print_stats`
-  parsers, and response classification (definitive vs indeterminate, per
-  Gates D and E).
-- [ ] Add `moonraker/control.rs` (I/O) implementing the four traits over
-  `reqwest` and the existing WebSocket framing.
-- [ ] Update the Moonraker descriptor with the builders and its
-  (still `notVerified`) evidence row.
-- [ ] Add `tests/p6_harness/fake_moonraker.rs` with scripted faults:
-  - lose the response after storing the file;
-  - store a partial file;
-  - delay past the timeout;
-  - 401 and 403;
-  - apply a start but lose the response;
-  - reject a start definitively;
-  - restart the host (clearing live state, keeping files and history);
-  - fail any test that sends `print`.
-- **Acceptance:**
-  - Every write-side pure function is covered by sim fixtures.
-  - Every read-side parser is covered by sim fixtures and, where the shape
-    differs, by U1 read-only fixtures.
-  - The adapter passes the full fake scenario suite.
-- **Tests:** unit tests for the builder and parsers (including "no
-  `print` field"); adapter tests against the fake for every Gate D–H
-  behavior.
-
-### Task 8: Executor, reconciler, abandon, events, and commands
-
-**Owner:** Backend and Wiring. **Prerequisites:** Tasks 3–6. It develops
-against fake capability traits and wires to Moonraker after Task 7.
-**Status: After spec** (the Moonraker wiring waits for Task 7).
-
-- [ ] `executor.rs`: write-ahead `dispatching` → call the trait → resolve.
-  Injectable fault points: before send, after send, after response before
-  commit.
-- [ ] `reconciler.rs`: the D5 rules. Startup runs after
-  `restore_persisted_connections` in `lib.rs`. The supervisor's Online
-  transition triggers it. Per-Printer serialization and backoff.
-- [ ] `abandon_host_operation` with the D8 preconditions.
-- [ ] The `hostOperations` stream and backfill.
-- [ ] Commands: `stage_slice_revision`, `start_staged_artifact`,
-  `pause_host_print`, `resume_host_print`, `cancel_host_print`,
-  `reconcile_host_operation`, `abandon_host_operation`, and
-  `list_host_operations`. Each capability command checks the matrix
-  first and returns `CAPABILITY_UNSUPPORTED` **without** writing a row.
-- **Acceptance:** the restart matrix below holds, and no command path ever
-  issues a second upload or start by itself.
-- **Tests (the restart matrix, against a fake trait and then the fake
-  Moonraker):**
-
-  | Crash or fault point | Kind | Expected after restart |
-  |---|---|---|
-  | After the write-ahead commit, before send | upload | `uncertain` → reconcile → absent → `failed { notApplied }`, no re-upload |
-  | After send, response lost | upload | `uncertain` → present and matching → `succeeded`, exactly one upload seen by the fake |
-  | Partial file stored | upload | `uncertain` → mismatch → handled per D5 |
-  | After send, response lost | start | `uncertain` → the host is printing `host_path` → `succeeded`, exactly one start seen |
-  | Start definitively rejected | start | `failed`, and no reconciliation |
-  | Host unreachable for the whole run | any | stays `uncertain`; abandon allowed; guards lift after abandon |
-  | Host running a different file | start | stays `uncertain` with the busy note; never auto-starts |
-
-  Start precondition tests (answer 13). No Host Operation row is written
-  on any rejection:
-  - Accepted from standby with `priorState: "ready"`.
-  - Accepted from `complete` and from `cancelled` with the matching
-    `priorState`.
-  - Rejected with `START_NOT_ALLOWED` from `error`, printing, paused, and
-    stale telemetry.
-  - Rejected with `START_PRECONDITION_CHANGED` when the acknowledged
-    `priorState` differs from the freshly observed state.
-  - Accepted again after `error` clears to standby.
-  - Sim: start a second staged file after the first print reached
-    `complete`, with the "previous print finished" acknowledgement.
-
-  Also: the seeded-secret scan over events, errors, rows, and logs;
-  listen-before-backfill ordering; operation-id replay for every command.
-
-### Task 9: Frontend contracts and stores
-
-**Owner:** Frontend. **Prerequisites:** Task 4 and Task 8 contract types
-(`just gen-contracts`). **Status: After spec.**
-
-- [ ] Add `capabilities-store.ts`, `host-operations-store.ts` (sequenced
-  stream), `presentation.ts`, the mock, and the web fixtures (D9).
-- **Tests:** stream ordering and backfill; presentation maps every
-  `CapabilityState` and Host Operation state; unsupported and failed
-  produce different copy and different severity.
-
-### Task 10: Frontend UI
-
-**Owner:** Frontend. **Prerequisites:** Task 9. **Status: After spec.**
-
-- [ ] Add the Job tab (`PrinterJobPanel`), `StageOnPrinterDialog`,
-  `AbandonReconciliationDialog`, `StartStagedDialog` (answer 1),
-  `CapabilityList`, `CONNECTION_IN_USE` handling in
-  `PrinterConnectionPanel`, and **Stage on Printer…** in
-  `SliceRevisionReview`. Add any new design-system component to
-  `components/index.ts` and `Showcase.tsx`.
-- **Acceptance:**
-  - An unsupported control is never an enabled button.
-  - A failed operation shows an alert with a recovery action.
-  - Abandon cannot be confirmed without the acknowledgement.
-  - Start cannot be confirmed until the bed-clear box is ticked, for both
-    start-safety rules.
-  - Start follows D9's table: offered for Ready, `complete`, and
-    `cancelled`, and disabled for `error` and every other state, with the
-    reason shown.
-  - For `complete` and `cancelled`, the confirmation text names the prior
-    state (answer 13).
-  - Everything is keyboard-operable.
-  - Layout works at 1440 × 900 and 1024 × 700.
-- **Tests:** component tests with `@solidjs/testing-library`
-  (`pointerDown`/`pointerUp` for Select and Menu). Each dialog's disabled
-  and blocked states. The Stage dialog disables unsupported Printers and
-  Offline Printers with different reasons. Start-specific tests:
-  - One test per row of the D9 Start table. Ready, `complete`, and
-    `cancelled` show Start. `error`, printing, paused, offline, and stale
-    telemetry do not offer it (disabled with the reason).
-  - The `complete` dialog's checkbox label is "The previous print
-    finished. The bed is clear." The `cancelled` label says the print was
-    cancelled. The Ready label names no prior state.
-  - The command is sent with the matching `priorState`.
-  - An `error` → standby transition on the status stream enables Start
-    without a reload.
-  - A `START_PRECONDITION_CHANGED` response closes the confirmation and
-    reopens it (or disables Start) for the newly reported state. The old
-    tick is never carried over.
-
-### Task 11: Live-host tests (sim writes, U1 read-only) and failure injection
-
-**Owner:** Protocol and Wiring. **Prerequisites:** Tasks 7 and 8, and the
-sim harness merged or rebased under this branch. **Status: Needs the sim
-harness.** The U1 read-only suite needs only Task 7's read side.
-
-- [ ] Add `#[ignore]` live-host tests that read the harness endpoint and
-  key (§Global constraints). Register them with `just test-sim`. Record
-  the harness's final variable names in this plan.
-- [ ] **Sim tier (required):**
-  - Put `cut_proxy` between farm3d and the sim to lose responses for
-    upload and start.
-  - Rebuild `RuntimeServices` over the same roots (a restart) and assert
-    reconciliation.
-  - Restart the Moonraker and Klipper containers mid-upload and mid-print.
-  - Stop the containers for longer than the backoff ceiling, then abandon.
-- [ ] **Real tier (U1): a read-only suite only (answer 8).** It runs
-  through the read-only wrapper (§Global constraints) against
-  `<U1 host>:7125`, and covers:
-  - probe, subscribe, and capability detection, compared with the sim;
-  - read-side parsing of the U1's real `print_stats`, file list,
-    metadata, history, and webcams;
-  - **reconciliation reads with no host write:**
-    1. Seed an `uncertain` upload row directly in the local database. It
-       targets a `farm3d/<new-uuid>.gcode` path that was never sent.
-    2. Reconcile against the U1. Assert `locate` reports absent and the
-       row resolves to `failed { notApplied }`.
-    3. Assert the wrapper recorded zero `POST`, zero `DELETE`, and zero
-       `printer.print.*` calls.
-  - **host unreachable:** block the port on the farm3d machine (never
-    touch the printer), assert the row stays `uncertain`, then abandon it.
-    Abandon is a local write only.
-
-  The P6 recipe for this suite is `just test-moonraker-real`, unless the
-  harness already provides a real-host recipe. It runs no upload, no
-  interrupted upload, no file deletion, no control command, and no service
-  restart on the U1.
-- [ ] Flip each Moonraker matrix entry from `notVerified` to `supported` or
-  `adapter`, citing the sim evidence. U1 read-only results may add `host`
-  facts and version corroboration, but never the evidence for a write
-  capability. Update the descriptor.
-- **Acceptance:**
-  - Every D5 row is observed on the sim.
-  - The U1 suite passes with zero recorded writes.
-  - Any U1 check that could not run is recorded as **unavailable**,
-    never as passed.
-  - The capability row cites the evidence and its tier.
-
-### Task 12: Tracer
-
-**Owner:** Wiring. **Prerequisites:** Tasks 8, 10, and 11.
-
-- [ ] Add `src-tauri/tests/p6_tracer.rs`. The full tracer below runs
-  against the fake in CI and against the sim under `just test-sim` (the
-  evidence that counts). It **never** runs against the U1, because step 2
-  uploads.
-- [ ] Add a separate read-only U1 variant, `u1_reconciliation_tracer`. It
-  has **no upload** and goes through the read-only wrapper:
-  1. Seed a Slice Revision and an `uncertain` upload row for a never-sent
-     `farm3d/<new-uuid>.gcode`.
-  2. Restart by rebuilding `RuntimeServices`.
-  3. Reconcile against the U1 → `failed { notApplied }`.
-  4. Assert the guards were blocked before step 3 and lifted after it.
-  5. Assert zero host writes were recorded.
-
-  The full sim tracer:
-  1. Import and slice (or import an external revision) to get one Slice
-     Revision. Record its sha256.
-  2. `stage_slice_revision` to a Moonraker Printer, with the response cut
-     by the proxy (or the fake).
-  3. Restart: rebuild `RuntimeServices` over the same roots.
-  4. Reconcile. Assert `succeeded`, exactly one file at `host_path` whose
-     hash matches, **no** second upload request, and **no** start request
-     (the host is still standby; history has no new job).
-  5. Assert that delete, archive, and Connection clear were blocked during
-     step 2–4 and are available after step 4.
-  6. Repeat with the host unreachable: abandon, then assert the guards
-     lift and the row is kept as `abandoned`.
-
-### Task 13: Docs and verification
-
-**Owner:** Wiring. A Verification owner then does a fresh pass.
-**Prerequisites:** all.
-
-- [ ] ADR-0011, `CONTEXT.md`, and the approach-doc row.
-- [ ] **Full verification:**
-  - `just build`, `just test`, and `source "$HOME/.cargo/env" && just
-    test-rust`;
-  - `just gen-contracts` plus `git diff --exit-code src/generated`;
-  - `just sim-up` then `just test-sim`, and the U1 read-only suite;
-  - `just package`, then stage one revision **to the sim** from the
-    installed package on Linux x86_64. The phase adds a direct dependency
-    and changes network behavior, so the installed-bundle check applies.
-    The installed app may connect to the U1 for monitoring and the
-    Capabilities list only.
-- [ ] A manual pass in `just dev` at 1440 × 900 and 1024 × 700, with every
-  Stage, Start, and control action aimed at a sim Printer (a U1 Printer
-  may appear only to show its read-only Capabilities list and status): the
-  Job tab, Stage, an uncertain row, Check again, Abandon, the blocked
-  Connection edit, blocked archive, and the Capabilities list. Screenshots
-  go in `p6-*.png`. Any check that could not run is recorded as
-  **unavailable**.
-- [ ] Verification doc: map the evidence to each #16 acceptance criterion.
-
-## Delivery order and parallel work
-
-```text
-Task 3 registry ───────────────────────────────┐
-Task 1 spike ─> Task 2 spec ─┬─> Task 4 matrix ┴─┬─> Task 7 Moonraker adapter ─┐
-                             └─> Task 5 schema ──┴─> Task 6 guards ─> Task 8 ──┼─> Task 11 real-host ─> Task 12 tracer ─> Task 13
-                                            Task 4 + Task 8 types ─> Task 9 stores ─> Task 10 UI ─┘
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just sim-up
+just test-sim
+just sim-down
+just test-rust
+just check-hosts
 ```
 
-| Task | Status today | Blocked by |
+### Task 2: Adapter registry on top of #27
+
+**Owner:** Backend. **Depends on:** nothing. **Status:** ready now.
+
+**Context:** #27 put every kind check behind
+`connections::is_supported_kind` (backed by `SUPPORTED_KINDS`), made
+`supervisor::build_connection` public, and added a supervisor test that
+keeps the list and the factory in step. P6 needs a registry of adapter
+**descriptors**, so later tasks can hang capability builders and an
+evidence row on each kind. This task changes no behavior.
+
+**Files:**
+
+- New `src-tauri/src/connections/adapters.rs`:
+
+  ```rust
+  pub type ObserveBuilder = fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn PrinterConnection>;
+  pub struct AdapterDescriptor {
+      pub kind: &'static str,
+      pub observe: ObserveBuilder,
+      // Task 5 adds: staging, control, host_state, camera, evidence.
+  }
+  pub fn registry() -> &'static [AdapterDescriptor];   // Moonraker, OctoPrint
+  pub fn descriptor(kind: &str) -> Option<&'static AdapterDescriptor>;
+  ```
+
+- `connections/mod.rs`: `SUPPORTED_KINDS` stays, as the kinds of
+  `registry()` in order (a `const` array kept in step by a test is fine).
+  `is_supported_kind(kind)` becomes `descriptor(kind).is_some()`. Don't
+  edit the four call sites' logic.
+- `connections/supervisor.rs`: `build_connection` delegates to
+  `descriptor(&config.kind).map(|d| (d.observe)(config, api_key))`.
+  `ConnectionManager::with_clock_and_factory` keeps its signature (tests
+  inject closures).
+- Replace the list-and-factory consistency test with a registry
+  consistency test.
+
+**Acceptance criteria:**
+
+- Every existing test passes unchanged. That includes the P2 batch tests
+  and #27's OctoPrint tests (`a0_octoprint_path`).
+- An unknown kind still gives `UNSUPPORTED_ADAPTER` from set, create, and
+  batch, `SetupGap::UnsupportedAdapter`, and the supervisor's "not
+  supported by this build" status.
+- `SUPPORTED_KINDS` equals `registry().iter().map(|d| d.kind)`.
+
+**TDD:** first write a failing unit test in `adapters.rs`:
+
+- `descriptor("moonraker")` and `descriptor("octoprint")` exist;
+- `descriptor("elegoolink")` is `None`;
+- each descriptor's `observe` builds a connection.
+
+Then the consistency test.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just check-hosts
+```
+
+### Task 3: Moonraker command spike (simulator plus read-only real host)
+
+**Owner:** Protocol. **Depends on:** Task 1 (apikey mode, `[history]`).
+**Status:** ready after Task 1. The read-only real-host checks can start
+now.
+
+**Output:** `docs/superpowers/baselines/2026-09-2x-p6-moonraker-command-spike.md`.
+It has one row per gate and per tier (PASS, FAIL, or Unavailable), with
+the evidence, the decision, the sim run manifest path, and the versions
+Moonraker and Klipper report.
+
+**Scratch code:** a throwaway crate outside the repo, or a `#[ignore]`d
+test that is not committed. Don't commit probing code. **The controller
+approves** the report by recording approval in its Status line.
+
+**Rules:**
+
+- Every write happens on the simulator only (`FARM3D_SIM_MOONRAKER`,
+  loopback).
+- The real-host column is read-only: `server.info`, `printer.objects.list`
+  and `printer.objects.query`, `server.files.list` and metadata for files
+  already on the host, `server.history.list`, and `server.webcams.list`.
+- Never write down the real host's address, hostname, or serial. Scrub
+  captures (answer 8, Global Constraints 1–2).
+
+| Gate | Simulator (required) | Real host (read-only) |
 |---|---|---|
-| 1 Spike | U1 **read-only** checks (A, C, H, and the read part of F) **ready now**; every write gate needs the sim harness | Sim harness landing |
-| 2 Spec + ADR-0011 | **Ready now** to draft in full: every product question is answered. Approval needs the Task 1 sim column | Task 1 (sim) |
-| 3 Registry refactor | Ready once PR #27 lands (builds on its `SUPPORTED_KINDS`) | PR #27 |
-| 4 Capability model | After spec (can start on approval of the adapter-neutral decisions) | Task 2, Task 3 |
-| 5 Schema / state machine | After spec (same) | Task 2 |
-| 6 Guards | After spec (same) | Task 5 |
-| 7 Moonraker adapter | Pure parts and fake after spec; done needs the sim | Task 1 (sim), Task 4 |
-| 8 Executor / reconciler | After spec (fake traits) | Tasks 3–6; Task 7 for wiring |
-| 9 Stores | After spec | Tasks 4, 8 (types) |
-| 10 UI | After spec | Task 9 |
-| 11 Live-host tests | Sim suite needs the harness; the U1 read-only suite needs Tasks 7 (read side) and 8 | Tasks 7, 8; sim harness |
-| 12 Tracer | Waits on tasks | Tasks 8, 10, 11 |
-| 13 Docs / verification | Waits on tasks | All |
+| A. HTTP auth | `variant apikey`: `X-Api-Key` on `/server/files/*` and on the WebSocket; the 401 shape | Record whether the key is needed for reads |
+| B. Upload without start | `POST /server/files/upload` to `farm3d/<uuid>.gcode` with no `print` field. `print_stats` stays unchanged. Response shape. Is `checksum` accepted, and is a wrong one rejected (and with what status)? | Not run |
+| C. Identity | `metadata` and `list` fields for the staged file (size, modified, any hash). Time a 20 MB download for download-and-hash | Field shapes for existing files |
+| D. Interrupted upload | Response lost: `Toxiproxy::cut_after(Moonraker, 0)`. Mid-body: a request-side cut (see Task 12's upstream toxic). Is a file left behind, and what size? | Not run |
+| E. Control | `printer.print.start/pause/resume/cancel` from each state. Wrong-state and Klippy-not-ready error shapes. Classify each as definitive or indeterminate | Not run |
+| F. Start evidence | `print_stats` sequence and a `server.history.list` job after a start whose response was cut. Measure the clock skew | Shapes of existing history and `print_stats` |
+| G. Host restart | Restart the Klipper and Moonraker containers mid-upload and mid-print. What persists? | Not run |
+| H. Capability detection | `server.info` components, `printer.objects.list` (`virtual_sdcard`, `pause_resume`, every `extruder*`), `server.webcams.list`, on `moonraker`, `moonraker-multi`, and `variant no-bed` | Same queries |
+| I. Clean start state | After a print completes, `print_stats.state == "complete"` persists until the next start. Confirm that `printer.print.start` from `complete` and from `cancelled` works (answer 13) | Not run |
 
-- #15 is **not** a blocker any more (closed, merged at `5c9ead7`).
-- #9 is no longer a hardware blocker. The sim counts for it (answer 7), so
-  #9 and the Task 1 sim column can run together as soon as the harness
-  lands.
-- The only external blocker left is the harness branch
-  (`feature/printer-simulation-harness`). Every write gate depends on it.
-  The U1 is reachable now for read-only checks only (answer 8).
-- **Ready now, in total:**
-  - drafting the full Task 2 spec;
-  - the U1 read-only spike checks (Gates A, C, and H, and the read-only
-    part of F). Gate H enumerates every `extruder*` object on the U1.
-- **Ready once PR #27 lands:** Task 3 (the registry, built on PR #27's
-  `SUPPORTED_KINDS`).
-- Tasks that touch tool state (4, 7, 8, 10) should rebase onto #9's
-  multi-extruder monitoring once it lands, so they reuse its tool model
-  rather than inventing one.
-- Tasks 4, 5, and 6 can run in parallel with Task 1 once Task 2's
-  adapter-neutral decisions are approved. If the user prefers one approval
-  for the whole spec, they wait for Task 1's sim column.
-- Tasks 9 and 10 can run in parallel with Task 7.
+**Acceptance criteria:**
 
-## Other adapters
+- Every simulator cell is PASS, FAIL, or Unavailable with evidence.
+- Every real-host cell is read-only or "Not run".
+- The report lists every decision the spec must take: the checksum, the
+  download-and-hash rule, which responses are definitive, the skew
+  tolerance, and the partial-file handling.
+- `just check-hosts` passes.
 
-Nothing in the shared foundation assumes parity.
+**Commands:**
 
-- **OctoPrint** needs #10 complete (PR #27), then a separate
-  command-research spike (the same gate list as Task 1, against
-  OctoPrint's `/api/files` and `/api/job`), then a short adapter plan that
-  does only the equivalents of Tasks 7, 11, and 12. Its registry row stays
-  `notVerified` until then. The schema, state machine, guards, matrix, and
-  UI do not change. Monitoring support from #10 never flips a command
-  capability.
-- **ElegooLink (Centauri Carbon only; the CC2 is out of v1).** It stays out
-  of the registry entirely until #8 records a go decision. After that:
-  - **Evidence tier: the in-repo fake SDCP server** (answer 10). Its
-    command behavior is modeled on real passive captures of other clients'
-    commands to a Carbon. Every write gate (the Task 1 gate equivalents)
-    runs against that fake.
-  - **farm3d never sends a command to a real Carbon.** A real Carbon may
-    at most be observed passively, and read-only monitoring stays with #8.
-    The ElegooLink test module refuses any non-fake endpoint for write
-    tests.
-  - The ElegooLink capability row records `tier: "fakeFromCaptures"` and
-    names the captures it was modeled on (D6). A behavior no capture shows
-    stays `notVerified` rather than being inferred.
-  - Capture files follow the same scrubbing rule as the U1 (§Global
-    constraints). Owner addresses and device identifiers never go in the
-    repo.
-  - The adapter plan follows the OctoPrint shape: the equivalents of
-    Tasks 7, 11, and 12 only. The shared foundation does not change.
-- One completed Moonraker path is enough for the first P7 tracer. It does
-  not confer parity on the others.
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just sim-up
+eval "$(sim/simctl env)"      # FARM3D_SIM_* for scratch probes
+sim/simctl variant moonraker apikey
+sim/simctl variant moonraker no-bed
+sim/simctl reset
+just sim-down
+just check-hosts
+```
 
-## External dependencies and blockers
+### Task 4: Focused spec and ADR-0011
 
-- **Shared sim harness (blocking the sim column).**
-  - Branch: `feature/printer-simulation-harness`, owned by a separate
-    agent.
-  - Provides `sim/compose.yaml`, `just sim-up`, `just test-sim`, the
-    endpoint and key variables, and its own ADR.
-  - P6 needs Klipper with `virtual_sdcard`, and ideally a config variant
-    with `pause_resume` and a webcam entry for Gate H. Any variant P6
-    needs is requested from that branch's owner.
-  - P6 live-host work rebases onto the harness once it merges.
-- **Snapmaker U1 (available now).** Moonraker at `<U1 host>:7125`, owned
-  by the repo owner.
-  - It is **read-only** corroboration (answer 8), not the required tier.
-    Agents never upload, interrupt an upload, delete files, send
-    start/pause/resume/cancel, or restart services on it. There is no
-    opt-in that changes this.
-  - Allowed on the U1: probe, subscribe, status, file-list, metadata,
-    history, webcam queries, and capability detection.
-  - Its firmware is a vendor build, so differences in read-only shapes
-    from the sim are expected findings.
-- **PR #27 (OctoPrint monitoring, open).** Task 3 depends on it. It also
-  makes `reqwest` 0.13 a direct dependency (`default-features = false`).
-  P6 adds only the `multipart` and `stream` features, and no TLS features
-  (answer 6).
-- **#9 (multi-extruder monitoring and readiness).** P6's tool model and
-  Start gating reuse #9's multi-extruder status and its non-ready
-  `complete`/`cancelled`/`error` states (answers 9 and 12).
-- **CI** has no Moonraker and no container runtime assumption. CI runs the
-  fake. Sim and U1 evidence lives in the verification doc.
-- **Platforms.** F0 declares only Linux x86_64 supported. Windows and macOS
-  compile and run unit tests, and make no claim.
+**Owner:** Wiring, with Protocol. **Depends on:** Task 3.
 
-## Coordination items (not product questions)
+**Files:**
 
-The user answered every product question on 2026-09-25 (§Status). What
-remains is coordination with other branches:
+- `docs/superpowers/specs/2026-09-2x-p6-connection-command-capabilities-design.md`,
+  in the P5 spec's shape: status, goal, scope and non-goals, vocabulary,
+  decisions, backend model, wire types, commands and events, frontend,
+  errors, accessibility, acceptance criteria, and delivery.
+- `docs/adr/0011-composable-connection-capabilities.md`.
+- `CONTEXT.md`: add **Host Operation**, **Staged artifact**,
+  **Uncertain outcome**, **Abandon reconciliation**, and **Capability**.
+  Update **Connection**.
 
-- **#9:** its tool model (how multiple extruders appear in telemetry).
-  #9 also needs to know that P6's Start rule (answer 13) offers Start from
-  `complete` and `cancelled` while its readiness stays non-ready. #9's
-  readiness must therefore expose the raw prior state (`complete`,
-  `cancelled`, or `error`), not only "not ready", so the Start rule and the
-  confirmation text can tell them apart.
-- **Harness:** a multi-extruder Klipper config variant, for answer 9's
-  sim coverage.
-- The harness's final names for the endpoint variable, the key variable,
-  and any real-host recipe. P6 adopts them (§Global constraints). If the
-  harness defines a real-host *write* opt-in, P6 does not use it against
-  the U1.
-- Whether the harness offers `pause_resume` and webcam config variants.
-  Without them, Gate H's `host` reasons are proved only for the default
-  config.
-- ADR numbering: P6 takes the next free number after the harness ADR if
-  0011 is taken.
+**Content:**
 
-## Exit gate (from issue #16, for Moonraker)
+- Turn this plan's Design reference D1–D9 into final decisions, using the
+  spike's outcomes: the checksum, the download-and-hash rule, the
+  definitive-rejection list, the skew tolerance, and partial-file
+  handling.
+- Every owner decision (answers 1–14) is fixed. Don't reopen them.
+- Where the spike changes an interface, update the affected tasks in this
+  plan in the same commit.
 
-- [ ] An evidence-backed Moonraker capability row records supported and
-  unsupported results (Tasks 1, 4, 11).
-- [ ] Live-host command tests on the sim (the required tier, answer 7)
-  cover uncertainty, interruption, restart, and reconciliation. The U1
-  read-only suite's results are recorded alongside them, with zero writes
-  to the U1 (Tasks 8, 11).
+**The controller approves** by recording approval in the spec and the ADR.
+
+**Acceptance criteria:**
+
+- Every D-section has a final decision.
+- Every command, event, and error code the later tasks use is named, with
+  its payload.
+- `just check-hosts` passes.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just check-hosts
+```
+
+### Task 5: Capability traits, the capability matrix, and its commands
+
+**Owner:** Backend. **Depends on:** Tasks 2 and 4.
+
+**Files:**
+
+- New `src-tauri/src/connections/capabilities.rs`:
+  - the traits `ArtifactStaging { upload, locate }`,
+    `PrintControl { start, pause, resume, cancel }`,
+    `HostStateQuery { host_job_state, job_history }`, and
+    `CameraDiscovery { cameras }`, all `async_trait` and `Send + Sync`;
+  - `CommandFailure { Definitive(String), Indeterminate(String) }`;
+  - `StagedArtifact { host_path, sha256, size }`;
+  - `HostJobState`, holding `print_stats` state and filename, and **every
+    tool** as `Vec<ToolTemperature>` plus the bed. Reuse #29's
+    `ToolTemperature`, and never keep a single "nozzle" field;
+  - the ts-rs types `CapabilityKey`, `CapabilityState`,
+    `PrinterCapabilities`, and `CapabilityEvidence { source, tier:
+    Sim | ReadOnlyHardware, verified_host_versions }`.
+- `adapters.rs`: `AdapterDescriptor` gains `staging`, `control`,
+  `host_state`, and `camera` (each an `Option` of a builder fn), plus
+  `evidence`. Moonraker and OctoPrint have all four as `None` for now,
+  and every write capability is `notVerified`.
+- `capabilities_for(printer, host_facts) -> PrinterCapabilities`:
+  - no Connection gives all `unsupported`, with an "adapter" detail of
+    "No Connection";
+  - an unknown kind gives `adapter`;
+  - a missing builder, or `evidence` with no row, gives `notVerified`;
+  - `useTls: true` gives every write capability as `notVerified` with the
+    detail "TLS connections are not supported yet." (reuse
+    `TLS_UNSUPPORTED_MESSAGE`);
+  - host facts saying `virtual_sdcard` is missing give `upload` and
+    `start` as `host`; missing `pause_resume` gives `pause` and `resume`
+    as `host`; no webcams gives `camera` as `host`;
+  - a `ReadOnlyHardware` tier can never produce `supported` for upload,
+    start, pause, resume, or cancel.
+- Host-fact derivation (pure) from a Moonraker `printer.objects.list` and
+  `server.webcams.list` response. It collects every `extruder*` object.
+- Commands `printer_capabilities(printerId)` and
+  `adapter_capability_matrix()`, registered per Global Constraint 7.
+
+**Acceptance criteria:**
+
+- A registry consistency test fails if a capability is `supported` with
+  no builder, or has a builder with no evidence.
+- Contracts regenerate cleanly.
+
+**TDD tests (write first):**
+
+- One `capabilities_for` test per rule above.
+- Host-fact derivation for one extruder, and for four extruders reported
+  out of order (`extruder2`, `extruder`, `extruder3`, `extruder1`).
+- Serde round-trip snapshots.
+- The two commands through the `tauri::test` IPC path (copy the pattern
+  in `tests/p2_contract_path.rs`).
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just gen-contracts && git diff --stat src/generated   # commit the regenerated files
+just check-hosts
+```
+
+### Task 6: `host_operations` schema, state machine, and repository
+
+**Owner:** Backend. **Depends on:** Task 4.
+
+**Files:**
+
+- `src-tauri/migrations/0007_p6_host_operations.sql`: a STRICT table with
+  these columns:
+  - `id` (CHECK `GLOB 'hop-*'`);
+  - `printer_id` (FK `printers(id)` `ON DELETE RESTRICT`);
+  - `kind` (CHECK in `upload`, `start`, `pause`, `resume`, `cancel`);
+  - `slice_revision_id` (FK `ON DELETE SET NULL`), `gcode_sha256`,
+    `gcode_size`, `host_path`;
+  - `endpoint_json` (valid JSON);
+  - `state` (CHECK in `dispatching`, `uncertain`, `reconciling`,
+    `succeeded`, `failed`, `abandoned`);
+  - `failure_json`, `resolution_json`;
+  - `attempts`, `last_attempt_at`, `last_attempt_error`;
+  - `abandoned_at`, `abandon_note`;
+  - `created_at`, `dispatched_at`, `resolved_at`.
+
+  It also adds:
+  - a partial unique index on `printer_id WHERE state IN
+    ('dispatching','uncertain','reconciling')`;
+  - a `BEFORE UPDATE` trigger raising when `OLD.state` is terminal;
+  - a rebuild of the `operations` ledger table adding the new kinds
+    (`stageSliceRevision`, `startStagedArtifact`, `pauseHostPrint`,
+    `resumeHostPrint`, `cancelHostPrint`, `abandonHostOperation`), with
+    create, copy, drop, and rename exactly as `0006_p5_slicing.sql` does.
+- `persistence/migrations.rs`: register 0007 and set
+  `CURRENT_SCHEMA_VERSION = 7`. Tests read the constant.
+- `spools/operations.rs`: the new `OperationKind` variants.
+- `host_ops/state.rs`: a pure `transition(from, event) -> Result<State,
+  IllegalTransition>` for the table in D3 (reproduced here):
+  - `dispatching` goes to `succeeded`, `failed`, or `uncertain`;
+  - `uncertain` goes to `reconciling` or `abandoned`;
+  - `reconciling` goes to `succeeded`, `failed`, or `uncertain`;
+  - every other pair is illegal.
+- `host_ops/repository.rs`: `insert_dispatching`, `transition` (uses
+  `state.rs`), `load`, `list_for_printer`, `list_unresolved`,
+  `mark_dispatching_uncertain` (the startup step),
+  `delete_terminal_for_printer`, and `has_unresolved(printer_id)`.
+- `host_ops/mod.rs`: the module and the domain types, ts-rs exported
+  (`HostOperation`, `HostOperationState`, `HostOperationKind`).
+
+**Acceptance criteria:**
+
+- Every legal transition persists, and every illegal one is rejected
+  before SQL.
+- The trigger stops an update to a terminal row.
+- A second unresolved row for the same Printer violates the index.
+- An operation-ledger replay returns the same `hop-*`.
+- No column can hold a credential.
+
+**TDD tests:**
+
+- `state.rs`: the whole transition table (every pair).
+- Repository tests over `crate::test_storage()`.
+- `tests/p6_migration.rs`: migrate a P5-shaped database (copy
+  `tests/p5_migration.rs`), assert that existing `operations` rows
+  survive, then restart.
+- A schema test asserting that no column name contains `credential`,
+  `secret`, or `key`.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just gen-contracts && git diff --stat src/generated
+just check-hosts
+```
+
+### Task 7: Guards: lifecycle, Connection, import, and Slice Revision
+
+**Owner:** Backend. **Depends on:** Task 6. "Unresolved" means a
+`host_operations` row in `dispatching`, `uncertain`, or `reconciling`.
+
+**Files:**
+
+- `printers/lifecycle.rs`:
+  - add `LifecycleBlockerCode::HostOperationUnresolved`;
+  - add `host_ops::guards::HostOperationBlockers` to `blocker_sources()`.
+    It blocks **Archive** and **Delete** while unresolved, with the
+    messages "Finish or abandon the pending printer operation before
+    archiving." and "…before deleting."
+- `printers/repository.rs`:
+  - `set_connection` gets a check, inside its transaction, that returns
+    the new `RepositoryError::ConnectionInUse` when the Printer has an
+    unresolved row **and** the new config changes `kind`, `host`, `port`,
+    or `use_tls`, or clears the Connection, or clears the credential
+    reference;
+  - replacing the credential reference with a new one, endpoint
+    unchanged, is **allowed**;
+  - `replace_all` (import) rejects the whole import if any unresolved row
+    exists;
+  - `delete` calls `delete_terminal_for_printer` in the same transaction,
+    after the blocker check.
+- `contracts/command.rs`: `ErrorCode::ConnectionInUse`, mapped from
+  `RepositoryError::ConnectionInUse` in `CommandError::from_repository`.
+- `slicing/blockers.rs`: register
+  `UnresolvedHostOperationBlocksRevisionDeletion` in
+  `slice_revision_blocker_sources()`. A revision with an unresolved
+  upload or start cannot be deleted.
+- The frontend needs no new component. The existing eligibility UI shows
+  the new blocker message.
+
+**Acceptance criteria**, each blocked while unresolved and allowed after
+`succeeded`, `failed`, or `abandoned`:
+
+- archive;
+- delete;
+- import;
+- endpoint change;
+- Connection clear;
+- credential clear;
+- deleting the referenced revision.
+
+Also: a credential replacement on the same endpoint succeeds; permanent
+delete removes only that Printer's terminal rows; and
+`printer_lifecycle_eligibility` reports the blocker.
+
+**TDD tests:**
+
+- One test per mutation, per unresolved state and per terminal state.
+- A race test: insert an operation and delete the Printer from two
+  threads. Exactly one wins, and no orphan row remains.
+- Credential cleanup (`retry_pending_credential_cleanup`) never deletes
+  the credential of a Printer with an unresolved row.
+- `tests/p6_guards.rs` drives `archive_printer`, `delete_printer`,
+  `set_printer_connection`, `clear_printer_connection`, and
+  `import_printers` through the IPC path.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just gen-contracts && git diff --stat src/generated
+just check-hosts
+```
+
+### Task 8: Moonraker capability adapter and `FakeMoonraker`
+
+**Owner:** Protocol. **Depends on:** Tasks 3, 4, and 5. Use the spike
+report's recorded shapes for fixtures. Scrub any real-host capture
+(Global Constraint 2).
+
+**Files:**
+
+- `Cargo.toml`: add the `multipart` and `stream` features to the existing
+  `reqwest` dependency. Keep `default-features = false`, with no TLS
+  feature.
+- New `connections/moonraker/files.rs`, pure with no I/O:
+  - the upload form parts (`file`, `root=gcodes`, `path=farm3d`, and
+    `checksum` if the spec kept it). There is **no API to add a `print`
+    field**;
+  - metadata, `files.list`, `history.list`, and `print_stats` parsers;
+  - `HostJobState` with every `extruder*` tool as `ToolTemperature` in
+    index order, plus the bed;
+  - response classification into `CommandFailure::Definitive` or
+    `Indeterminate`, per the spec's list.
+- New `connections/moonraker/control.rs`:
+  - implements `ArtifactStaging`, `PrintControl`, `HostStateQuery`, and
+    `CameraDiscovery` over `reqwest` (HTTP) and the existing WebSocket
+    framing (`printer.print.*`, `printer.objects.query`,
+    `server.history.list`, `server.webcams.list`);
+  - the same HTTP client rules as the OctoPrint adapter: no redirects, no
+    system proxy, and `X-Api-Key` marked sensitive;
+  - timeouts: connect 5 s; upload per the spec; RPC 10 s. A timeout is
+    `Indeterminate`.
+- `adapters.rs`: the Moonraker descriptor gains the four builders. The
+  `evidence` row stays `notVerified` until Task 12.
+- New `tests/common/fake_moonraker.rs`: an in-process HTTP and WebSocket
+  server on a loopback `TcpListener`. It stores uploads in memory and
+  records every request. Scripted faults:
+  - store the file, then drop the response;
+  - store a partial file;
+  - delay past the timeout;
+  - 401;
+  - apply a start, then drop the response;
+  - reject a start definitively (with the spike's error shape);
+  - "restart": clear live state but keep files and history.
+
+  It fails the test if any upload has a `print` field.
+
+**Acceptance criteria:**
+
+- The pure functions are covered by fixtures from the spike's simulator
+  captures.
+- The adapter passes every `FakeMoonraker` scenario.
+- No code path can put `print` into an upload.
+- The seeded-secret test: an API key never appears in any error string or
+  `Debug` output.
+
+**TDD tests:**
+
+- Unit tests in `files.rs` (including "the built form has no `print`
+  field" and four-tool parsing).
+- `tests/p6_moonraker_adapter.rs` against `FakeMoonraker`: every trait
+  method's success path, and every scripted fault's
+  `Definitive`/`Indeterminate` classification.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just check-hosts
+```
+
+### Task 9: Executor, reconciler, Start rule, abandon, events, and commands
+
+**Owner:** Backend and Wiring. **Depends on:** Tasks 5, 6, 7, and 8.
+
+**Files:**
+
+- `host_ops/executor.rs`: `run(operation)` does a write-ahead
+  `insert_dispatching` (commit), calls the capability trait, then commits
+  `succeeded`, `failed` (on `Definitive`), or `uncertain` (on
+  `Indeterminate`, a timeout, or a panic). Fault points are injectable
+  for tests: before send, after send, and after the response but before
+  commit.
+- `host_ops/reconciler.rs` applies the D5 rules:
+
+  | Kind | Proved applied | Proved not applied |
+  |---|---|---|
+  | upload | `locate` present, size matches, and the hash matches if checked | absent |
+  | start | `print_stats.filename == host_path` and the state is printing, paused, or complete, or a history job for `host_path` started after `dispatched_at` (within the spec's skew tolerance) | standby with no such job |
+  | pause/resume/cancel | observed state matches | observed state proves no effect |
+
+  - Anything else is back to `uncertain`, with `attempts` and
+    `last_attempt_error` bumped.
+  - It **never** issues a write.
+  - Triggers:
+    - startup, after `restore_persisted_connections` in `lib.rs`: first
+      `mark_dispatching_uncertain`, then reconcile each unresolved row;
+    - when `ConnectionManager` publishes Online for a Printer (a hook);
+    - `reconcile_host_operation`.
+  - It serializes per Printer and backs off with
+    `supervisor::backoff_delay`.
+- `host_ops/start_rule.rs` (pure) implements the Start table:
+
+  | Printer `OperationalState` | Allowed `priorState` |
+  |---|---|
+  | `Ready` | `ready` |
+  | `Finished` | `finished` |
+  | `Cancelled` | `cancelled` |
+  | `Failed`, `Printing`, `Paused`, `Busy`, `Offline`, `Connecting`, `Unknown`, `Error`, `SetupIncomplete`, or stale freshness | none |
+
+  `check(status, prior_state) -> Result<(), StartRejection { NotAllowed
+  { observed }, PreconditionChanged { observed } }>`.
+- `host_ops/commands.rs`, registered per Global Constraint 7:
+  - `stage_slice_revision(operationId, printerId, sliceRevisionId)`;
+  - `start_staged_artifact(operationId, printerId, hostOperationId,
+    priorState)`: re-reads the Printer's live status from
+    `ConnectionManager`, applies `start_rule::check` **before** the
+    write-ahead, and writes no row on rejection;
+  - `pause_host_print`, `resume_host_print`, `cancel_host_print`
+    `(operationId, printerId)`;
+  - `reconcile_host_operation(hostOperationId)`;
+  - `abandon_host_operation(operationId, hostOperationId, acknowledgement:
+    "hostStateUnknown", note?)`: allowed only from `uncertain` with
+    `attempts >= 1`, otherwise `HOST_OPERATION_NOT_ABANDONABLE`;
+  - `list_host_operations(printerId?)`.
+
+  Every capability command checks `capabilities_for` first and returns
+  `CAPABILITY_UNSUPPORTED` with **no** row written.
+- New error codes in `contracts/command.rs`: `CapabilityUnsupported`,
+  `HostOperationNotAbandonable`, `StartNotAllowed`, and
+  `StartPreconditionChanged`, each with a `RecoveryCode` where one
+  applies.
+- `host_ops/events.rs`: the `hostOperations` stream (type prefix
+  `hostOperations.`), `changed` events after commit, and a backfill
+  command, using the same envelope and sequence as `slicing/events.rs`.
+- `lib.rs`: add `HostOperationServices` to `RuntimeServices` and wire the
+  startup order.
+
+**Acceptance criteria:**
+
+- No code path issues a second upload or start by itself.
+- The restart matrix below holds.
+- Credentials appear in no event, error, or row.
+
+**TDD tests** (`tests/p6_host_ops.rs`, against `FakeMoonraker` and a
+rebuilt `RuntimeServices` over the same roots for "restart"):
+
+| Fault | Kind | Expected |
+|---|---|---|
+| Crash after write-ahead, before send | upload | `uncertain` → reconcile → absent → `failed{notApplied}`; no upload seen |
+| Response lost after store | upload | `uncertain` → `succeeded`; exactly one upload seen |
+| Partial file | upload | per the spec's partial-file rule |
+| Start applied, response lost | start | `uncertain` → `succeeded`; exactly one start seen |
+| Start definitively rejected | start | `failed`, not reconciled |
+| Host unreachable throughout | any | stays `uncertain`; abandon allowed; guards lift after abandon |
+| Host printing a different file | start | stays `uncertain`; no start sent |
+
+Also test:
+
+- `start_rule` unit tests, one per table row. `Finished` + `finished` is
+  OK; `Finished` + `ready` gives `PreconditionChanged`; `Failed` +
+  anything gives `NotAllowed`.
+- Four-tool status inputs.
+- Command-level Start tests: no row on `START_NOT_ALLOWED` or
+  `START_PRECONDITION_CHANGED`, and allowed again after `Failed` clears
+  to `Ready`.
+- `CAPABILITY_UNSUPPORTED` for an OctoPrint Printer, with no row.
+- Operation-id replay for every command.
+- Listen-before-backfill ordering.
+- The seeded-secret scan over events, errors, and rows.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just gen-contracts && git diff --stat src/generated
+just check-hosts
+```
+
+### Task 10: Frontend stores, the Start rule, and presentation
+
+**Owner:** Frontend. **Depends on:** the Task 5 and Task 9 contracts
+(already generated in `src/generated/`).
+
+**Files:**
+
+- `src/host-ops/capabilities-store.ts`: `PrinterCapabilities` per Printer
+  from `printer_capabilities`, refetched when the Printer's status
+  changes.
+- `src/host-ops/host-operations-store.ts`: the `hostOperations` stream
+  through `src/ipc/sequenced-stream.ts`, listening before backfill (copy
+  `src/slicing/slicing-store.ts`).
+- `src/host-ops/host-operations-store-mock.ts` and `web-fixtures.ts` for
+  `just web`:
+  - a Ready single-tool Moonraker Printer;
+  - a four-tool Moonraker Printer;
+  - an OctoPrint Printer (every write `notVerified`);
+  - a `Finished` Printer with a staged artifact;
+  - a `Failed` Printer;
+  - a Printer with an `uncertain` upload.
+- `src/host-ops/start-rule.ts`, a pure mirror of the backend table.
+  `startOffer(status) -> { offered: false, reason } | { offered: true,
+  priorState, confirmLabel }`:
+  - `ready` → "The bed is clear.";
+  - `finished` → "The previous print finished. The bed is clear.";
+  - `cancelled` → "The previous print was cancelled. The bed is clear.";
+  - `Failed` → not offered, "Clear the error on the printer first.";
+  - other states → not offered, with the state as the reason.
+- `src/host-ops/presentation.ts`, pure:
+  - Host Operation state labels (Uploading, Staged, Uncertain, Checking,
+    Failed, Abandoned) with severity;
+  - `CapabilityState` labels ("Supported", "Not supported by
+    <adapter>", "Not verified yet", "Not available on this printer");
+  - unsupported and failed use **different** copy and severity.
+
+**Acceptance criteria:**
+
+- The stores apply events in sequence and discard duplicates.
+- `start-rule.ts` agrees with every backend `start_rule` row.
+- No credential field exists in any store type.
+
+**TDD tests (Vitest):**
+
+- Stream ordering and backfill.
+- `startOffer` for every `OperationalState`, and for stale freshness.
+- Presentation for every state.
+- Unsupported and failed never share copy.
+
+**Commands:**
+
+```sh
+just build
+just test
+```
+
+### Task 11: Frontend UI: Job tab, Stage, Start, Abandon, and Capabilities
+
+**Owner:** Frontend. **Depends on:** Task 10.
+
+**Files:**
+
+- `src/screens/PrinterJobPanel.tsx` and `.module.css`, added as a **Job**
+  tab in `PrinterDetailDock.tsx` (today: Status, Setup). It shows:
+  - the host's current print from telemetry: file, state, progress, and
+    every tool's temperature/target from `telemetry.tools` (fall back to
+    `nozzle_*` when `tools` is empty) plus the bed;
+  - **Pause**, **Resume**, and **Cancel print…** (cancel confirms), shown
+    only when the capability is supported;
+  - **Staged on this Printer**: Host Operations with state, and
+    **Check again**, **Abandon check…**, and **Start…**.
+- `src/screens/StartStagedDialog.tsx`: a Kobalte Dialog.
+  - The checkbox label comes from `startOffer(status).confirmLabel`, and
+    Confirm is disabled until it is ticked.
+  - It sends `priorState`.
+  - On `START_PRECONDITION_CHANGED` or `START_NOT_ALLOWED` it clears the
+    tick and re-renders for the new status. A tick is never reused.
+  - This holds for both `StartSafety` values.
+- `src/screens/StageOnPrinterDialog.tsx`: opened from **Stage on
+  Printer…** in `SliceRevisionReview.tsx`, using Kobalte Dialog and
+  Select.
+  - Printers whose `upload` is unsupported are listed but disabled, with
+    the capability reason.
+  - Offline Printers are disabled with "Offline", which is different
+    copy.
+  - **Add to Queue…** stays disabled.
+- `src/screens/AbandonReconciliationDialog.tsx`: a Kobalte AlertDialog.
+  - Required checkbox: "I understand the printer may still have this
+    file or be printing it."
+  - Body names the Printer and file, and states that farm3d will stop
+    checking.
+- `src/screens/CapabilityList.tsx`: a read-only list in the Setup tab.
+  Each capability shows its label and evidence tier.
+- `PrinterConnectionPanel.tsx`: show `CONNECTION_IN_USE` with a link to
+  the Job tab.
+
+**Acceptance criteria:**
+
+- An unsupported control is never an enabled button.
+- A failure is an inline `role="alert"` with a recovery action.
+- Start follows the table: offered for Ready, Finished, and Cancelled
+  (each with its own label), and disabled with a reason otherwise.
+- Abandon and Start cannot be confirmed without their checkboxes.
+- Everything is keyboard-operable.
+- Layout works at 1440 × 900 and 1024 × 700.
+- Tokens, CSS Modules, and Kobalte only.
+
+**TDD tests** (`@solidjs/testing-library`, with
+`pointerDown`/`pointerUp` for Select and Menu):
+
+- One Start test per table row, with exact labels.
+- The command receives the matching `priorState`.
+- A `Failed` → `Ready` status event enables Start without a reload.
+- `START_PRECONDITION_CHANGED` clears the tick.
+- The Stage dialog's unsupported and Offline reasons differ.
+- Abandon cannot be confirmed unticked.
+- A four-tool Printer shows four tools.
+- `CONNECTION_IN_USE` rendering.
+
+**Commands:**
+
+```sh
+just build
+just test
+just web      # manual check at /#showcase and the Job tab with the web fixtures
+```
+
+### Task 12: Simulator evidence and the read-only real-host suite
+
+**Owner:** Protocol and Wiring. **Depends on:** Tasks 1, 8, and 9.
+
+**Files:**
+
+- `src-tauri/tests/sim/toxiproxy.rs`: add `cut_request_after(proxy,
+  bytes)`, an **upstream** `limit_data` toxic. The existing toxics are
+  downstream only.
+- `src-tauri/tests/sim_moonraker.rs`: a P6 section. Every test is
+  `#[ignore]`, takes `sim::exclusive()`, calls `reset()` first, and uses
+  `require_sim!`. It drives `host_ops` through a `RuntimeServices` whose
+  Printer points at `sim.config()`.
+  - **Safety precondition before any start:** read every heater from
+    `sim.heaters()` (every `extruder*` and `heater_bed`) and refuse if any
+    target is non-zero. Also refuse if the host is printing or paused.
+    `Finished` and `Cancelled` are allowed starting states and pass the
+    matching `priorState`.
+  - Upload uses a no-motion fixture: comments and `M117` only, with no
+    `M104`, `M109`, `M140`, `M190`, or `T<n>`.
+  - Scenarios:
+    - stage, then `cut_after(Moonraker, 0)`, which loses the response
+      after the host stored the file;
+    - rebuild the services (a restart), reconcile, and expect `succeeded`
+      with exactly one file;
+    - `cut_request_after` mid-body, then reconcile per the spec;
+    - start with the response cut, then reconcile to `succeeded`;
+    - pause, resume, and cancel;
+    - a second start from `Finished` with `priorState: finished`
+      (answer 13);
+    - `set_enabled(false)` for longer than the backoff, then abandon;
+    - Klipper restart mid-print;
+    - capability detection on `moonraker`, `moonraker-multi` (four
+      tools), `variant no-bed`, and `variant apikey`.
+- New `src-tauri/tests/p6_moonraker_readonly.rs`, the real-hardware tier
+  (`#[ignore]`):
+  - It reads `FARM3D_MOONRAKER_HOST` (required, with no default),
+    `FARM3D_MOONRAKER_PORT` (default 7125), `FARM3D_MOONRAKER_API_KEY`,
+    and `FARM3D_MOONRAKER_API_KEY_FILE`, as `a0_moonraker_live.rs` does.
+  - It builds its client through a **read-only wrapper** that exposes
+    only `HostStateQuery`, `ArtifactStaging::locate`, `CameraDiscovery`,
+    probe, and subscribe. It records every request, and fails on any
+    HTTP `POST` or `DELETE` or any `printer.print.*` RPC.
+  - Tests:
+    - probe and capability detection;
+    - `host_job_state` with every tool;
+    - `locate` of a never-sent `farm3d/<uuid>.gcode` is absent;
+    - a seeded local `uncertain` upload row for that path reconciles to
+      `failed{notApplied}`;
+    - blocking the port on the farm3d machine keeps the row `uncertain`,
+      and abandon is local only;
+    - each test asserts zero recorded writes.
+  - It must never print or write the host value.
+- `justfile`: a new recipe `p6-readonly` that fails without
+  `FARM3D_MOONRAKER_HOST` and runs `cargo test --test
+  p6_moonraker_readonly -- --ignored --test-threads=1 --nocapture`. Also
+  add `p6_*` sim tests to `test-sim` if they live in a new file (prefer
+  `sim_moonraker.rs`).
+- `adapters.rs`: flip each Moonraker write capability to `supported` or
+  `adapter` with `tier: Sim` and `source` naming this run's manifest.
+  Read-only results may add `host` facts and `verified_host_versions`
+  only.
+
+**Acceptance criteria:**
+
+- Every D5 row is observed on the simulator, with the manifest path
+  recorded.
+- The read-only suite passes with zero recorded writes, or is recorded as
+  Unavailable.
+- `just test-rust` (CI) passes without simulators.
+- No host value appears in any committed file (`just check-hosts`).
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just sim-up
+FARM3D_SIM_REQUIRED=1 just test-sim
+just sim-down
+FARM3D_MOONRAKER_HOST=<U1 host> just p6-readonly     # optional, owner-run; never commit the value
+just test-rust
+just check-hosts
+```
+
+### Task 13: Tracer
+
+**Owner:** Wiring. **Depends on:** Tasks 9, 11, and 12.
+
+**Files:**
+
+- `src-tauri/tests/p6_tracer.rs`: one test, run **twice**:
+  - against `FakeMoonraker` in the normal suite (CI);
+  - as `#[ignore]` against the simulator under `just test-sim`, which is
+    the evidence run.
+
+  Steps:
+  1. Import `tests/fixtures/library/plain.gcode` and create an external
+     Slice Revision from it. Record its sha256. On the simulator, use the
+     no-motion fixture from Task 12 instead, since `plain.gcode` may
+     contain motion or heating.
+  2. `stage_slice_revision` with the response cut (the fake's
+     drop-after-store fault, or `cut_after(Moonraker, 0)` on the sim).
+  3. Assert that archive, delete, Connection clear, and revision delete
+     are blocked.
+  4. Restart: rebuild `RuntimeServices` over the same roots.
+  5. Reconcile. Assert `succeeded`, exactly one file at
+     `farm3d/<slr-id>.gcode` with a matching hash, **no** second upload,
+     and **no** start (the host is still standby; no new history job).
+  6. Assert that the guards have lifted.
+  7. Repeat with the host unreachable (the fake down, or
+     `set_enabled(false)`), then abandon. The guards lift, and the row is
+     kept as `abandoned`.
+- `p6_moonraker_readonly.rs`: add `readonly_reconciliation_tracer`. It
+  does **no upload**:
+  1. Seed an `uncertain` upload row for a never-sent path.
+  2. Restart.
+  3. Reconcile against the real host, expecting `failed{notApplied}`.
+  4. Assert that the guards lifted, with zero writes recorded.
+
+**Acceptance criteria:** both runs pass, and the sim run's manifest path
+is recorded for Task 14.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just test-rust
+just sim-up && FARM3D_SIM_REQUIRED=1 just test-sim && just sim-down
+just check-hosts
+```
+
+### Task 14: Documentation and verification record
+
+**Owner:** Wiring; a fresh verification pass follows. **Depends on:** all.
+
+**Files:**
+
+- `docs/verification/2026-09-2x-p6-moonraker-commands.md`, in the P2 and
+  P5 verification shape. It maps every #16 acceptance criterion to
+  evidence: test names, the sim manifest path, and read-only results
+  (Unavailable if not run), with no host values.
+- `docs/screenshots/p6-*.png` at 1440 × 900 and 1024 × 700:
+  - the Job tab;
+  - Stage;
+  - an uncertain row;
+  - Check again;
+  - Abandon;
+  - Start from Finished;
+  - Start disabled after Failed;
+  - the blocked Connection edit;
+  - blocked archive;
+  - the Capabilities list.
+
+  Every write action targets a **simulator** Printer.
+- `docs/superpowers/plans/2026-09-16-complete-v1-implementation-approach.md`:
+  close the "Adapter command/camera capabilities" row for Moonraker only.
+- `CONTEXT.md`, if Task 4 left anything out.
+
+**Acceptance criteria:**
+
+- Every gate in the commands below passes, or is recorded as unavailable
+  with a reason.
+- Nothing in the record names an owner host.
+
+**Commands:**
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+just build
+just test
+just test-rust
+just gen-contracts && git diff --exit-code src/generated
+just sim-up && FARM3D_SIM_REQUIRED=1 just test-sim && just sim-down
+just package        # then, from the installed .deb, stage one revision to the simulator
+just dev            # manual pass; needs a display
+just check-hosts
+```
+
+## Delivery order
+
+```text
+Task 1 (sim cleanup) ─> Task 3 (spike) ─> Task 4 (spec + ADR) ─┬─> Task 5 (capabilities) ─┬─> Task 8 (adapter) ─┐
+Task 2 (registry) ─────────────────────────────────────────────┘                          │                     ├─> Task 9 (executor) ─┬─> Task 12 (sim + read-only) ─> Task 13 (tracer) ─> Task 14
+                                               Task 4 ─> Task 6 (schema) ─> Task 7 (guards) ┘                                          └─> Task 10 (stores) ─> Task 11 (UI) ──────┘
+```
+
+| # | Task | Ready | Depends on |
+|---|---|---|---|
+| 1 | Retire moonraker-sim; fold variants; OctoPrint sim tests | **Now** | — |
+| 2 | Adapter registry on #27 | **Now** | — |
+| 3 | Moonraker command spike | After 1 (read-only checks now) | 1 |
+| 4 | Spec + ADR-0011 | After 3 | 3 |
+| 5 | Capability traits and matrix | After 4 | 2, 4 |
+| 6 | Schema, state machine, repository | After 4 | 4 |
+| 7 | Guards | After 6 | 6 |
+| 8 | Moonraker adapter + FakeMoonraker | After 5 | 3, 4, 5 |
+| 9 | Executor, reconciler, Start rule, commands | After 8 | 5–8 |
+| 10 | Frontend stores and Start rule | After 9's contracts | 5, 9 |
+| 11 | Frontend UI | After 10 | 10 |
+| 12 | Sim evidence and read-only suite | After 9 | 1, 8, 9 |
+| 13 | Tracer | After 11, 12 | 9, 11, 12 |
+| 14 | Docs and verification | Last | all |
+
+Tasks 1 and 2 run in parallel. Tasks 6 and 7 run in parallel with Tasks 5
+and 8. Tasks 10–11 run in parallel with Task 12.
+
+## Exit gate (issue #16, Moonraker)
+
+- [ ] An evidence-backed Moonraker capability row, with `tier: sim` and a
+  manifest citation (Tasks 3, 5, 12).
+- [ ] Simulator command tests cover uncertainty, interruption, restart,
+  and reconciliation. Read-only real-host results are recorded, with zero
+  writes (Tasks 9, 12).
 - [ ] Archive/delete, import, and Connection/credential mutations cannot
-  orphan an active or uncertain operation, and become available only after
-  resolution or explicit abandonment (Tasks 6, 8, 12).
-- [ ] Capability-aware frontend behavior distinguishes unsupported from
-  failed operations (Tasks 9, 10).
-- [ ] The tracer completes on the sim with no duplicate upload and no
-  accidental start. The U1 read-only reconciliation variant completes with
-  no upload (Task 12).
+  orphan an unresolved operation, and they unblock only after resolution
+  or abandonment (Tasks 7, 9, 13).
+- [ ] The UI distinguishes unsupported from failed, and follows the Start
+  table (Tasks 10, 11).
+- [ ] The tracer completes on the simulator with no duplicate upload and
+  no accidental start. The read-only variant completes with no upload
+  (Task 13).
