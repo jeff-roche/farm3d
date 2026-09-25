@@ -117,6 +117,7 @@
 
 .arrange {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.5rem;
 }
@@ -129,11 +130,24 @@
   background-color: var(--f3d-color-surface-raised);
 }
 
-.status {
-  min-height: 1.25rem;
-  margin: 0;
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
   padding: 0.125rem 0.75rem;
   border-top: 1px solid var(--f3d-color-border);
+}
+
+.status {
+  flex: 1;
+  min-height: 1.25rem;
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.hint {
+  margin: 0;
   color: var(--f3d-color-text-muted);
   font-size: var(--f3d-type-body-small-size);
 }

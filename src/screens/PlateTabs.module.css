@@ -84,3 +84,9 @@
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
+
+.hint {
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+  white-space: nowrap;
+}

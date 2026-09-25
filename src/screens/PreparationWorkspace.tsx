@@ -1,5 +1,5 @@
 import { IconArrowLeft } from "@tabler/icons-solidjs";
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { Button } from "../design-system";
 import { loadRevisions } from "../library/library-store";
 import { measureBetween } from "../slicing/bounds";
@@ -176,6 +176,11 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   const session = props.session;
   const actions = createPreparationActions(session);
   let inspector: HTMLDivElement | undefined;
+  const arrangeReasonId = createUniqueId();
+  // Opening the workspace moves focus to its heading, since the Prepare…
+  // button that opened it is gone.
+  let heading: HTMLHeadingElement | undefined;
+  onMount(() => heading?.focus());
 
   const [narrow, setNarrow] = createSignal(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
   // Folded by default when narrow, so the viewport keeps its room.
@@ -230,6 +235,27 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
     return distance ? { measure: [distance.from, distance.to] as [Vec3, Vec3] } : {};
   };
 
+  // --- Why tools are unavailable (shown as text, not only as disabled) ------
+  const arrangeUnavailable = (): string | undefined => {
+    const reason = session.optionsError();
+    if (reason) return `Arrange needs the slice options, which didn't load: ${reason}`;
+    if (session.volume() === null) return "Arrange is waiting for the slice options.";
+    if ((plate()?.instances.length ?? 0) === 0) return "No objects on this plate to arrange.";
+    return undefined;
+  };
+  const toolHints = () => {
+    const hints: string[] = [];
+    const instance = selected();
+    if (!instance) {
+      hints.push("Select an object to move, turn, scale, lay flat, move to another plate, duplicate or delete it.");
+    } else if ((session.object(instance.objectKey)?.layFlatFaces.length ?? 0) === 0) {
+      hints.push(`${session.instanceName(instance.instanceKey)} has no flat faces to lay it on.`);
+    }
+    const arrange = arrangeUnavailable();
+    if (arrange && !session.optionsError()) hints.push(arrange);
+    return hints.join(" ");
+  };
+
   // --- Tools -----------------------------------------------------------------
   const focusIn = (selector: string) => inspector?.querySelector<HTMLElement>(selector)?.focus();
   const tools = preparationTools(actions, {
@@ -238,7 +264,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
       const instance = selected();
       return !!instance && (session.object(instance.objectKey)?.layFlatFaces.length ?? 0) > 0;
     },
-    canArrange: () => session.volume() !== null && (plate()?.instances.length ?? 0) > 0,
+    canArrange: () => arrangeUnavailable() === undefined,
     measuring,
     toggleMeasure: () => {
       setMeasuring((on) => !on);
@@ -316,25 +342,28 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
     return "All changes saved";
   };
 
-  const back = () => {
-    session.editor.dispose();
-    props.onBack();
-  };
 
   return (
     <div class={styles.workspace}>
       <div class={styles.header}>
-        <Button variant="ghost" size="sm" onClick={back}>
+        <Button variant="ghost" size="sm" onClick={() => props.onBack()}>
           <IconArrowLeft size={14} aria-hidden="true" /> Back to Library
         </Button>
-        <h2 class={styles.title}>Preparing {session.model().name}</h2>
-        <span class={styles.saveState} role="status">{saveState()}</span>
+        <h2 ref={heading} class={styles.title} tabIndex={-1}>Preparing {session.model().name}</h2>
+        <span class={styles.saveState}>{saveState()}</span>
       </div>
       <Show when={noticeText(session.editor.notice())}>
         {(text) => (
           <div class={styles.notice} role="alert">
             <p class={styles.noticeText}>{text()}</p>
             <Button variant="ghost" size="sm" onClick={() => session.editor.dismissNotice()}>Dismiss</Button>
+          </div>
+        )}
+      </Show>
+      <Show when={session.optionsError()}>
+        {(reason) => (
+          <div class={styles.notice} role="alert">
+            <p class={styles.noticeText}>Placement checks need the slice options, which didn't load: {reason()}</p>
           </div>
         )}
       </Show>
@@ -421,6 +450,11 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
                         instances={plate()?.instances ?? []}
                         instanceName={session.instanceName}
                         placement={placement}
+                        checking={(key) => {
+                          const instance = plate()?.instances.find((candidate) => candidate.instanceKey === key);
+                          return !!instance && session.checkingPlacement(instance);
+                        }}
+                        notArranged={actions.notArranged}
                         selectedInstanceKey={session.selectedInstanceKey()}
                         onSelect={session.select}
                         triangleCount={triangleCount()}
@@ -450,11 +484,15 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
                           variant="secondary"
                           size="sm"
                           aria-keyshortcuts="A"
-                          disabled={session.volume() === null || (plate()?.instances.length ?? 0) === 0}
+                          disabled={arrangeUnavailable() !== undefined}
+                          aria-describedby={arrangeUnavailable() ? arrangeReasonId : undefined}
                           onClick={() => actions.arrangePlate()}
                         >
                           Arrange plate
                         </Button>
+                        <Show when={arrangeUnavailable()}>
+                          {(reason) => <p id={arrangeReasonId} class={styles.hint}>{reason()}</p>}
+                        </Show>
                       </div>
                     </div>
                   </Show>
@@ -467,7 +505,12 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
           <aside class={styles.dock} aria-label="Preparation settings">{props.dock}</aside>
         </Show>
       </div>
-      <p class={styles.status} role="status">{actions.status()}</p>
+      <div class={styles.footer}>
+        <p class={styles.status} role="status">{actions.status()}</p>
+        <Show when={toolHints()}>
+          <p class={styles.hint}>{toolHints()}</p>
+        </Show>
+      </div>
     </div>
   );
 }

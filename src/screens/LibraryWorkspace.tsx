@@ -227,6 +227,17 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     if (model && !modelsFor(activeView(), [model], now()).length) setView(ALL_MODELS);
   }));
 
+  // The collection pane, remade each time preparing ends.
+  let content: HTMLDivElement | undefined;
+  /** **Back to Library**: the collection returns, with focus on the card
+   *  or row of the Model that was being prepared. */
+  const endPreparing = () => {
+    setPreparingId(null);
+    queueMicrotask(() => content
+      ?.querySelector<HTMLElement>("button[aria-pressed='true'], [role='row'][aria-selected='true']")
+      ?.focus());
+  };
+
   // Preparing ends when the selection moves to another Model (or none).
   const preparing = createMemo(() => {
     const model = selectedModel();
@@ -422,7 +433,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
               onRenameProject={(projectId) => setDialog({ kind: "renameProject", projectId })}
               onDeleteProject={(projectId) => setDialog({ kind: "deleteProject", projectId })}
             />
-            <div class={styles.content}>
+            <div ref={content} class={styles.content}>
               <Show
                 when={library.status() !== "loading" || library.models().length > 0}
                 fallback={<p class={styles.notice} role="status">Loading the Library…</p>}
@@ -512,7 +523,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           {(_id) => (
             <div class={styles.preparing}>
               <Suspense fallback={<p class={styles.notice} role="status">Loading the Preparation workspace…</p>}>
-                <PreparationMode model={preparing()!} onBack={() => setPreparingId(null)} />
+                <PreparationMode model={preparing()!} onBack={endPreparing} />
               </Suspense>
             </div>
           )}

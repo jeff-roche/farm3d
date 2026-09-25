@@ -228,18 +228,40 @@ describe("LibraryWorkspace", () => {
     const details = screen.getByRole("complementary", { name: "Model details" });
     fireEvent.click(within(details).getByRole("button", { name: "Prepare…" }));
     expect(await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 })).toBeInTheDocument();
+    // Focus moves to the workspace, since the button that opened it is gone.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Preparing Enclosure lid" })).toHaveFocus());
     // The sidebar and the details panel make way; the target is unchanged.
     expect(screen.queryByRole("navigation", { name: "Library" })).toBeNull();
     expect(screen.queryByRole("complementary", { name: "Model details" })).toBeNull();
     expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-web-enclosure" });
     fireEvent.click(screen.getByRole("button", { name: /Back to Library/ }));
     expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    // Back on the Model that was being prepared.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enclosure lid", pressed: true })).toHaveFocus());
 
     fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
     await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 });
     navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-knob" } });
     expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
+  });
+
+  it("saves an edit still waiting for its pause when another selection ends preparing", async () => {
+    const { loadWebSlicingFixture, slicingStoreMock } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole("button", { name: /Plate$/ }));
+    await screen.findByRole("tab", { name: /^Plate 3/ });
+    expect(slicingStoreMock.updatePreparation).not.toHaveBeenCalled();
+
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-knob" } });
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    await waitFor(() => expect(slicingStoreMock.updatePreparation).toHaveBeenCalledTimes(1));
+    const [, document] = slicingStoreMock.updatePreparation.mock.calls[0];
+    expect(document.plates).toHaveLength(3);
   });
 
   it("a card's Add to Project… selects the Model and focuses the details panel's picker", async () => {

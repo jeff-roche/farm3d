@@ -12,6 +12,10 @@ export interface PreparationObjectListProps {
   instances: InstanceDoc[];
   instanceName: (instanceKey: string) => string;
   placement: (instanceKey: string) => PlacementCheck | undefined;
+  /** The placement shown predates the instance's latest turn or scale. */
+  checking?: (instanceKey: string) => boolean;
+  /** The last arrange couldn't fit this instance and left it in place. */
+  notArranged?: (instanceKey: string) => boolean;
   selectedInstanceKey: string | null;
   onSelect: (instanceKey: string) => void;
   /** The plate's triangle count, for the large-model note. */
@@ -56,9 +60,19 @@ export function PreparationObjectList(props: PreparationObjectListProps) {
       id: "status",
       header: "Placement",
       cell: (key) => (
-        <Show when={placementProblem(props.placement(key))} fallback={<span class={styles.ok}>On the bed</span>}>
-          {(problem) => <SeverityMarker severity="warning" label={problem()} />}
-        </Show>
+        <span class={styles.placement}>
+          <Show
+            when={!props.checking?.(key)}
+            fallback={<span class={styles.ok}>Checking placement…</span>}
+          >
+            <Show when={placementProblem(props.placement(key))} fallback={<span class={styles.ok}>On the bed</span>}>
+              {(problem) => <SeverityMarker severity="warning" label={problem()} />}
+            </Show>
+          </Show>
+          <Show when={props.notArranged?.(key)}>
+            <SeverityMarker severity="warning" label="Didn't fit, not arranged" />
+          </Show>
+        </span>
       ),
     },
   ];

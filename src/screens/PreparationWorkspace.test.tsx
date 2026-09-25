@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
 import type { ModelRecord } from "../library/types";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
+import { footprintOf } from "../slicing/bounds";
 import { SAVE_DEBOUNCE_MS } from "../slicing/preparation-editor";
 import {
   loadWebSlicingFixture,
@@ -16,6 +17,11 @@ import { PreparationMode } from "./PreparationMode";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
+// Counted, to check footprints stay off the input path.
+vi.mock("../slicing/bounds", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../slicing/bounds")>();
+  return { ...actual, footprintOf: vi.fn(actual.footprintOf) };
+});
 vi.mock("../settings/settings-store", () => ({
   loadSettings: vi.fn(async () => ({ themeMode: "system" })),
   updateSettings: vi.fn(async () => undefined),
@@ -148,13 +154,22 @@ describe("PreparationWorkspace", () => {
       expect(shownDocument().plates.map((plate) => plate.plateKey)).toEqual(["plt-web-enclosure-2"]);
     });
 
+    it("say in words why no more plates can be added", async () => {
+      const full = JSON.parse(JSON.stringify(held())) as PreparationRecord;
+      for (let n = full.document.plates.length; n < 36; n += 1) full.document.plates.push({ plateKey: `plt-extra-${n}`, instances: [] });
+      setSlicingState({ preparations: { [ENCLOSURE]: full } });
+      await open();
+      expect(screen.getByRole("button", { name: /Plate$/ })).toBeDisabled();
+      expect(screen.getByText("36 plates, the most a Preparation can have")).toBeInTheDocument();
+    });
+
     it("can't delete the last plate", async () => {
       const only = JSON.parse(JSON.stringify(held())) as PreparationRecord;
       only.document.plates = [only.document.plates[0]];
       setSlicingState({ preparations: { [ENCLOSURE]: only } });
       await open();
       await fireEvent.pointerDown(screen.getByLabelText(/^Plate actions for/), { pointerType: "mouse", button: 0 });
-      expect((await screen.findByText("Delete…")).closest("[role='menuitem']")).toHaveAttribute("data-disabled");
+      expect((await screen.findByText(/^Delete… \(a Preparation keeps at least one plate\)/)).closest("[role='menuitem']")).toHaveAttribute("data-disabled");
     });
   });
 
@@ -270,6 +285,77 @@ describe("PreparationWorkspace", () => {
       await saved();
       // The 120 × 80 lid, centred on the 256 mm bed.
       expect(lid().transform.translateMm).toEqual([68, 88]);
+    });
+  });
+
+  describe("placement checks", () => {
+    it("mark what the last arrange couldn't fit, until it is edited", async () => {
+      // Two lids at double size: only one fits on the bed.
+      const crowded = JSON.parse(JSON.stringify(held())) as PreparationRecord;
+      const big = { translateMm: [128, 128] as [number, number], rotateDeg: [0, 0, 0] as [number, number, number], scale: [2, 2, 1] as [number, number, number] };
+      crowded.document.plates[0].instances = [
+        { instanceKey: "ins-a", objectKey: 1, transform: big },
+        { instanceKey: "ins-b", objectKey: 1, transform: big },
+      ];
+      setSlicingState({ preparations: { [ENCLOSURE]: crowded } });
+      render(() => <PreparationMode model={enclosure()} onBack={onBack} />);
+      await waitFor(() => expect(lastFakeRenderer()?.instances.length).toBe(2));
+      await waitFor(() => expect(lastFakeRenderer()?.buildVolume).toBeTruthy());
+      key(canvas(), { key: "a" });
+      expect(await screen.findByText(/Didn't fit, left where they were: Lid 2\./)).toBeInTheDocument();
+      const lid2 = () => screen.getByRole("row", { name: /Lid 2/ });
+      expect(lid2()).toHaveTextContent("Didn't fit, not arranged");
+      expect(screen.getByRole("row", { name: /Lid 1/ })).not.toHaveTextContent("Didn't fit");
+      // Still marked later, and gone once that object is edited.
+      await saved();
+      expect(lid2()).toHaveTextContent("Didn't fit, not arranged");
+      fireEvent.click(lid2());
+      key(canvas(), { key: "ArrowLeft" });
+      await waitFor(() => expect(lid2()).not.toHaveTextContent("Didn't fit"));
+    });
+
+    it("say in words why a tool is unavailable, and why placement can't be checked", async () => {
+      slicingStoreMock.listSliceOptions.mockImplementation(async () => {
+        throw { contractVersion: 1, code: "RUNTIME_UNAVAILABLE", message: "No slicer runtime is installed.", recovery: [], retryable: false };
+      });
+      render(() => <PreparationMode model={enclosure()} onBack={onBack} />);
+      expect(await screen.findByText("Placement checks need the slice options, which didn't load: No slicer runtime is installed."))
+        .toBeInTheDocument();
+      // The toolbar's and the side column's.
+      for (const button of screen.getAllByRole("button", { name: "Arrange plate" })) expect(button).toBeDisabled();
+      expect(screen.getByText("Arrange needs the slice options, which didn't load: No slicer runtime is installed.")).toBeInTheDocument();
+      expect(screen.getByText(/^Select an object to move, turn, scale/)).toBeInTheDocument();
+      // The save state is plain text, not a second live region.
+      expect(screen.getByText("All changes saved").closest("[role='status']")).toBeNull();
+    });
+
+    it("turn at once, and check the placement afterwards, for the latest turn only", async () => {
+      // Near the back edge: fine as it is, out of bounds once turned 90°.
+      const nearEdge = JSON.parse(JSON.stringify(held())) as PreparationRecord;
+      nearEdge.document.plates[0].instances[0].transform.translateMm = [128, 170];
+      setSlicingState({ preparations: { [ENCLOSURE]: nearEdge } });
+      const computed = vi.mocked(footprintOf);
+      computed.mockClear();
+      await open();
+      fireEvent.click(screen.getByRole("row", { name: /Lid/ }));
+      const row = () => screen.getByRole("row", { name: /Lid/ });
+      await waitFor(() => expect(row()).toHaveTextContent("On the bed"));
+      // The first checks, one per plate's object, are done.
+      await waitFor(() => expect(computed).toHaveBeenCalledTimes(2));
+      computed.mockClear();
+
+      for (let turn = 0; turn < 6; turn += 1) key(canvas(), { key: "r" });
+      // Every turn shows at once; no footprint was computed on the way.
+      expect(lastFakeRenderer()!.instances[0].matrix[0]).toBeCloseTo(0, 6);
+      expect(computed).not.toHaveBeenCalled();
+      expect(row()).toHaveTextContent("Checking placement…");
+
+      await waitFor(() => expect(row()).toHaveTextContent("Outside the bed"));
+      expect(row()).not.toHaveTextContent("Checking placement…");
+      // One computation, for the last turn only.
+      expect(computed).toHaveBeenCalledTimes(1);
+      expect(computed.mock.calls[0][0].rotateDeg[2]).toBe(90);
+      expect(screen.getByRole("tab", { name: /^Lid/ })).toHaveTextContent("issues");
     });
   });
 

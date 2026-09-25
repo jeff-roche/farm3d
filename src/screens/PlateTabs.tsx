@@ -1,6 +1,6 @@
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { IconDots, IconPlus } from "@tabler/icons-solidjs";
-import { createSignal, For, Show, type JSX } from "solid-js";
+import { createSignal, createUniqueId, For, Show, type JSX } from "solid-js";
 import { Button, Dialog, DropdownMenu, TextField, type DropdownMenuEntry } from "../design-system";
 import { MAX_PLATE_NAME_CHARS, MAX_PLATES, plateLabel } from "../slicing/preparation-edits";
 import type { PlateDoc } from "../slicing/types";
@@ -51,6 +51,7 @@ export function PlateTabs(props: PlateTabsProps) {
     else setDeleting(plate);
   };
 
+  const limitId = createUniqueId();
   const menu = (): DropdownMenuEntry[] => {
     const plate = shown();
     if (!plate) return [];
@@ -59,7 +60,9 @@ export function PlateTabs(props: PlateTabsProps) {
       { label: "Move left", onSelect: () => props.onMove(plate.plateKey, -1), disabled: index() <= 0 },
       { label: "Move right", onSelect: () => props.onMove(plate.plateKey, 1), disabled: index() >= props.plates.length - 1 },
       { type: "separator" },
-      { label: "Delete…", onSelect: () => requestDelete(plate), disabled: props.plates.length <= 1 },
+      props.plates.length <= 1
+        ? { label: "Delete… (a Preparation keeps at least one plate)", onSelect: () => {}, disabled: true }
+        : { label: "Delete…", onSelect: () => requestDelete(plate) },
     ];
   };
 
@@ -86,10 +89,13 @@ export function PlateTabs(props: PlateTabsProps) {
           size="sm"
           onClick={props.onAdd}
           disabled={props.plates.length >= MAX_PLATES}
-          title={props.plates.length >= MAX_PLATES ? `A Preparation has at most ${MAX_PLATES} plates.` : undefined}
+          aria-describedby={props.plates.length >= MAX_PLATES ? limitId : undefined}
         >
           <IconPlus size={14} aria-hidden="true" /> Plate
         </Button>
+        <Show when={props.plates.length >= MAX_PLATES}>
+          <span id={limitId} class={styles.hint}>{MAX_PLATES} plates, the most a Preparation can have</span>
+        </Show>
         <Show when={shown()}>
           {(plate) => (
             <DropdownMenu

@@ -4,6 +4,7 @@
  *  the target's slice options and build volume, each instance's footprint,
  *  the live validation, and the plate and object selection. */
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
+import { isCommandError } from "../ipc/client";
 import type { ModelRecord } from "../library/types";
 import { footprintOf, type Footprint } from "../slicing/bounds";
 import { createGeometryCache } from "../slicing/geometry-cache";
@@ -19,6 +20,7 @@ import {
 import type {
   GeometryObject,
   InstanceDoc,
+  InstanceTransform,
   PreparationDocument,
   PreparationRecord,
   RevisionGeometry,
@@ -44,9 +46,20 @@ export interface PreparationSession {
   meshes: () => Map<number, MeshBuffer>;
   /** `list_slice_options` for the document's target. */
   options: () => SliceOptions | undefined;
+  /** Why the slice options couldn't load, if they couldn't. */
+  optionsError: () => string | undefined;
   /** The target's printable space; `null` until the options load. */
   volume: () => BuildVolume | null;
+  /** The instance's footprint as last checked: after a turn or scale,
+   *  the previous one until the new one is computed (see
+   *  {@link checkingPlacement}); `undefined` before its first check. */
   footprint: (instance: InstanceDoc) => Footprint | undefined;
+  /** The footprint shown is from before the latest turn or scale; the new
+   *  one is being computed. */
+  checkingPlacement: (instance: InstanceDoc) => boolean;
+  /** The current footprint, computed now if need be. For one-off commands
+   *  (arrange, duplicate) that need it exact; never on a key repeat. */
+  footprintNow: (instance: InstanceDoc) => Footprint | undefined;
   validation: () => PreparationValidation;
   object: (objectKey: number) => GeometryObject | undefined;
   objectName: (objectKey: number) => string;
@@ -66,7 +79,10 @@ export interface PreparationSession {
 const FOOTPRINT_CACHE_SIZE = 256;
 
 export function createPreparationSession(model: () => ModelRecord): PreparationSession {
-  const record = () => slicing.preparation(model().id);
+  // A session is for one Model; its id is held so the final save on
+  // leaving still finds the record once the host's model is gone.
+  const modelId = untrack(model).id;
+  const record = () => slicing.preparation(modelId);
   const editor = createPreparationEditor({ preparation: record, save: updatePreparation });
   onCleanup(() => editor.dispose());
 
@@ -115,19 +131,25 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
   }));
 
   const [options, setOptions] = createSignal<SliceOptions | undefined>();
+  const [optionsError, setOptionsError] = createSignal<string | undefined>();
   const targetKey = createMemo(() => {
     const target = document()?.target;
     return target ? JSON.stringify(target) : undefined;
   });
   createEffect(on(targetKey, (key) => {
-    setOptions(undefined);
+    batch(() => {
+      setOptions(undefined);
+      setOptionsError(undefined);
+    });
     if (!key) return;
     const target = untrack(document)!.target;
     listSliceOptions(target).then(
       (loaded) => { if (untrack(targetKey) === key) setOptions(loaded); },
-      // No options (e.g. no slicer runtime): no volume to check against;
-      // Task 13's panel reports why.
-      () => {},
+      // No options (e.g. no slicer runtime): no volume to check against.
+      (error: unknown) => {
+        if (untrack(targetKey) !== key) return;
+        setOptionsError(isCommandError(error) ? error.message : "The slice options could not be loaded.");
+      },
     );
   }));
   const volume = createMemo<BuildVolume | null>(() => {
@@ -135,20 +157,85 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     return loaded ? buildVolumeFromProfile(loaded.profileSnapshot) : null;
   });
 
-  // A footprint scans every vertex, so it is kept per mesh, rotation and
-  // scale: a move reuses it, and instances that share all three share it.
+  // A footprint scans every vertex (a quarter of a second on a
+  // million-vertex mesh), so it never runs on the input path. Each is kept
+  // per mesh, rotation and scale: a move reuses it, and instances sharing
+  // all three share it. A turn or scale shows the instance's last known
+  // footprint, marked as checking, and the new one is computed in a later
+  // task; only the newest request per instance runs.
   const footprints = new Map<string, { mesh: MeshBuffer; footprint: Footprint | null }>();
+  const lastKnown = new Map<string, Footprint>();
+  const queued = new Map<string, { shape: string; mesh: MeshBuffer; transform: InstanceTransform }>();
+  const [footprintVersion, setFootprintVersion] = createSignal(0);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    clearTimeout(timer);
+    queued.clear();
+  });
+
+  const shapeOf = (instance: InstanceDoc) => {
+    const { rotateDeg, scale } = instance.transform;
+    return `${instance.objectKey}|${rotateDeg.join(",")}|${scale.join(",")}`;
+  };
+  const remember = (shape: string, mesh: MeshBuffer, footprint: Footprint | null) => {
+    footprints.delete(shape);
+    footprints.set(shape, { mesh, footprint });
+    if (footprints.size > FOOTPRINT_CACHE_SIZE) footprints.delete(footprints.keys().next().value!);
+  };
+  const cached = (instance: InstanceDoc, mesh: MeshBuffer) => {
+    const held = footprints.get(shapeOf(instance));
+    return held && held.mesh === mesh ? held : undefined;
+  };
+
+  const runQueued = () => {
+    timer = undefined;
+    const next = queued.entries().next();
+    if (next.done) return;
+    const [instanceKey, request] = next.value;
+    queued.delete(instanceKey);
+    const held = footprints.get(request.shape);
+    if (!held || held.mesh !== request.mesh) {
+      remember(request.shape, request.mesh, footprintOf(request.transform, request.mesh.positions));
+    }
+    setFootprintVersion((version) => version + 1);
+    if (queued.size > 0) timer = setTimeout(runQueued, 0);
+  };
+  const request = (instanceKey: string, shape: string, mesh: MeshBuffer, transform: InstanceTransform) => {
+    const waiting = queued.get(instanceKey);
+    if (waiting?.shape === shape && waiting.mesh === mesh) return;
+    // Re-inserted, so the newest request goes to the back of the queue.
+    queued.delete(instanceKey);
+    queued.set(instanceKey, { shape, mesh, transform });
+    if (timer === undefined) timer = setTimeout(runQueued, 0);
+  };
+
   const footprint = (instance: InstanceDoc): Footprint | undefined => {
+    footprintVersion();
     const mesh = meshes().get(instance.objectKey);
     if (!mesh) return undefined;
-    const { rotateDeg, scale } = instance.transform;
-    const key = `${instance.objectKey}|${rotateDeg.join(",")}|${scale.join(",")}`;
-    const held = footprints.get(key);
-    if (held && held.mesh === mesh) return held.footprint ?? undefined;
+    const held = cached(instance, mesh);
+    if (held) {
+      queued.delete(instance.instanceKey);
+      if (held.footprint) lastKnown.set(instance.instanceKey, held.footprint);
+      return held.footprint ?? undefined;
+    }
+    request(instance.instanceKey, shapeOf(instance), mesh, instance.transform);
+    return lastKnown.get(instance.instanceKey);
+  };
+  const checkingPlacement = (instance: InstanceDoc): boolean => {
+    footprintVersion();
+    const mesh = meshes().get(instance.objectKey);
+    return !!mesh && !cached(instance, mesh);
+  };
+  const footprintNow = (instance: InstanceDoc): Footprint | undefined => {
+    const mesh = meshes().get(instance.objectKey);
+    if (!mesh) return undefined;
+    const held = cached(instance, mesh);
+    if (held) return held.footprint ?? undefined;
     const computed = footprintOf(instance.transform, mesh.positions);
-    footprints.delete(key);
-    footprints.set(key, { mesh, footprint: computed });
-    if (footprints.size > FOOTPRINT_CACHE_SIZE) footprints.delete(footprints.keys().next().value!);
+    remember(shapeOf(instance), mesh, computed);
+    queued.delete(instance.instanceKey);
+    setFootprintVersion((version) => version + 1);
     return computed ?? undefined;
   };
 
@@ -216,8 +303,11 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     loadFailed,
     meshes,
     options,
+    optionsError,
     volume,
     footprint,
+    checkingPlacement,
+    footprintNow,
     validation,
     object,
     objectName,

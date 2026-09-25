@@ -116,6 +116,9 @@ export function InstanceInspector(props: InstanceInspectorProps) {
           onChange={(key) => { if (key !== props.plateKey) props.actions.moveToPlate(key); }}
           disabled={props.plates.length < 2}
         />
+        <Show when={props.plates.length < 2}>
+          <p class={styles.hint}>Add a plate to move objects between plates.</p>
+        </Show>
       </div>
 
       <div class={styles.actions}>

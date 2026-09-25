@@ -53,6 +53,9 @@ export interface PreparationActions {
   layFlatOn(faceIndex: number): void;
   /** **A**: arranges the shown plate. */
   arrangePlate(): void;
+  /** The last arrange left this instance where it was (it didn't fit),
+   *  and it hasn't been edited since. Cleared by the next arrange. */
+  notArranged(instanceKey: string): boolean;
   arrangeSpacing(): number;
   setArrangeSpacing(spacingMm: number): void;
   /** **Shift+1…9** and the plate `Select`. */
@@ -78,6 +81,10 @@ export function createPreparationActions(session: PreparationSession): Preparati
   // Which lay-flat face F applies next, per instance. Tool state only; the
   // result lives in the document.
   const lastFace = new Map<string, number>();
+  // What the last arrange couldn't place, with each one's transform then:
+  // an edit of the instance makes the note moot.
+  const [unplaced, setUnplaced] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const transformKey = (transform: InstanceTransform) => JSON.stringify(transform);
 
   const selected = (): InstanceDoc | undefined => {
     const key = session.selectedInstanceKey();
@@ -157,7 +164,7 @@ export function createPreparationActions(session: PreparationSession): Preparati
       const plate = document?.plates.find((candidate) => candidate.plateKey === session.plateKey());
       if (!plate || !volume) return;
       const items = plate.instances.flatMap((instance) => {
-        const footprint = session.footprint(instance);
+        const footprint = session.footprintNow(instance);
         return footprint ? [{ key: instance.instanceKey, min: footprint.min, max: footprint.max }] : [];
       });
       const result = arrange(items, volume, spacing());
@@ -167,10 +174,19 @@ export function createPreparationActions(session: PreparationSession): Preparati
         if (placed) transforms.set(instance.instanceKey, { ...instance.transform, translateMm: placed });
       }
       session.editor.edit((current) => setTransforms(current, transforms));
-      const left = plate.instances.filter((instance) => result.unplaced.includes(instance.instanceKey)).map(name);
+      const leftInstances = plate.instances.filter((instance) => result.unplaced.includes(instance.instanceKey));
+      setUnplaced(new Map(leftInstances.map((instance) => [instance.instanceKey, transformKey(instance.transform)])));
+      const left = leftInstances.map(name);
       setStatus(left.length > 0
         ? `Arranged ${result.placed.size} of ${items.length} objects. Didn't fit, left where they were: ${left.join(", ")}.`
         : `Arranged ${result.placed.size} ${result.placed.size === 1 ? "object" : "objects"}.`);
+    },
+    notArranged: (instanceKey) => {
+      const held = unplaced().get(instanceKey);
+      const document = session.document();
+      if (held === undefined || !document) return false;
+      const instance = findInstance(document, instanceKey)?.instance;
+      return !!instance && transformKey(instance.transform) === held;
     },
     arrangeSpacing: spacing,
     setArrangeSpacing: (value) => setSpacing(Number.isFinite(value) && value >= 0 ? value : DEFAULT_ARRANGE_SPACING_MM),
@@ -182,7 +198,7 @@ export function createPreparationActions(session: PreparationSession): Preparati
     duplicate: () => {
       const instance = selected();
       if (!instance) return;
-      const footprint = session.footprint(instance);
+      const footprint = session.footprintNow(instance);
       const offset: [number, number] = [footprint ? footprint.max[0] - footprint.min[0] + DEFAULT_ARRANGE_SPACING_MM : 10, 0];
       const key = newKey();
       session.editor.edit((document) => duplicateInstance(document, instance.instanceKey, key, offset));
