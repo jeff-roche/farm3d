@@ -156,6 +156,13 @@ passes `modal` on that specific `Popover` (no visual backdrop exists on
 A `Popover` with its own `trigger` (the Showcase example) doesn't need
 either workaround.
 
+**Returning focus from a trigger-less `Dialog`.** Kobalte returns focus to a
+dialog's own trigger when it closes, so a `Dialog` opened only through
+`open` has nowhere to put focus back. Pass `returnFocus`, an accessor called
+at close time, to name the element that should get it (the Showcase's "Open
+without a trigger" demo; the Slicer settings, which return to whichever
+control opened them).
+
 ## Showcase page
 
 `src/design-system/Showcase.tsx` renders every component and its states.

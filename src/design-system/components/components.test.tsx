@@ -343,6 +343,24 @@ describe("Dialog", () => {
     // Only the Close button — no trigger.
     expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Close"]);
   });
+
+  it("returns focus to `returnFocus` when a trigger-less dialog closes", async () => {
+    const [open, setOpen] = createSignal(false);
+    render(() => (
+      <>
+        <button onClick={() => setOpen(true)}>Opener</button>
+        <Dialog title="Confirm" open={open()} onOpenChange={setOpen} returnFocus={() => screen.getByText("Opener")}>
+          Body content
+        </Dialog>
+      </>
+    ));
+    await fireEvent.click(screen.getByText("Opener"));
+    await screen.findByText("Body content");
+    await waitFor(() => expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true));
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText("Body content")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Opener")).toHaveFocus());
+  });
 });
 
 describe("Popover", () => {

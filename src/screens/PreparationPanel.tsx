@@ -338,7 +338,7 @@ export function PreparationPanel(props: PreparationPanelProps) {
                 <p class={styles.note}>{NOTHING_TRIED}</p>
               </Show>
               <div>
-                <Button ref={settingsButton} variant="primary" size="sm" onClick={openSlicerSettings}>
+                <Button ref={settingsButton} variant="primary" size="sm" onClick={(event) => openSlicerSettings(event.currentTarget)}>
                   Open Slicer settings
                 </Button>
               </div>
@@ -375,7 +375,7 @@ export function PreparationPanel(props: PreparationPanelProps) {
                   )}
                 </Show>
                 <Show when={error().openSettings}>
-                  <Button variant="secondary" size="sm" onClick={openSlicerSettings}>Open Slicer settings</Button>
+                  <Button variant="secondary" size="sm" onClick={(event) => openSlicerSettings(event.currentTarget)}>Open Slicer settings</Button>
                 </Show>
                 <Show when={error().retry && attempt()}>
                   {(held) => (

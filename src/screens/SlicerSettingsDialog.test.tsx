@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import {
@@ -120,6 +121,51 @@ describe("opening the Slicer settings", () => {
     fireEvent.click(within(dialog).getAllByRole("button", { name: "Close" })[1]);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(slicerSettingsOpen()).toBe(false);
+  });
+});
+
+describe("returning focus when the Slicer settings close", () => {
+  /** The Settings menu's focusable button: Kobalte's trigger around the icon. */
+  const menuButton = () => screen.getByLabelText("Settings").closest<HTMLElement>("[aria-haspopup]")!;
+
+  async function closeWithEscape() {
+    const dialog = await screen.findByRole("dialog", { name: "Slicer" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  }
+
+  it("goes back to the Settings button after opening from the menu", async () => {
+    renderHost();
+    await fireEvent.pointerDown(screen.getByLabelText("Settings"), { pointerType: "mouse", button: 0 });
+    await fireEvent.pointerUp(await screen.findByText("Slicer..."), { button: 0 });
+    await closeWithEscape();
+    await waitFor(() => expect(menuButton()).toHaveFocus());
+  });
+
+  it("goes back to the Preparation panel's link, or to the Settings button once the link has gone", async () => {
+    const [linkShown, setLinkShown] = createSignal(true);
+    render(() => (
+      <>
+        <SettingsMenu />
+        <Show when={linkShown()}>
+          <button onClick={(event) => openSlicerSettings(event.currentTarget)}>Open Slicer settings</button>
+        </Show>
+        <SlicerSettingsHost />
+      </>
+    ));
+    const link = screen.getByRole("button", { name: "Open Slicer settings" });
+    link.focus();
+    fireEvent.click(link);
+    await closeWithEscape();
+    await waitFor(() => expect(link).toHaveFocus());
+
+    fireEvent.click(link);
+    await screen.findByRole("dialog", { name: "Slicer" });
+    // The panel went away while the settings were open (say, a slice ran).
+    setLinkShown(false);
+    await closeWithEscape();
+    await waitFor(() => expect(menuButton()).toHaveFocus());
   });
 });
 

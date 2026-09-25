@@ -1,8 +1,8 @@
 import { IconSettings } from "@tabler/icons-solidjs";
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { DropdownMenu } from "../design-system";
 import { exportSettings, importSettings } from "../settings/settings-store";
-import { openSlicerSettings } from "../slicing/slicer-settings-opener";
+import { openSlicerSettings, registerSlicerSettingsHome } from "../slicing/slicer-settings-opener";
 import { ThemePopover } from "./ThemePopover";
 import styles from "./SettingsMenu.module.css";
 
@@ -28,8 +28,17 @@ export function SettingsMenu() {
   // The same race applies to the Slicer settings dialog, which the app
   // renders from the opener (SlicerSettingsHost).
   function openSlicer() {
-    setTimeout(openSlicerSettings, 0);
+    setTimeout(() => openSlicerSettings(menuButton()), 0);
   }
+
+  // The focusable menu button is Kobalte's trigger around the icon. It is
+  // also where focus returns from the Slicer settings when whatever opened
+  // them has gone.
+  const menuButton = () => triggerRef?.closest<HTMLElement>("[aria-haspopup]") ?? undefined;
+  onMount(() => {
+    const button = menuButton();
+    if (button) onCleanup(registerSlicerSettingsHome(button));
+  });
 
   return (
     <>

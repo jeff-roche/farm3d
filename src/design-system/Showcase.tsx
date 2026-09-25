@@ -279,6 +279,7 @@ export function Showcase() {
             <Button variant="danger">Confirm</Button>
           </div>
         </Dialog>
+        <ReturnFocusDialogDemo />
       </Panel>
 
       <Panel title="Popover">
@@ -475,5 +476,22 @@ export function Showcase() {
         />
       </Panel>
     </div>
+  );
+}
+
+/** A dialog with no trigger of its own, opened from elsewhere: `returnFocus`
+ *  puts focus back on the control that opened it. */
+function ReturnFocusDialogDemo() {
+  const [open, setOpen] = createSignal(false);
+  let opener: HTMLButtonElement | undefined;
+  return (
+    <>
+      <Button ref={opener} variant="secondary" onClick={() => setOpen(true)}>
+        Open without a trigger
+      </Button>
+      <Dialog title="Opened from elsewhere" open={open()} onOpenChange={setOpen} returnFocus={() => opener}>
+        Closing returns focus to the button that opened this.
+      </Dialog>
+    </>
   );
 }

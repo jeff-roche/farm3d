@@ -1,5 +1,5 @@
 import { lazy, Show, Suspense } from "solid-js";
-import { closeSlicerSettings, openSlicerSettings, slicerSettingsOpen } from "../slicing/slicer-settings-opener";
+import { closeSlicerSettings, slicerSettingsOpen } from "../slicing/slicer-settings-opener";
 
 // Loaded the first time the Slicer settings open, keeping the dialog out of
 // the main chunk.
@@ -15,7 +15,9 @@ export function SlicerSettingsHost() {
       <Suspense>
         <SlicerSettingsDialog
           open
-          onOpenChange={(open) => (open ? openSlicerSettings() : closeSlicerSettings())}
+          onOpenChange={(open) => {
+            if (!open) closeSlicerSettings();
+          }}
         />
       </Suspense>
     </Show>

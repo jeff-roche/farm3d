@@ -8,6 +8,7 @@ import {
   resetSlicerRuntime,
   slicing,
 } from "../slicing/slicing-store";
+import { slicerSettingsReturnFocus } from "../slicing/slicer-settings-opener";
 import { CANDIDATE_SOURCES, NOTHING_TRIED, PRESETS_UNREADABLE } from "../slicing/slice-presentation";
 import type {
   EngineCandidate,
@@ -223,6 +224,7 @@ export function SlicerSettingsDialog(props: SlicerSettingsDialogProps) {
       description="The OrcaSlicer that farm3d slices with, and where its presets come from."
       open={props.open}
       onOpenChange={props.onOpenChange}
+      returnFocus={slicerSettingsReturnFocus}
     >
       <div class={styles.body}>
         <Show
