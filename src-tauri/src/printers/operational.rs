@@ -176,10 +176,7 @@ pub fn evaluate_operational_status(
                 OperationalState::Cancelled,
                 Some(ReadinessReason::BedNeedsClearing),
             ),
-            HostActivity::Failed => (
-                OperationalState::Failed,
-                Some(ReadinessReason::PrintFailed),
-            ),
+            HostActivity::Failed => (OperationalState::Failed, Some(ReadinessReason::PrintFailed)),
             HostActivity::Idle => (OperationalState::Ready, None),
         }
     };
