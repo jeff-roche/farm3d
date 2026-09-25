@@ -60,6 +60,35 @@ shell/tool.
   reintroduce M3 patterns (shadows-as-elevation, large touch targets,
   ripple animation) without an explicit request to do so.
 
+## Printer simulators (adapter tests)
+
+Adapter tests run against simulators, not real printers (ADR-0012,
+[`sim/README.md`](./sim/README.md)):
+
+```sh
+just sim-up && just test-sim && just sim-down
+```
+
+- `just sim-up` needs Docker or podman; the first run builds a Klipper
+  image for 10–20 minutes. `just test-sim` skips cleanly if the
+  simulators are down, and `just test` / `just test-rust` never need them.
+- **Never send writes to a real printer from automated tests** (no
+  upload, print control, G-code, heater changes, or M112). Real-hardware
+  tests may only probe, subscribe, and query, and take their host from an
+  environment variable with no default. All write and command tests run
+  against the simulators; the harness refuses non-loopback `FARM3D_SIM_*`
+  targets.
+- **Never commit real network details** (LAN IPs, hostnames, serials,
+  MACs, API keys, tokens). Use RFC 5737 addresses (`192.0.2.x`) in docs
+  and examples. `just check-hosts` checks tracked and staged files against
+  a denylist kept outside the repo (`FARM3D_PRIVATE_HOSTS` or an untracked
+  `.private-hosts`).
+- New simulator-backed tests go in `src-tauri/tests/sim_*.rs`, use the
+  shared harness in `src-tauri/tests/sim/`, hold `sim::exclusive()`, and
+  call the simulator's `reset()` first.
+- The ElegooLink fake (`tests/sim/elegoolink.rs`) may only do what #8's
+  real-hardware captures show. Never add behavior from docs or guesses.
+
 ## Before claiming frontend work is done
 
 Run `just build` and `just test`; both must pass. If a display is

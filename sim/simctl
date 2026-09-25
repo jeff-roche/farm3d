@@ -1,0 +1,420 @@
+#!/usr/bin/env bash
+# farm3d printer simulators: lifecycle, readiness, fault injection (ADR-0012).
+#
+# Usage: sim/simctl <command> [args]
+#
+#   build              build the local Klipper+simulavr image if it is missing
+#   up                 build if needed, start every simulator, wait until ready
+#   down               stop everything and delete its volumes (next `up` is fresh)
+#   status             container state plus per-simulator readiness; exit 3 if not ready
+#   wait [seconds]     wait until every simulator is ready (default 180)
+#   env                print the FARM3D_SIM_* variables the Rust harness reads
+#   manifest           print a JSON record of images, digests, versions, config hashes
+#   reset              clear all faults, restart any Klipper that is not ready, wait
+#   logs <service>     service logs (a compose service name, or simulavr[-multi])
+#
+# Fault injection (the states that are hard to reach on purpose):
+#
+#   fault klipper-shutdown [sim]  M112 through Moonraker: Klipper goes to "shutdown"
+#   fault klipper-restart [sim]   restart the Klipper container (fresh MCU + klippy)
+#   fault klipper-stop|start [sim] stop/start Klipper; Moonraker stays up
+#   fault host-down <sim>         the proxy refuses connections (host went away)
+#   fault host-up <sim>           undo host-down
+#   fault stop|start <sim>        stop/start the real service process
+#   fault slow <sim> <ms>         add latency to every response
+#   fault cut <sim> <bytes>       close each connection after <bytes> of response
+#   fault hang <sim>              responses stop arriving; connections stay open
+#   fault clear [sim]             remove every fault (all simulators by default)
+#
+# <sim> is moonraker (one extruder), moonraker-multi (four toolheads), or
+# octoprint; [sim] defaults to moonraker. ElegooLink has no container: its
+# fake SDCP server runs inside the Rust tests (sim/elegoolink/README.md).
+#
+# Environment:
+#   FARM3D_SIM_ENGINE   docker or podman (default: podman if installed, else docker)
+#   FARM3D_SIM_CACHE    where the prind source is unpacked (default ~/.cache/farm3d/sim)
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+compose_file="$here/compose.yaml"
+
+# Pins. Changing any of these changes what the evidence says was tested.
+prind_commit=80600f7d6f0d28d4d249728a054ac546a22743b9
+klipper_commit=ce7002bedf37e938bb483572949f3703ac6476cb
+klipper_image=localhost/farm3d-simulavr:prind-80600f7-klipper-ce7002b
+
+# Fixed endpoints (sim/compose.yaml lists them all). Adapters connect to the
+# proxied port; the harness drives the simulator on the direct one.
+moonraker_url=http://127.0.0.1:27125
+moonraker_control_url=http://127.0.0.1:27126
+moonraker_multi_url=http://127.0.0.1:27135
+moonraker_multi_control_url=http://127.0.0.1:27136
+octoprint_url=http://127.0.0.1:25000
+octoprint_control_url=http://127.0.0.1:25001
+# A published test fixture, not a secret: the simulator listens on loopback.
+octoprint_api_key=farm3d-sim-octoprint-key-0123456789
+toxiproxy_url=http://127.0.0.1:28474
+
+moonraker_sims=(moonraker moonraker-multi)
+proxies=(moonraker moonraker-multi octoprint)
+
+die() {
+    echo "simctl: $*" >&2
+    exit 1
+}
+
+pick_engine() {
+    if [ -n "${FARM3D_SIM_ENGINE:-}" ]; then
+        echo "$FARM3D_SIM_ENGINE"
+    elif command -v podman >/dev/null 2>&1; then
+        echo podman
+    elif command -v docker >/dev/null 2>&1; then
+        echo docker
+    else
+        die "neither podman nor docker is installed"
+    fi
+}
+
+engine="$(pick_engine)"
+
+compose() {
+    if [ "$engine" = podman ]; then
+        if command -v podman-compose >/dev/null 2>&1; then
+            podman-compose -f "$compose_file" "$@"
+        else
+            podman compose -f "$compose_file" "$@"
+        fi
+    elif docker compose version >/dev/null 2>&1; then
+        docker compose -f "$compose_file" "$@"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        docker-compose -f "$compose_file" "$@"
+    else
+        die "docker is installed but neither 'docker compose' nor docker-compose is"
+    fi
+}
+
+json_get() {
+    # json_get <python expression over `d`>; reads JSON on stdin, prints the value.
+    python3 -c "import json,sys
+try:
+    d=json.load(sys.stdin)
+    print($1)
+except Exception:
+    print('')"
+}
+
+http() {
+    curl -fsS --max-time 5 "$@" 2>/dev/null || true
+}
+
+moonraker_sim_arg() {
+    case "${1:-moonraker}" in
+    moonraker | moonraker-multi) echo "${1:-moonraker}" ;;
+    *) die "name a Moonraker simulator: moonraker or moonraker-multi" ;;
+    esac
+}
+
+proxy_arg() {
+    case "${1:-}" in
+    moonraker | moonraker-multi | octoprint) echo "$1" ;;
+    *) die "name a simulator: moonraker, moonraker-multi, or octoprint" ;;
+    esac
+}
+
+control_url() {
+    case "$1" in
+    moonraker) echo "$moonraker_control_url" ;;
+    moonraker-multi) echo "$moonraker_multi_control_url" ;;
+    esac
+}
+
+klipper_service() {
+    case "$1" in
+    moonraker) echo klipper ;;
+    moonraker-multi) echo klipper-multi ;;
+    esac
+}
+
+moonraker_state() {
+    http "$(control_url "$1")/server/info" | json_get "d['result']['klippy_state']"
+}
+
+octoprint_state() {
+    http -H "X-Api-Key: $octoprint_api_key" "$octoprint_control_url/api/connection" |
+        json_get "d['current']['state']"
+}
+
+toxiproxy_version() {
+    http "$toxiproxy_url/version" | json_get "d['version'] if isinstance(d, dict) else d"
+}
+
+readiness() {
+    local ready=0 sim state
+    for sim in "${moonraker_sims[@]}"; do
+        state="$(moonraker_state "$sim")"
+        printf '%-16s klippy_state=%s\n' "$sim" "${state:-unreachable}"
+        [ "$state" = ready ] || ready=1
+    done
+    state="$(octoprint_state)"
+    printf '%-16s state=%s\n' octoprint "${state:-unreachable}"
+    [ "$state" = Operational ] || ready=1
+    state="$(toxiproxy_version)"
+    printf '%-16s version=%s\n' toxiproxy "${state:-unreachable}"
+    [ -n "$state" ] || ready=1
+    printf '%-16s in-process fake in the Rust tests; no container\n' elegoolink
+    return "$ready"
+}
+
+wait_ready() {
+    local timeout="${1:-180}" start=$SECONDS
+    while ! readiness >/dev/null; do
+        if ((SECONDS - start >= timeout)); then
+            readiness || true
+            die "simulators not ready after ${timeout}s; see: sim/simctl logs <service>"
+        fi
+        sleep 2
+    done
+    echo "simctl: all simulators ready after $((SECONDS - start))s"
+}
+
+build() {
+    if "$engine" image inspect "$klipper_image" >/dev/null 2>&1; then
+        echo "simctl: $klipper_image already built"
+        return
+    fi
+    local cache="${FARM3D_SIM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/farm3d/sim}"
+    local src="$cache/prind-$prind_commit"
+    if [ ! -f "$src/docker/klipper/Dockerfile" ]; then
+        mkdir -p "$src"
+        echo "simctl: downloading prind $prind_commit"
+        curl -fsSL "https://github.com/mkuf/prind/archive/$prind_commit.tar.gz" |
+            tar -xz -C "$src" --strip-components=1
+    fi
+    echo "simctl: building $klipper_image (first build takes 10-20 minutes)"
+    # Host networking: rootless podman without /dev/net/tun cannot build
+    # with its default network. prind's VERSION defaults to Klipper master,
+    # so the Klipper commit is pinned here.
+    "$engine" build --network=host --target build-simulavr \
+        --build-arg "VERSION=$klipper_commit" \
+        -t "$klipper_image" "$src/docker/klipper"
+}
+
+toxiproxy_call() {
+    # toxiproxy_call <method> <path> [json body]
+    local method="$1" path="$2" body="${3:-}"
+    if [ -n "$body" ]; then
+        curl -fsS --max-time 5 -X "$method" -H 'Content-Type: application/json' \
+            -d "$body" "$toxiproxy_url$path" >/dev/null
+    else
+        curl -fsS --max-time 5 -X "$method" "$toxiproxy_url$path" >/dev/null
+    fi
+}
+
+clear_all_faults() {
+    # Disable first: that closes every connection at once. Removing a
+    # latency toxic while it still holds data back can otherwise block for
+    # as long as the latency.
+    local proxy
+    for proxy in "${proxies[@]}"; do
+        toxiproxy_call POST "/proxies/$proxy" '{"enabled":false}'
+    done
+    toxiproxy_call POST /reset
+}
+
+add_toxic() {
+    # add_toxic <proxy> <name> <type> <attributes json>
+    toxiproxy_call POST "/proxies/$1/toxics" \
+        "{\"name\":\"$2\",\"type\":\"$3\",\"stream\":\"downstream\",\"attributes\":$4}"
+}
+
+recover_klipper() {
+    # Klipper's FIRMWARE_RESTART cannot reset simulavr's emulated MCU, so a
+    # Klipper in "shutdown" or "error" is recovered by restarting its
+    # container. The state is re-read each pass.
+    local sim="$1" restarts=0
+    for _ in $(seq 1 10); do
+        case "$(moonraker_state "$sim")" in
+        ready) return 0 ;;
+        shutdown | error)
+            [ "$restarts" -ge 3 ] && die "$sim: Klipper did not recover after $restarts restarts"
+            compose restart "$(klipper_service "$sim")"
+            restarts=$((restarts + 1))
+            ;;
+        esac
+        sleep 2
+    done
+}
+
+fault() {
+    local kind="${1:-}"
+    shift || true
+    local sim
+    case "$kind" in
+    klipper-shutdown)
+        sim="$(moonraker_sim_arg "${1:-}")"
+        curl -fsS --max-time 5 -X POST "$(control_url "$sim")/printer/emergency_stop" >/dev/null
+        # Return only once Moonraker reports it, so a following command
+        # (for example `reset`) never sees the stale "ready".
+        for _ in $(seq 1 50); do
+            [ "$(moonraker_state "$sim")" = shutdown ] && break
+            sleep 0.2
+        done
+        echo "simctl: sent M112 to $sim; Klipper reports: $(moonraker_state "$sim")"
+        ;;
+    klipper-restart) compose restart "$(klipper_service "$(moonraker_sim_arg "${1:-}")")" ;;
+    klipper-stop) compose stop "$(klipper_service "$(moonraker_sim_arg "${1:-}")")" ;;
+    klipper-start) compose start "$(klipper_service "$(moonraker_sim_arg "${1:-}")")" ;;
+    host-down)
+        sim="$(proxy_arg "${1:-}")"
+        toxiproxy_call POST "/proxies/$sim" '{"enabled":false}'
+        echo "simctl: $sim proxy disabled (connections refused)"
+        ;;
+    host-up)
+        sim="$(proxy_arg "${1:-}")"
+        toxiproxy_call POST "/proxies/$sim" '{"enabled":true}'
+        echo "simctl: $sim proxy enabled"
+        ;;
+    stop) compose stop "$(proxy_arg "${1:-}")" ;;
+    start) compose start "$(proxy_arg "${1:-}")" ;;
+    slow)
+        sim="$(proxy_arg "${1:-}")"
+        add_toxic "$sim" slow latency "{\"latency\":${2:?give a latency in milliseconds}}"
+        echo "simctl: $sim responses delayed by $2 ms"
+        ;;
+    cut)
+        sim="$(proxy_arg "${1:-}")"
+        add_toxic "$sim" cut limit_data "{\"bytes\":${2:?give a byte count}}"
+        echo "simctl: $sim connections close after $2 response bytes"
+        ;;
+    hang)
+        sim="$(proxy_arg "${1:-}")"
+        add_toxic "$sim" hang timeout '{"timeout":0}'
+        echo "simctl: $sim responses withheld"
+        ;;
+    clear)
+        if [ -n "${1:-}" ]; then
+            sim="$(proxy_arg "$1")"
+            toxiproxy_call POST "/proxies/$sim" '{"enabled":false}'
+            local name
+            for name in slow cut hang; do
+                curl -fsS --max-time 5 -X DELETE "$toxiproxy_url/proxies/$sim/toxics/$name" \
+                    >/dev/null 2>&1 || true
+            done
+            toxiproxy_call POST "/proxies/$sim" '{"enabled":true}'
+        else
+            clear_all_faults
+        fi
+        echo "simctl: faults cleared"
+        ;;
+    *) die "unknown fault '$kind'; see sim/simctl --help" ;;
+    esac
+}
+
+manifest() {
+    # Every image the compose file names, with what is actually present
+    # locally (image id and repo digests).
+    local images=() ref id digests
+    while read -r ref; do
+        id="$("$engine" image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
+        digests="$("$engine" image inspect --format '{{json .RepoDigests}}' "$ref" 2>/dev/null || true)"
+        images+=("{\"ref\":\"$ref\",\"id\":\"$id\",\"repoDigests\":${digests:-null}}")
+    done < <(sed -n 's/^ *image: *//p' "$compose_file" | sort -u)
+
+    local reported=() sim
+    for sim in "${moonraker_sims[@]}"; do
+        reported+=("\"$sim\":{\"serverInfo\":$(http "$(control_url "$sim")/server/info" | json_get "json.dumps(d['result'].get('moonraker_version'))" || true),\"klipper\":$(http "$(control_url "$sim")/printer/info" | json_get "json.dumps(d['result'].get('software_version'))" || true)}")
+    done
+    local octo_version
+    octo_version="$(http -H "X-Api-Key: $octoprint_api_key" "$octoprint_control_url/api/version" |
+        json_get "json.dumps(d.get('server'))")"
+
+    local config_hashes
+    config_hashes="$(cd "$here" && sha256sum compose.yaml simctl moonraker/* octoprint/* toxiproxy/* |
+        python3 -c 'import json,sys; print(json.dumps({l.split()[1]: l.split()[0] for l in sys.stdin}))')"
+    local repo_commit
+    repo_commit="$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(git -C "$here" status --porcelain -- . 2>/dev/null)" ]; then
+        repo_commit="$repo_commit (sim/ has uncommitted changes)"
+    fi
+    python3 - "$engine" "$prind_commit" "$klipper_commit" "[$(IFS=,; echo "${images[*]}")]" \
+        "{$(IFS=,; echo "${reported[*]}")}" "${octo_version:-null}" "$config_hashes" \
+        "$repo_commit" <<'PY'
+import datetime, json, sys
+engine, prind, klipper, images, reported, octo, hashes, repo = sys.argv[1:]
+def load(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+moonraker = {
+    sim: {"moonrakerVersion": value.get("serverInfo"), "klipperVersion": value.get("klipper")}
+    for sim, value in (load(reported) or {}).items()
+}
+print(json.dumps({
+    "recordedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "engine": engine,
+    "repoCommit": repo,
+    "pins": {"prindCommit": prind, "klipperCommit": klipper},
+    "images": load(images),
+    "reported": {"moonraker": moonraker, "octoprintVersion": load(octo)},
+    "configSha256": load(hashes),
+}, indent=2))
+PY
+}
+
+case "${1:-}" in
+build) build ;;
+up)
+    build
+    compose up -d
+    wait_ready "${2:-240}"
+    ;;
+down)
+    compose down -v --remove-orphans
+    ;;
+status)
+    compose ps || true
+    echo
+    if readiness; then
+        echo "simctl: ready"
+    else
+        echo "simctl: NOT ready (start with: just sim-up)"
+        exit 3
+    fi
+    ;;
+wait) wait_ready "${2:-180}" ;;
+env)
+    cat <<EOF
+export FARM3D_SIM_MOONRAKER=$moonraker_url
+export FARM3D_SIM_MOONRAKER_CONTROL=$moonraker_control_url
+export FARM3D_SIM_MOONRAKER_MULTI=$moonraker_multi_url
+export FARM3D_SIM_MOONRAKER_MULTI_CONTROL=$moonraker_multi_control_url
+export FARM3D_SIM_OCTOPRINT=$octoprint_url
+export FARM3D_SIM_OCTOPRINT_CONTROL=$octoprint_control_url
+export FARM3D_SIM_OCTOPRINT_API_KEY=$octoprint_api_key
+export FARM3D_SIM_TOXIPROXY=$toxiproxy_url
+export FARM3D_SIM_CTL=$here/simctl
+EOF
+    ;;
+manifest) manifest ;;
+reset)
+    clear_all_faults
+    for sim in "${moonraker_sims[@]}"; do
+        recover_klipper "$sim"
+    done
+    wait_ready "${2:-120}"
+    ;;
+logs)
+    case "${2:-}" in
+    simulavr) compose exec -T klipper cat /opt/printer_data/logs/simulavr.log ;;
+    simulavr-multi) compose exec -T klipper-multi cat /opt/printer_data/logs/simulavr.log ;;
+    "") die "name a service (see sim/compose.yaml), or simulavr / simulavr-multi" ;;
+    *) compose logs "$2" ;;
+    esac
+    ;;
+fault) shift && fault "$@" ;;
+-h | --help | help | "")
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+    ;;
+*) die "unknown command '$1'; see sim/simctl --help" ;;
+esac
