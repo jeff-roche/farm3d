@@ -287,6 +287,17 @@ describe("PreparationPanel", () => {
     expect(screen.getByRole("complementary", { name: "Preparation settings" })).toBeVisible();
   });
 
+  it("moves focus into the overlay when Settings panel opens it", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1024 });
+    render(() => <PreparationMode model={enclosure()} onBack={() => {}} />);
+    const toggle = await screen.findByRole("button", { name: "Settings panel" });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const overlay = screen.getByRole("complementary", { name: "Preparation settings" });
+    await waitFor(() => expect(overlay.contains(document.activeElement)).toBe(true));
+    expect(document.activeElement).not.toBe(overlay);
+  });
+
   it("opens on a chosen printer profile when there are no Printers to prepare for", async () => {
     printerState.list = [];
     const seeded = held();

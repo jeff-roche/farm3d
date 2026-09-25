@@ -189,6 +189,17 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   const [dockOpen, setDockOpen] = createSignal(false);
   const dockId = createUniqueId();
   let dockToggle: HTMLButtonElement | undefined;
+  let dockPanel: HTMLElement | undefined;
+  // Opening the overlay moves focus into it, so the next Tab stays there.
+  const toggleDock = () => {
+    const opening = !dockOpen();
+    setDockOpen(opening);
+    if (!opening || !dockPanel) return;
+    const first = dockPanel.querySelector<HTMLElement>(
+      "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])",
+    );
+    (first ?? dockPanel).focus();
+  };
   // Resolved once: each read of a JSX prop would build another panel.
   const dock = children(() => props.dock);
   // A failed slice is shown (and takes focus) even while the panel is folded.
@@ -382,7 +393,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
             size="sm"
             aria-expanded={dockOpen()}
             aria-controls={dockId}
-            onClick={() => setDockOpen((open) => !open)}
+            onClick={toggleDock}
           >
             Settings panel
           </Button>
@@ -539,7 +550,9 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
         </div>
         <Show when={dock()}>
           <aside
+            ref={dockPanel}
             id={dockId}
+            tabIndex={-1}
             class={styles.dock}
             classList={{ [styles.dockOverlay]: narrow() }}
             hidden={narrow() && !dockOpen()}
