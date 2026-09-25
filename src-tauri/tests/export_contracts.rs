@@ -80,13 +80,14 @@ use farm3d_lib::settings::commands::{
 };
 use farm3d_lib::slicing::{
     BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineSource, EngineState, Fact,
-    FactProvenance, FilamentPresetOption, InfillPattern, InstanceDoc, InstanceTransform, PlateDoc,
-    PreparationDocument, PreparationRecord, PresetSourceOrigin, PresetSourceState,
-    ProcessPresetOption, ProfileSnapshot, RuntimeChannel, SliceControls, SliceEstimateSource,
-    SliceEstimates, SliceFacts, SliceFailure, SliceFailureCode, SliceOperationRecord,
-    SliceOperationState, SliceOptionDefaults, SliceOptions, SlicePlateRef, SliceRevisionBlob,
-    SliceRevisionBlobRole, SliceRevisionKind, SliceRevisionRecord, SliceRevisionSummary,
-    SliceRevisionTarget, SliceRuntimeInfo, SliceTarget, SlicerRuntimeStatus, SupportMode,
+    FactProvenance, FilamentPresetOption, GeometryBuildItem, GeometryObject, InfillPattern,
+    InstanceDoc, InstanceTransform, LayFlatFace, PlateDoc, PreparationDocument, PreparationRecord,
+    PresetSourceOrigin, PresetSourceState, ProcessPresetOption, ProfileSnapshot, RevisionGeometry,
+    RuntimeChannel, SliceControls, SliceEstimateSource, SliceEstimates, SliceFacts, SliceFailure,
+    SliceFailureCode, SliceOperationRecord, SliceOperationState, SliceOptionDefaults, SliceOptions,
+    SlicePlateRef, SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind,
+    SliceRevisionRecord, SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget,
+    SlicerRuntimeStatus, SupportMode,
 };
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
@@ -468,6 +469,10 @@ fn export_registry() -> Vec<Export> {
         export::<FilamentPresetOption>(),
         export::<SliceOptionDefaults>(),
         export::<SliceOptions>(),
+        export::<LayFlatFace>(),
+        export::<GeometryObject>(),
+        export::<GeometryBuildItem>(),
+        export::<RevisionGeometry>(),
     ]
 }
 

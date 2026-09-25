@@ -22,6 +22,10 @@ gen-contracts:
 gen-library-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
 
+# Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF)
+gen-slicing-fixtures:
+    cargo test --manifest-path src-tauri/Cargo.toml --test p5_geometry regenerate_slicing_fixtures -- --ignored --exact
+
 # Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
 gen-catalog tag="v2.4.2":
     cargo run --manifest-path src-tauri/Cargo.toml --features catalog-generator --bin gen-catalog -- {{ tag }}

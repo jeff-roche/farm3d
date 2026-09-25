@@ -7,15 +7,21 @@
 //! registers with the Library. [`runtime`] discovers the OrcaSlicer engine
 //! and preset source (D2), [`presets`] indexes and flattens presets and
 //! lists the slice options (D3), and [`mapping`] holds the D4 tables.
+//! [`geometry`] and [`hull`] compute revision geometry and the D5 instance
+//! transforms (D6), and [`plate3mf`] writes the per-plate input 3MF (D7).
 
 pub mod blockers;
 pub mod facts;
+pub mod geometry;
+pub mod hull;
 pub mod mapping;
+pub mod plate3mf;
 pub mod presets;
 pub mod process_group;
 pub mod repository;
 pub mod runtime;
 
+pub use geometry::{GeometryBuildItem, GeometryObject, LayFlatFace, RevisionGeometry};
 pub use runtime::{
     EngineSource, EngineState, PresetSourceOrigin, PresetSourceState, SlicerRuntimeStatus,
 };
