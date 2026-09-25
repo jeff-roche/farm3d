@@ -34,6 +34,11 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::host_ops::{
+    HostOperation, HostOperationEndpoint, HostOperationFailure, HostOperationKind,
+    HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
+    HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
+};
 use farm3d_lib::library::commands::{
     DeleteModelResult, DeleteProjectResult, LibraryContentInfo, LibrarySnapshot,
     ModelMutationResult, ModelPatch, ProjectMutationResult, RevisionThumbnail,
@@ -515,6 +520,17 @@ fn export_registry() -> Vec<Export> {
         export::<ReloadPreparationData>(),
         export::<ConfirmedFactRequest<f64>>(),
         export::<CreateExternalSliceRevisionFacts>(),
+        export::<HostOperationKind>(),
+        export::<HostOperationState>(),
+        export::<PriorState>(),
+        export::<HostOperationEndpoint>(),
+        export::<HostOperationFailure>(),
+        export::<StartEvidenceSource>(),
+        export::<HostOperationObservedState>(),
+        export::<HostOperationResolution>(),
+        export::<HostOperationLastAttempt>(),
+        export::<HostOperation>(),
+        export::<HostOperationsSnapshot>(),
     ]
 }
 

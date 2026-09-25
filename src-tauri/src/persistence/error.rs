@@ -129,6 +129,14 @@ pub enum RepositoryError {
         from: crate::slicing::SliceOperationState,
         to: crate::slicing::SliceOperationState,
     },
+    /// P6 D3: a Host Operation can't move from `from` to `to` (`state.rs`'s
+    /// table says so, or a repository function's own narrower rule, e.g.
+    /// `record_attempt` outside `reconciling`). Nothing was written.
+    IllegalHostOperationTransition {
+        host_operation_id: String,
+        from: crate::host_ops::HostOperationState,
+        to: crate::host_ops::HostOperationState,
+    },
     Storage(StorageError),
 }
 

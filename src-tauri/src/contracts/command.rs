@@ -1068,6 +1068,9 @@ impl CommandError {
             // commands give it a user-facing code (e.g. cancelling a
             // finished operation).
             RepositoryError::IllegalSliceTransition { .. } => Self::internal(),
+            // Likewise a caller bug until a later task's guard rejects the
+            // request itself before this ever runs.
+            RepositoryError::IllegalHostOperationTransition { .. } => Self::internal(),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
