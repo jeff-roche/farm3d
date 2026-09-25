@@ -191,7 +191,7 @@ No simulator runs there.
 Tasks restate what they need from here. This section is where the design
 was argued. **The final decisions are in the Task 4 spec,
 `docs/superpowers/specs/2026-09-25-p6-connection-command-capabilities-design.md`, and where it differs from this section the spec wins.** Task 4 updated
-D2, D4, D5, D6, and D9 below, and Tasks 5–13, to match it.
+D1, D2, D3, D4, D5, D6, D7, and D9 below, and Tasks 5–13, to match it.
 
 ### D1. Composable capability interfaces (the issue's decision gate)
 
@@ -203,7 +203,8 @@ D2, D4, D5, D6, and D9 below, and Tasks 5–13, to match it.
 
 The four traits are `ArtifactStaging` (`upload`, `locate`),
 `PrintControl` (`start`, `pause`, `resume`, `cancel`), `HostStateQuery`
-(`host_job_state`, `job_history`), and `CameraDiscovery` (`cameras`). An
+(`host_facts`, `host_job_state`, `job_history`), and `CameraDiscovery`
+(`cameras`). An
 `AdapterDescriptor { kind, observe, staging?, control?, host_state?,
 camera?, evidence }` lives in `connections/adapters.rs`. The descriptor
 row grows out of `SUPPORTED_KINDS`.
@@ -258,6 +259,17 @@ reconciling ─ unreachable / inconclusive ─> uncertain
 reconciling ─ startup ───────────────────> uncertain
 uncertain ─ operator, risk-confirmed ────> abandoned
 ```
+
+- `dispatched_at` is committed by `mark_sent` just before connecting. **The
+  executor sends nothing unless `mark_sent` returned `Ok`.** If `mark_sent`
+  fails, the executor sends nothing and either commits
+  `failed{neverSent}` or leaves the row for startup recovery. Every local
+  precondition (building the capability object, reading the credential,
+  and `ContentStore::open_verified` for an upload) runs before
+  `mark_sent`.
+- `uncertain_since` is set only on `dispatching → uncertain` (executor or
+  startup), and kept unchanged on `reconciling → uncertain` and at
+  startup.
 
 An unsupported capability never creates a row
 (`CAPABILITY_UNSUPPORTED`).
@@ -330,11 +342,12 @@ type PrinterCapabilities = {
 
 | Mutation while unresolved | Result |
 |---|---|
-| Archive, delete | `LIFECYCLE_BLOCKED` with `HOST_OPERATION_UNRESOLVED` |
-| Printer import | Rejected as a whole |
+| Archive, delete | `LIFECYCLE_BLOCKED` with blocker code `hostOperationUnresolved` |
+| Printer import | `HOST_OPERATION_PENDING`; the whole import is rejected, nothing written |
 | Endpoint change, Connection clear, credential clear | `CONNECTION_IN_USE` |
 | Credential replace, same endpoint | Allowed (probed) |
-| Delete a referenced Slice Revision | `LIFECYCLE_BLOCKED` with `HOST_OPERATION_UNRESOLVED` |
+| Delete a referenced Slice Revision | `LIFECYCLE_BLOCKED` with blocker code `hostOperationUnresolved` |
+| A new write on the same Printer | `HOST_OPERATION_PENDING` |
 
 Permanent delete removes the Printer's terminal rows in the same
 transaction.
@@ -345,7 +358,9 @@ transaction.
 "hostStateUnknown", note?)`:
 
 - It is allowed only from `uncertain`, after at least one failed
-  reconciliation attempt.
+  reconciliation attempt, or with no attempt when the row is structurally
+  unreconcilable (the capability its kind needs to reconcile is
+  unsupported; spec D5 "Capability gate").
 - It needs a Kobalte `AlertDialog` with a required acknowledgement
   checkbox.
 - The result is the terminal `abandoned` state, and the row is kept.
@@ -775,7 +790,7 @@ just check-hosts
 - New `src-tauri/src/connections/capabilities.rs`:
   - the traits `ArtifactStaging { upload, locate }`,
     `PrintControl { start, pause, resume, cancel }`,
-    `HostStateQuery { host_job_state, job_history }`, and
+    `HostStateQuery { host_facts, host_job_state, job_history }`, and
     `CameraDiscovery { cameras }`, all `async_trait` and `Send + Sync`;
   - the exact trait signatures and supporting types in spec D1:
     `StagedArtifact { host_path, sha256, size }`, `LocateOutcome { Absent,
@@ -875,6 +890,8 @@ just check-hosts
     `no_longer_pending` (0/1);
   - `abandoned_at`, `abandon_note`;
   - `created_at`, `dispatched_at`, `uncertain_since`, `resolved_at`.
+    `uncertain_since` is written only on `dispatching → uncertain`
+    (executor or startup) and never changed afterwards.
 
   It also adds:
   - a partial unique index on `printer_id WHERE state IN
@@ -1067,8 +1084,14 @@ report's recorded shapes for fixtures. Scrub any real-host capture
   - the same HTTP client rules as the OctoPrint adapter: no redirects, no
     system proxy, and `X-Api-Key` on every request, marked sensitive;
   - timeouts (spec D10): connect 5 s; JSON queries 10 s; control POSTs
-    60 s; upload and `locate` download 60 s + 1 s per started MiB. A
-    timeout is `Indeterminate` for a write and an `Err` for a read.
+    60 s; upload and `locate` download 60 s + 1 s per started MiB;
+    verification window 10 s polled every 500 ms. They are fields of a
+    `MoonrakerTimings` config struct passed to the builders, with these
+    values as `MoonrakerTimings::default()`; tests inject short values. A
+    timeout is `Indeterminate` for a write and an `Err` for a read;
+  - `job_history` sends `limit`, `order=desc`, and `since` when given.
+    Fixtures must confirm Moonraker v0.11.0's handling of `since` and
+    `order` (callers still re-check every job, spec D5).
 - `adapters.rs`: the Moonraker descriptor gains the four builders. The
   `evidence` row stays `notVerified` until Task 12.
 - New `tests/common/fake_moonraker.rs`: an in-process HTTP server on a
@@ -1126,9 +1149,15 @@ just check-hosts
 **Files:**
 
 - `host_ops/executor.rs`: after the command's write-ahead
-  `insert_dispatching` (commit), `run(operation)` runs in the background:
-  `mark_sent` (commits `dispatched_at` just before connecting), calls the
-  capability trait, then commits per the spec D5 dispatch table:
+  `insert_dispatching` (commit), `run(operation)` runs in the background.
+  It first runs every local precondition (builds the capability object,
+  reads the credential, and for an upload opens the bytes with
+  `ContentStore::open_verified`); a failure there sends nothing and
+  commits `failed{neverSent}`. Then `mark_sent` commits `dispatched_at`
+  just before connecting. **It sends nothing unless `mark_sent` returned
+  `Ok`**: if `mark_sent` fails, it sends nothing and either commits
+  `failed{neverSent}` or leaves the row for startup recovery. Then it calls
+  the capability trait and commits per the spec D5 dispatch table:
   - upload: a 201 is followed by `locate`; only `Matches` is `succeeded`,
     anything else `uncertain`;
   - start: 200 `ok` is `succeeded` (`startAccepted`);
@@ -1141,9 +1170,10 @@ just check-hosts
     (a panic before `mark_sent` → `failed { neverSent }`). A 503 `Klippy
     Disconnected` also sets `no_longer_pending`.
 
-  Fault points are injectable for tests: before `mark_sent`, after
-  `mark_sent` before send, after send, and after the response but before
-  commit.
+  Fault points are injectable for tests (the same list as the spec's
+  module table): before `mark_sent`, after `mark_sent` but before send,
+  after send, and after the response but before commit. A test also makes
+  `mark_sent` itself fail and asserts nothing was sent.
 - `host_ops/reconciler.rs` applies the spec D5 rules (final; they replace
   the draft table this plan had):
 
@@ -1169,6 +1199,18 @@ just check-hosts
     `authRejected`).
   - It **never** issues a write. It uses the row's `endpoint_json` with
     the Printer's current credential.
+  - History (spec D5): the start's high-water mark is the **maximum
+    parsed `job_id`** over `job_history({ limit: 50 })` (`order=desc`),
+    never the first job. A reconcile attempt reads `job_history({ since:
+    dispatched_at − 30 s, limit: 50 })` and re-checks filename, id, and
+    start time on every returned job, trusting neither `since` nor
+    `order`.
+  - Capability gate: an attempt needs `artifactIdentity` for an upload row
+    and `hostState` for a start, pause, resume, or cancel row. If that
+    capability is unsupported, no attempt runs (the automatic triggers skip
+    the row, and `reconcile_host_operation` returns
+    `CAPABILITY_UNSUPPORTED`), and the row is structurally
+    unreconcilable.
   - Triggers:
     - startup, after `restore_persisted_connections` in `lib.rs`
       (`recover_after_restart` has already run inside
@@ -1179,7 +1221,11 @@ just check-hosts
   - It serializes per Printer (the same lock as the write commands). While
     the Printer is Online it retries after `supervisor::backoff_delay(
     attempts)`, and for `uploadSettling` also at exactly `uncertain_since
-    + 60 s`. The clock is injectable, so tests never sleep.
+    + 60 s`. `SETTLE_PERIOD` (60 s), `START_SKEW_TOLERANCE` (30 s),
+    `HISTORY_QUERY_LIMIT` (50), and the backoff are fields of a
+    `HostOpsTimings` config struct with those production defaults. Tests
+    inject a fake `Clock`, short `HostOpsTimings`, and short
+    `MoonrakerTimings` (Task 8), so no test waits 60 s in real time.
 - `host_ops/start_rule.rs` (pure) implements the Start table:
 
   | Printer `OperationalState` | Allowed `priorState` |
@@ -1213,8 +1259,9 @@ just check-hosts
   - `reconcile_host_operation(hostOperationId)`;
   - `abandon_host_operation(operationId, hostOperationId, acknowledgement:
     "hostStateUnknown", note?)`: allowed only from `uncertain` with
-    `attempts >= 1`, otherwise `HOST_OPERATION_NOT_ABANDONABLE`; `note` is
-    at most 500 characters;
+    `attempts >= 1`, or with `attempts == 0` when the row is structurally
+    unreconcilable (capability gate above); otherwise
+    `HOST_OPERATION_NOT_ABANDONABLE`. `note` is at most 500 characters;
   - `list_host_operations(printerId?)`, the backfill, returning
     `HostOperationsSnapshot { streamId, snapshotSequence, operations }`.
 
@@ -1263,6 +1310,8 @@ rebuilt `RuntimeServices` over the same roots for "restart"):
 | 503 `Klippy Disconnected` | start | `uncertain`, `noLongerPending: true`; never `failed` |
 | Control `ok`, no state change | pause | `uncertain` (`effectNotObserved`) |
 | Host unreachable throughout | any | stays `uncertain`; abandon allowed after one attempt; guards lift after abandon |
+| `mark_sent` fails | upload, start | nothing sent; `failed{neverSent}` (or `neverSent` after restart) |
+| Reconcile capability now unsupported | upload | no attempt; `reconcile_host_operation` → `CAPABILITY_UNSUPPORTED`; abandon allowed with `attempts == 0` |
 | Host printing a different file | start | stays `uncertain` (`differentFileOnHost`); no start sent |
 
 Also test:
@@ -1315,15 +1364,15 @@ just check-hosts
   - a `Failed` Printer;
   - a Printer with an `uncertain` upload (`attempts: 1`).
 - `src/host-ops/start-rule.ts`, a pure mirror of the backend table.
-  `startOffer(status) -> { offered: false, reason } | { offered: true,
-  priorState, confirmLabel }`:
+  `startOffer(status, hasUnresolved) -> { offered: false, reason } |
+  { offered: true, priorState, confirmLabel }`:
   - `ready` → "The bed is clear.";
   - `finished` → "The previous print finished. The bed is clear.";
   - `cancelled` → "The previous print was cancelled. The bed is clear.";
   - `Failed` → not offered, "Clear the error on the printer first.";
   - other states → not offered, with the state as the reason;
-  - not offered while the Printer has an unresolved Host Operation ("A
-    printer operation is pending.").
+  - not offered when `hasUnresolved` is true ("A printer operation is
+    pending.").
 
   It also has `controlOffer(status, verb, hasUnresolved)` (spec D9 control
   rule): pause only from `printing`, resume only from `paused`, cancel
@@ -1351,8 +1400,9 @@ just check-hosts
 **TDD tests (Vitest):**
 
 - Stream ordering and backfill.
-- `startOffer` for every `OperationalState`, for stale freshness, and with
-  an unresolved row; `controlOffer` for every verb and state.
+- `startOffer(status, hasUnresolved)` for every `OperationalState`, for
+  stale freshness, and with `hasUnresolved: true`; `controlOffer` for
+  every verb and state.
 - Presentation for every state.
 - Unsupported and failed never share copy.
 
@@ -1380,20 +1430,23 @@ just test
     text otherwise);
   - **Staged on this Printer**: staged artifacts with **Start…**, and
     Host Operations with their state and inconclusive reason, **Check
-    again** (enabled in `uncertain`), and **Abandon check…** (enabled in
-    `uncertain` with `attempts >= 1`);
+    again** (enabled in `uncertain` when the reconcile capability is
+    supported), and **Abandon check…** (enabled in `uncertain` with
+    `attempts >= 1`, or when the reconcile capability is unsupported);
   - one `aria-live="polite"` region announcing Host Operation state
     changes.
 - `src/screens/StartStagedDialog.tsx`: a Kobalte Dialog.
-  - The checkbox label comes from `startOffer(status).confirmLabel`, and
-    Confirm is disabled until it is ticked.
+  - The checkbox label comes from `startOffer(status,
+    hasUnresolved).confirmLabel`, and Confirm is disabled until it is
+    ticked.
   - It sends `priorState`.
   - While the command runs it shows "Checking the file on the printer…"
     (the backend re-verifies the staged bytes before starting).
   - On `START_PRECONDITION_CHANGED` or `START_NOT_ALLOWED` it clears the
     tick and re-renders for the new status. A tick is never reused.
   - On `STAGED_ARTIFACT_INVALID` it shows the message with **Stage
-    again**.
+    again**, a local dialog action (the error's `recovery` is empty; there
+    is no `RecoveryCode` for it).
   - This holds for both `StartSafety` values.
 - `src/screens/StageOnPrinterDialog.tsx`: opened from **Stage on
   Printer…** in `SliceRevisionReview.tsx`, using Kobalte Dialog and
@@ -1433,7 +1486,9 @@ just test
 **TDD tests** (`@solidjs/testing-library`, with
 `pointerDown`/`pointerUp` for Select and Menu):
 
-- One Start test per table row, with exact labels.
+- One Start test per table row, with exact labels, calling
+  `startOffer(status, hasUnresolved)`; Start is disabled with "A printer
+  operation is pending." when `hasUnresolved` is true.
 - The command receives the matching `priorState`.
 - A `Failed` → `Ready` status event enables Start without a reload.
 - `START_PRECONDITION_CHANGED` clears the tick; `STAGED_ARTIFACT_INVALID`
@@ -1479,10 +1534,17 @@ just web      # manual check at /#showcase and the Job tab with the web fixtures
     - rebuild the services (a restart), reconcile, and expect `succeeded`
       with exactly one file;
     - `cut_request_after` mid-body, then reconcile: `uncertain`
-      (`uploadSettling`) until 60 s after `uncertain_since`, then
+      (`uploadSettling`) until the settle period after `uncertain_since`
+      ends, then
       `failed{notApplied}`;
     - start with the response cut, then reconcile to `succeeded` (from
       `print_stats` or the history job above the mark);
+    - confirm and record how Moonraker v0.11.0 handles `since` and
+      `order=desc` on `/server/history/list` (spec D5). If `order` is not
+      honoured, record it and stop for a spec revision before adding
+      evidence rows;
+    - use short `HostOpsTimings` (for example a 2 s settle period) so the
+      settle-period scenarios don't wait 60 s;
     - pause, resume, and cancel;
     - a second start from `Finished` with `priorState: finished`
       (answer 13);
