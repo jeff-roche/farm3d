@@ -324,6 +324,11 @@ pub enum ErrorCode {
     /// P5 D7: a plate can't be sliced as it stands (for example, it is
     /// empty).
     PreparationInvalid,
+    /// P5 D5: the Preparation is pinned to an older revision of its Model,
+    /// and `start_slice` didn't say to continue with it.
+    PreparationStale,
+    /// P5 D10: the slice operation has already finished.
+    OperationNotCancellable,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -343,6 +348,12 @@ pub enum RecoveryCode {
     CheckCredentials,
     RestartApplication,
     UpgradeFarm3d,
+    /// P5: open the Slicer settings (engine and preset source).
+    OpenSlicerSettings,
+    /// P5 D5: reload the Preparation onto its Model's current revision.
+    ReloadPreparation,
+    /// P5: change the Preparation (presets, controls, or plates).
+    EditPreparation,
 }
 
 /// The versioned success envelope returned by every command.
@@ -735,7 +746,7 @@ impl CommandError {
         Self::typed(
             ErrorCode::SlicerUnavailable,
             format!("OrcaSlicer is not available: {reason}"),
-            vec![],
+            vec![RecoveryCode::OpenSlicerSettings],
             false,
         )
         .with_string_details(&[("reason", reason)])
@@ -746,7 +757,7 @@ impl CommandError {
         Self::typed(
             ErrorCode::PresetSourceUnavailable,
             format!("No OrcaSlicer presets are available: {reason}"),
-            vec![],
+            vec![RecoveryCode::OpenSlicerSettings],
             false,
         )
         .with_string_details(&[("reason", reason)])
@@ -757,7 +768,10 @@ impl CommandError {
         Self::typed(
             ErrorCode::PresetNotFound,
             format!("OrcaSlicer {preset_source_version} has no {kind} preset named \"{preset}\"."),
-            vec![RecoveryCode::EditFields],
+            vec![
+                RecoveryCode::EditPreparation,
+                RecoveryCode::OpenSlicerSettings,
+            ],
             false,
         )
         .with_string_details(&[
@@ -773,7 +787,7 @@ impl CommandError {
         Self::typed(
             ErrorCode::PresetInvalid,
             format!("The {kind} preset \"{preset}\" can't be used: {reason}"),
-            vec![RecoveryCode::EditFields],
+            vec![RecoveryCode::EditPreparation],
             false,
         )
         .with_string_details(&[("kind", kind), ("preset", preset), ("reason", reason)])
@@ -787,7 +801,7 @@ impl CommandError {
             format!(
                 "The filament preset \"{filament_preset}\" is not made for \"{machine_preset}\"."
             ),
-            vec![RecoveryCode::EditFields],
+            vec![RecoveryCode::EditPreparation],
             false,
         )
         .with_string_details(&[
@@ -812,7 +826,10 @@ impl CommandError {
         Self::typed(
             ErrorCode::UnsupportedSettingForRuntime,
             format!("OrcaSlicer {preset_source_version} does not support the setting \"{key}\"."),
-            vec![],
+            vec![
+                RecoveryCode::EditPreparation,
+                RecoveryCode::OpenSlicerSettings,
+            ],
             false,
         )
         .with_string_details(&[("key", key), ("presetSourceVersion", preset_source_version)])
@@ -822,8 +839,42 @@ impl CommandError {
     /// `reason` is `empty`, `unknownObject`, `emptyObject`, or
     /// `invalidTransform`.
     pub fn preparation_invalid(plate_key: &str, reason: &str, message: &str) -> Self {
-        Self::typed(ErrorCode::PreparationInvalid, message, vec![], false)
-            .with_string_details(&[("plateKey", plate_key), ("reason", reason)])
+        Self::typed(
+            ErrorCode::PreparationInvalid,
+            message,
+            vec![RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[("plateKey", plate_key), ("reason", reason)])
+    }
+
+    /// P5 D5: Preparation `preparation_id` is pinned to
+    /// `source_revision_id`, which is no longer its Model's current
+    /// revision. `start_slice` goes ahead only with
+    /// `continueWithSourceRevision` equal to the pinned revision.
+    pub fn preparation_stale(preparation_id: &str, source_revision_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::PreparationStale,
+            "The Model changed since this Preparation was made. Reload it onto the current revision, or continue with the revision it was made from.",
+            vec![RecoveryCode::ReloadPreparation, RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[
+            ("preparationId", preparation_id),
+            ("sourceRevisionId", source_revision_id),
+        ])
+    }
+
+    /// P5 D10: the operation is already `succeeded`, `failed`,
+    /// `cancelled`, or `interrupted`.
+    pub fn operation_not_cancellable(operation_id: &str, state: &str) -> Self {
+        Self::typed(
+            ErrorCode::OperationNotCancellable,
+            "This slice has already finished.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("sliceOperationId", operation_id), ("state", state)])
     }
 
     /// D7: an action (a Printer's archive/delete, or a Spool's archive/

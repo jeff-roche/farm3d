@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 58] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 77] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -242,9 +242,96 @@ contracts![
         "ConvertModelToManagedRequest",
         "ConvertModelToManagedResult"
     ),
+    (
+        "get_slicer_runtime",
+        "GetSlicerRuntimeRequest",
+        "GetSlicerRuntimeResult"
+    ),
+    (
+        "check_slicer_runtime",
+        "CheckSlicerRuntimeRequest",
+        "CheckSlicerRuntimeResult"
+    ),
+    (
+        "pick_slicer_engine",
+        "PickSlicerEngineRequest",
+        "PickSlicerEngineResult"
+    ),
+    (
+        "pick_preset_source",
+        "PickPresetSourceRequest",
+        "PickPresetSourceResult"
+    ),
+    (
+        "reset_slicer_runtime",
+        "ResetSlicerRuntimeRequest",
+        "ResetSlicerRuntimeResult"
+    ),
+    (
+        "list_slice_options",
+        "ListSliceOptionsRequest",
+        "ListSliceOptionsResult"
+    ),
+    (
+        "get_revision_geometry",
+        "GetRevisionGeometryRequest",
+        "GetRevisionGeometryResult"
+    ),
+    (
+        "get_revision_mesh",
+        "GetRevisionMeshRequest",
+        "GetRevisionMeshResult"
+    ),
+    ("list_slicing", "ListSlicingRequest", "ListSlicingResult"),
+    (
+        "create_preparation",
+        "CreatePreparationRequest",
+        "CreatePreparationResult"
+    ),
+    (
+        "update_preparation",
+        "UpdatePreparationRequest",
+        "UpdatePreparationResult"
+    ),
+    (
+        "reload_preparation",
+        "ReloadPreparationRequest",
+        "ReloadPreparationResult"
+    ),
+    (
+        "delete_preparation",
+        "DeletePreparationRequest",
+        "DeletePreparationResult"
+    ),
+    ("start_slice", "StartSliceRequest", "StartSliceResult"),
+    (
+        "cancel_slice_operation",
+        "CancelSliceOperationRequest",
+        "CancelSliceOperationResult"
+    ),
+    (
+        "get_slice_operation_log",
+        "GetSliceOperationLogRequest",
+        "GetSliceOperationLogResult"
+    ),
+    (
+        "list_slice_revisions",
+        "ListSliceRevisionsRequest",
+        "ListSliceRevisionsResult"
+    ),
+    (
+        "get_slice_revision",
+        "GetSliceRevisionRequest",
+        "GetSliceRevisionResult"
+    ),
+    (
+        "delete_slice_revision",
+        "DeleteSliceRevisionRequest",
+        "DeleteSliceRevisionResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 58] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 77] {
     &COMMAND_CONTRACTS
 }
 
@@ -382,7 +469,45 @@ export type CheckLinkedSourcesResult = CommandSuccess<ModelRecord[]>;
 export type LocateLinkedSourceRequest = ContractRequest & { modelId: string; expectedRevision: number; selectionId: string; fileIndex: number; acceptDifferentContent: boolean };
 export type LocateLinkedSourceResult = CommandSuccess<ModelMutationResult>;
 export type ConvertModelToManagedRequest = ContractRequest & { modelId: string; expectedRevision: number };
-export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;"#.to_string()
+export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;
+export type GetSlicerRuntimeRequest = NoArgsRequest;
+export type GetSlicerRuntimeResult = CommandSuccess<SlicerRuntimeStatus>;
+export type CheckSlicerRuntimeRequest = NoArgsRequest;
+export type CheckSlicerRuntimeResult = CommandSuccess<SlicerRuntimeStatus>;
+export type PickSlicerEngineRequest = ContractRequest & { expectedRevision: number };
+export type PickSlicerEngineResult = CommandSuccess<SlicerRuntimeStatus | null>;
+export type PickPresetSourceRequest = ContractRequest & { expectedRevision: number; kind: PresetSourceKind };
+export type PickPresetSourceResult = CommandSuccess<SlicerRuntimeStatus | null>;
+export type ResetSlicerRuntimeRequest = ContractRequest & { expectedRevision: number; engine: boolean; presetSource: boolean };
+export type ResetSlicerRuntimeResult = CommandSuccess<SlicerRuntimeStatus>;
+export type ListSliceOptionsRequest = ContractRequest & { target: SliceTarget };
+export type ListSliceOptionsResult = CommandSuccess<SliceOptions>;
+export type GetRevisionGeometryRequest = ContractRequest & { revisionId: string };
+export type GetRevisionGeometryResult = CommandSuccess<RevisionGeometry>;
+export type GetRevisionMeshRequest = ContractRequest & { revisionId: string; objectKey: number };
+export type GetRevisionMeshResult = ArrayBuffer;
+export type ListSlicingRequest = NoArgsRequest;
+export type ListSlicingResult = CommandSuccess<SlicingSnapshot>;
+export type CreatePreparationRequest = ContractRequest & { modelId: string; target?: SliceTarget };
+export type CreatePreparationResult = CommandSuccess<PreparationRecord>;
+export type UpdatePreparationRequest = ContractRequest & { preparationId: string; expectedRevision: number; document: PreparationDocument };
+export type UpdatePreparationResult = CommandSuccess<PreparationRecord>;
+export type ReloadPreparationRequest = ContractRequest & { preparationId: string; expectedRevision: number };
+export type ReloadPreparationResult = CommandSuccess<ReloadPreparationData>;
+export type DeletePreparationRequest = ContractRequest & { preparationId: string; expectedRevision: number };
+export type DeletePreparationResult = CommandSuccess<SlicingDeleted>;
+export type StartSliceRequest = ContractRequest & { operationId: string; preparationId: string; expectedRevision: number; plateKeys: string[]; continueWithSourceRevision?: string };
+export type StartSliceResult = CommandSuccess<StartSliceData>;
+export type CancelSliceOperationRequest = ContractRequest & { sliceOperationId: string };
+export type CancelSliceOperationResult = CommandSuccess<SliceOperationRecord>;
+export type GetSliceOperationLogRequest = ContractRequest & { sliceOperationId: string };
+export type GetSliceOperationLogResult = CommandSuccess<SliceOperationLog>;
+export type ListSliceRevisionsRequest = ContractRequest & { modelId: string };
+export type ListSliceRevisionsResult = CommandSuccess<SliceRevisionSummary[]>;
+export type GetSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
+export type GetSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
+export type DeleteSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
+export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -453,6 +578,21 @@ export type ConvertModelToManagedResult = CommandSuccess<ModelMutationResult>;"#
         visitor.visit::<crate::library::commands::RevisionThumbnail>();
         visitor.visit::<crate::library::commands::LibraryContentInfo>();
         visitor.visit::<crate::library::ModelRecord>();
+        visitor.visit::<crate::slicing::SlicerRuntimeStatus>();
+        visitor.visit::<crate::slicing::commands::PresetSourceKind>();
+        visitor.visit::<crate::slicing::SliceTarget>();
+        visitor.visit::<crate::slicing::SliceOptions>();
+        visitor.visit::<crate::slicing::RevisionGeometry>();
+        visitor.visit::<crate::slicing::commands::SlicingSnapshot>();
+        visitor.visit::<crate::slicing::PreparationRecord>();
+        visitor.visit::<crate::slicing::PreparationDocument>();
+        visitor.visit::<crate::slicing::preparation::ReloadPreparationData>();
+        visitor.visit::<crate::slicing::commands::SlicingDeleted>();
+        visitor.visit::<crate::slicing::commands::StartSliceData>();
+        visitor.visit::<crate::slicing::SliceOperationRecord>();
+        visitor.visit::<crate::slicing::commands::SliceOperationLog>();
+        visitor.visit::<crate::slicing::SliceRevisionSummary>();
+        visitor.visit::<crate::slicing::SliceRevisionRecord>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

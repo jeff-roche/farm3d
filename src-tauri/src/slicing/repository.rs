@@ -314,6 +314,43 @@ pub fn update_preparation(
     load_preparation(tx, id)?.ok_or_else(|| not_found(id))
 }
 
+/// D5 reload: pins Preparation `id` to `source_revision_id` (one of its
+/// Model's revisions) with `document`, and bumps its revision.
+pub fn rebase_preparation(
+    tx: &Transaction<'_>,
+    id: &str,
+    expected_revision: i64,
+    source_revision_id: &str,
+    document: &PreparationDocument,
+) -> Result<PreparationRecord, RepositoryError> {
+    let current = checked_preparation(tx, id, expected_revision)?;
+    match source_revision(tx, source_revision_id)? {
+        Some((owner, _, _, _)) if owner == current.model_id => {}
+        _ => {
+            return Err(RepositoryError::Validation {
+                field_path: "sourceRevisionId",
+            })
+        }
+    }
+    tx.execute(
+        "UPDATE slice_preparations
+         SET source_revision_id = ?2, document_json = ?3, revision = revision + 1, updated_at = ?4
+         WHERE id = ?1",
+        params![id, source_revision_id, to_json(document), now_rfc3339()],
+    )?;
+    load_preparation(tx, id)?.ok_or_else(|| not_found(id))
+}
+
+/// Every Preparation, by Model id.
+pub fn list_preparations(connection: &Connection) -> Result<Vec<PreparationRecord>, StorageError> {
+    let mut statement =
+        connection.prepare(&format!("{PREPARATION_SELECT} ORDER BY p.model_id, p.id"))?;
+    let rows = statement
+        .query_map([], decode_preparation)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// Deletes Preparation `id`. Its operations cascade, and their logs are
 /// marked for cleanup when nothing else refers to them.
 pub fn delete_preparation(
@@ -516,6 +553,38 @@ pub fn transition_operation(
         )?,
     };
     load_operation(tx, id)?.ok_or_else(|| not_found(id))
+}
+
+/// D17's backfill: every `queued` or `running` operation, in queue order,
+/// then the `recent` most recently finished ones, newest first.
+pub fn list_active_and_recent_operations(
+    connection: &Connection,
+    recent: u32,
+) -> Result<Vec<SliceOperationRecord>, StorageError> {
+    let mut rows = Vec::new();
+    for (filter, limit) in [
+        (
+            "WHERE state IN ('queued', 'running') ORDER BY queued_at, id",
+            None,
+        ),
+        (
+            "WHERE state NOT IN ('queued', 'running')
+             ORDER BY finished_at DESC, queued_at DESC, id DESC LIMIT ?1",
+            Some(recent),
+        ),
+    ] {
+        let mut statement = connection.prepare(&format!("{OPERATION_SELECT} {filter}"))?;
+        let found = match limit {
+            Some(limit) => statement
+                .query_map([limit], decode_operation)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            None => statement
+                .query_map([], decode_operation)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        };
+        rows.extend(found);
+    }
+    Ok(rows)
 }
 
 /// An operation [`mark_active_interrupted`] stopped. A formerly `running`
@@ -798,6 +867,20 @@ pub fn list_revision_summaries(
     ))?;
     let rows = statement
         .query_map([model_id], decode_revision)?
+        .map(|row| row.map(|row| row.summary))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Every Slice Revision, newest first.
+pub fn list_all_revision_summaries(
+    connection: &Connection,
+) -> Result<Vec<SliceRevisionSummary>, StorageError> {
+    let mut statement = connection.prepare(&format!(
+        "{REVISION_SELECT} ORDER BY s.created_at DESC, s.id DESC"
+    ))?;
+    let rows = statement
+        .query_map([], decode_revision)?
         .map(|row| row.map(|row| row.summary))
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)

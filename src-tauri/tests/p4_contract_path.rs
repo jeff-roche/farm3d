@@ -29,6 +29,9 @@ use common::{a_catalog, invoke, FakeModelFileIo};
 /// `COMMAND_NAMES.len()` before P4 (P3 merged).
 const PRE_P4: usize = 41;
 
+/// Commands P5 added after P4 (`tests/p5_slicing.rs` lists them).
+const P5_COMMAND_COUNT: usize = 19;
+
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
     "inspect_import_selection",
@@ -53,7 +56,10 @@ const CORE_3MF_SHA256: &str = "0712090c29fed95a750f831dcb7be12a3372648719e3978d0
 
 #[test]
 fn every_p4_command_is_registered_with_a_contract() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), PRE_P4 + P4_COMMANDS.len());
+    assert_eq!(
+        farm3d_lib::COMMAND_NAMES.len(),
+        PRE_P4 + P4_COMMANDS.len() + P5_COMMAND_COUNT
+    );
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     assert_eq!(manifest.len(), farm3d_lib::COMMAND_NAMES.len());
     for command in P4_COMMANDS {

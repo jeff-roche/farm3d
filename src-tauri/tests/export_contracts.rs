@@ -78,16 +78,24 @@ use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
 };
+use farm3d_lib::slicing::commands::{
+    PresetSourceKind, SliceOperationLog, SlicingDeleted, SlicingSnapshot, StartSliceData,
+};
+use farm3d_lib::slicing::events::{
+    SliceProgressPayload, SlicingEvent, SlicingEventPayload, SlicingEventType,
+};
+use farm3d_lib::slicing::preparation::ReloadPreparationData;
 use farm3d_lib::slicing::{
-    BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineSource, EngineState, Fact,
-    FactProvenance, FilamentPresetOption, GeometryBuildItem, GeometryObject, InfillPattern,
-    InstanceDoc, InstanceTransform, LayFlatFace, PlateDoc, PreparationDocument, PreparationRecord,
-    PresetSourceOrigin, PresetSourceState, ProcessPresetOption, ProfileSnapshot, RevisionGeometry,
-    RuntimeChannel, SliceControls, SliceEstimateSource, SliceEstimates, SliceFacts, SliceFailure,
-    SliceFailureCode, SliceOperationRecord, SliceOperationState, SliceOptionDefaults, SliceOptions,
-    SlicePlateRef, SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind,
-    SliceRevisionRecord, SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget,
-    SlicerRuntimeStatus, SupportMode,
+    BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineCandidate, EngineCandidateResult,
+    EngineSource, EngineState, Fact, FactProvenance, FilamentPresetOption, GeometryBuildItem,
+    GeometryObject, InfillPattern, InstanceDoc, InstanceTransform, LayFlatFace, PlateDoc,
+    PreparationDocument, PreparationRecord, PresetSourceOrigin, PresetSourceState,
+    ProcessPresetOption, ProfileSnapshot, RevisionGeometry, RuntimeChannel, SliceControls,
+    SliceEstimateSource, SliceEstimates, SliceFacts, SliceFailure, SliceFailureCode,
+    SliceOperationRecord, SliceOperationState, SliceOptionDefaults, SliceOptions, SlicePlateRef,
+    SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind, SliceRevisionRecord,
+    SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget, SlicerRuntimeStatus,
+    SupportMode,
 };
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
@@ -473,6 +481,18 @@ fn export_registry() -> Vec<Export> {
         export::<GeometryObject>(),
         export::<GeometryBuildItem>(),
         export::<RevisionGeometry>(),
+        export::<EngineCandidate>(),
+        export::<EngineCandidateResult>(),
+        export::<SlicingEventType>(),
+        export::<SlicingEventPayload>(),
+        export::<SlicingEvent>(),
+        export::<SliceProgressPayload>(),
+        export::<SlicingSnapshot>(),
+        export::<PresetSourceKind>(),
+        export::<StartSliceData>(),
+        export::<SliceOperationLog>(),
+        export::<SlicingDeleted>(),
+        export::<ReloadPreparationData>(),
     ]
 }
 
@@ -706,6 +726,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::UnmappedProfileOverride,
         ErrorCode::UnsupportedSettingForRuntime,
         ErrorCode::PreparationInvalid,
+        ErrorCode::PreparationStale,
+        ErrorCode::OperationNotCancellable,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -717,6 +739,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::CheckCredentials,
         RecoveryCode::RestartApplication,
         RecoveryCode::UpgradeFarm3d,
+        RecoveryCode::OpenSlicerSettings,
+        RecoveryCode::ReloadPreparation,
+        RecoveryCode::EditPreparation,
     ];
 
     assert_eq!(
@@ -732,12 +757,13 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
                 "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
                 "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
-                "PREPARATION_INVALID"
+                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
                 "CHOOSE_SUPPORTED_ADAPTER", "CHECK_CONNECTION", "CHECK_CREDENTIALS",
-                "RESTART_APPLICATION", "UPGRADE_FARM3D"
+                "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
+                "RELOAD_PREPARATION", "EDIT_PREPARATION"
             ]
         })
     );

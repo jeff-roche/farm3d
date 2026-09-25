@@ -82,6 +82,39 @@ type CommandMap = {
     Contracts.ConvertModelToManagedRequest,
     Contracts.ConvertModelToManagedResult,
   ];
+  // P5. `get_revision_mesh` answers with raw bytes, not the JSON envelope,
+  // so it needs a binary invoke path rather than `command()` (Task 10).
+  get_slicer_runtime: [Contracts.GetSlicerRuntimeRequest, Contracts.GetSlicerRuntimeResult];
+  check_slicer_runtime: [Contracts.CheckSlicerRuntimeRequest, Contracts.CheckSlicerRuntimeResult];
+  pick_slicer_engine: [Contracts.PickSlicerEngineRequest, Contracts.PickSlicerEngineResult];
+  pick_preset_source: [Contracts.PickPresetSourceRequest, Contracts.PickPresetSourceResult];
+  reset_slicer_runtime: [Contracts.ResetSlicerRuntimeRequest, Contracts.ResetSlicerRuntimeResult];
+  list_slice_options: [Contracts.ListSliceOptionsRequest, Contracts.ListSliceOptionsResult];
+  get_revision_geometry: [
+    Contracts.GetRevisionGeometryRequest,
+    Contracts.GetRevisionGeometryResult,
+  ];
+  get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
+  list_slicing: [Contracts.ListSlicingRequest, Contracts.ListSlicingResult];
+  create_preparation: [Contracts.CreatePreparationRequest, Contracts.CreatePreparationResult];
+  update_preparation: [Contracts.UpdatePreparationRequest, Contracts.UpdatePreparationResult];
+  reload_preparation: [Contracts.ReloadPreparationRequest, Contracts.ReloadPreparationResult];
+  delete_preparation: [Contracts.DeletePreparationRequest, Contracts.DeletePreparationResult];
+  start_slice: [Contracts.StartSliceRequest, Contracts.StartSliceResult];
+  cancel_slice_operation: [
+    Contracts.CancelSliceOperationRequest,
+    Contracts.CancelSliceOperationResult,
+  ];
+  get_slice_operation_log: [
+    Contracts.GetSliceOperationLogRequest,
+    Contracts.GetSliceOperationLogResult,
+  ];
+  list_slice_revisions: [Contracts.ListSliceRevisionsRequest, Contracts.ListSliceRevisionsResult];
+  get_slice_revision: [Contracts.GetSliceRevisionRequest, Contracts.GetSliceRevisionResult];
+  delete_slice_revision: [
+    Contracts.DeleteSliceRevisionRequest,
+    Contracts.DeleteSliceRevisionResult,
+  ];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;

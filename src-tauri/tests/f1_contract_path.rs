@@ -1,6 +1,7 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
+    // P4's 58 plus P5's 19.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 19);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -62,6 +63,25 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_additions() {
             "check_linked_sources",
             "locate_linked_source",
             "convert_model_to_managed",
+            "get_slicer_runtime",
+            "check_slicer_runtime",
+            "pick_slicer_engine",
+            "pick_preset_source",
+            "reset_slicer_runtime",
+            "list_slice_options",
+            "get_revision_geometry",
+            "get_revision_mesh",
+            "list_slicing",
+            "create_preparation",
+            "update_preparation",
+            "reload_preparation",
+            "delete_preparation",
+            "start_slice",
+            "cancel_slice_operation",
+            "get_slice_operation_log",
+            "list_slice_revisions",
+            "get_slice_revision",
+            "delete_slice_revision",
         ]
     );
 }
@@ -174,6 +194,25 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::library::commands::check_linked_sources,
             farm3d_lib::library::commands::locate_linked_source,
             farm3d_lib::library::commands::convert_model_to_managed,
+            farm3d_lib::slicing::commands::get_slicer_runtime,
+            farm3d_lib::slicing::commands::check_slicer_runtime,
+            farm3d_lib::slicing::commands::pick_slicer_engine,
+            farm3d_lib::slicing::commands::pick_preset_source,
+            farm3d_lib::slicing::commands::reset_slicer_runtime,
+            farm3d_lib::slicing::commands::list_slice_options,
+            farm3d_lib::slicing::commands::get_revision_geometry,
+            farm3d_lib::slicing::commands::get_revision_mesh,
+            farm3d_lib::slicing::commands::list_slicing,
+            farm3d_lib::slicing::commands::create_preparation,
+            farm3d_lib::slicing::commands::update_preparation,
+            farm3d_lib::slicing::commands::reload_preparation,
+            farm3d_lib::slicing::commands::delete_preparation,
+            farm3d_lib::slicing::commands::start_slice,
+            farm3d_lib::slicing::commands::cancel_slice_operation,
+            farm3d_lib::slicing::commands::get_slice_operation_log,
+            farm3d_lib::slicing::commands::list_slice_revisions,
+            farm3d_lib::slicing::commands::get_slice_revision,
+            farm3d_lib::slicing::commands::delete_slice_revision,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -347,6 +386,53 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             "convert_model_to_managed",
             json!({"modelId": "m", "expectedRevision": 1}),
         ),
+        ("get_slicer_runtime", json!({})),
+        ("check_slicer_runtime", json!({})),
+        ("pick_slicer_engine", json!({"expectedRevision": 1})),
+        (
+            "pick_preset_source",
+            json!({"expectedRevision": 1, "kind": "folder"}),
+        ),
+        (
+            "reset_slicer_runtime",
+            json!({"expectedRevision": 1, "engine": true, "presetSource": true}),
+        ),
+        (
+            "list_slice_options",
+            json!({"target": {"kind": "printer", "printerId": "p"}}),
+        ),
+        ("get_revision_geometry", json!({"revisionId": "r"})),
+        (
+            "get_revision_mesh",
+            json!({"revisionId": "r", "objectKey": 1}),
+        ),
+        ("list_slicing", json!({})),
+        ("create_preparation", json!({"modelId": "m"})),
+        (
+            "update_preparation",
+            json!({"preparationId": "p", "expectedRevision": 1, "document": {
+                "plates": [],
+                "target": {"kind": "printer", "printerId": "p"},
+                "controls": {},
+            }}),
+        ),
+        (
+            "reload_preparation",
+            json!({"preparationId": "p", "expectedRevision": 1}),
+        ),
+        (
+            "delete_preparation",
+            json!({"preparationId": "p", "expectedRevision": 1}),
+        ),
+        (
+            "start_slice",
+            json!({"operationId": "o", "preparationId": "p", "expectedRevision": 1, "plateKeys": []}),
+        ),
+        ("cancel_slice_operation", json!({"sliceOperationId": "s"})),
+        ("get_slice_operation_log", json!({"sliceOperationId": "s"})),
+        ("list_slice_revisions", json!({"modelId": "m"})),
+        ("get_slice_revision", json!({"sliceRevisionId": "s"})),
+        ("delete_slice_revision", json!({"sliceRevisionId": "s"})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {
