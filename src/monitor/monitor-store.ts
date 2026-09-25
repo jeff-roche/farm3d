@@ -30,7 +30,7 @@ export interface MonitorPrinterView {
   hasMissingReadings: boolean;
   readings: Pick<
     PrinterStatus["telemetry"],
-    "progress" | "nozzleTempC" | "nozzleTargetC" | "bedTempC" | "bedTargetC" | "printDurationS"
+    "progress" | "nozzleTempC" | "nozzleTargetC" | "bedTempC" | "bedTargetC" | "printDurationS" | "tools"
   >;
   lastObservedAt?: string;
   freshUntil?: string;
@@ -180,7 +180,8 @@ function severityLabel(severity: MonitorSeverity): string | undefined {
 function hasMissingReadings(status: PrinterStatus | undefined): boolean {
   const telemetry = status?.telemetry;
   return telemetry?.nozzleTempC === undefined || telemetry?.nozzleTargetC === undefined
-    || telemetry?.bedTempC === undefined || telemetry?.bedTargetC === undefined;
+    || telemetry?.bedTempC === undefined || telemetry?.bedTargetC === undefined
+    || (telemetry.tools ?? []).some((tool) => tool.tempC === undefined || tool.targetC === undefined);
 }
 
 function capitalize(value: string): string {
@@ -232,6 +233,7 @@ function toView(printer: ResolvedPrinter): MonitorPrinterView {
       bedTempC: telemetry?.bedTempC,
       bedTargetC: telemetry?.bedTargetC,
       printDurationS: telemetry?.printDurationS,
+      tools: telemetry?.tools,
     },
     lastObservedAt: status?.lastObservedAt,
     freshUntil: status?.freshUntil,

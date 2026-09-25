@@ -137,6 +137,7 @@ impl PrinterStatus {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             },
             last_observed_at: None,
             fresh_until: None,

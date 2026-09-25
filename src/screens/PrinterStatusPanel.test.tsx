@@ -94,6 +94,18 @@ describe("PrinterStatusPanel", () => {
     expect(screen.getByText("Live status is still reconciling.")).toBeInTheDocument();
   });
 
+  it("lists each tool of a multi-tool printer as its own reading", () => {
+    // A0.1 (#9), decision B2.
+    const status = printer.runtimeStatus!;
+    render(() => <PrinterStatusPanel printer={{ ...printer, runtimeStatus: { ...status, telemetry: {
+      ...status.telemetry, tools: [{ index: 0, tempC: 210, targetC: 215 }, { index: 1, tempC: 30 }],
+    } } }} />);
+    const field = (label: string) => screen.getByText(label, { selector: "dt" }).nextElementSibling;
+    expect(field("T0")).toHaveTextContent("210 °C / 215 °C");
+    expect(field("T1")).toHaveTextContent("30 °C / —");
+    expect(screen.queryByText("Nozzle", { selector: "dt" })).not.toBeInTheDocument();
+  });
+
   it("uses unavailable values rather than inventing telemetry", () => {
     render(() => <PrinterStatusPanel printer={{ ...printer, runtimeStatus: undefined }} />);
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);

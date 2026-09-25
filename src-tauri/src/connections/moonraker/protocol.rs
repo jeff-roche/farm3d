@@ -2,7 +2,7 @@
 //! sockets, no async, no Tauri. Everything here is a function of its input,
 //! which is what makes the merge semantics below testable without a printer.
 
-use crate::connections::status_repository::PrinterTelemetry;
+use crate::connections::status_repository::{PrinterTelemetry, ToolTemperature};
 use crate::connections::{ConnectionState, ProbeResult, ReportedCapabilities};
 use crate::printers::operational::HostActivity;
 use serde_json::{json, Value};
@@ -37,17 +37,51 @@ pub fn rpc_request(id: u64, method: &str, params: Option<Value>) -> String {
     req.to_string()
 }
 
-/// Exactly the objects and attributes the dashboard renders. Requesting
-/// named attributes rather than `null` (which means "every attribute") keeps
-/// the notification volume proportional to what is actually displayed.
+/// Exactly the objects and attributes the dashboard renders, for a
+/// single-tool printer. Requesting named attributes rather than `null`
+/// (which means "every attribute") keeps the notification volume
+/// proportional to what is actually displayed.
 pub fn subscribe_params() -> Value {
-    json!({"objects": {
-        "extruder": ["temperature", "target"],
+    subscribe_params_for(&[(0, "extruder".to_string())])
+}
+
+/// The subscription for a printer with these tools (from `tool_objects`).
+pub fn subscribe_params_for(tools: &[(u32, String)]) -> Value {
+    let mut objects = json!({
         "heater_bed": ["temperature", "target"],
         "print_stats": ["filename", "state", "print_duration", "message"],
         "display_status": ["progress"],
         "toolhead": ["axis_minimum", "axis_maximum"]
-    }})
+    });
+    for (_, name) in tools {
+        objects[name.as_str()] = json!(["temperature", "target"]);
+    }
+    json!({ "objects": objects })
+}
+
+/// The tool heaters in a `printer.objects.list` answer, in tool order:
+/// Klipper names them `extruder`, `extruder1`, `extruder2`, ... (A0.1, #9,
+/// decision B2). Objects that merely mention an extruder
+/// (`tmc2209 extruder1`, `extruder_stepper belt`) are not tools.
+pub fn tool_objects(objects: &[Value]) -> Vec<(u32, String)> {
+    let mut tools: Vec<(u32, String)> = objects
+        .iter()
+        .filter_map(Value::as_str)
+        .filter_map(|name| {
+            let suffix = name.strip_prefix("extruder")?;
+            let index = if suffix.is_empty() {
+                0
+            } else if suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+                suffix.parse().ok()?
+            } else {
+                return None;
+            };
+            Some((index, name.to_string()))
+        })
+        .collect();
+    tools.sort();
+    tools.dedup_by_key(|(index, _)| *index);
+    tools
 }
 
 pub fn parse_frame(raw: &str) -> Frame {
@@ -106,6 +140,9 @@ pub fn parse_frame(raw: &str) -> Frame {
 #[derive(Default, Debug, Clone)]
 pub struct StatusSnapshot {
     objects: serde_json::Map<String, Value>,
+    /// The printer's tools, when known and more than one. Empty means a
+    /// single `extruder`.
+    tools: Vec<(u32, String)>,
 }
 
 impl StatusSnapshot {
@@ -132,6 +169,14 @@ impl StatusSnapshot {
 
     fn is_empty(&self) -> bool {
         self.objects.is_empty()
+    }
+
+    fn set_tools(&mut self, tools: &[(u32, String)]) {
+        self.tools = if tools.len() > 1 {
+            tools.to_vec()
+        } else {
+            Vec::new()
+        };
     }
 
     fn number(&self, object: &str, attribute: &str) -> Option<f64> {
@@ -186,6 +231,15 @@ impl StatusSnapshot {
             bed_temp_c: self.number("heater_bed", "temperature"),
             bed_target_c: self.number("heater_bed", "target"),
             print_duration_s: self.number("print_stats", "print_duration"),
+            tools: self
+                .tools
+                .iter()
+                .map(|(index, name)| ToolTemperature {
+                    index: *index,
+                    temp_c: self.number(name, "temperature"),
+                    target_c: self.number(name, "target"),
+                })
+                .collect(),
         }
     }
 }
@@ -206,6 +260,7 @@ pub fn is_auth_error(code: Option<i64>, message: &str) -> bool {
 pub const ID_SERVER_INFO: u64 = 1;
 pub const ID_PRINTER_INFO: u64 = 2;
 pub const ID_SUBSCRIBE: u64 = 3;
+pub const ID_OBJECTS_LIST: u64 = 4;
 
 /// One thing the subscription loop must do after a frame.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,8 +269,10 @@ pub enum Step {
     Telemetry,
     /// Publish the connection state.
     Health(ConnectionState),
-    /// Send `printer.objects.subscribe` again.
-    Resubscribe,
+    /// Send `printer.objects.list`, to learn the printer's tools.
+    ListObjects,
+    /// Send `printer.objects.subscribe` with these params.
+    Subscribe(Value),
     /// Moonraker rejected the credential; end the subscription.
     AuthFailed(String),
 }
@@ -232,6 +289,8 @@ pub enum Step {
 /// - Moonraker drops every subscription when Klippy disconnects (a
 ///   FIRMWARE_RESTART, a host restart, a crash). A client has to subscribe
 ///   again on `notify_klippy_ready`, or its readings silently stop.
+/// - A printer may have several tools (a Snapmaker U1 has four). The tool
+///   list comes from `printer.objects.list` before each subscription.
 /// - Readings merge into the snapshot in every state, but they are published
 ///   only while Klipper is ready. The supervisor treats telemetry as proof of
 ///   an online printer, so publishing it during a shutdown would flip the
@@ -284,6 +343,17 @@ impl SubscriptionState {
                 }
                 steps
             }
+            Frame::Response { id, result } if id == ID_OBJECTS_LIST => {
+                let objects = result["objects"].as_array().cloned().unwrap_or_default();
+                let tools = tool_objects(&objects);
+                self.snapshot.set_tools(&tools);
+                vec![Step::Subscribe(subscribe_params_for(&tools))]
+            }
+            Frame::Error { id, message, code }
+                if id == ID_OBJECTS_LIST && !is_auth_error(code, &message) =>
+            {
+                vec![Step::Subscribe(subscribe_params())]
+            }
             Frame::Response { id, result } if id == ID_SUBSCRIBE => {
                 // `printer.objects.subscribe` wraps its payload in a `status`
                 // key; the notifications do not.
@@ -296,7 +366,7 @@ impl SubscriptionState {
             }
             Frame::KlippyReady => {
                 self.klippy = Some(ConnectionState::Online);
-                vec![Step::Resubscribe, Step::Health(ConnectionState::Online)]
+                vec![Step::ListObjects, Step::Health(ConnectionState::Online)]
             }
             Frame::KlippyDown => {
                 self.klippy = Some(ConnectionState::Offline);
@@ -488,15 +558,166 @@ mod tests {
             state.on_frame(Frame::KlippyDown),
             vec![Step::Health(ConnectionState::Offline)]
         );
+        // Klipper may come back with a different config, so the tool list
+        // is read again before subscribing.
         assert_eq!(
             state.on_frame(Frame::KlippyReady),
-            vec![Step::Resubscribe, Step::Health(ConnectionState::Online)]
+            vec![Step::ListObjects, Step::Health(ConnectionState::Online)]
+        );
+        assert_eq!(
+            state.on_frame(objects_list(&["extruder", "heater_bed"])),
+            vec![Step::Subscribe(subscribe_params())]
         );
         assert_eq!(
             state.on_frame(subscribe_response(30.0)),
             vec![Step::Telemetry, Step::Health(ConnectionState::Online)]
         );
         assert_eq!(state.telemetry().nozzle_temp_c, Some(30.0));
+    }
+
+    fn objects_list(names: &[&str]) -> Frame {
+        Frame::Response {
+            id: ID_OBJECTS_LIST,
+            result: serde_json::json!({ "objects": names }),
+        }
+    }
+
+    /// Object names from a four-toolhead Snapmaker U1's read-only
+    /// `printer.objects.list` (A0.1, #9), trimmed to the ones that matter
+    /// here plus the look-alikes that must not count as tools.
+    const U1_OBJECTS: &[&str] = &[
+        "gcode_move",
+        "print_stats",
+        "virtual_sdcard",
+        "display_status",
+        "heaters",
+        "heater_bed",
+        "tmc2209 extruder",
+        "heater_fan e0_nozzle_fan",
+        "extruder_offset_calibration",
+        "tmc2209 extruder1",
+        "tmc2209 extruder2",
+        "tmc2209 extruder3",
+        "toolhead",
+        "extruder",
+        "extruder1",
+        "extruder2",
+        "extruder3",
+    ];
+
+    #[test]
+    fn discovers_every_extruder_in_tool_order_and_ignores_look_alikes() {
+        // A0.1 (#9), decision B2.
+        let mut names = U1_OBJECTS.to_vec();
+        names.push("extruder_stepper belt");
+        names.push("extruder10");
+        let values: Vec<Value> = names.iter().map(|name| Value::from(*name)).collect();
+        assert_eq!(
+            tool_objects(&values),
+            vec![
+                (0, "extruder".to_string()),
+                (1, "extruder1".to_string()),
+                (2, "extruder2".to_string()),
+                (3, "extruder3".to_string()),
+                (10, "extruder10".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_subscription_names_every_discovered_tool() {
+        let tools = vec![(0, "extruder".to_string()), (1, "extruder1".to_string())];
+        let params = subscribe_params_for(&tools);
+        let objects = &params["objects"];
+        assert_eq!(
+            objects["extruder"],
+            serde_json::json!(["temperature", "target"])
+        );
+        assert_eq!(
+            objects["extruder1"],
+            serde_json::json!(["temperature", "target"])
+        );
+        assert!(objects.get("heater_bed").is_some());
+        assert_eq!(
+            subscribe_params_for(&[(0, "extruder".to_string())]),
+            subscribe_params(),
+            "a single-tool printer subscribes exactly as before"
+        );
+    }
+
+    #[test]
+    fn a_multi_tool_printer_reports_every_tool_and_leaves_missing_readings_absent() {
+        let mut state = SubscriptionState::default();
+        state.on_frame(server_info("ready"));
+        let steps = state.on_frame(objects_list(U1_OBJECTS));
+        assert!(matches!(steps.as_slice(), [Step::Subscribe(_)]));
+        state.on_frame(Frame::Response {
+            id: ID_SUBSCRIBE,
+            result: serde_json::json!({"status": {
+                "extruder": {"temperature": 24.0, "target": 0.0},
+                "extruder1": {"temperature": 25.5, "target": 210.0},
+                "extruder2": {"temperature": null, "target": null},
+                "print_stats": {"state": "standby"}
+            }}),
+        });
+
+        let telemetry = state.telemetry();
+        assert_eq!(
+            telemetry.nozzle_temp_c,
+            Some(24.0),
+            "tool 0 stays the primary nozzle"
+        );
+        assert_eq!(
+            telemetry.tools,
+            vec![
+                ToolTemperature {
+                    index: 0,
+                    temp_c: Some(24.0),
+                    target_c: Some(0.0)
+                },
+                ToolTemperature {
+                    index: 1,
+                    temp_c: Some(25.5),
+                    target_c: Some(210.0)
+                },
+                ToolTemperature {
+                    index: 2,
+                    temp_c: None,
+                    target_c: None
+                },
+                ToolTemperature {
+                    index: 3,
+                    temp_c: None,
+                    target_c: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_tool_printer_reports_no_tool_list() {
+        let mut state = SubscriptionState::default();
+        state.on_frame(server_info("ready"));
+        state.on_frame(objects_list(&["extruder", "heater_bed", "toolhead"]));
+        state.on_frame(subscribe_response(24.0));
+        let telemetry = state.telemetry();
+        assert_eq!(telemetry.nozzle_temp_c, Some(24.0));
+        assert!(telemetry.tools.is_empty());
+    }
+
+    #[test]
+    fn a_failed_objects_list_falls_back_to_the_single_tool_subscription() {
+        // A Klippy that is not ready answers 503; the next
+        // notify_klippy_ready lists again.
+        let mut state = SubscriptionState::default();
+        assert_eq!(
+            state.on_frame(Frame::Error {
+                id: ID_OBJECTS_LIST,
+                message: "Klippy Host not connected".into(),
+                code: Some(503),
+            }),
+            vec![Step::Subscribe(subscribe_params())]
+        );
     }
 
     #[test]

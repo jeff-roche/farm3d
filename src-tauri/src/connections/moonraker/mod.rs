@@ -15,7 +15,8 @@ use crate::connections::{
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     is_auth_error, parse_frame, probe_result_from, rpc_request, subscribe_params, Frame,
-    StatusSnapshot, Step, SubscriptionState, ID_PRINTER_INFO, ID_SERVER_INFO, ID_SUBSCRIBE,
+    StatusSnapshot, Step, SubscriptionState, ID_OBJECTS_LIST, ID_PRINTER_INFO, ID_SERVER_INFO,
+    ID_SUBSCRIBE,
 };
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -251,7 +252,7 @@ impl PrinterConnection for MoonrakerConnection {
             rpc_request(ID_SERVER_INFO, "server.info", None),
         )
         .await?;
-        send(&mut socket, subscribe_request()).await?;
+        send(&mut socket, objects_list_request()).await?;
 
         let mut state = SubscriptionState::default();
         let mut last_inbound = tokio::time::Instant::now();
@@ -289,8 +290,20 @@ impl PrinterConnection for MoonrakerConnection {
                             Step::Health(health) => send_health(&tx, health).await,
                             // Moonraker drops subscriptions when Klippy
                             // disconnects; readings stop unless we ask again.
-                            Step::Resubscribe => {
-                                send(&mut socket, subscribe_request()).await?;
+                            Step::ListObjects => {
+                                send(&mut socket, objects_list_request()).await?;
+                                false
+                            }
+                            Step::Subscribe(params) => {
+                                send(
+                                    &mut socket,
+                                    rpc_request(
+                                        ID_SUBSCRIBE,
+                                        "printer.objects.subscribe",
+                                        Some(params),
+                                    ),
+                                )
+                                .await?;
                                 false
                             }
                             Step::AuthFailed(message) => {
@@ -307,12 +320,8 @@ impl PrinterConnection for MoonrakerConnection {
     }
 }
 
-fn subscribe_request() -> String {
-    rpc_request(
-        ID_SUBSCRIBE,
-        "printer.objects.subscribe",
-        Some(subscribe_params()),
-    )
+fn objects_list_request() -> String {
+    rpc_request(ID_OBJECTS_LIST, "printer.objects.list", None)
 }
 
 fn liveness_interval(period: Duration) -> tokio::time::Interval {
@@ -456,6 +465,11 @@ mod tests {
             .unwrap();
     }
 
+    fn listed(id: u64) -> serde_json::Value {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "result": {"objects": ["extruder", "heater_bed", "print_stats", "toolhead"]}})
+    }
+
     fn subscribed(id: u64, nozzle: f64) -> serde_json::Value {
         serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {"eventtime": 1.0, "status": {
             "extruder": {"temperature": nozzle, "target": 0.0},
@@ -485,6 +499,8 @@ mod tests {
                 "result": {"klippy_state": "ready"}}),
             )
             .await;
+            let list = expect_request(&mut socket, "printer.objects.list").await;
+            reply(&mut socket, listed(list)).await;
             let first = expect_request(&mut socket, "printer.objects.subscribe").await;
             reply(&mut socket, subscribed(first, 24.0)).await;
             // A FIRMWARE_RESTART: Moonraker forgets every subscription.
@@ -498,6 +514,8 @@ mod tests {
                 serde_json::json!({"jsonrpc": "2.0", "method": "notify_klippy_ready"}),
             )
             .await;
+            let list = expect_request(&mut socket, "printer.objects.list").await;
+            reply(&mut socket, listed(list)).await;
             let second = expect_request(&mut socket, "printer.objects.subscribe").await;
             reply(&mut socket, subscribed(second, 31.0)).await;
             std::future::pending::<()>().await;

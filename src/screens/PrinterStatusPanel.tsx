@@ -5,7 +5,7 @@ import type { MaterialSlot, ResolvedPrinter } from "../printers/types";
 import { materialLabel } from "../spools/materials";
 import { ensureInventoryLoaded, spoolState } from "../spools/spool-store";
 import { formatGrams } from "../spools/weight";
-import { formatTemperature } from "./monitor-printer-presentation";
+import { formatTemperature, nozzleReadings } from "./monitor-printer-presentation";
 import styles from "./PrinterStatusPanel.module.css";
 
 export interface PrinterStatusPanelProps {
@@ -47,7 +47,7 @@ export function PrinterStatusPanel(props: PrinterStatusPanelProps) {
     ["Connection", status()?.connectionState ?? "Unavailable"],
     ["Host activity", readings()?.hostActivityName ?? readings()?.hostActivity ?? "—"],
     ["Progress", readings()?.progress === undefined ? "—" : `${Math.round(readings()!.progress! * 100)}%`],
-    ["Nozzle", formatTemperature(readings()?.nozzleTempC, readings()?.nozzleTargetC)],
+    ...nozzleReadings(readings() ?? {}).map((reading) => [reading.label, reading.value]),
     ["Bed", formatTemperature(readings()?.bedTempC, readings()?.bedTargetC)],
     ["Freshness", status()?.freshness ?? "Unavailable"],
     ["Last observed", formatObservedAge(status()?.lastObservedAt)],
