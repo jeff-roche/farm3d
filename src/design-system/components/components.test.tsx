@@ -21,6 +21,7 @@ import { Stepper, type StepperStep } from "./Stepper";
 import { Textarea } from "./Textarea";
 import { FileDropSurface } from "./FileDropSurface";
 import { SegmentedControl } from "./SegmentedControl";
+import { Progress } from "./Progress";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -162,6 +163,38 @@ describe("Select", () => {
     expect(message.id).not.toBe("");
     const describedBy = screen.getByRole("button").getAttribute("aria-describedby") ?? "";
     expect(describedBy.split(" ")).toContain(message.id);
+  });
+});
+
+describe("Select groups and an empty controlled value", () => {
+  it("lists options under their group headings and selects one", async () => {
+    const onChange = vi.fn();
+    render(() => (
+      <Select
+        label="Target"
+        placeholder="Choose a target"
+        value={null}
+        groups={[
+          { label: "Printers", options: ["CC Left"] },
+          { label: "Printer profiles", options: ["Centauri Carbon 0.4"] },
+        ]}
+        onChange={onChange}
+      />
+    ));
+    expect(screen.getByRole("button")).toHaveTextContent("Choose a target");
+    await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
+    expect(await screen.findByText("Printers")).toBeInTheDocument();
+    expect(screen.getByText("Printer profiles")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("option", { name: "Centauri Carbon 0.4" }));
+    expect(onChange).toHaveBeenCalledWith("Centauri Carbon 0.4");
+  });
+
+  it("shows the placeholder again when the value goes back to null", () => {
+    const [value, setValue] = createSignal<string | null>("Apple");
+    render(() => <Select label="Fruit" placeholder="None" options={["Apple", "Banana"]} value={value()} />);
+    expect(screen.getByRole("button")).toHaveTextContent("Apple");
+    setValue(null);
+    expect(screen.getByRole("button")).toHaveTextContent("None");
   });
 });
 
@@ -389,6 +422,11 @@ describe("NumberField", () => {
   it("renders the suffix text", () => {
     render(() => <NumberField label="Height" value={10} suffix="mm" />);
     expect(screen.getByText("mm")).toBeInTheDocument();
+  });
+
+  it("shows a placeholder while empty", () => {
+    render(() => <NumberField label="Walls" placeholder="Preset's value" />);
+    expect(screen.getByLabelText("Walls")).toHaveAttribute("placeholder", "Preset's value");
   });
 });
 
@@ -727,5 +765,22 @@ describe("SegmentedControl", () => {
 
     listInput.focus();
     expect(document.activeElement).toBe(listInput);
+  });
+});
+
+describe("Progress", () => {
+  it("reads its value as the given text", () => {
+    render(() => <Progress label="Slicing" value={42} showValue valueLabel="42% of the plate" />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "42");
+    expect(bar).toHaveAttribute("aria-valuetext", "42% of the plate");
+    expect(screen.getByText("42% of the plate")).toBeInTheDocument();
+  });
+
+  it("has no value while indeterminate", () => {
+    render(() => <Progress label="Slicing" indeterminate />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    expect(bar).toHaveAttribute("data-indeterminate");
   });
 });

@@ -75,3 +75,13 @@
   font-size: var(--f3d-type-body-small-size);
   color: var(--f3d-color-danger);
 }
+
+.section {
+  padding: 0.375rem 0.5rem 0.125rem;
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  color: var(--f3d-color-text-disabled);
+  text-transform: uppercase;
+}

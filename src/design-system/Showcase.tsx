@@ -159,6 +159,15 @@ export function Showcase() {
         <div class={styles.column}>
           <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
           <Select label="With error" options={["Apple", "Banana", "Cherry"]} error="That option no longer exists." />
+          <Select
+            label="Grouped"
+            placeholder="Choose a target"
+            value={null}
+            groups={[
+              { label: "Printers", options: ["CC Left", "CC Right"] },
+              { label: "Printer profiles", options: ["Elegoo Centauri Carbon 0.4 nozzle"] },
+            ]}
+          />
         </div>
       </Panel>
 
@@ -227,15 +236,18 @@ export function Showcase() {
       </Panel>
 
       <Panel title="NumberField">
-        <NumberField
-          label="Bed height"
-          suffix="mm"
-          minValue={0}
-          maxValue={500}
-          step={1}
-          value={numberValue()}
-          onChange={setNumberValue}
-        />
+        <div class={styles.column}>
+          <NumberField
+            label="Bed height"
+            suffix="mm"
+            minValue={0}
+            maxValue={500}
+            step={1}
+            value={numberValue()}
+            onChange={setNumberValue}
+          />
+          <NumberField label="Walls" minValue={1} maxValue={20} step={1} placeholder="Preset's value" />
+        </div>
       </Panel>
 
       <Panel title="Field">
@@ -291,6 +303,7 @@ export function Showcase() {
         <div class={styles.column}>
           <Progress label="Loading assets" showValue value={65} />
           <Progress label="Indeterminate" indeterminate />
+          <Progress label="Generating G-code" showValue value={42} valueLabel="42% of the plate" />
         </div>
       </Panel>
 

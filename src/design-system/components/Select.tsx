@@ -1,10 +1,20 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import styles from "./Select.module.css";
 
+export interface SelectGroup<T> {
+  label: string;
+  options: T[];
+}
+
 export interface SelectProps<T> {
   label?: string;
-  options: T[];
-  value?: T;
+  /** Flat option list. Ignored if `groups` is passed. */
+  options?: T[];
+  /** Grouped option list, rendered under section headers. */
+  groups?: SelectGroup<T>[];
+  /** `null` shows nothing chosen (the placeholder) while staying
+   *  controlled; `undefined` leaves the Select uncontrolled. */
+  value?: T | null;
   defaultValue?: T;
   onChange?: (value: T) => void;
   /** Defaults to the option itself (for T = string). */
@@ -26,19 +36,27 @@ export function Select<T>(props: SelectProps<T>) {
   return (
     <KSelect
       class={[styles.root, props.class].filter(Boolean).join(" ")}
-      options={props.options}
-      optionValue={props.optionValue ? (o: T) => toValue(o) : undefined}
-      optionTextValue={(o: T) => toLabel(o)}
-      value={props.value}
+      options={(props.groups ?? props.options ?? []) as never[]}
+      optionGroupChildren={props.groups ? ("options" as never) : undefined}
+      optionValue={props.optionValue ? ((o: T) => toValue(o)) as never : undefined}
+      optionTextValue={((o: T) => toLabel(o)) as never}
+      value={props.value as never}
       defaultValue={props.defaultValue}
-      onChange={(v) => v !== null && props.onChange?.(v)}
+      onChange={(v: unknown) => {
+        if (v !== null) props.onChange?.(v as T);
+      }}
       placeholder={props.placeholder}
       disabled={props.disabled}
       validationState={props.error ? "invalid" : "valid"}
       itemComponent={(itemProps) => (
         <KSelect.Item item={itemProps.item} class={styles.item}>
-          <KSelect.ItemLabel>{toLabel(itemProps.item.rawValue)}</KSelect.ItemLabel>
+          <KSelect.ItemLabel>{toLabel(itemProps.item.rawValue as T)}</KSelect.ItemLabel>
         </KSelect.Item>
+      )}
+      sectionComponent={(sectionProps) => (
+        <KSelect.Section class={styles.section}>
+          {(sectionProps.section.rawValue as SelectGroup<T>).label}
+        </KSelect.Section>
       )}
     >
       {props.label && <KSelect.Label class={styles.label}>{props.label}</KSelect.Label>}
