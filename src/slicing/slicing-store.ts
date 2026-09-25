@@ -7,9 +7,8 @@ import {
   retryOnTransportFailure,
 } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
-import type { CommandError } from "../generated/contracts/command/CommandError";
-import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import { desktopOnlyError } from "./desktop-only";
+import { notFound } from "./local-errors";
 import { decodeMeshBuffer, type MeshBuffer } from "./mesh-buffer";
 import type { WebSlicingFixture } from "./web-fixtures";
 import {
@@ -124,23 +123,6 @@ function findRevision(id: string): SliceRevisionSummary | undefined {
     if (found) return found;
   }
   return undefined;
-}
-
-// --- Errors -------------------------------------------------------------------
-
-function commandError(code: ErrorCode, message: string, details?: Record<string, string>): CommandError {
-  return {
-    contractVersion: 1,
-    code,
-    message,
-    recovery: code === "VALIDATION" ? ["EDIT_FIELDS"] : [],
-    retryable: false,
-    ...(details ? { details } : {}),
-  };
-}
-
-function notFound(id: string): CommandError {
-  return commandError("NOT_FOUND", id, { entityId: id });
 }
 
 // --- Settling records -----------------------------------------------------------
@@ -625,8 +607,6 @@ export async function deleteSliceRevision(sliceRevisionId: string): Promise<void
 
 // --- Web-mode local Preparation edits ------------------------------------------------
 
-const MAX_PLATES = 36;
-
 /** Web mode only: the fixtures load on first use, so they stay out of the
  *  desktop bundle's main chunk. */
 async function requireWebFixture(): Promise<WebSlicingFixture> {
@@ -637,39 +617,11 @@ async function requireWebFixture(): Promise<WebSlicingFixture> {
   return webFixture;
 }
 
-function validationError(fieldPath: string, message: string): CommandError {
-  return commandError("VALIDATION", message, { fieldPath });
-}
-
-/** The backend's document rules that need no geometry: 1–36 plates and
- *  unique, non-empty plate and instance keys. */
-function validateDocument(document: PreparationDocument): void {
-  if (document.plates.length < 1 || document.plates.length > MAX_PLATES) {
-    throw validationError("document.plates", `A Preparation has 1 to ${MAX_PLATES} plates.`);
-  }
-  const plateKeys = new Set<string>();
-  const instanceKeys = new Set<string>();
-  document.plates.forEach((plate, p) => {
-    if (!plate.plateKey.trim() || plateKeys.has(plate.plateKey)) {
-      throw validationError(`document.plates[${p}].plateKey`, "Each plate needs its own key.");
-    }
-    plateKeys.add(plate.plateKey);
-    plate.instances.forEach((instance, i) => {
-      if (!instance.instanceKey.trim() || instanceKeys.has(instance.instanceKey)) {
-        throw validationError(`document.plates[${p}].instances[${i}].instanceKey`, "Each object on a plate needs its own key.");
-      }
-      instanceKeys.add(instance.instanceKey);
-    });
-  });
-}
-
 /** Web-mode creates in flight, per Model: a second call joins the first. */
 const pendingWebCreates = new Map<string, Promise<PreparationRecord>>();
 
-/** A simplified D5 seed: one plate per source plate (or one plate), each
- *  printable build item once at the bed's centre, and the default
- *  presets. Single-flight per Model, like the backend's "return the
- *  existing one". */
+/** A simplified D5 seed (see `web-preparations.ts`). Single-flight per
+ *  Model, like the backend's "return the existing one". */
 function webCreatePreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
   const pending = pendingWebCreates.get(modelId);
   if (pending) return pending;
@@ -680,58 +632,25 @@ function webCreatePreparation(modelId: string, target?: SliceTarget): Promise<Pr
 
 async function seedWebPreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
   const fixture = await requireWebFixture();
-  const { buildWebLibraryFixture } = await import("../library/web-fixtures");
+  const [{ buildWebLibraryFixture }, { seedLocalPreparation }] = await Promise.all([
+    import("../library/web-fixtures"),
+    import("./web-preparations"),
+  ]);
   // Checked after the awaits, so a Preparation made meanwhile (by an
   // event or an earlier create) is returned, not replaced.
   const existing = state.preparations[modelId];
   if (existing) return existing;
   const model = buildWebLibraryFixture().models.find((m) => m.id === modelId);
   if (!model) throw notFound(modelId);
-  if (model.format === "gcode") {
-    throw validationError("modelId", "A G-code Model is already sliced, so it has no Preparation.");
-  }
-  const geometry = fixture.geometry[model.currentRevision.id];
-  if (!geometry) throw notFound(model.currentRevision.id);
-  const options = fixture.sliceOptions;
-  const bed = options.profileSnapshot.bedShape;
-  const center: [number, number] = bed.kind === "rectangular"
-    ? [bed.originXMm + bed.widthMm / 2, bed.originYMm + bed.depthMm / 2]
-    : [0, 0];
-  const plates = new Map<number, PreparationDocument["plates"][number]>();
-  for (const item of geometry.buildItems.filter((i) => i.printable)) {
-    const index = item.plateIndex ?? 1;
-    const plate = plates.get(index) ?? { plateKey: crypto.randomUUID(), instances: [] };
-    plate.instances.push({
-      instanceKey: crypto.randomUUID(),
-      objectKey: item.objectKey,
-      transform: { translateMm: center, rotateDeg: [0, 0, 0], scale: [1, 1, 1] },
-    });
-    plates.set(index, plate);
-  }
-  const now = new Date().toISOString();
-  const preparation: PreparationRecord = {
-    id: `prp-web-${crypto.randomUUID()}`,
-    modelId,
-    sourceRevisionId: model.currentRevision.id,
-    revision: 1,
-    stale: false,
-    document: {
-      plates: [...plates.entries()].sort(([a], [b]) => a - b).map(([, plate]) => plate),
-      target: target ?? { kind: "profile", catalogRef: { ...options.profileSnapshot.catalogRef } },
-      ...(options.defaults.processPreset ? { processPreset: options.defaults.processPreset } : {}),
-      ...(options.defaults.filamentPreset ? { filamentPreset: options.defaults.filamentPreset } : {}),
-      controls: {},
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
+  const preparation = seedLocalPreparation(fixture, model, target);
   settlePreparation(preparation, "result");
   return preparation;
 }
 
-function webUpdatePreparation(preparationId: string, document: PreparationDocument): PreparationRecord {
+async function webUpdatePreparation(preparationId: string, document: PreparationDocument): Promise<PreparationRecord> {
+  const { validateLocalDocument } = await import("./web-preparations");
   const held = heldPreparation(preparationId);
-  validateDocument(document);
+  validateLocalDocument(document);
   const preparation: PreparationRecord = {
     ...held,
     document: clone(document),
