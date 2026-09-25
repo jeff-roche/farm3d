@@ -169,7 +169,20 @@ describe("startSlicing (desktop)", () => {
     }));
     await flush();
     expect(slicing.syncState()).toBe("current");
+    expect(backfills()).toBe(2);
     expect(slicing.preparations().map((p) => p.id).sort()).toEqual(["prp-1", "prp-2", "prp-3"]);
+  });
+
+  it("a duplicate sequence after the snapshot applies once and causes no resync", async () => {
+    responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ revision: 1 })] });
+    const { slicing } = await startedStore();
+    emit(envelope(1, "slicing.preparation.changed", preparation({ revision: 2, stale: true }), "prp-1"));
+    // The same sequence again, with a payload that would show if applied.
+    emit(envelope(1, "slicing.preparation.changed", preparation({ revision: 2, stale: false }), "prp-1"));
+    await flush();
+    expect(slicing.preparation("mdl-1")).toMatchObject({ revision: 2, stale: true });
+    expect(slicing.syncState()).toBe("current");
+    expect(backfills()).toBe(1);
   });
 
   it("a new streamId (an app restart) triggers a new backfill", async () => {
@@ -329,6 +342,14 @@ describe("settling", () => {
     expect(slicing.preparation("mdl-1")).toBeUndefined();
   });
 
+  it("a command result never replaces a different Preparation held for the Model; only an event may", async () => {
+    responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ id: "prp-new", revision: 1 })] });
+    responders.create_preparation = () => preparation({ id: "prp-old", revision: 9 });
+    const { createPreparation, slicing } = await startedStore();
+    await createPreparation("mdl-1");
+    expect(slicing.preparation("mdl-1")?.id).toBe("prp-new");
+  });
+
   it("a new Preparation for the same Model replaces the removed one", async () => {
     responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ id: "prp-1", revision: 4 })] });
     const { slicing } = await startedStore();
@@ -369,6 +390,17 @@ describe("settling", () => {
     emit(envelope(4, "slicing.revision.removed", {}, "slr-1"));
     expect(slicing.revisions("mdl-1").map((r) => r.id)).toEqual(["slr-2"]);
     expect(slicing.revision("slr-1")).toBeUndefined();
+  });
+
+  it("orders revisions that share a createdAt by id, descending, as the backend does", async () => {
+    const at = "2026-09-24T00:00:00Z";
+    responders.list_slicing = () => slicingSnapshot(0, {
+      revisions: [sliceRevision({ id: "slr-a", createdAt: at }), sliceRevision({ id: "slr-c", createdAt: at })],
+    });
+    const { slicing } = await startedStore();
+    expect(slicing.revisions("mdl-1").map((r) => r.id)).toEqual(["slr-c", "slr-a"]);
+    emit(envelope(1, "slicing.revision.created", sliceRevision({ id: "slr-b", createdAt: at }), "slr-b"));
+    expect(slicing.revisions("mdl-1").map((r) => r.id)).toEqual(["slr-c", "slr-b", "slr-a"]);
   });
 
   it("the runtime follows events, and a command result from an older configuration never overwrites it", async () => {

@@ -148,14 +148,17 @@ function settleRuntime(status: SlicerRuntimeStatus, from: "event" | "result"): v
 /** `stale` is derived on read and can change without a `revision` bump, so
  *  a stream event (ordered by sequence) applies at an equal revision. A
  *  command result has no sequence to order it, so it applies only when
- *  strictly newer and can never regress an event. A record with a new id
- *  for the same Model replaces the old one (it was deleted). */
+ *  strictly newer and can never regress an event. Only an event may
+ *  replace a different Preparation for the same Model (the old one was
+ *  deleted); a result for another id is older than what is held. */
 function settlePreparation(record: PreparationRecord, from: "event" | "result"): void {
   if (removedPreparations.has(record.id)) return;
   const existing = state.preparations[record.modelId];
   if (existing && existing.id === record.id) {
     const stale = from === "event" ? record.revision < existing.revision : record.revision <= existing.revision;
     if (stale) return;
+  } else if (existing && from === "result") {
+    return;
   }
   setState("preparations", record.modelId, reconcile(record));
 }
@@ -201,8 +204,12 @@ function settleProgress(operationId: string, progress: SliceProgress): void {
   setState("progress", operationId, reconcile(progress));
 }
 
-function byNewest(a: SliceRevisionSummary, b: SliceRevisionSummary): number {
-  return b.createdAt.localeCompare(a.createdAt);
+/** The backend's order: `created_at DESC, id DESC`, compared as plain
+ *  strings (ISO timestamps and ids sort by code unit). */
+function byNewestRevision(a: SliceRevisionSummary, b: SliceRevisionSummary): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+  if (a.id !== b.id) return a.id < b.id ? 1 : -1;
+  return 0;
 }
 
 /** Slice Revisions are immutable (D1), so one is only ever added or
@@ -211,7 +218,7 @@ function settleRevision(summary: SliceRevisionSummary): void {
   if (removedRevisions.has(summary.id)) return;
   const list = state.revisionsByModel[summary.modelId] ?? [];
   if (list.some((r) => r.id === summary.id)) return;
-  setState("revisionsByModel", summary.modelId, [...list, summary].sort(byNewest));
+  setState("revisionsByModel", summary.modelId, [...list, summary].sort(byNewestRevision));
 }
 
 function dropRevision(id: string): void {
@@ -225,7 +232,7 @@ function dropRevision(id: string): void {
 function groupRevisions(revisions: SliceRevisionSummary[]): SlicingState["revisionsByModel"] {
   const grouped: SlicingState["revisionsByModel"] = {};
   for (const revision of revisions) (grouped[revision.modelId] ??= []).push(revision);
-  for (const list of Object.values(grouped)) list?.sort(byNewest);
+  for (const list of Object.values(grouped)) list?.sort(byNewestRevision);
   return grouped;
 }
 
