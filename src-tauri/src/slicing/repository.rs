@@ -2290,27 +2290,51 @@ mod tests {
     fn a_tie_in_ending_time_prunes_the_lower_id_first() {
         let (_temp, _lease, storage) = seeded();
         with_preparation(&storage);
-        for n in 1..=6 {
-            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
-        }
+        // Six logged cancellations sharing one end time, written straight to the
+        // rows so no transition prunes on the way in. The lowest id is
+        // written last, so only the id can put it first.
+        let ids = ["sop-b", "sop-c", "sop-d", "sop-e", "sop-f", "sop-a"];
         storage
-            .write(|tx| {
-                tx.execute(
-                    "UPDATE slice_operations SET finished_at = '2020-01-01T00:00:00.000Z'",
-                    [],
-                )?;
-                prune_unpublished_logs(tx, Some("prp-a"))
+            .write_repo(|tx| {
+                for (n, id) in (1..).zip(ids) {
+                    insert_blob(tx, &log_hash(n), 10);
+                    insert_operation(
+                        tx,
+                        &NewSliceOperation {
+                            id: id.to_string(),
+                            preparation_id: "prp-a".to_string(),
+                            source_revision_id: "msr-stl-1".to_string(),
+                            plate: PlateSnapshot {
+                                plate_index: 1,
+                                plate: a_plate("plate-a", None),
+                            },
+                        },
+                    )?;
+                    tx.execute(
+                        "UPDATE slice_operations
+                         SET state = 'cancelled', log_sha256 = ?2,
+                             finished_at = '2020-01-01T00:00:00.000Z'
+                         WHERE id = ?1",
+                        params![id, log_hash(n)],
+                    )?;
+                }
+                Ok(())
             })
+            .expect("seed");
+
+        let pruned = storage
+            .write(|tx| prune_unpublished_logs(tx, Some("prp-a")))
             .expect("prune");
-        // Pruning is idempotent once at most five logs remain.
         let again = storage
             .write(|tx| prune_unpublished_logs(tx, Some("prp-a")))
             .expect("prune again");
 
-        assert_eq!(again, 0);
-        assert_eq!(log_of(&storage, "sop-1"), None);
-        for n in 2..=6 {
-            assert_eq!(log_of(&storage, &format!("sop-{n}")), Some(log_hash(n)));
+        assert_eq!(pruned, 1);
+        assert_eq!(again, 0, "pruning is idempotent");
+        assert_eq!(log_of(&storage, "sop-a"), None, "the lower id goes");
+        assert!(pending(&storage, &log_hash(6)));
+        for (n, id) in (1..).zip(&ids[..5]) {
+            assert_eq!(log_of(&storage, id), Some(log_hash(n)), "{id}");
         }
     }
 
@@ -2414,6 +2438,59 @@ mod tests {
         assert_eq!(state("sop-ok"), State::Succeeded);
         assert_eq!(state("sop-queued"), State::Queued);
         assert_eq!(state("sop-running"), State::Running);
+    }
+
+    #[test]
+    fn a_log_a_kept_operation_shares_is_not_released() {
+        let (_temp, _lease, storage) = seeded();
+        with_preparation(&storage);
+        // The oldest and the newest failures logged identical text, so
+        // they share one hash.
+        fail_with_log(&storage, "prp-a", "sop-1", 1);
+        for n in 2..=5 {
+            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
+        }
+        storage
+            .write_repo(|tx| {
+                insert_operation(
+                    tx,
+                    &NewSliceOperation {
+                        id: "sop-6".to_string(),
+                        preparation_id: "prp-a".to_string(),
+                        source_revision_id: "msr-stl-1".to_string(),
+                        plate: PlateSnapshot {
+                            plate_index: 1,
+                            plate: a_plate("plate-a", None),
+                        },
+                    },
+                )?;
+                transition_operation(
+                    tx,
+                    "sop-6",
+                    OperationTransition::Fail {
+                        failure: a_failure(),
+                        log_sha256: Some(log_hash(1)),
+                    },
+                )
+            })
+            .expect("fail");
+
+        assert_eq!(log_of(&storage, "sop-1"), None, "the oldest is pruned");
+        assert_eq!(log_of(&storage, "sop-6"), Some(log_hash(1)));
+        assert!(
+            !pending(&storage, &log_hash(1)),
+            "a kept operation still refers to the log"
+        );
+        assert_eq!(
+            count(
+                &storage,
+                &format!(
+                    "SELECT COUNT(*) FROM content_blobs WHERE sha256 = '{}'",
+                    log_hash(1)
+                )
+            ),
+            1
+        );
     }
 
     #[test]
