@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use farm3d_lib::connections::moonraker::protocol::subscribe_params;
+use farm3d_lib::connections::moonraker::protocol::{subscribe_params, tool_objects};
 use farm3d_lib::connections::moonraker::{upgrade_request, MoonrakerConnection};
 use farm3d_lib::connections::status_repository::StatusRepository;
 use farm3d_lib::connections::supervisor::{ConnectionManager, PrinterSetupFacts, STATUS_EVENT};
@@ -717,6 +717,11 @@ fn live_watch() {
         println!("a0: watching for {secs} s. Note the wall-clock time of every manual action.");
         tokio::time::sleep(Duration::from_secs(secs)).await;
         let backfill = supervised.manager.status_backfill();
+        let (tools_ok, tools) = tool_check(&live, &supervised).await;
+        println!(
+            "a0: CHECK D10 {} — every extruder is carried as a tool reading",
+            if tools_ok { "Pass" } else { "Fail" }
+        );
         let _ = supervised.manager.stop(PRINTER_ID).await;
         let _ = stop.send(true);
         let _ = tap.await;
@@ -725,6 +730,7 @@ fn live_watch() {
             "watch-summary.json",
             &json!({
                 "backfillAtEnd": backfill,
+                "toolCheck": {"pass": tools_ok, "detail": tools},
                 "supervisorEvents": supervised.events.lock().unwrap().len(),
                 "tap": {
                     "readyAt": tap_state.lock().unwrap().ready_at,
@@ -741,6 +747,96 @@ fn live_watch() {
 // Test 3: the scripted lifecycle scenario
 // ---------------------------------------------------------------------------
 
+/// Compares the printer's tools (from `printer.objects.list`) with the
+/// latest published telemetry. A multi-tool printer must carry one tool
+/// reading per extruder, with a temperature wherever Moonraker reports one;
+/// a single-tool printer must carry none (decision B2).
+async fn tool_check(live: &Live, supervised: &Supervised) -> (bool, Value) {
+    let list = one_call(live, "printer.objects.list", None).await;
+    let objects = result(&list)["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let tools = tool_objects(&objects);
+    let names: Vec<&str> = tools.iter().map(|(_, name)| name.as_str()).collect();
+    let query = one_call(
+        live,
+        "printer.objects.query",
+        Some(json!({"objects": names
+            .iter()
+            .map(|name| (name.to_string(), json!(["temperature", "target"])))
+            .collect::<serde_json::Map<_, _>>()})),
+    )
+    .await;
+    let telemetry = supervised
+        .latest()
+        .map(|status| status["telemetry"].clone())
+        .unwrap_or(Value::Null);
+    let reported = telemetry["tools"].as_array().cloned().unwrap_or_default();
+    let ok = if tools.len() > 1 {
+        reported.len() == tools.len()
+            && tools.iter().zip(&reported).all(|((index, name), tool)| {
+                let has_reading = !result(&query)["status"][name]["temperature"].is_null();
+                tool["index"] == json!(index) && (!has_reading || tool.get("tempC").is_some())
+            })
+    } else {
+        reported.is_empty()
+    };
+    (
+        ok,
+        json!({"extruders": names, "reportedTools": reported,
+               "nozzleTempC": telemetry.get("nozzleTempC"), "hostQuery": result(&query)["status"]}),
+    )
+}
+
+/// The drive scenario sends M112 and FIRMWARE_RESTART, so it runs only
+/// against a loopback host: the local simulator. Real printers are
+/// read-only (owner rule, A0.1). A host name other than `localhost` is
+/// refused rather than resolved, because a name could point anywhere.
+fn drive_target_allowed(host: &str) -> Result<(), String> {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if loopback {
+        Ok(())
+    } else {
+        Err(format!(
+            "live_lifecycle_drive sends M112 and FIRMWARE_RESTART, so it only runs against a \
+             loopback host (the local simulator); refusing FARM3D_MOONRAKER_HOST={host:?}. \
+             Use `just moonraker-live probe` or `watch` for a real printer: they are read-only."
+        ))
+    }
+}
+
+#[test]
+fn the_drive_scenario_refuses_any_non_loopback_host() {
+    for host in [
+        "127.0.0.1",
+        "127.0.0.2",
+        "localhost",
+        "LOCALHOST",
+        "::1",
+        "[::1]",
+    ] {
+        assert_eq!(drive_target_allowed(host), Ok(()), "{host}");
+    }
+    for host in [
+        "192.0.2.10",
+        "10.0.0.5",
+        "printer.local",
+        "voron",
+        "0.0.0.0",
+        "::",
+        "localhost.example.com",
+        "",
+    ] {
+        let refusal = drive_target_allowed(host).expect_err(host);
+        assert!(refusal.contains("loopback"), "{refusal}");
+    }
+}
+
 /// Drives Klipper through ready → shutdown → restart → ready and checks what
 /// the production supervisor publishes at each step. It sends
 /// `printer.emergency_stop` (M112) and `printer.firmware_restart`, and it sets
@@ -750,6 +846,9 @@ fn live_watch() {
 #[ignore = "needs a live, idle Moonraker; run with `just moonraker-live drive`"]
 fn live_lifecycle_drive() {
     let live = Arc::new(Live::from_env());
+    if let Err(refusal) = drive_target_allowed(&live.config.host) {
+        panic!("{refusal}");
+    }
     assert_eq!(
         std::env::var("FARM3D_MOONRAKER_ALLOW_CONTROL").as_deref(),
         Ok("1"),
@@ -804,6 +903,15 @@ fn live_lifecycle_drive() {
             "the supervisor publishes an online status with live telemetry after start",
             verdict(first.is_some()),
             json!({"status": first.as_ref().map(|(_, s)| s)}),
+        );
+
+        // D10: every tool the printer has reaches the status (decision B2).
+        let (ok, detail) = tool_check(&live, &supervised).await;
+        checks.record(
+            "D10",
+            "every extruder in printer.objects.list is carried as a tool reading",
+            verdict(ok),
+            detail,
         );
 
         // D2: absent readings stay absent.

@@ -15,9 +15,10 @@
 #
 # Usage: scripts/moonraker-sim/sim.sh <command>
 #   build                 build the simulavr image (once; takes a few minutes)
-#   up [trusted|apikey] [full|no-bed]
+#   up [trusted|apikey] [full|no-bed|multi-tool]
 #                         start the stack (default: trusted full). no-bed
-#                         drops [heater_bed] to test a missing object.
+#                         drops [heater_bed] to test a missing object;
+#                         multi-tool adds [extruder1].
 #   down                  stop and remove the stack
 #   status                container state plus Moonraker's server.info
 #   api-key               print Moonraker's API key (apikey mode)
@@ -117,8 +118,12 @@ up)
         awk '/^\[heater_bed\]/ { skip = 1; next } /^\[/ { skip = 0 } !skip' \
             "$here/printer.cfg" >"$runtime/config/printer.cfg"
         ;;
+    # A second toolhead, [extruder1], for the multi-tool case (decision B2).
+    multi-tool)
+        cat "$here/printer.cfg" "$here/extruder1.cfg" >"$runtime/config/printer.cfg"
+        ;;
     *)
-        echo "error: variant must be full or no-bed" >&2
+        echo "error: variant must be full, no-bed, or multi-tool" >&2
         exit 2
         ;;
     esac
@@ -196,7 +201,7 @@ logs)
     esac
     ;;
 *)
-    sed -n '2,26p' "$0"
+    sed -n '2,28p' "$0"
     exit 2
     ;;
 esac
