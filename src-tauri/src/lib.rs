@@ -334,6 +334,9 @@ fn build_runtime_services<R: tauri::Runtime>(
     // P5 D10: interrupt what a previous run left queued or running, and
     // remove every work directory, before any command is served.
     slicing::operations::recover_after_restart(&storage).map_err(startup_error)?;
+    // Recovery pruned old operation logs; unlink them now. A blob that
+    // can't be unlinked is retried by the next startup sweep.
+    let _ = content.release_unreferenced(&storage);
 
     let resource_path = app
         .path()

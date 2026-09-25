@@ -59,8 +59,8 @@ use super::process_group::{process_executable, process_start_time, stop_recorded
 use super::publish::{finish_run, record_unpublished, FinishedRun, PublishInputs, Unpublished};
 use super::repository::{
     insert_operation, load_operation, load_preparation, load_runtime_config,
-    mark_active_interrupted, transition_operation, InterruptedOperation, NewSliceOperation,
-    OperationTransition,
+    mark_active_interrupted, prune_unpublished_logs, transition_operation, InterruptedOperation,
+    NewSliceOperation, OperationTransition,
 };
 use super::runtime::PATH_EXECUTABLE;
 use super::{
@@ -414,6 +414,8 @@ fn fail_operation<R: tauri::Runtime>(
             })
             .ok()
     });
+    // The move may have pruned an older log; release it.
+    let _ = services.content.release_unreferenced(&services.storage);
     record
         .map(|record| vec![events::operation_changed(&record)])
         .unwrap_or_default()
@@ -424,11 +426,12 @@ fn cancel_unstarted<R: tauri::Runtime>(
     services: &SlicingServices<R>,
     id: &str,
 ) -> Vec<events::SlicingEventSpec> {
-    services
-        .storage
-        .write_repo(|tx| {
-            transition_operation(tx, id, OperationTransition::Cancel { log_sha256: None })
-        })
+    let record = services.storage.write_repo(|tx| {
+        transition_operation(tx, id, OperationTransition::Cancel { log_sha256: None })
+    });
+    // The move may have pruned an older log; release it.
+    let _ = services.content.release_unreferenced(&services.storage);
+    record
         .map(|record| vec![events::operation_changed(&record)])
         .unwrap_or_default()
 }
@@ -1132,6 +1135,13 @@ pub struct Recovery {
     pub stopped: Vec<String>,
     /// Work directories removed.
     pub work_dirs_removed: usize,
+    /// Unpublished-operation logs dropped past each Preparation's
+    /// [`KEPT_UNPUBLISHED_LOGS`], so a database from before the limit
+    /// converges. Their blobs await [`ContentStore::release_unreferenced`].
+    ///
+    /// [`KEPT_UNPUBLISHED_LOGS`]: super::repository::KEPT_UNPUBLISHED_LOGS
+    /// [`ContentStore::release_unreferenced`]: crate::library::content::ContentStore::release_unreferenced
+    pub logs_pruned: usize,
 }
 
 /// Whether recorded process `pid`, started at `started_at`, is still that
@@ -1164,10 +1174,16 @@ fn still_running_engine(pid: u32, started_at: i64, engine_path: Option<&str>) ->
 }
 
 /// D10 startup recovery, run after the content store's startup sweep and
-/// before any command is served.
+/// before any command is served. It also prunes unpublished-operation logs
+/// past [`KEPT_UNPUBLISHED_LOGS`]; the caller then releases their blobs
+/// with [`ContentStore::release_unreferenced`].
+///
+/// [`KEPT_UNPUBLISHED_LOGS`]: super::repository::KEPT_UNPUBLISHED_LOGS
+/// [`ContentStore::release_unreferenced`]: crate::library::content::ContentStore::release_unreferenced
 pub fn recover_after_restart(storage: &Storage) -> Result<Recovery, StorageError> {
     let config = storage.read(|connection| Ok(load_runtime_config(connection)))??;
     let interrupted = storage.write(mark_active_interrupted)?;
+    let logs_pruned = storage.write(|tx| prune_unpublished_logs(tx, None))?;
     let mut stopped = Vec::new();
     for operation in interrupted.iter().filter(|operation| operation.was_running) {
         let (Some(pid), Some(started_at)) = (operation.pid, operation.pid_started_at) else {
@@ -1207,6 +1223,7 @@ pub fn recover_after_restart(storage: &Storage) -> Result<Recovery, StorageError
         interrupted,
         stopped,
         work_dirs_removed,
+        logs_pruned,
     })
 }
 

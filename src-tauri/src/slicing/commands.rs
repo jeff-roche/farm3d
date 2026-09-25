@@ -489,7 +489,8 @@ pub async fn cancel_slice_operation<R: tauri::Runtime>(
 
 /// D9/D13: the operation's stored log: its revision's `log` blob when it
 /// succeeded, else `slice_operations.log_sha256`. Empty while it has none
-/// (it never ran). A succeeded operation's log is its revision's, so it
+/// (it never ran, or its log was pruned past
+/// [`KEPT_UNPUBLISHED_LOGS`](super::repository::KEPT_UNPUBLISHED_LOGS)). A succeeded operation's log is its revision's, so it
 /// goes with a deleted revision: that is `NOT_FOUND`
 /// ([`CommandError::slice_log_deleted`]), not an empty log.
 #[tauri::command]

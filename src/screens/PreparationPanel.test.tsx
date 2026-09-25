@@ -707,6 +707,16 @@ describe("PreparationPanel", () => {
       expect(document.activeElement).not.toBe(log);
     });
 
+    it("says no log is kept for a finished attempt whose log is empty (never written, or pruned)", async () => {
+      slicingStoreMock.loadOperationLog.mockImplementation(async (id) =>
+        id === "sop-web-enclosure-latch" ? { text: "", truncated: false, noiseLines: [] } : fixture.logs[id]);
+      await open();
+      const failed = rowFor("Plate 2: Latch");
+      expect(await within(failed).findByText("No log is kept for this attempt.")).toBeInTheDocument();
+      fireEvent.click(within(failed).getByRole("button", { name: "Copy log" }));
+      expect(await within(failed).findByText("There's nothing to copy. No log is kept for this attempt.")).toBeInTheDocument();
+    });
+
     it("says so when a succeeded operation's Slice Revision was deleted", async () => {
       await open();
       setSlicingState({

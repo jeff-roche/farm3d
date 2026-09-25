@@ -499,7 +499,9 @@ pub fn insert_operation(
 
 /// D10: moves operation `id` along `transition`. A move D10 doesn't allow
 /// from the current state is [`RepositoryError::IllegalSliceTransition`]
-/// and writes nothing.
+/// and writes nothing. A move to `failed` or `cancelled` also prunes its
+/// Preparation's older unpublished logs ([`prune_unpublished_logs`]); the
+/// caller releases the blobs after commit.
 pub fn transition_operation(
     tx: &Transaction<'_>,
     id: &str,
@@ -552,7 +554,61 @@ pub fn transition_operation(
             params![id, state, now],
         )?,
     };
+    if matches!(
+        to,
+        SliceOperationState::Failed | SliceOperationState::Cancelled
+    ) {
+        prune_unpublished_logs(tx, Some(&current.preparation_id))?;
+    }
     load_operation(tx, id)?.ok_or_else(|| not_found(id))
+}
+
+/// How many of a Preparation's failed or cancelled operations keep their
+/// logs: the most recent ones, by end time and then id.
+pub const KEPT_UNPUBLISHED_LOGS: u32 = 5;
+
+/// Drops the logs of every failed or cancelled operation of Preparation
+/// `preparation_id` (of every Preparation, when `None`) beyond the
+/// [`KEPT_UNPUBLISHED_LOGS`] most recent. The rows stay, with no log, and
+/// each dropped blob is marked for cleanup when nothing else refers to it;
+/// after commit, [`ContentStore::release_unreferenced`] unlinks it.
+/// Succeeded, queued, running, and interrupted operations, and Slice
+/// Revision logs, are never touched. Returns how many logs were dropped.
+///
+/// [`ContentStore::release_unreferenced`]: crate::library::content::ContentStore::release_unreferenced
+pub fn prune_unpublished_logs(
+    tx: &Transaction<'_>,
+    preparation_id: Option<&str>,
+) -> Result<usize, StorageError> {
+    let pruned = {
+        let mut statement = tx.prepare(
+            "SELECT id, log_sha256 FROM (
+                 SELECT id, log_sha256,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY preparation_id ORDER BY finished_at DESC, id DESC
+                        ) AS recency
+                 FROM slice_operations
+                 WHERE state IN ('failed', 'cancelled')
+                   AND (?1 IS NULL OR preparation_id = ?1)
+             )
+             WHERE recency > ?2 AND log_sha256 IS NOT NULL",
+        )?;
+        let rows = statement
+            .query_map(params![preparation_id, KEPT_UNPUBLISHED_LOGS], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (id, _) in &pruned {
+        tx.execute(
+            "UPDATE slice_operations SET log_sha256 = NULL WHERE id = ?1",
+            [id],
+        )?;
+    }
+    let hashes: Vec<String> = pruned.iter().map(|(_, sha256)| sha256.clone()).collect();
+    mark_unreferenced_blobs(tx, &hashes)?;
+    Ok(pruned.len())
 }
 
 /// D17's backfill: every `queued` or `running` operation, in queue order,
@@ -2076,6 +2132,261 @@ mod tests {
             count(&storage, "SELECT COUNT(*) FROM pending_blob_cleanup"),
             4
         );
+    }
+
+    // --- unpublished-log retention ---
+
+    /// A distinct fake log hash for `n`.
+    fn log_hash(n: u32) -> String {
+        format!("{n:0>64}")
+    }
+
+    fn log_of(storage: &Storage, id: &str) -> Option<String> {
+        storage
+            .read(|c| {
+                c.query_row(
+                    "SELECT log_sha256 FROM slice_operations WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("log")
+    }
+
+    fn pending(storage: &Storage, sha256: &str) -> bool {
+        count(
+            storage,
+            &format!("SELECT COUNT(*) FROM pending_blob_cleanup WHERE sha256 = '{sha256}'"),
+        ) == 1
+    }
+
+    /// Queues `id` on `preparation_id` and fails it with log `log_hash(n)`.
+    fn fail_with_log(storage: &Storage, preparation_id: &str, id: &str, n: u32) {
+        storage
+            .write_repo(|tx| {
+                insert_blob(tx, &log_hash(n), 10);
+                let source_revision_id = load_preparation(tx, preparation_id)?
+                    .expect("preparation")
+                    .source_revision_id;
+                insert_operation(
+                    tx,
+                    &NewSliceOperation {
+                        id: id.to_string(),
+                        preparation_id: preparation_id.to_string(),
+                        source_revision_id,
+                        plate: PlateSnapshot {
+                            plate_index: 1,
+                            plate: a_plate("plate-a", None),
+                        },
+                    },
+                )?;
+                transition_operation(
+                    tx,
+                    id,
+                    OperationTransition::Fail {
+                        failure: a_failure(),
+                        log_sha256: Some(log_hash(n)),
+                    },
+                )
+            })
+            .expect("fail");
+    }
+
+    #[test]
+    fn a_sixth_unpublished_log_drops_the_oldest_and_marks_its_blob() {
+        let (_temp, _lease, storage) = seeded();
+        with_preparation(&storage);
+        storage
+            .write_repo(|tx| {
+                insert_blob(tx, STL_HASH_2, 100);
+                insert_model(tx, "mdl-stl-b", "stl");
+                insert_source_revision(tx, "msr-stl-b", "mdl-stl-b", 1, "stl", STL_HASH_2);
+                insert_preparation(tx, "prp-b", "mdl-stl-b", "msr-stl-b", &a_document())
+            })
+            .expect("second preparation");
+        // prp-b's one log is older than all of prp-a's.
+        fail_with_log(&storage, "prp-b", "sop-other", 90);
+        for n in 1..=5 {
+            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
+        }
+        // Ending times win over ids: sop-3 ended first.
+        storage
+            .write(|tx| {
+                tx.execute(
+                    "UPDATE slice_operations SET finished_at = '2020-01-01T00:00:00.000Z'
+                     WHERE id IN ('sop-3', 'sop-other')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("backdate");
+        for n in 1..=5 {
+            assert_eq!(
+                log_of(&storage, &format!("sop-{n}")),
+                Some(log_hash(n)),
+                "five logs are all kept"
+            );
+        }
+
+        fail_with_log(&storage, "prp-a", "sop-6", 6);
+
+        assert_eq!(log_of(&storage, "sop-3"), None, "the oldest is pruned");
+        for n in [1, 2, 4, 5, 6] {
+            assert_eq!(log_of(&storage, &format!("sop-{n}")), Some(log_hash(n)));
+        }
+        assert!(pending(&storage, &log_hash(3)), "its blob is marked");
+        assert_eq!(
+            count(
+                &storage,
+                &format!(
+                    "SELECT COUNT(*) FROM content_blobs WHERE sha256 = '{}'",
+                    log_hash(3)
+                )
+            ),
+            0
+        );
+        let pruned = storage
+            .read(|c| Ok(load_operation(c, "sop-3")))
+            .expect("read")
+            .expect("load")
+            .expect("the row stays");
+        assert_eq!(pruned.state, State::Failed);
+        assert_eq!(pruned.failure, Some(a_failure()));
+        assert_eq!(
+            log_of(&storage, "sop-other"),
+            Some(log_hash(90)),
+            "another Preparation's log is untouched"
+        );
+    }
+
+    #[test]
+    fn a_tie_in_ending_time_prunes_the_lower_id_first() {
+        let (_temp, _lease, storage) = seeded();
+        with_preparation(&storage);
+        for n in 1..=6 {
+            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
+        }
+        storage
+            .write(|tx| {
+                tx.execute(
+                    "UPDATE slice_operations SET finished_at = '2020-01-01T00:00:00.000Z'",
+                    [],
+                )?;
+                prune_unpublished_logs(tx, Some("prp-a"))
+            })
+            .expect("prune");
+        // Pruning is idempotent once at most five logs remain.
+        let again = storage
+            .write(|tx| prune_unpublished_logs(tx, Some("prp-a")))
+            .expect("prune again");
+
+        assert_eq!(again, 0);
+        assert_eq!(log_of(&storage, "sop-1"), None);
+        for n in 2..=6 {
+            assert_eq!(log_of(&storage, &format!("sop-{n}")), Some(log_hash(n)));
+        }
+    }
+
+    #[test]
+    fn pruning_leaves_succeeded_active_and_revision_logs_alone() {
+        let (_temp, _lease, storage) = seeded();
+        with_preparation(&storage);
+        // A succeeded operation whose revision's log is LOG_HASH.
+        queue(&storage, "sop-ok");
+        transition(
+            &storage,
+            "sop-ok",
+            OperationTransition::Start {
+                pid: 1,
+                pid_started_at: 1,
+            },
+        )
+        .expect("start");
+        storage
+            .write_repo(|tx| {
+                insert_farm3d_revision(tx, &a_farm3d_revision("slr-a", 2))?;
+                transition_operation(
+                    tx,
+                    "sop-ok",
+                    OperationTransition::Succeed {
+                        slice_revision_id: "slr-a".to_string(),
+                    },
+                )
+            })
+            .expect("succeed");
+        queue(&storage, "sop-queued");
+        queue(&storage, "sop-running");
+        transition(
+            &storage,
+            "sop-running",
+            OperationTransition::Start {
+                pid: 2,
+                pid_started_at: 2,
+            },
+        )
+        .expect("start");
+        // The oldest failure shares its log with the revision.
+        storage
+            .write_repo(|tx| {
+                insert_operation(
+                    tx,
+                    &NewSliceOperation {
+                        id: "sop-0".to_string(),
+                        preparation_id: "prp-a".to_string(),
+                        source_revision_id: "msr-stl-1".to_string(),
+                        plate: PlateSnapshot {
+                            plate_index: 1,
+                            plate: a_plate("plate-a", None),
+                        },
+                    },
+                )?;
+                transition_operation(
+                    tx,
+                    "sop-0",
+                    OperationTransition::Fail {
+                        failure: a_failure(),
+                        log_sha256: Some(LOG_HASH.to_string()),
+                    },
+                )
+            })
+            .expect("fail");
+        for n in 1..=5 {
+            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
+        }
+
+        assert_eq!(log_of(&storage, "sop-0"), None, "the oldest is pruned");
+        assert!(
+            !pending(&storage, LOG_HASH),
+            "the revision still refers to its log"
+        );
+        assert_eq!(
+            count(
+                &storage,
+                &format!("SELECT COUNT(*) FROM content_blobs WHERE sha256 = '{LOG_HASH}'")
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &storage,
+                &format!(
+                    "SELECT COUNT(*) FROM slice_revision_blobs
+                     WHERE revision_id = 'slr-a' AND role = 'log' AND sha256 = '{LOG_HASH}'"
+                )
+            ),
+            1
+        );
+        let state = |id: &str| {
+            storage
+                .read(|c| Ok(load_operation(c, id)))
+                .expect("read")
+                .expect("load")
+                .expect("present")
+                .state
+        };
+        assert_eq!(state("sop-ok"), State::Succeeded);
+        assert_eq!(state("sop-queued"), State::Queued);
+        assert_eq!(state("sop-running"), State::Running);
     }
 
     #[test]

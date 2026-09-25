@@ -162,9 +162,12 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
     }
   };
 
-  /** Why a loaded log is empty: not saved yet, or never written (the
-   *  slice was cancelled or interrupted before it ran). */
-  const emptyLogText = () => (active() ? "The log is saved when the slice finishes." : "This slice left no log.");
+  /** Why a loaded log is empty: not saved yet, or none kept. A finished
+   *  attempt may never have written one (cancelled or interrupted before
+   *  it ran), or its log may have been pruned (the backend keeps only a
+   *  Preparation's most recent failed or cancelled logs); the record
+   *  can't tell which, so the wording covers both. */
+  const emptyLogText = () => (active() ? "The log is saved when the slice finishes." : "No log is kept for this attempt.");
 
   const segments = createMemo(() => {
     const held = loadedLog();

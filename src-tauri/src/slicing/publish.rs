@@ -551,7 +551,8 @@ fn stage_and_commit(
 /// D13: ends operation `operation_id` without a revision. Only `log` is
 /// stored, as the operation's `log_sha256`, in the same commit as its move
 /// to `failed` or `cancelled`. Any other staging of the operation (a
-/// rejected G-code) is discarded first.
+/// rejected G-code) is discarded first. Once committed, the logs that move
+/// pruned from older operations are released.
 pub fn record_unpublished(
     store: &ContentStore,
     storage: &Storage,
@@ -576,6 +577,10 @@ pub fn record_unpublished(
             })
         });
     store.discard_staging(operation_id);
+    if result.is_ok() {
+        // Committed; a blob that can't be unlinked now is retried at startup.
+        let _ = store.release_unreferenced(storage);
+    }
     result
 }
 
@@ -1305,6 +1310,158 @@ mod tests {
         assert_eq!(fixture.count("SELECT COUNT(*) FROM slice_revisions"), 0);
         assert_eq!(fixture.blob_files().len(), 1);
         assert_log_is_kept(&fixture, "cancelled log");
+    }
+
+    /// Queues operations `sop-log-1` to `sop-log-{count}` on the fixture's
+    /// Preparation. The ids sort in the order they are created, so the
+    /// order they end in is also their (end time, id) order.
+    fn queue_logged(fixture: &Fixture, count: u32) -> Vec<String> {
+        let ids: Vec<String> = (1..=count).map(|n| format!("sop-log-{n}")).collect();
+        fixture
+            .storage
+            .write_repo(|tx| {
+                for id in &ids {
+                    insert_operation(
+                        tx,
+                        &NewSliceOperation {
+                            id: id.clone(),
+                            preparation_id: "prp-publish".to_string(),
+                            source_revision_id: "msr-stl-1".to_string(),
+                            plate: PlateSnapshot {
+                                plate_index: 1,
+                                plate: a_document().plates[0].clone(),
+                            },
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        ids
+    }
+
+    fn log_sha256_of(fixture: &Fixture, id: &str) -> Option<String> {
+        fixture
+            .storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT log_sha256 FROM slice_operations WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap()
+    }
+
+    fn blob_exists(fixture: &Fixture, sha256: &str) -> bool {
+        fixture
+            .storage
+            .paths()
+            .content_root()
+            .join("blobs/sha256")
+            .join(&sha256[..2])
+            .join(sha256)
+            .exists()
+    }
+
+    #[test]
+    fn a_sixth_failure_prunes_the_oldest_log_and_releases_its_blob() {
+        let fixture = Fixture::new();
+        let ids = queue_logged(&fixture, 6);
+        let mut hashes = Vec::new();
+        for (n, id) in ids.iter().enumerate() {
+            let log = SliceLog {
+                text: format!("failure log {n}"),
+                truncated: false,
+            };
+            record_unpublished(
+                &fixture.store,
+                &fixture.storage,
+                id,
+                Unpublished::Failed(SliceFailure {
+                    code: SliceFailureCode::PresetInvalid,
+                    message: "The presets are invalid.".to_string(),
+                }),
+                &log,
+            )
+            .unwrap();
+            hashes.push(log_sha256_of(&fixture, id));
+        }
+
+        assert_eq!(
+            log_sha256_of(&fixture, &ids[0]),
+            None,
+            "the oldest is pruned"
+        );
+        let oldest = hashes[0].clone().expect("it had a log");
+        assert!(!blob_exists(&fixture, &oldest), "its blob is released");
+        assert_eq!(
+            fixture.count("SELECT COUNT(*) FROM pending_blob_cleanup"),
+            0
+        );
+        for (id, hash) in ids.iter().zip(&hashes).skip(1) {
+            let hash = hash.clone().expect("a log");
+            assert_eq!(log_sha256_of(&fixture, id), Some(hash.clone()));
+            assert!(blob_exists(&fixture, &hash));
+        }
+        assert_eq!(
+            fixture.count("SELECT COUNT(*) FROM slice_operations WHERE log_sha256 IS NOT NULL"),
+            5
+        );
+        assert_eq!(
+            fixture.operation().state,
+            SliceOperationState::Running,
+            "a running operation is untouched"
+        );
+    }
+
+    #[test]
+    fn startup_recovery_prunes_a_database_seeded_with_more_than_five_logs() {
+        let fixture = Fixture::new();
+        let ids = queue_logged(&fixture, 7);
+        // Logs written as a database from before the limit holds them:
+        // straight to the rows, with no pruning.
+        let mut hashes = Vec::new();
+        for (n, id) in ids.iter().enumerate() {
+            let staged = fixture
+                .store
+                .stage_bytes(format!("old log {n}").as_bytes(), id, LOG_NAME)
+                .unwrap();
+            let sha256 = staged.sha256.clone();
+            fixture
+                .store
+                .place_and_commit(&fixture.storage, &[&staged], |tx| {
+                    tx.execute(
+                        "UPDATE slice_operations
+                         SET state = 'cancelled', log_sha256 = ?2, finished_at = ?3
+                         WHERE id = ?1",
+                        rusqlite::params![id, sha256, format!("2026-01-01T00:00:0{n}.000Z")],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            hashes.push(sha256);
+        }
+        assert_eq!(
+            fixture.count("SELECT COUNT(*) FROM slice_operations WHERE log_sha256 IS NOT NULL"),
+            7
+        );
+
+        let recovery = crate::slicing::operations::recover_after_restart(&fixture.storage).unwrap();
+        fixture
+            .store
+            .release_unreferenced(&fixture.storage)
+            .unwrap();
+
+        assert_eq!(recovery.logs_pruned, 2);
+        for (id, hash) in ids.iter().zip(&hashes).take(2) {
+            assert_eq!(log_sha256_of(&fixture, id), None);
+            assert!(!blob_exists(&fixture, hash), "{id}'s blob is released");
+        }
+        for (id, hash) in ids.iter().zip(&hashes).skip(2) {
+            assert_eq!(log_sha256_of(&fixture, id).as_deref(), Some(hash.as_str()));
+            assert!(blob_exists(&fixture, hash));
+        }
     }
 
     #[test]
