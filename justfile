@@ -24,7 +24,7 @@ test-orca:
     fi
     # One at a time: the cancel twin counts AppImage mounts.
     cargo test --manifest-path src-tauri/Cargo.toml --features test-support \
-        --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish \
+        --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing \
         real_orca -- --ignored --test-threads=1
 
 # Regenerate TypeScript contracts from the Rust wire types

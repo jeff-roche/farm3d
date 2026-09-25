@@ -1,0 +1,1193 @@
+//! P5 Task 8: slice operations, the `slicing` stream, the commands, and
+//! restart recovery, through the Tauri IPC path against `fake-orca` (spec
+//! D5, D9, D10, D13, D17, §Commands).
+//!
+//! Each test installs `fake-orca` as `<tmp>/orca/bin/orca-slicer` beside a
+//! copy of the TestVendor preset fixtures in `<tmp>/orca/resources/
+//! profiles`, so the engine supplies its own presets as an installed
+//! OrcaSlicer would, and configures that engine in `slicer_runtime_config`.
+//! Discovery is kept off this machine's `PATH` and home folders through the
+//! services' test seam, and `FAKE_ORCA_*` scenarios reach the engine through
+//! the extra-environment seam; production discovery is unchanged.
+//!
+//! Needs `--features test-support`, which builds `fake-orca`.
+
+mod common;
+
+use std::ffi::OsString;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use farm3d_lib::connections::supervisor::STATUS_EVENT;
+use farm3d_lib::connections::{ConnectionConfig, PrinterConnection};
+use farm3d_lib::library::links::WatchPolicy;
+use farm3d_lib::library::selection::SelectionPurpose;
+use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
+use farm3d_lib::slicing::invocation::{WorkDir, WORK_ROOT_DIR};
+use farm3d_lib::slicing::operations::recover_after_restart;
+use farm3d_lib::slicing::repository::{load_runtime_config, save_runtime_config};
+use farm3d_lib::slicing::runtime::DiscoveryEnv;
+use farm3d_lib::RuntimeServices;
+use serde_json::{json, Value};
+use tauri::ipc::{CallbackFn, InvokeResponseBody};
+use tauri::test::{MockRuntime, INVOKE_KEY};
+use tauri::webview::InvokeRequest;
+use tauri::Listener;
+
+use common::{a_catalog, a_ref_json, invoke, FakeModelFileIo};
+
+const FAKE_ORCA: &str = env!("CARGO_BIN_EXE_fake-orca");
+const DEADLINE: Duration = Duration::from_secs(20);
+
+/// The 19 commands this task registers (`create_external_slice_revision`
+/// is Task 9's).
+const P5_COMMANDS: &[&str] = &[
+    "get_slicer_runtime",
+    "check_slicer_runtime",
+    "pick_slicer_engine",
+    "pick_preset_source",
+    "reset_slicer_runtime",
+    "list_slice_options",
+    "get_revision_geometry",
+    "get_revision_mesh",
+    "list_slicing",
+    "create_preparation",
+    "update_preparation",
+    "reload_preparation",
+    "delete_preparation",
+    "start_slice",
+    "cancel_slice_operation",
+    "get_slice_operation_log",
+    "list_slice_revisions",
+    "get_slice_revision",
+    "delete_slice_revision",
+];
+
+fn no_connection(
+    _config: &ConnectionConfig,
+    _key: Option<zeroize::Zeroizing<String>>,
+) -> Option<Box<dyn PrinterConnection>> {
+    None
+}
+
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// `fake-orca` installed as `<root>/bin/orca-slicer`, with the preset
+/// fixtures in `<root>/resources/profiles`.
+fn install_orca(root: &Path) -> PathBuf {
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let engine = bin.join("orca-slicer");
+    fs::copy(FAKE_ORCA, &engine).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    copy_dir(
+        &fixtures().join("profiles"),
+        &root.join("resources/profiles"),
+    );
+    engine
+}
+
+/// Polls `probe` until it returns `Some`, or panics at the deadline.
+fn wait_for<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        if let Some(found) = probe() {
+            return found;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// One running app over the shared roots, recording its `slicing.*`
+/// events.
+struct Running {
+    _app: tauri::App<MockRuntime>,
+    webview: tauri::WebviewWindow<MockRuntime>,
+    services: Arc<RuntimeServices<MockRuntime>>,
+    events: Arc<Mutex<Vec<Value>>>,
+    _credentials: tempfile::TempDir,
+}
+
+impl Running {
+    fn boot(paths: &StoragePaths, lease: &MetadataRootLease) -> Self {
+        let storage = Arc::new(Storage::open(paths.clone(), lease).unwrap());
+        let credentials = tempfile::tempdir().unwrap();
+        let (app, webview, _manager, services) = common::runtime_with_file_io(
+            tauri::generate_handler![
+                farm3d_lib::library::commands::inspect_import_selection,
+                farm3d_lib::library::commands::import_models,
+                farm3d_lib::library::commands::check_linked_sources,
+                farm3d_lib::library::commands::delete_model,
+                farm3d_lib::library::commands::list_library,
+                farm3d_lib::slicing::commands::get_slicer_runtime,
+                farm3d_lib::slicing::commands::check_slicer_runtime,
+                farm3d_lib::slicing::commands::pick_slicer_engine,
+                farm3d_lib::slicing::commands::pick_preset_source,
+                farm3d_lib::slicing::commands::reset_slicer_runtime,
+                farm3d_lib::slicing::commands::list_slice_options,
+                farm3d_lib::slicing::commands::get_revision_geometry,
+                farm3d_lib::slicing::commands::get_revision_mesh,
+                farm3d_lib::slicing::commands::list_slicing,
+                farm3d_lib::slicing::commands::create_preparation,
+                farm3d_lib::slicing::commands::update_preparation,
+                farm3d_lib::slicing::commands::reload_preparation,
+                farm3d_lib::slicing::commands::delete_preparation,
+                farm3d_lib::slicing::commands::start_slice,
+                farm3d_lib::slicing::commands::cancel_slice_operation,
+                farm3d_lib::slicing::commands::get_slice_operation_log,
+                farm3d_lib::slicing::commands::list_slice_revisions,
+                farm3d_lib::slicing::commands::get_slice_revision,
+                farm3d_lib::slicing::commands::delete_slice_revision,
+            ],
+            storage,
+            Arc::new(a_catalog()),
+            credentials.path().to_path_buf(),
+            no_connection,
+            Arc::new(FakeModelFileIo { picks: None }),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&events);
+        app.listen(STATUS_EVENT, move |event| {
+            let value: Value = serde_json::from_str(event.payload()).unwrap();
+            if value["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("slicing."))
+            {
+                recorded.lock().unwrap().push(value);
+            }
+        });
+        services.slicing.set_discovery_env(DiscoveryEnv {
+            home: None,
+            path_var: None,
+            probe_timeout: Duration::from_secs(10),
+        });
+        farm3d_lib::start_library_runtime(
+            &services,
+            app.handle(),
+            WatchPolicy::PollOnly {
+                interval: Duration::from_secs(3600),
+            },
+        );
+        farm3d_lib::start_slicing_runtime(&services, app.handle());
+        Self {
+            _app: app,
+            webview,
+            services,
+            events,
+            _credentials: credentials,
+        }
+    }
+
+    fn call(&self, command: &str, mut body: Value) -> Result<Value, Value> {
+        body["contractVersion"] = json!(1);
+        invoke(&self.webview, command, body).map(|response| response["data"].clone())
+    }
+
+    fn ok(&self, command: &str, body: Value) -> Value {
+        self.call(command, body)
+            .unwrap_or_else(|error| panic!("{command} failed: {error}"))
+    }
+
+    fn error(&self, command: &str, body: Value) -> Value {
+        match self.call(command, body) {
+            Ok(value) => panic!("{command} unexpectedly succeeded: {value}"),
+            Err(error) => error,
+        }
+    }
+
+    /// `get_revision_mesh`'s raw bytes.
+    fn mesh(&self, revision_id: &str, object_key: u32) -> Vec<u8> {
+        let response = tauri::test::get_ipc_response(
+            &self.webview,
+            InvokeRequest {
+                cmd: "get_revision_mesh".to_string(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: json!({
+                    "contractVersion": 1,
+                    "revisionId": revision_id,
+                    "objectKey": object_key,
+                })
+                .into(),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        )
+        .unwrap_or_else(|error| panic!("get_revision_mesh failed: {error}"));
+        match response {
+            InvokeResponseBody::Raw(bytes) => bytes,
+            InvokeResponseBody::Json(json) => panic!("expected raw bytes, got {json}"),
+        }
+    }
+
+    /// Sets the `FAKE_ORCA_*` variables the next slices run with.
+    fn scenario(&self, variables: &[(&str, &str)]) {
+        self.services.slicing.set_engine_environment(
+            variables
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                .collect(),
+        );
+    }
+
+    /// Imports `path` and returns its Model record.
+    fn import(&self, path: &Path, storage_mode: &str) -> Value {
+        let selection = self
+            .services
+            .library
+            .selections
+            .register(SelectionPurpose::Import, vec![path.to_path_buf()])
+            .selection_id;
+        let inspection = self.ok(
+            "inspect_import_selection",
+            json!({ "selectionId": selection }),
+        );
+        assert_eq!(inspection["items"][0]["status"], "ready", "{inspection}");
+        let imported = self.ok(
+            "import_models",
+            json!({
+                "selectionId": selection,
+                "operationId": format!("import-{}", uuid::Uuid::new_v4()),
+                "items": [{
+                    "fileIndex": 0,
+                    "name": path.file_stem().unwrap().to_string_lossy(),
+                    "projectIds": [],
+                    "storageMode": storage_mode,
+                    "acknowledgeUnsupported": true,
+                }],
+            }),
+        );
+        assert_eq!(imported["items"][0]["outcome"], "imported", "{imported}");
+        imported["items"][0]["model"].clone()
+    }
+
+    fn prepare(&self, model_id: &str) -> Value {
+        self.ok(
+            "create_preparation",
+            json!({
+                "modelId": model_id,
+                "target": { "kind": "profile", "catalogRef": a_ref_json() },
+            }),
+        )
+    }
+
+    fn start(&self, operation_id: &str, preparation: &Value, plates: &[&Value]) -> Vec<Value> {
+        self.ok(
+            "start_slice",
+            json!({
+                "operationId": operation_id,
+                "preparationId": preparation["id"],
+                "expectedRevision": preparation["revision"],
+                "plateKeys": plates.iter().map(|plate| plate["plateKey"].clone()).collect::<Vec<_>>(),
+            }),
+        )["operations"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    fn slicing(&self) -> Value {
+        self.ok("list_slicing", json!({}))
+    }
+
+    fn operation(&self, id: &str) -> Value {
+        self.slicing()["activeAndRecentOperations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|operation| operation["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no operation {id}"))
+    }
+
+    /// Waits until operation `id` is in `state` and the stream has said
+    /// so: the row commits before the worker cleans up and publishes, so
+    /// the event is what marks the step finished.
+    fn wait_state(&self, id: &str, state: &str) -> Value {
+        wait_for(&format!("{id} to be {state}"), || {
+            let announced = self.events_of(id).iter().any(|event| {
+                event["type"] == "slicing.operation.changed" && event["payload"]["state"] == state
+            });
+            let operation = self.operation(id);
+            (announced && operation["state"] == state).then_some(operation)
+        })
+    }
+
+    fn events_of(&self, id: &str) -> Vec<Value> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event["subject"]["id"] == id)
+            .cloned()
+            .collect()
+    }
+
+    fn blob(&self, sha256: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        self.services
+            .library
+            .content
+            .open_verified(sha256)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        bytes
+    }
+
+    fn work_dir(&self, operation_id: &str) -> PathBuf {
+        WorkDir::for_operation(self.services.storage.paths().content_root(), operation_id)
+            .root()
+            .to_path_buf()
+    }
+}
+
+/// Fresh roots, an installed `fake-orca` configured as the engine, and a
+/// folder for source files.
+struct Farm {
+    _roots: tempfile::TempDir,
+    paths: StoragePaths,
+    lease: MetadataRootLease,
+    orca: tempfile::TempDir,
+    engine: PathBuf,
+    sources: tempfile::TempDir,
+}
+
+impl Farm {
+    fn new() -> Self {
+        let roots = tempfile::tempdir().unwrap();
+        let paths =
+            StoragePaths::new(roots.path().join("metadata"), roots.path().join("data")).unwrap();
+        let lease = MetadataRootLease::acquire(&paths).unwrap();
+        let orca = tempfile::tempdir().unwrap();
+        let engine = install_orca(orca.path());
+        let storage = Storage::open(paths.clone(), &lease).unwrap();
+        storage
+            .write_repo(|tx| {
+                let current = load_runtime_config(tx)?;
+                save_runtime_config(tx, current.revision, Some(engine.to_str().unwrap()), None)
+            })
+            .unwrap();
+        Self {
+            _roots: roots,
+            paths,
+            lease,
+            orca,
+            engine,
+            sources: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn start(&self) -> Running {
+        Running::boot(&self.paths, &self.lease)
+    }
+
+    /// Copies fixture `name` into the sources folder as `as_name`.
+    fn source(&self, name: &str, as_name: &str) -> PathBuf {
+        let path = self.sources.path().join(as_name);
+        fs::copy(fixtures().join("library").join(name), &path).unwrap();
+        path
+    }
+}
+
+fn plates(preparation: &Value) -> Vec<Value> {
+    preparation["document"]["plates"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn ids(operations: &[Value]) -> Vec<String> {
+    operations
+        .iter()
+        .map(|operation| operation["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn every_p5_command_is_registered_with_a_contract() {
+    let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
+    assert_eq!(manifest.len(), farm3d_lib::COMMAND_NAMES.len());
+    for command in P5_COMMANDS {
+        assert!(
+            farm3d_lib::COMMAND_NAMES.contains(command),
+            "{command} missing from COMMAND_NAMES"
+        );
+        assert!(
+            manifest.iter().any(|entry| entry.command == *command),
+            "{command} missing from COMMAND_CONTRACTS"
+        );
+    }
+    assert!(!farm3d_lib::COMMAND_NAMES.contains(&"create_external_slice_revision"));
+}
+
+#[test]
+fn the_runtime_status_names_the_chosen_engine_and_why() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let status = running.ok("get_slicer_runtime", json!({}));
+    assert_eq!(status["canSlice"], true, "{status}");
+    assert_eq!(status["engine"]["state"], "available");
+    assert_eq!(status["engine"]["source"], "configured");
+    assert_eq!(status["engine"]["executableName"], "orca-slicer");
+    assert_eq!(status["presetSource"]["origin"], "engine");
+    assert_eq!(
+        status["engineCandidates"],
+        json!([{
+            "source": "configured",
+            "executableName": "orca-slicer",
+            "path": farm.engine.to_str().unwrap(),
+            "result": { "kind": "chosen", "version": "2.4.2" },
+        }])
+    );
+
+    // A configured engine that fails its probe falls through to PATH, and
+    // the status says so.
+    let broken = farm.orca.path().join("broken");
+    fs::write(&broken, "not a program").unwrap();
+    running
+        .services
+        .storage
+        .write_repo(|tx| {
+            let current = load_runtime_config(tx)?;
+            save_runtime_config(tx, current.revision, Some(broken.to_str().unwrap()), None)
+        })
+        .unwrap();
+    running.services.slicing.set_discovery_env(DiscoveryEnv {
+        home: None,
+        path_var: Some(farm.orca.path().join("bin").into_os_string()),
+        probe_timeout: Duration::from_secs(10),
+    });
+    let status = running.ok("check_slicer_runtime", json!({}));
+    assert_eq!(status["engine"]["state"], "available", "{status}");
+    assert_eq!(status["engine"]["source"], "path");
+    let candidates = status["engineCandidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 2, "{status}");
+    assert_eq!(candidates[0]["source"], "configured");
+    assert_eq!(candidates[0]["executableName"], "broken");
+    assert_eq!(candidates[0]["result"]["kind"], "probeFailed");
+    assert_eq!(candidates[1]["source"], "path");
+    assert_eq!(candidates[1]["result"]["kind"], "chosen");
+    assert!(
+        running
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "slicing.runtime.changed"
+                && event["payload"]["engine"]["source"] == "path"),
+        "the change goes out on the stream"
+    );
+}
+
+#[test]
+fn a_two_plate_preparation_slices_into_two_revisions_of_one_source() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-two-plates.3mf", "two.3mf"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let source_revision = model["currentRevision"]["id"].clone();
+
+    let preparation = running.prepare(model_id);
+    assert_eq!(preparation["stale"], false);
+    assert_eq!(preparation["sourceRevisionId"], source_revision);
+    let plates = plates(&preparation);
+    assert_eq!(plates.len(), 2, "one plate per Orca plate: {preparation}");
+    assert!(preparation["document"]["processPreset"].is_string());
+    assert!(preparation["document"]["filamentPreset"].is_string());
+    // Asking again returns the same Preparation.
+    assert_eq!(running.prepare(model_id)["id"], preparation["id"]);
+
+    // Geometry and mesh transfer (D6).
+    let geometry = running.ok(
+        "get_revision_geometry",
+        json!({ "revisionId": source_revision }),
+    );
+    let object_key = geometry["objects"][0]["objectKey"].as_u64().unwrap() as u32;
+    let mesh = running.mesh(source_revision.as_str().unwrap(), object_key);
+    assert_eq!(&mesh[..4], b"F3DM");
+
+    let operations = running.start("op-two-plates", &preparation, &[&plates[0], &plates[1]]);
+    assert_eq!(operations.len(), 2);
+    assert!(operations
+        .iter()
+        .all(|operation| operation["state"] == "queued"));
+    let succeeded: Vec<Value> = ids(&operations)
+        .iter()
+        .map(|id| running.wait_state(id, "succeeded"))
+        .collect();
+
+    let revisions = running.ok("list_slice_revisions", json!({ "modelId": model_id }));
+    let revisions = revisions.as_array().unwrap();
+    assert_eq!(revisions.len(), 2, "{revisions:?}");
+    let mut plate_keys: Vec<&Value> = revisions
+        .iter()
+        .map(|revision| &revision["plate"]["plateKey"])
+        .collect();
+    plate_keys.sort_by_key(|key| key.to_string());
+    plate_keys.dedup();
+    assert_eq!(plate_keys.len(), 2, "distinct plate keys");
+    assert!(revisions
+        .iter()
+        .all(|revision| revision["sourceRevisionId"] == source_revision));
+    for operation in &succeeded {
+        let revision_id = operation["sliceRevisionId"].as_str().unwrap();
+        let record = running.ok(
+            "get_slice_revision",
+            json!({ "sliceRevisionId": revision_id }),
+        );
+        assert_eq!(record["plate"]["plateKey"], operation["plateKey"]);
+        assert_eq!(record["plate"]["plateIndex"], operation["plateIndex"]);
+        assert_eq!(record["kind"], "farm3d");
+        assert_eq!(record["runtime"]["engineVersion"], "2.4.2");
+        assert_eq!(record["blobs"].as_array().unwrap().len(), 6);
+        assert!(!running.work_dir(operation["id"].as_str().unwrap()).exists());
+    }
+}
+
+#[test]
+fn a_success_log_is_the_revision_log_with_its_noise_tagged() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-log", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "succeeded");
+
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    let text = log["text"].as_str().unwrap();
+    assert!(text.contains("fake-orca scenario success"), "{text}");
+    assert_eq!(log["truncated"], false);
+    let noisy = log["noiseLines"].as_array().unwrap();
+    assert_eq!(noisy.len(), 1, "{log}");
+    let line = text
+        .lines()
+        .nth(noisy[0].as_u64().unwrap() as usize - 1)
+        .unwrap();
+    assert!(line.contains("unable to open display"));
+
+    // It is the revision's `log` blob (D13), not a separate operation log.
+    let revision_id = operation["sliceRevisionId"].as_str().unwrap();
+    let log_blob: String = running
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT sha256 FROM slice_revision_blobs WHERE revision_id = ?1 AND role = 'log'",
+                [revision_id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(running.blob(&log_blob), text.as_bytes());
+    let operation_log: Option<String> = running
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT log_sha256 FROM slice_operations WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(operation_log, None);
+}
+
+#[test]
+fn a_failed_slice_keeps_its_log_and_publishes_nothing() {
+    let farm = Farm::new();
+    let running = farm.start();
+    running.scenario(&[("FAKE_ORCA_SCENARIO", "fail:-50")]);
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-fail", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "failed");
+    assert_eq!(operation["failure"]["code"]["kind"], "objectsOutsidePlate");
+    assert_eq!(
+        operation["failure"]["message"],
+        "An object is outside the printable area."
+    );
+    assert!(operation.get("sliceRevisionId").is_none());
+
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    let text = log["text"].as_str().unwrap();
+    assert!(text.contains("fake-orca scenario fail:-50"), "{text}");
+    let content_root = running.services.storage.paths().content_root();
+    assert!(
+        !text.contains(content_root.to_str().unwrap()),
+        "the work directory is redacted"
+    );
+    assert!(
+        !text.contains(farm.engine.to_str().unwrap()),
+        "the engine is redacted"
+    );
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([]),
+        "no revision"
+    );
+    assert!(!running.work_dir(&id).exists());
+}
+
+#[test]
+fn cancelling_a_running_slice_stops_it_and_a_queued_one_never_starts() {
+    let farm = Farm::new();
+    let running = farm.start();
+    running.scenario(&[("FAKE_ORCA_SCENARIO", "hang")]);
+    let model = running.import(&farm.source("orca-two-plates.3mf", "two.3mf"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plates = plates(&preparation);
+    let operations = ids(&running.start("op-cancel", &preparation, &[&plates[0], &plates[1]]));
+    let (first, second) = (&operations[0], &operations[1]);
+    running.wait_state(first, "running");
+
+    // The second waits behind the first, and cancels without spawning.
+    let cancelled = running.ok(
+        "cancel_slice_operation",
+        json!({ "sliceOperationId": second }),
+    );
+    assert_eq!(cancelled["state"], "cancelled");
+    assert!(cancelled.get("startedAt").is_none(), "it never started");
+    assert!(!running.work_dir(second).exists());
+    assert!(
+        running
+            .events_of(second)
+            .iter()
+            .all(|event| event["payload"]["state"] != "running"),
+        "it was never running"
+    );
+
+    let started = Instant::now();
+    let cancelled = running.ok(
+        "cancel_slice_operation",
+        json!({ "sliceOperationId": first }),
+    );
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    assert!(started.elapsed() < Duration::from_secs(6));
+    assert!(!running.work_dir(first).exists());
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([])
+    );
+    let log = running.ok(
+        "get_slice_operation_log",
+        json!({ "sliceOperationId": first }),
+    );
+    assert!(log["text"]
+        .as_str()
+        .unwrap()
+        .contains("fake-orca scenario hang"));
+
+    // A finished operation can't be cancelled.
+    let error = running.error(
+        "cancel_slice_operation",
+        json!({ "sliceOperationId": first }),
+    );
+    assert_eq!(error["code"], "OPERATION_NOT_CANCELLABLE", "{error}");
+}
+
+#[test]
+fn start_slice_replays_by_operation_id_and_refuses_a_reused_id() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-two-plates.3mf", "two.3mf"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plates = plates(&preparation);
+    let first = running.start("op-replay", &preparation, &[&plates[0]]);
+    let id = ids(&first).remove(0);
+    running.wait_state(&id, "succeeded");
+
+    // The same request: the same operation, nothing new queued.
+    let replay = running.start("op-replay", &preparation, &[&plates[0]]);
+    assert_eq!(ids(&replay), vec![id.clone()]);
+    assert_eq!(replay[0]["state"], "succeeded");
+    let count: i64 = running
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM slice_operations", [], |row| {
+                row.get(0)
+            })
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // The same id for another request is the P3 ledger's reuse error.
+    let error = running.error(
+        "start_slice",
+        json!({
+            "operationId": "op-replay",
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+            "plateKeys": [plates[1]["plateKey"]],
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "operationId");
+}
+
+#[test]
+fn a_gcode_model_has_no_preparation() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let error = running.error(
+        "create_preparation",
+        json!({ "modelId": model["id"], "target": { "kind": "profile", "catalogRef": a_ref_json() } }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "modelId");
+    assert_eq!(running.slicing()["preparations"], json!([]));
+}
+
+#[test]
+fn a_stale_source_is_refused_then_continued_and_reload_keeps_transforms() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let source = farm.source("cube-binary.stl", "cube.stl");
+    let model = running.import(&source, "linked");
+    let model_id = model["id"].as_str().unwrap().to_string();
+    let first_revision = model["currentRevision"]["id"].as_str().unwrap().to_string();
+    let preparation = running.prepare(&model_id);
+
+    // Move the object, then change the linked source.
+    let mut document = preparation["document"].clone();
+    document["plates"][0]["instances"][0]["transform"]["translateMm"] = json!([60.0, 70.0]);
+    document["plates"][0]["instances"][0]["transform"]["rotateDeg"] = json!([0.0, 0.0, 45.0]);
+    let preparation = running.ok(
+        "update_preparation",
+        json!({
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+            "document": document,
+        }),
+    );
+    let moved = preparation["document"]["plates"][0]["instances"][0].clone();
+    fs::copy(fixtures().join("library/cube-ascii.stl"), &source).unwrap();
+    let changed = running.ok("check_linked_sources", json!({ "modelIds": [model_id] }));
+    assert_eq!(changed[0]["revisionCount"], 2, "{changed}");
+
+    // The Preparation is now stale, and the stream says so.
+    let preparation_id = preparation["id"].as_str().unwrap().to_string();
+    let stale = wait_for("a stale preparation.changed", || {
+        running
+            .events_of(&preparation_id)
+            .into_iter()
+            .rev()
+            .find(|event| {
+                event["type"] == "slicing.preparation.changed" && event["payload"]["stale"] == true
+            })
+    });
+    assert_eq!(stale["payload"]["sourceRevisionId"], first_revision);
+    let preparation = stale["payload"].clone();
+    let plate = &plates(&preparation)[0];
+
+    let request = |operation_id: &str, continue_with: Option<&str>| {
+        let mut body = json!({
+            "operationId": operation_id,
+            "preparationId": preparation_id,
+            "expectedRevision": preparation["revision"],
+            "plateKeys": [plate["plateKey"]],
+        });
+        if let Some(revision) = continue_with {
+            body["continueWithSourceRevision"] = json!(revision);
+        }
+        body
+    };
+    let error = running.error("start_slice", request("op-stale", None));
+    assert_eq!(error["code"], "PREPARATION_STALE", "{error}");
+    assert_eq!(error["recovery"][0], "RELOAD_PREPARATION");
+
+    // Continuing explicitly slices the pinned revision.
+    let started = running.ok("start_slice", request("op-continue", Some(&first_revision)));
+    let id = started["operations"][0]["id"].as_str().unwrap().to_string();
+    let operation = running.wait_state(&id, "succeeded");
+    assert_eq!(operation["sourceRevisionId"], first_revision);
+
+    // Reload keeps the surviving object's transform.
+    let reloaded = running.ok(
+        "reload_preparation",
+        json!({ "preparationId": preparation_id, "expectedRevision": preparation["revision"] }),
+    );
+    assert_eq!(reloaded["removedObjectKeys"], json!([]));
+    assert_eq!(reloaded["addedObjectKeys"], json!([]));
+    let preparation = &reloaded["preparation"];
+    assert_eq!(preparation["stale"], false);
+    assert_ne!(preparation["sourceRevisionId"], first_revision);
+    assert_eq!(preparation["document"]["plates"][0]["instances"][0], moved);
+}
+
+#[test]
+fn events_are_ordered_and_the_backfill_covers_what_came_before() {
+    let farm = Farm::new();
+    let running = farm.start();
+    running.scenario(&[("FAKE_ORCA_STEP_MS", "100")]);
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-events", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "succeeded");
+    let revision_id = operation["sliceRevisionId"].as_str().unwrap().to_string();
+
+    let events = running.events.lock().unwrap().clone();
+    // One stream, every sequence number once and in order.
+    let stream = &events[0]["streamId"];
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(&event["streamId"], stream);
+        assert_eq!(
+            event["sequence"].as_u64().unwrap(),
+            events[0]["sequence"].as_u64().unwrap() + index as u64,
+            "{events:#?}"
+        );
+    }
+    let kinds: Vec<(String, String)> = events
+        .iter()
+        .filter(|event| {
+            event["subject"]["id"] == id.as_str() || event["subject"]["id"] == revision_id.as_str()
+        })
+        .map(|event| {
+            (
+                event["type"].as_str().unwrap().to_string(),
+                event["payload"]["state"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .filter(|(kind, _)| kind != "slicing.operation.progress")
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (
+                "slicing.operation.changed".to_string(),
+                "queued".to_string()
+            ),
+            (
+                "slicing.operation.changed".to_string(),
+                "running".to_string()
+            ),
+            ("slicing.revision.created".to_string(), String::new()),
+            (
+                "slicing.operation.changed".to_string(),
+                "succeeded".to_string()
+            ),
+        ]
+    );
+    assert!(events
+        .iter()
+        .any(|event| event["type"] == "slicing.preparation.changed"
+            && event["subject"]["id"] == preparation["id"]));
+
+    // Progress: at most one per 250 ms, and the last update always arrives.
+    let progress: Vec<&Value> = events
+        .iter()
+        .filter(|event| event["type"] == "slicing.operation.progress")
+        .collect();
+    assert!(!progress.is_empty());
+    assert!(
+        progress.len() < 5,
+        "fake-orca wrote 5 updates 100 ms apart: {progress:#?}"
+    );
+    assert_eq!(progress.last().unwrap()["payload"]["totalPercent"], 100);
+    let times: Vec<chrono::DateTime<chrono::Utc>> = progress
+        .iter()
+        .map(|event| event["occurredAt"].as_str().unwrap().parse().unwrap())
+        .collect();
+    for pair in times[..times.len() - 1].windows(2) {
+        assert!(
+            pair[1] - pair[0] >= chrono::Duration::milliseconds(240),
+            "throttled: {times:?}"
+        );
+    }
+
+    // The backfill: its sequence is the last event's, and it holds what
+    // the events built.
+    let snapshot = running.slicing();
+    assert_eq!(&snapshot["streamId"], stream);
+    assert_eq!(
+        snapshot["snapshotSequence"],
+        events.last().unwrap()["sequence"]
+    );
+    assert_eq!(snapshot["preparations"][0]["id"], preparation["id"]);
+    assert_eq!(
+        snapshot["activeAndRecentOperations"][0]["state"],
+        "succeeded"
+    );
+    assert_eq!(snapshot["revisions"][0]["id"], revision_id);
+    assert_eq!(snapshot["runtime"]["canSlice"], true);
+
+    // Events after a snapshot carry larger sequences.
+    running.scenario(&[("FAKE_ORCA_SCENARIO", "fail:-6")]);
+    let before = running.slicing()["snapshotSequence"].as_u64().unwrap();
+    let id = ids(&running.start("op-events-2", &preparation, &[plate])).remove(0);
+    running.wait_state(&id, "failed");
+    let later = running.events_of(&id);
+    assert!(later
+        .iter()
+        .all(|event| event["sequence"].as_u64().unwrap() > before));
+}
+
+#[test]
+fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
+    let farm = Farm::new();
+    let first = farm.start();
+    let model = first.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap().to_string();
+    let preparation = first.prepare(&model_id);
+    let plate = &plates(&preparation)[0];
+    let done = ids(&first.start("op-before", &preparation, &[plate])).remove(0);
+    let revision_id = first.wait_state(&done, "succeeded")["sliceRevisionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let revision_before = first.ok(
+        "get_slice_revision",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+    let gcode_sha256: String = first
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT gcode_sha256 FROM slice_revisions WHERE id = ?1",
+                [&revision_id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    let gcode_before = first.blob(&gcode_sha256);
+
+    first.scenario(&[("FAKE_ORCA_SCENARIO", "hang")]);
+    let hung = ids(&first.start("op-hung", &preparation, &[plate])).remove(0);
+    first.wait_state(&hung, "running");
+    let work = first.work_dir(&hung);
+    assert!(work.exists());
+
+    // Restart: a new Storage over the same roots runs D10's recovery, as
+    // `build_runtime_services` does, while the old engine still runs.
+    let storage = Storage::open(farm.paths.clone(), &farm.lease).unwrap();
+    let recovery = recover_after_restart(&storage).unwrap();
+    assert_eq!(recovery.interrupted.len(), 1);
+    assert_eq!(recovery.interrupted[0].id, hung);
+    assert!(recovery.interrupted[0].was_running);
+    assert_eq!(
+        recovery.stopped,
+        vec![hung.clone()],
+        "the engine was still ours"
+    );
+    assert!(!work.exists(), "the work directory is removed");
+    assert!(!storage
+        .paths()
+        .content_root()
+        .join(WORK_ROOT_DIR)
+        .read_dir()
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false));
+
+    let second = farm.start();
+    // The old supervisor sees its engine end and must store nothing.
+    std::thread::sleep(Duration::from_millis(500));
+    let interrupted = second.operation(&hung);
+    assert_eq!(interrupted["state"], "interrupted");
+    assert!(interrupted["finishedAt"].is_string());
+    assert!(second.slicing()["activeAndRecentOperations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|operation| operation["state"] != "running" && operation["state"] != "queued"));
+    let revisions = second.ok("list_slice_revisions", json!({ "modelId": model_id }));
+    assert_eq!(revisions.as_array().unwrap().len(), 1);
+    assert_eq!(
+        second.ok(
+            "get_slice_revision",
+            json!({ "sliceRevisionId": revision_id }),
+        ),
+        revision_before,
+        "the earlier revision is unchanged"
+    );
+    assert_eq!(second.blob(&gcode_sha256), gcode_before);
+    drop(first);
+}
+
+#[test]
+fn preparations_are_edited_deleted_and_removed_with_their_model() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+
+    // A stale expected revision is CONFLICT.
+    let error = running.error(
+        "update_preparation",
+        json!({
+            "preparationId": preparation["id"],
+            "expectedRevision": 99,
+            "document": preparation["document"],
+        }),
+    );
+    assert_eq!(error["code"], "CONFLICT");
+    // An invalid document is VALIDATION.
+    let mut document = preparation["document"].clone();
+    document["plates"] = json!([]);
+    let error = running.error(
+        "update_preparation",
+        json!({
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+            "document": document,
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION");
+
+    running.ok(
+        "delete_preparation",
+        json!({ "preparationId": preparation["id"], "expectedRevision": preparation["revision"] }),
+    );
+    assert_eq!(running.slicing()["preparations"], json!([]));
+    let preparation_id = preparation["id"].as_str().unwrap().to_string();
+    assert!(running
+        .events_of(&preparation_id)
+        .iter()
+        .any(|event| event["type"] == "slicing.preparation.removed"));
+
+    // A Preparation that cascades with its Model goes out as removed too.
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let preparation_id = preparation["id"].as_str().unwrap().to_string();
+    running.ok(
+        "delete_model",
+        json!({ "id": model["id"], "expectedRevision": model["revision"] }),
+    );
+    wait_for("preparation.removed after the Model", || {
+        running
+            .events_of(&preparation_id)
+            .into_iter()
+            .find(|event| event["type"] == "slicing.preparation.removed")
+    });
+}
+
+#[test]
+fn a_revision_can_be_deleted_and_the_stream_says_so() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-delete", &preparation, &[plate])).remove(0);
+    let revision_id = running.wait_state(&id, "succeeded")["sliceRevisionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    running.ok(
+        "delete_slice_revision",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([])
+    );
+    assert!(running
+        .events_of(&revision_id)
+        .iter()
+        .any(|event| event["type"] == "slicing.revision.removed"));
+    let error = running.error(
+        "get_slice_revision",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+    assert_eq!(error["code"], "NOT_FOUND");
+}
+
+/// The same IPC path against a real OrcaSlicer (spec D23): `FARM3D_ORCA`
+/// is the engine; the TestVendor fixtures are the preset source, so the
+/// test catalog's printer resolves. Run with `just test-orca`.
+#[test]
+#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
+fn real_orca_slices_a_cube_through_the_commands() {
+    let engine = std::env::var_os("FARM3D_ORCA")
+        .map(PathBuf::from)
+        .expect("FARM3D_ORCA must name an OrcaSlicer engine; run through `just test-orca`");
+    let farm = Farm::new();
+    let profiles = farm.orca.path().to_path_buf();
+    // Real Orca requires "G92 E0" each layer with relative extrusion, so
+    // this test's copy of the fixture printer adds it.
+    let machine =
+        profiles.join("resources/profiles/TestVendor/machine/TP/Test Printer 0.4 nozzle.json");
+    let mut preset: Value = serde_json::from_slice(&fs::read(&machine).unwrap()).unwrap();
+    preset["layer_change_gcode"] = json!("G92 E0");
+    fs::write(&machine, serde_json::to_vec_pretty(&preset).unwrap()).unwrap();
+    let storage = Storage::open(farm.paths.clone(), &farm.lease).unwrap();
+    storage
+        .write_repo(|tx| {
+            let current = load_runtime_config(tx)?;
+            save_runtime_config(
+                tx,
+                current.revision,
+                Some(engine.to_str().unwrap()),
+                Some(profiles.to_str().unwrap()),
+            )
+        })
+        .unwrap();
+    drop(storage);
+    let running = farm.start();
+    running.services.slicing.set_discovery_env(DiscoveryEnv {
+        home: None,
+        path_var: None,
+        probe_timeout: Duration::from_secs(30),
+    });
+    let status = running.ok("check_slicer_runtime", json!({}));
+    assert_eq!(status["canSlice"], true, "{status}");
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-real", &preparation, &[plate])).remove(0);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let operation = loop {
+        let operation = running.operation(&id);
+        if operation["state"] != "queued" && operation["state"] != "running" {
+            break operation;
+        }
+        assert!(Instant::now() < deadline, "the slice took over 2 minutes");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert_eq!(
+        operation["state"], "succeeded",
+        "{operation}\n{}",
+        log["text"]
+    );
+    let revision = running.ok(
+        "get_slice_revision",
+        json!({ "sliceRevisionId": operation["sliceRevisionId"] }),
+    );
+    assert_eq!(
+        revision["runtime"]["engineVersion"],
+        status["engine"]["version"]
+    );
+}
