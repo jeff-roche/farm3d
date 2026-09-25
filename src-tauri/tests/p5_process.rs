@@ -24,6 +24,8 @@ const FAKE_ORCA: &str = env!("CARGO_BIN_EXE_fake-orca");
 const MACHINE: &str = "Test Printer 0.4 nozzle";
 const PROCESS: &str = "0.20mm Standard @Test";
 const FILAMENT: &str = "Test PLA @Test";
+/// A cancel test that fails must not wait out the 30-minute default.
+const CANCEL_TEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -98,10 +100,37 @@ fn assert_no_absolute_paths(text: &str, known: &[&Path]) {
         let path = path.to_string_lossy();
         assert!(!text.contains(path.as_ref()), "the log names {path}");
     }
-    let word = text
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | ','))
-        .find(|word| word.starts_with('/'));
-    assert_eq!(word, None, "the log holds an absolute path");
+    // An absolute path starts with a `/` that doesn't continue a relative
+    // path or a placeholder (`<work>/x`, `~/x`, `a/b`): at the start, or
+    // after a space, `:`, `=`, a quote, and so on.
+    let continues_path =
+        |byte: u8| byte.is_ascii_alphanumeric() || b"_-.~+>/".contains(&byte) || byte >= 0x80;
+    let bytes = text.as_bytes();
+    if let Some(at) = (0..bytes.len())
+        .find(|&at| bytes[at] == b'/' && (at == 0 || !continues_path(bytes[at - 1])))
+    {
+        let start = at.saturating_sub(40);
+        let end = (at + 60).min(bytes.len());
+        panic!(
+            "the log holds an absolute path: {:?}",
+            String::from_utf8_lossy(&bytes[start..end])
+        );
+    }
+}
+
+#[test]
+fn the_absolute_path_check_catches_paths_after_punctuation() {
+    for text in [
+        "x=/etc/a",
+        "key:/etc/a",
+        "\"/etc/a\"",
+        "/etc/a",
+        "see /etc/a",
+    ] {
+        let caught = std::panic::catch_unwind(|| assert_no_absolute_paths(text, &[])).is_err();
+        assert!(caught, "{text}");
+    }
+    assert_no_absolute_paths("<work>/input ~/.config a/b <engine>/orca 1/2", &[]);
 }
 
 fn home() -> PathBuf {
@@ -318,7 +347,8 @@ fn a_hung_slice_times_out_through_the_stop_escalation() {
 fn cancel_mid_run_stops_the_grandchild_within_six_seconds() {
     let temp = tempfile::tempdir().unwrap();
     let work = prepared_work(temp.path());
-    let command = fake_command(&work, "hangWithGrandchild");
+    let mut command = fake_command(&work, "hangWithGrandchild");
+    command.timeout = CANCEL_TEST_TIMEOUT;
     let (sender, receiver) = tokio::sync::watch::channel(false);
     let pid_file = work.root().join("grandchild.pid");
     let (cancelled_at, when) = mpsc::channel();
@@ -429,6 +459,130 @@ fn an_oversized_log_keeps_its_head_and_tail_within_the_cap_and_no_paths() {
         .contains("reading <work>/input/plate.3mf from ~/.config via <engine>/fake-orca"));
     let engine_dir = Path::new(FAKE_ORCA).parent().unwrap();
     assert_no_absolute_paths(&log.text, &[work.root(), &home(), engine_dir]);
+}
+
+#[test]
+fn a_panicking_observer_still_stops_the_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = prepared_work(temp.path());
+    let mut command = fake_command(&work, "hang");
+    command.timeout = CANCEL_TEST_TIMEOUT;
+    let pid = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    struct Panicker(std::sync::Arc<std::sync::Mutex<Option<u32>>>);
+    impl SliceObserver for Panicker {
+        fn spawned(&mut self, pid: u32) {
+            *self.0.lock().unwrap() = Some(pid);
+            panic!("observer failure");
+        }
+        fn progress(&mut self, _update: SliceProgress) {}
+    }
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_slice(&command, &CancelFlag::never(), &mut Panicker(pid.clone()))
+    }));
+    assert!(unwound.is_err());
+    let pid = pid.lock().unwrap().expect("spawned") as i32;
+    assert!(!alive(pid), "the unwind left the engine running");
+}
+
+#[test]
+fn the_child_gets_only_the_allowlisted_environment() {
+    // A variable farm3d has but OrcaSlicer must not see. Cargo also sets
+    // CARGO_PKG_NAME for every test binary.
+    std::env::set_var("FARM3D_TEST_SENTINEL", "leak");
+    assert!(std::env::var_os("CARGO_PKG_NAME").is_some());
+    let temp = tempfile::tempdir().unwrap();
+    let work = prepared_work(temp.path());
+    let mut command = fake_command(&work, "success");
+    command
+        .environment
+        .push(("FAKE_ORCA_PRINT_ENV".into(), "1".into()));
+    let (run, _) = slice(&command);
+    assert_eq!(outcome(&run, &work), SliceOutcome::OutputWritten);
+    let names: Vec<&str> = run
+        .log
+        .text
+        .lines()
+        .filter_map(|line| line.strip_prefix("env: "))
+        .collect();
+    assert!(names.contains(&"PATH"), "{names:?}");
+    assert!(!names.contains(&"FARM3D_TEST_SENTINEL"), "{names:?}");
+    assert!(!names.contains(&"CARGO_PKG_NAME"), "{names:?}");
+    let allowed = [
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "XDG_RUNTIME_DIR",
+        "PATH",
+    ];
+    for name in names {
+        assert!(
+            allowed.contains(&name) || name.starts_with("FAKE_ORCA_"),
+            "{name} leaked into the child"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_process_that_ignores_sigterm_is_killed_after_the_grace() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = prepared_work(temp.path());
+    let mut command = fake_command(&work, "hangIgnoringTerm");
+    command.timeout = CANCEL_TEST_TIMEOUT;
+    command.grace = Duration::from_millis(300);
+    let (sender, receiver) = tokio::sync::watch::channel(false);
+
+    /// Cancels 300 ms after the spawn, once the shell has taken over.
+    struct CancelSoon {
+        pid: Option<u32>,
+        sender: tokio::sync::watch::Sender<bool>,
+    }
+    impl SliceObserver for CancelSoon {
+        fn spawned(&mut self, pid: u32) {
+            self.pid = Some(pid);
+            let sender = self.sender.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(300));
+                let _ = sender.send(true);
+            });
+        }
+        fn progress(&mut self, _update: SliceProgress) {}
+    }
+    let mut observer = CancelSoon { pid: None, sender };
+    let started = Instant::now();
+    let run = run_slice(&command, &CancelFlag::new(receiver), &mut observer);
+    assert_eq!(run.exit, RunExit::Cancelled);
+    assert!(run.killed, "SIGTERM alone should not have stopped it");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    let group = observer.pid.unwrap() as i32;
+    assert!(!alive(group));
+    let survivors: Vec<i32> = fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| {
+            fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                // Field 5 (after the command in parentheses) is the group.
+                let fields: Vec<&str> = stat
+                    .rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .collect();
+                fields.first() != Some(&"Z") && fields.get(2) == Some(&group.to_string().as_str())
+            })
+        })
+        .collect();
+    assert!(
+        survivors.is_empty(),
+        "group members survived: {survivors:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -582,7 +736,7 @@ mod real {
         let (engine, profiles, _cache) = real_orca();
         let temp = tempfile::tempdir().unwrap();
         let (work, machine, filament) = real_work(temp.path(), &profiles);
-        let command = SliceCommand::new(engine.clone(), work.clone(), Some(&profiles));
+        let command = SliceCommand::new(engine.clone(), work.clone(), Some(profiles.clone()));
         let started = Instant::now();
         let (run, recorder) = slice(&command);
         eprintln!(
@@ -618,7 +772,8 @@ mod real {
         let temp = tempfile::tempdir().unwrap();
         let (work, _, _) = real_work(temp.path(), &profiles);
         fs::write(work.plate_3mf(), heavy_sphere_plate()).unwrap();
-        let command = SliceCommand::new(engine, work.clone(), Some(&profiles));
+        let mut command = SliceCommand::new(engine, work.clone(), Some(profiles.clone()));
+        command.timeout = CANCEL_TEST_TIMEOUT;
         let mounts_before = engine_mounts();
 
         /// Cancels on the first progress update, as a user would mid-run.

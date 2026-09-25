@@ -28,10 +28,12 @@
 //! | `malformedOutput` | return code 0 and a `plate_1.gcode` that is not G-code |
 //! | `oversizedOutput` | return code 0 and a sparse `plate_1.gcode` of `FAKE_ORCA_OUTPUT_BYTES` (default 1 GiB + 1) |
 //! | `crash` | aborts (SIGABRT), a signal farm3d did not send |
+//! | `hangIgnoringTerm` | one progress line, then becomes a shell that ignores SIGTERM (as does its `sleep`), so only SIGKILL stops it |
 //!
 //! `FAKE_ORCA_STEP_MS` (default 20) is the pause between progress lines,
 //! and a non-empty `FAKE_ORCA_NO_RESULT` skips `result.json`, leaving only
-//! the exit status.
+//! the exit status. A non-empty `FAKE_ORCA_PRINT_ENV` prints `env: <NAME>`
+//! for every variable fake-orca received, before anything else.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -136,6 +138,23 @@ fn finish(out: &Path, code: i32) -> ! {
         eprintln!("run found error, return {code}, exit...");
     }
     std::process::exit(code & 0xff)
+}
+
+/// Replaces this process (same pid, same group) with a shell that ignores
+/// SIGTERM. The ignored disposition is inherited by its `sleep`s.
+#[cfg(unix)]
+fn ignore_term_forever() -> ! {
+    use std::os::unix::process::CommandExt;
+    let error = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("trap '' TERM; while :; do sleep 0.05; done")
+        .exec();
+    panic!("exec /bin/sh: {error}");
+}
+
+#[cfg(not(unix))]
+fn ignore_term_forever() -> ! {
+    sleep_forever()
 }
 
 fn sleep_forever() -> ! {
@@ -358,6 +377,11 @@ fn main() {
         std::process::exit(0);
     }
     let out = args.outputdir.clone().unwrap_or_else(|| PathBuf::from("."));
+    if env("FAKE_ORCA_PRINT_ENV").is_some() {
+        for (name, _) in std::env::vars_os() {
+            println!("env: {}", name.to_string_lossy());
+        }
+    }
     let scenario = env("FAKE_ORCA_SCENARIO").unwrap_or_else(|| "success".to_string());
     println!("OrcaSlicer-{version}: fake-orca scenario {scenario}");
     eprintln!("Error: unable to open display");
@@ -391,6 +415,7 @@ fn main() {
         }
         "hang" => sleep_forever(),
         "crash" => std::process::abort(),
+        "hangIgnoringTerm" => ignore_term_forever(),
         "hangWithGrandchild" => {
             let exe = std::env::current_exe().expect("own path");
             // Never waited on: it must outlive this process unless the
