@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::printed_bounds::BoundsCheck;
-use super::runtime::{sha256_file, OrcaVersion, PresetSourceOrigin};
+use super::runtime::{FileHashCache, OrcaVersion, PresetSourceOrigin};
 use super::{RuntimeChannel, SliceControls, SliceRevisionTarget, SliceRuntimeInfo};
 
 /// The folder under the content root that holds the work directories.
@@ -163,12 +163,14 @@ pub struct EngineIdentity {
 }
 
 impl EngineIdentity {
-    /// Hashes the engine file at `path` (an AppImage is hashed whole).
-    pub fn of(path: &Path, version: &OrcaVersion) -> io::Result<Self> {
+    /// The engine file at `path` (an AppImage is hashed whole), hashed
+    /// through `hashes`, so an unchanged engine is hashed once per size and
+    /// modification time rather than once per operation.
+    pub fn of(path: &Path, version: &OrcaVersion, hashes: &FileHashCache) -> io::Result<Self> {
         Ok(Self {
             version: version.to_string(),
             channel: version.channel(),
-            sha256: sha256_file(path)?,
+            sha256: hashes.sha256(path)?,
         })
     }
 }

@@ -21,7 +21,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -173,6 +173,10 @@ pub enum PresetSourceState {
 
 /// D2: what `get_slicer_runtime` returns. `revision` is the
 /// `slicer_runtime_config` revision the pickers and reset expect.
+/// `engineCandidates` is every engine discovery probed, in the order it
+/// tried them, so the Settings section can say which one was chosen and
+/// why the ones before it were passed over (for example, a configured
+/// engine whose probe failed before discovery fell through to `PATH`).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/SlicerRuntimeStatus.ts")]
@@ -183,6 +187,49 @@ pub struct SlicerRuntimeStatus {
     pub versions_differ: bool,
     #[ts(type = "number")]
     pub revision: i64,
+    pub engine_candidates: Vec<EngineCandidate>,
+}
+
+/// D2: one engine discovery probed. `path` is the full path, shown only in
+/// the Settings section.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/EngineCandidate.ts")]
+pub struct EngineCandidate {
+    pub source: EngineSource,
+    pub executable_name: String,
+    pub path: String,
+    pub result: EngineCandidateResult,
+}
+
+/// What probing one [`EngineCandidate`] found.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/EngineCandidateResult.ts"
+)]
+pub enum EngineCandidateResult {
+    /// The engine farm3d uses.
+    Chosen {
+        version: String,
+    },
+    /// Supported, but a newer well-known AppImage won.
+    NotChosen {
+        version: String,
+    },
+    UnsupportedVersion {
+        version: String,
+    },
+    ProbeFailed {
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -485,16 +532,72 @@ pub fn is_appimage(path: &Path) -> bool {
         && &header[8..11] == b"AI\x02"
 }
 
+/// The size and modification time a cached result was computed for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FileStamp {
+    size: u64,
+    modified: Option<SystemTime>,
+}
+
+impl FileStamp {
+    /// `None` when the file can't be read.
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        Some(Self {
+            size: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+/// One slot per path. A caller holds only its own path's slot while it
+/// computes, so work on one path never waits for work on another, and two
+/// callers for the same path compute once.
+struct Slots<V> {
+    slots: Mutex<HashMap<PathBuf, Arc<Mutex<Option<V>>>>>,
+}
+
+impl<V> Default for Slots<V> {
+    fn default() -> Self {
+        Self {
+            slots: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<V> Slots<V> {
+    fn slot(&self, path: &Path) -> Arc<Mutex<Option<V>>> {
+        let mut slots = self
+            .slots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(slots.entry(path.to_path_buf()).or_default())
+    }
+
+    fn clear(&self) {
+        self.slots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+}
+
+fn lock_slot<V>(slot: &Mutex<Option<V>>) -> std::sync::MutexGuard<'_, Option<V>> {
+    slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// D2: re-probes before each slice, reusing a result for 60 s while the
-/// engine file's size and modification time are unchanged.
+/// engine file's size and modification time are unchanged. A probe holds
+/// only its own executable's slot, so a slow probe (up to 10 s) never
+/// delays a status call about another executable, and concurrent callers
+/// for the same executable share one probe.
 #[derive(Default)]
 pub struct ProbeCache {
-    entries: Mutex<HashMap<PathBuf, CachedProbe>>,
+    entries: Slots<CachedProbe>,
 }
 
 struct CachedProbe {
-    size: u64,
-    modified: Option<SystemTime>,
+    stamp: FileStamp,
     at: Instant,
     probe: EngineProbe,
 }
@@ -505,36 +608,74 @@ impl ProbeCache {
     }
 
     pub fn probe(&self, executable: &Path, timeout: Duration) -> EngineProbe {
-        let metadata = fs::metadata(executable).ok();
-        let size = metadata.as_ref().map_or(0, fs::Metadata::len);
-        let modified = metadata
-            .as_ref()
-            .and_then(|metadata| metadata.modified().ok());
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = entries.get(executable) {
-            if metadata.is_some()
-                && cached.size == size
-                && cached.modified == modified
-                && cached.at.elapsed() < PROBE_CACHE_TTL
-            {
+        let stamp = FileStamp::of(executable);
+        let slot = self.entries.slot(executable);
+        let mut entry = lock_slot(&slot);
+        if let (Some(cached), Some(stamp)) = (entry.as_ref(), stamp) {
+            if cached.stamp == stamp && cached.at.elapsed() < PROBE_CACHE_TTL {
                 return cached.probe.clone();
             }
         }
         let probe = probe_engine(executable, timeout);
-        entries.insert(
-            executable.to_path_buf(),
-            CachedProbe {
-                size,
-                modified,
-                at: Instant::now(),
-                probe: probe.clone(),
-            },
-        );
+        *entry = stamp.map(|stamp| CachedProbe {
+            stamp,
+            at: Instant::now(),
+            probe: probe.clone(),
+        });
         probe
     }
+
+    /// Forgets every result, so the next probe of each executable runs
+    /// (**Check again**, or a configuration change).
+    pub fn clear(&self) {
+        self.entries.clear();
+    }
+}
+
+/// SHA-256 of engine and AppImage files, reused while a file's size and
+/// modification time are unchanged. Hashing a 137 MB AppImage takes a
+/// noticeable moment, so the runtime status and the invocation manifest
+/// share one hash per file version (D2, D8).
+#[derive(Default)]
+pub struct FileHashCache {
+    entries: Slots<(FileStamp, String)>,
+}
+
+impl FileHashCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The lowercase hex SHA-256 of `path`, hashed at most once per size
+    /// and modification time. A file whose modification time can't be read
+    /// is hashed every time.
+    pub fn sha256(&self, path: &Path) -> io::Result<String> {
+        let slot = self.entries.slot(path);
+        let mut entry = lock_slot(&slot);
+        let stamp = FileStamp::of(path);
+        if let (Some((cached, sha256)), Some(stamp)) = (entry.as_ref(), stamp) {
+            if *cached == stamp && stamp.modified.is_some() {
+                return Ok(sha256.clone());
+            }
+        }
+        let sha256 = sha256_file(path)?;
+        // The stamp after hashing: a file that changed while it was read
+        // is not cached under its old stamp.
+        *entry = match (stamp, FileStamp::of(path)) {
+            (Some(before), Some(after)) if before == after && before.modified.is_some() => {
+                Some((before, sha256.clone()))
+            }
+            _ => None,
+        };
+        Ok(sha256)
+    }
+}
+
+/// The caches a long-lived runtime keeps between resolutions.
+#[derive(Default)]
+pub struct RuntimeCaches {
+    pub probes: ProbeCache,
+    pub hashes: FileHashCache,
 }
 
 // ---------------------------------------------------------------------------
@@ -646,27 +787,71 @@ fn failure_state(path: &Path, outcome: &ProbeOutcome) -> Option<EngineState> {
     }
 }
 
+/// What [`discover_engine_with`] found: the state, the chosen engine, and
+/// every candidate it probed, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineDiscovery {
+    pub state: EngineState,
+    pub engine: Option<ResolvedEngine>,
+    pub candidates: Vec<EngineCandidate>,
+}
+
 /// D2: engine discovery. Stops at the first candidate that probes as
 /// supported. Among the well-known AppImages, every match is probed and
 /// the newest version wins. When nothing is supported, the state is the
 /// first candidate's failure, or `notFound` when there was no candidate.
+/// Probes afresh; see [`discover_engine_with`].
 pub fn discover_engine(
     configured: Option<&Path>,
     env: &DiscoveryEnv,
 ) -> (EngineState, Option<ResolvedEngine>) {
+    let discovery = discover_engine_with(configured, env, &RuntimeCaches::default());
+    (discovery.state, discovery.engine)
+}
+
+/// [`discover_engine`] through `caches`' probe cache, reporting every
+/// candidate it probed.
+pub fn discover_engine_with(
+    configured: Option<&Path>,
+    env: &DiscoveryEnv,
+    caches: &RuntimeCaches,
+) -> EngineDiscovery {
     let mut first_failure: Option<EngineState> = None;
-    let try_one = |path: &Path, source: EngineSource, first_failure: &mut Option<EngineState>| {
-        let probe = probe_engine(path, env.probe_timeout);
+    let mut candidates: Vec<EngineCandidate> = Vec::new();
+    let mut try_one = |path: &Path, source: EngineSource| {
+        let probe = caches.probes.probe(path, env.probe_timeout);
+        let candidate = |result| EngineCandidate {
+            source,
+            executable_name: basename(path),
+            path: path.to_string_lossy().into_owned(),
+            result,
+        };
         match probe.outcome {
-            ProbeOutcome::Supported(version) => Some(ResolvedEngine {
-                path: path.to_path_buf(),
-                version,
-                source,
-                extract_and_run: probe.extract_and_run,
-            }),
+            ProbeOutcome::Supported(version) => {
+                candidates.push(candidate(EngineCandidateResult::NotChosen {
+                    version: version.to_string(),
+                }));
+                Some(ResolvedEngine {
+                    path: path.to_path_buf(),
+                    version,
+                    source,
+                    extract_and_run: probe.extract_and_run,
+                })
+            }
             outcome => {
+                candidates.push(candidate(match &outcome {
+                    ProbeOutcome::UnsupportedVersion(version) => {
+                        EngineCandidateResult::UnsupportedVersion {
+                            version: version.to_string(),
+                        }
+                    }
+                    ProbeOutcome::Failed(reason) => EngineCandidateResult::ProbeFailed {
+                        reason: reason.clone(),
+                    },
+                    ProbeOutcome::Supported(_) => unreachable!("handled above"),
+                }));
                 if first_failure.is_none() {
-                    *first_failure = failure_state(path, &outcome);
+                    first_failure = failure_state(path, &outcome);
                 }
                 None
             }
@@ -680,22 +865,44 @@ pub fn discover_engine(
     if let Some(path) = find_on_path(env.path_var.as_ref()) {
         ordered.push((path, EngineSource::Path));
     }
+    let mut chosen = None;
     for (path, source) in ordered {
-        if let Some(engine) = try_one(&path, source, &mut first_failure) {
-            return (engine.state(), Some(engine));
+        if let Some(engine) = try_one(&path, source) {
+            chosen = Some(engine);
+            break;
         }
     }
-
-    let best = well_known_appimages(env.home.as_deref())
-        .into_iter()
-        .filter_map(|path| try_one(&path, EngineSource::WellKnown, &mut first_failure))
-        .fold(None::<ResolvedEngine>, |best, engine| match best {
-            Some(best) if best.version.rank() >= engine.version.rank() => Some(best),
-            _ => Some(engine),
-        });
-    match best {
-        Some(engine) => (engine.state(), Some(engine)),
-        None => (first_failure.unwrap_or(EngineState::NotFound), None),
+    if chosen.is_none() {
+        chosen = well_known_appimages(env.home.as_deref())
+            .into_iter()
+            .filter_map(|path| try_one(&path, EngineSource::WellKnown))
+            .fold(None::<ResolvedEngine>, |best, engine| match best {
+                Some(best) if best.version.rank() >= engine.version.rank() => Some(best),
+                _ => Some(engine),
+            });
+    }
+    match chosen {
+        Some(engine) => {
+            let chosen_path = engine.path.to_string_lossy().into_owned();
+            if let Some(candidate) = candidates
+                .iter_mut()
+                .find(|candidate| candidate.path == chosen_path)
+            {
+                candidate.result = EngineCandidateResult::Chosen {
+                    version: engine.version.to_string(),
+                };
+            }
+            EngineDiscovery {
+                state: engine.state(),
+                engine: Some(engine),
+                candidates,
+            }
+        }
+        None => EngineDiscovery {
+            state: first_failure.unwrap_or(EngineState::NotFound),
+            engine: None,
+            candidates,
+        },
     }
 }
 
@@ -870,8 +1077,18 @@ pub fn extract_appimage_profiles(
     cache_dir: &Path,
     timeout: Duration,
 ) -> ExtractOutcome {
+    extract_appimage_profiles_with(appimage, cache_dir, timeout, &FileHashCache::new())
+}
+
+/// [`extract_appimage_profiles`], hashing through `hashes`.
+pub fn extract_appimage_profiles_with(
+    appimage: &Path,
+    cache_dir: &Path,
+    timeout: Duration,
+    hashes: &FileHashCache,
+) -> ExtractOutcome {
     let name = basename(appimage);
-    let hash = match sha256_file(appimage) {
+    let hash = match hashes.sha256(appimage) {
         Ok(hash) => hash,
         Err(_) => return ExtractOutcome::Failed(format!("{name} could not be read.")),
     };
@@ -954,8 +1171,12 @@ pub fn sweep_stale_profile_caches(cache_dir: &Path, keep_hashes: &[&str]) -> io:
 
 /// The version a configured preset source states: the probe of `executable`
 /// must be a supported version.
-fn source_version(executable: &Path, env: &DiscoveryEnv) -> Result<OrcaVersion, PresetSourceState> {
-    match probe_engine(executable, env.probe_timeout).outcome {
+fn source_version(
+    executable: &Path,
+    env: &DiscoveryEnv,
+    caches: &RuntimeCaches,
+) -> Result<OrcaVersion, PresetSourceState> {
+    match caches.probes.probe(executable, env.probe_timeout).outcome {
         ProbeOutcome::Supported(version) => Ok(version),
         ProbeOutcome::UnsupportedVersion(version) => Err(PresetSourceState::Unavailable {
             reason: format!("OrcaSlicer {version} presets are not supported."),
@@ -974,6 +1195,25 @@ pub fn resolve_preset_source(
     env: &DiscoveryEnv,
     cache_dir: &Path,
 ) -> (PresetSourceState, Option<ResolvedPresetSource>) {
+    resolve_preset_source_with(
+        path,
+        origin,
+        engine_version,
+        env,
+        cache_dir,
+        &RuntimeCaches::default(),
+    )
+}
+
+/// [`resolve_preset_source`] through `caches`.
+pub fn resolve_preset_source_with(
+    path: &Path,
+    origin: PresetSourceOrigin,
+    engine_version: Option<&OrcaVersion>,
+    env: &DiscoveryEnv,
+    cache_dir: &Path,
+    caches: &RuntimeCaches,
+) -> (PresetSourceState, Option<ResolvedPresetSource>) {
     let unavailable = |reason: String| (PresetSourceState::Unavailable { reason }, None);
     let name = basename(path);
     let (lookup, cache_hash, version_executable) = if path.is_dir() {
@@ -983,7 +1223,7 @@ pub fn resolve_preset_source(
             directory_executable(path),
         )
     } else if path.is_file() && is_appimage(path) {
-        match extract_appimage_profiles(path, cache_dir, EXTRACT_TIMEOUT) {
+        match extract_appimage_profiles_with(path, cache_dir, EXTRACT_TIMEOUT, &caches.hashes) {
             ExtractOutcome::Extracted { root, hash } => (
                 find_profiles(&[root.join("resources")]),
                 Some(hash),
@@ -1015,7 +1255,7 @@ pub fn resolve_preset_source(
     };
     let version = match (engine_version, version_executable) {
         (Some(version), _) => version.clone(),
-        (None, Some(executable)) => match source_version(&executable, env) {
+        (None, Some(executable)) => match source_version(&executable, env, caches) {
             Ok(version) => version,
             Err(state) => return (state, None),
         },
@@ -1058,21 +1298,38 @@ pub fn resolve_runtime(
     env: &DiscoveryEnv,
     cache_dir: &Path,
 ) -> SlicerRuntime {
-    let (engine_state, engine) = discover_engine(config.engine_path.as_deref().map(Path::new), env);
+    resolve_runtime_with(config, env, cache_dir, &RuntimeCaches::default())
+}
+
+/// [`resolve_runtime`] through `caches`: a probe is reused for 60 s and a
+/// file's hash while it is unchanged.
+pub fn resolve_runtime_with(
+    config: &SlicerRuntimeConfig,
+    env: &DiscoveryEnv,
+    cache_dir: &Path,
+    caches: &RuntimeCaches,
+) -> SlicerRuntime {
+    let EngineDiscovery {
+        state: engine_state,
+        engine,
+        candidates,
+    } = discover_engine_with(config.engine_path.as_deref().map(Path::new), env, caches);
     let (preset_state, preset_source) = match (&config.preset_source_path, &engine) {
-        (Some(path), _) => resolve_preset_source(
+        (Some(path), _) => resolve_preset_source_with(
             Path::new(path),
             PresetSourceOrigin::Configured,
             None,
             env,
             cache_dir,
+            caches,
         ),
-        (None, Some(engine)) => resolve_preset_source(
+        (None, Some(engine)) => resolve_preset_source_with(
             &engine.path,
             PresetSourceOrigin::Engine,
             Some(&engine.version),
             env,
             cache_dir,
+            caches,
         ),
         (None, None) => (PresetSourceState::NotConfigured, None),
     };
@@ -1087,6 +1344,7 @@ pub fn resolve_runtime(
             engine: engine_state,
             preset_source: preset_state,
             revision: config.revision,
+            engine_candidates: candidates,
         },
         engine,
         preset_source,
@@ -1279,13 +1537,22 @@ pub fn pick_preset_source(
     kind: PresetSourcePickKind,
     env: &DiscoveryEnv,
     cache_dir: &Path,
+    caches: &RuntimeCaches,
 ) -> Result<RuntimePick, CommandError> {
     check_revision(storage, expected_revision)?;
     let Some(path) = io.pick_preset_source(kind)? else {
         return Ok(RuntimePick::Cancelled);
     };
     let text = path_text(&path)?;
-    match resolve_preset_source(&path, PresetSourceOrigin::Configured, None, env, cache_dir).0 {
+    let (state, _) = resolve_preset_source_with(
+        &path,
+        PresetSourceOrigin::Configured,
+        None,
+        env,
+        cache_dir,
+        caches,
+    );
+    match state {
         PresetSourceState::Available { .. } => {}
         PresetSourceState::PresetsUnreadable => {
             return Err(CommandError::preset_source_unavailable(
@@ -1478,6 +1745,14 @@ mod tests {
             can_slice: false,
             versions_differ: false,
             revision: 1,
+            engine_candidates: vec![EngineCandidate {
+                source: EngineSource::Configured,
+                executable_name: "orca".to_string(),
+                path: "/opt/orca".to_string(),
+                result: EngineCandidateResult::ProbeFailed {
+                    reason: "no".to_string(),
+                },
+            }],
         };
         assert_eq!(
             serde_json::to_value(&status).unwrap(),
@@ -1487,6 +1762,12 @@ mod tests {
                 "canSlice": false,
                 "versionsDiffer": false,
                 "revision": 1,
+                "engineCandidates": [{
+                    "source": "configured",
+                    "executableName": "orca",
+                    "path": "/opt/orca",
+                    "result": { "kind": "probeFailed", "reason": "no" },
+                }],
             })
         );
     }
@@ -2054,6 +2335,7 @@ mod fake_executable_tests {
             PresetSourcePickKind::Folder,
             &env,
             temp.path(),
+            &RuntimeCaches::default(),
         )
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::PresetSourceUnavailable);
@@ -2070,6 +2352,7 @@ mod fake_executable_tests {
             PresetSourcePickKind::Folder,
             &env,
             temp.path(),
+            &RuntimeCaches::default(),
         )
         .unwrap() else {
             panic!("expected a save");

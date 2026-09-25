@@ -804,6 +804,34 @@ impl ContentStore {
         })
     }
 
+    /// Opens the blob for `sha256` as a plain, seekable file, without
+    /// verifying it. For readers that need to seek (a 3MF's ZIP directory,
+    /// P5 D6); pair it with [`ContentStore::verify`] before trusting the
+    /// bytes. A blob is never buffered whole.
+    pub fn open_unverified(&self, sha256: &str) -> Result<File, ContentError> {
+        if !is_sha256_hex(sha256) {
+            return Err(ContentError::Unreadable(io::ErrorKind::InvalidInput));
+        }
+        let path = self.blobs.join(&sha256[..2]).join(sha256);
+        let file = open_no_follow(&path).map_err(|error| ContentError::Unreadable(error.kind()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| ContentError::Unreadable(error.kind()))?;
+        if !metadata.is_file() {
+            return Err(ContentError::NotAFile);
+        }
+        Ok(file)
+    }
+
+    /// Streams the blob for `sha256` through its hash, in one pass with a
+    /// fixed buffer. [`ContentError::HashMismatch`] when the bytes no
+    /// longer match.
+    pub fn verify(&self, sha256: &str) -> Result<(), ContentError> {
+        let mut reader = self.open_verified(sha256)?;
+        io::copy(&mut reader, &mut io::sink())?;
+        Ok(())
+    }
+
     /// Deletes `staging/<staging_key>` and everything in it. Best effort:
     /// anything left behind goes at the next startup sweep.
     pub fn discard_staging(&self, staging_key: &str) {

@@ -830,6 +830,10 @@ pub trait SliceObserver {
     fn spawned(&mut self, pid: u32);
     /// A new progress update.
     fn progress(&mut self, update: SliceProgress);
+    /// Called on every supervisor wake-up (about every 50 ms), with or
+    /// without new progress, so an observer that throttles can deliver a
+    /// held update once its window has passed.
+    fn tick(&mut self) {}
 }
 
 /// How the engine process ended.
@@ -1070,6 +1074,7 @@ pub fn run_slice(
         let step = (Instant::now() + TICK).min(deadline);
         let end = wait_until(&mut group.child, step, &|| cancel.is_cancelled());
         deliver(observer);
+        observer.tick();
         match end {
             WaitEnd::DeadlinePassed if Instant::now() < deadline => continue,
             end => break end,

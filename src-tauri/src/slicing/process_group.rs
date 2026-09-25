@@ -293,6 +293,71 @@ fn reap_and_clear_group(child: &mut GroupChild, _grace: Duration) -> GroupEnd {
     }
 }
 
+/// D10: the start time of process `pid`, as Linux `/proc/<pid>/stat`
+/// field 22 (clock ticks since boot). With the pid, it identifies one
+/// process: a pid reused later has a different start time. `None` off
+/// Linux, or when the process is gone.
+pub fn process_start_time(pid: u32) -> Option<i64> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Field 2 (the command name) is parenthesised and may hold spaces
+        // or parentheses, so count from the last `)`: field 3 comes next.
+        let after_name = &stat[stat.rfind(')')? + 1..];
+        after_name.split_whitespace().nth(22 - 3)?.parse().ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// D10: the executable process `pid` runs (Linux `/proc/<pid>/exe`).
+/// `None` off Linux, or when it can't be read.
+pub fn process_executable(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// D10 startup recovery: stops the process group `group_id`, which is
+/// not farm3d's child (it survived a previous run of farm3d): SIGTERM,
+/// then SIGKILL if any member outlives `grace`. Returns whether SIGKILL was
+/// sent. Does nothing off Unix.
+pub fn stop_recorded_group(group_id: i32, grace: Duration) -> bool {
+    #[cfg(unix)]
+    {
+        use rustix::process::{
+            kill_process_group, test_kill_process_group, Pid, Signal as RustixSignal,
+        };
+        let Some(group) = Pid::from_raw(group_id) else {
+            return false;
+        };
+        let _ = kill_process_group(group, RustixSignal::TERM);
+        let deadline = Instant::now() + grace;
+        while test_kill_process_group(group).is_ok() {
+            if Instant::now() >= deadline {
+                let _ = kill_process_group(group, RustixSignal::KILL);
+                return true;
+            }
+            thread::sleep(POLL);
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (group_id, grace);
+        false
+    }
+}
+
 /// D9's Windows containment: a Job Object that kills its processes when
 /// its last handle closes.
 #[cfg(windows)]

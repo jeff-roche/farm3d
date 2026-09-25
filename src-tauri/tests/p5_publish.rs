@@ -23,7 +23,7 @@ use farm3d_lib::slicing::repository::{
     insert_operation, insert_preparation, transition_operation, NewSliceOperation,
     OperationTransition,
 };
-use farm3d_lib::slicing::runtime::{OrcaVersion, PresetSourceOrigin};
+use farm3d_lib::slicing::runtime::{FileHashCache, OrcaVersion, PresetSourceOrigin};
 use farm3d_lib::slicing::{
     InstanceDoc, InstanceTransform, PlateDoc, PlateSnapshot, PreparationDocument, SliceControls,
     SliceFailureCode, SliceOperationState, SliceRevisionBlobRole, SliceRevisionTarget, SliceTarget,
@@ -191,7 +191,8 @@ impl Fixture {
                 controls: SliceControls::default(),
             },
             facts: Farm3dFacts::new(a_profile(), 0.4, MaterialFamily::Pla, None, 1.75),
-            engine: EngineIdentity::of(Path::new(FAKE_ORCA), &version).unwrap(),
+            engine: EngineIdentity::of(Path::new(FAKE_ORCA), &version, &FileHashCache::new())
+                .unwrap(),
             preset_source: PresetSourceIdentity::new(&version, PresetSourceOrigin::Engine),
             profile_overrides: Vec::new(),
         };
@@ -497,7 +498,8 @@ mod real {
         target.process_preset = process;
         target.filament_preset = filament;
         target.profile = profile_of(&flat_machine);
-        fixture.inputs.engine = EngineIdentity::of(&engine, &version).unwrap();
+        fixture.inputs.engine =
+            EngineIdentity::of(&engine, &version, &FileHashCache::new()).unwrap();
 
         let command = SliceCommand::new(engine, fixture.work.clone(), Some(profiles));
         let run = run_slice(&command, &CancelFlag::never(), &mut NoObserver);
