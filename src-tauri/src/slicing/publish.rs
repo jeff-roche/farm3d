@@ -582,8 +582,8 @@ pub fn record_unpublished(
 /// D11–D13 for one finished run: maps how it ended ([`process::outcome`]),
 /// validates the output, and either publishes a revision or records the
 /// failure or cancellation with the log. A content-store failure is
-/// returned as is and leaves the operation `running`, as a crash would;
-/// startup recovery (D10) interrupts it.
+/// returned as is, and the scheduler then fails the operation at once with
+/// `storageFailed`, keeping the log when it can still be stored.
 pub fn finish_run(
     store: &ContentStore,
     storage: &Storage,
