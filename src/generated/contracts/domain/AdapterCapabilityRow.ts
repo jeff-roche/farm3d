@@ -7,4 +7,4 @@ export type AdapterCapabilityRow = { adapterKind: string,
  * No host rules applied — this is what the adapter TYPE supports, not
  * what one Printer's host currently reports.
  */
-capabilities: { [key in CapabilityKey]?: CapabilityState }, };
+capabilities: Record<CapabilityKey, CapabilityState>, };

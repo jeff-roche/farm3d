@@ -3,7 +3,7 @@ import type { CapabilityKey } from "./CapabilityKey";
 import type { CapabilityState } from "./CapabilityState";
 import type { HostFacts } from "./HostFacts";
 
-export type PrinterCapabilities = { printerId: string, adapterKind: string | null, capabilities: { [key in CapabilityKey]?: CapabilityState },
+export type PrinterCapabilities = { printerId: string, adapterKind: string | null, capabilities: Record<CapabilityKey, CapabilityState>,
 /**
  * When absent, no host rule applied (D6): only the adapter/evidence/TLS
  * rules ran.

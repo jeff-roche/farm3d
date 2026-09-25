@@ -310,6 +310,81 @@ impl CapabilityState {
     }
 }
 
+/// `Record<CapabilityKey, CapabilityState>`, with every key of
+/// `CapabilityKey::ALL` always present — [`CapabilityMap::complete`] is the
+/// only constructor, so that guarantee holds by construction.
+///
+/// `ts-rs`'s automatic mapping for an enum-keyed `BTreeMap`/`HashMap`
+/// renders `{ [key in K]?: V }` (every key optional), which is weaker than
+/// the spec's `Record<K, V>` (every key required) — `#[ts(type = "...")]`
+/// on the field alone would fix the rendered text but drops that field's
+/// automatic dependency tracking (`ts-rs` skips it whenever a field has a
+/// literal type override), which would silently drop the
+/// `import type { CapabilityKey }`/`{ CapabilityState }` lines the
+/// generated file needs. This newtype's hand-written `TS` impl below picks
+/// the exact TypeScript text AND keeps the dependency hint
+/// (`visit_dependencies`), so the generated file still imports both.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(transparent)]
+pub struct CapabilityMap(BTreeMap<CapabilityKey, CapabilityState>);
+
+impl CapabilityMap {
+    /// Builds a map with `state_for(key)` for every key of
+    /// `CapabilityKey::ALL` — never a partial one.
+    fn complete(mut state_for: impl FnMut(CapabilityKey) -> CapabilityState) -> Self {
+        CapabilityMap(
+            CapabilityKey::ALL
+                .into_iter()
+                .map(|key| (key, state_for(key)))
+                .collect(),
+        )
+    }
+}
+
+impl std::ops::Index<CapabilityKey> for CapabilityMap {
+    type Output = CapabilityState;
+
+    fn index(&self, key: CapabilityKey) -> &CapabilityState {
+        &self.0[&key]
+    }
+}
+
+impl TS for CapabilityMap {
+    type WithoutGenerics = Self;
+    type OptionInnerType = Self;
+
+    fn name(_: &ts_rs::Config) -> String {
+        "Record<CapabilityKey, CapabilityState>".to_string()
+    }
+
+    fn inline(_: &ts_rs::Config) -> String {
+        "Record<CapabilityKey, CapabilityState>".to_string()
+    }
+
+    // A field's dependency-on-`CapabilityMap` reaches its consumer (here,
+    // `PrinterCapabilities`/`AdapterCapabilityRow`'s derived
+    // `visit_dependencies`) through `visit_generics`, exactly as `ts-rs`'s
+    // own blanket `HashMap<K, V>` impl does (`K`/`V` are its "generics"),
+    // not through `visit_dependencies` — that method only matters if
+    // `CapabilityMap` were ever exported directly, which it isn't. Both are
+    // overridden identically so the dependency hint holds either way.
+    fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
+    where
+        Self: 'static,
+    {
+        visitor.visit::<CapabilityKey>();
+        visitor.visit::<CapabilityState>();
+    }
+
+    fn visit_generics(visitor: &mut impl ts_rs::TypeVisitor)
+    where
+        Self: 'static,
+    {
+        visitor.visit::<CapabilityKey>();
+        visitor.visit::<CapabilityState>();
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/HostFacts.ts")]
@@ -331,7 +406,7 @@ pub struct HostFacts {
 pub struct PrinterCapabilities {
     pub printer_id: String,
     pub adapter_kind: Option<String>,
-    pub capabilities: BTreeMap<CapabilityKey, CapabilityState>,
+    pub capabilities: CapabilityMap,
     /// When absent, no host rule applied (D6): only the adapter/evidence/TLS
     /// rules ran.
     pub host_facts: Option<HostFacts>,
@@ -346,7 +421,7 @@ pub struct AdapterCapabilityRow {
     pub adapter_kind: String,
     /// No host rules applied — this is what the adapter TYPE supports, not
     /// what one Printer's host currently reports.
-    pub capabilities: BTreeMap<CapabilityKey, CapabilityState>,
+    pub capabilities: CapabilityMap,
 }
 
 const NOT_VERIFIED_DETAIL: &str = "Not verified for this Connection type yet.";
@@ -367,19 +442,13 @@ fn has_builder(key: CapabilityKey, descriptor: &AdapterDescriptor) -> bool {
 /// message for the first violated rule for `key`, if any.
 fn host_rule_violation(key: CapabilityKey, facts: &HostFacts) -> Option<&'static str> {
     match key {
-        CapabilityKey::Upload if !facts.has_virtual_sdcard => {
-            Some("This printer has no virtual SD card.")
-        }
-        CapabilityKey::Start if !facts.has_virtual_sdcard => {
+        CapabilityKey::Upload | CapabilityKey::Start if !facts.has_virtual_sdcard => {
             Some("This printer has no virtual SD card.")
         }
         CapabilityKey::Start if !facts.has_history => {
             Some("This printer's Moonraker keeps no job history, so farm3d can't confirm a start.")
         }
-        CapabilityKey::Pause if !facts.has_pause_resume => {
-            Some("This printer has no pause and resume support.")
-        }
-        CapabilityKey::Resume if !facts.has_pause_resume => {
+        CapabilityKey::Pause | CapabilityKey::Resume if !facts.has_pause_resume => {
             Some("This printer has no pause and resume support.")
         }
         CapabilityKey::Camera if facts.camera_count == 0 => {
@@ -432,15 +501,9 @@ fn capability_state(
     CapabilityState::supported(evidence)
 }
 
-fn all_unsupported(
-    reason: UnsupportedReason,
-    detail: impl Into<String>,
-) -> BTreeMap<CapabilityKey, CapabilityState> {
+fn all_unsupported(reason: UnsupportedReason, detail: impl Into<String>) -> CapabilityMap {
     let detail = detail.into();
-    CapabilityKey::ALL
-        .into_iter()
-        .map(|key| (key, CapabilityState::unsupported(reason, detail.clone())))
-        .collect()
+    CapabilityMap::complete(|_key| CapabilityState::unsupported(reason, detail.clone()))
 }
 
 /// D6. Public for P7. The first matching rule wins, in the order the spec
@@ -473,15 +536,9 @@ pub fn capabilities_for(
             observed_at: None,
         };
     };
-    let capabilities = CapabilityKey::ALL
-        .into_iter()
-        .map(|key| {
-            (
-                key,
-                capability_state(key, descriptor, connection.use_tls, host_facts),
-            )
-        })
-        .collect();
+    let capabilities = CapabilityMap::complete(|key| {
+        capability_state(key, descriptor, connection.use_tls, host_facts)
+    });
     PrinterCapabilities {
         printer_id,
         adapter_kind: Some(connection.kind.clone()),
@@ -501,10 +558,9 @@ pub fn adapter_capability_matrix() -> Vec<AdapterCapabilityRow> {
         .iter()
         .map(|descriptor| AdapterCapabilityRow {
             adapter_kind: descriptor.kind.to_string(),
-            capabilities: CapabilityKey::ALL
-                .into_iter()
-                .map(|key| (key, capability_state(key, descriptor, false, None)))
-                .collect(),
+            capabilities: CapabilityMap::complete(|key| {
+                capability_state(key, descriptor, false, None)
+            }),
         })
         .collect()
 }
@@ -699,7 +755,7 @@ mod tests {
         assert_eq!(result.adapter_kind, None);
         assert_eq!(result.host_facts, None);
         for key in CapabilityKey::ALL {
-            let state = &result.capabilities[&key];
+            let state = &result.capabilities[key];
             assert_eq!(reason(state), UnsupportedReason::Adapter);
             assert_eq!(detail(state), "No Connection");
         }
@@ -714,7 +770,7 @@ mod tests {
 
         assert_eq!(result.adapter_kind.as_deref(), Some("elegoolink"));
         for key in CapabilityKey::ALL {
-            let state = &result.capabilities[&key];
+            let state = &result.capabilities[key];
             assert_eq!(reason(state), UnsupportedReason::Adapter);
             assert_eq!(detail(state), "farm3d can't use this Connection type.");
         }
@@ -902,7 +958,7 @@ mod tests {
         assert_eq!(result.adapter_kind.as_deref(), Some(MOONRAKER_KIND));
         for key in CapabilityKey::ALL {
             assert_eq!(
-                reason(&result.capabilities[&key]),
+                reason(&result.capabilities[key]),
                 UnsupportedReason::NotVerified
             );
         }
@@ -920,10 +976,42 @@ mod tests {
         for row in &rows {
             for key in CapabilityKey::ALL {
                 assert_eq!(
-                    reason(&row.capabilities[&key]),
+                    reason(&row.capabilities[key]),
                     UnsupportedReason::NotVerified
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_capability_map_always_carries_all_eight_keys() {
+        // A `Record<CapabilityKey, CapabilityState>` promises every key is
+        // present, never a partial map — `CapabilityMap::complete` is the
+        // only constructor, so this holds for every path that builds one.
+        let no_connection = capabilities_for(&a_stored_printer(None), None);
+        assert_eq!(no_connection.capabilities.0.len(), CapabilityKey::ALL.len());
+
+        let unknown_kind = capabilities_for(
+            &a_stored_printer(Some(connection("elegoolink", false))),
+            None,
+        );
+        assert_eq!(unknown_kind.capabilities.0.len(), CapabilityKey::ALL.len());
+
+        let real_adapter = capabilities_for(
+            &a_stored_printer(Some(connection(MOONRAKER_KIND, false))),
+            None,
+        );
+        assert_eq!(real_adapter.capabilities.0.len(), CapabilityKey::ALL.len());
+
+        for row in adapter_capability_matrix() {
+            assert_eq!(row.capabilities.0.len(), CapabilityKey::ALL.len());
+        }
+
+        // Every key indexes without panicking, for every map above.
+        for key in CapabilityKey::ALL {
+            let _ = &no_connection.capabilities[key];
+            let _ = &unknown_kind.capabilities[key];
+            let _ = &real_adapter.capabilities[key];
         }
     }
 
