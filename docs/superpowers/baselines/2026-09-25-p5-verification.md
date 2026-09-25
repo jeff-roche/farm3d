@@ -672,8 +672,14 @@ redone.
   production code.
 - **Spec D20's wording** differs from the Task 12 ledger ruling.
 
-**Platform scope.** Windows and macOS compile and are unit-tested only.
-They make no runtime claim (D24), and CI stays on fake-orca.
+**Platform scope.** Linux is the only platform that runs. The claim here
+used to be that Windows and macOS compile and are unit-tested, but the
+backend didn't compile for Windows: P1–P4's hard-link guards used the
+unstable `windows_by_handle` API. That is fixed in `06c27b5`, and
+`just check-windows` now type-checks and lints the Windows target from
+Linux (including the Job Object code and the tests). Nothing is linked or
+run on Windows, and macOS wasn't re-checked. Neither makes a runtime claim
+(D24), and CI stays on fake-orca.
 
 **Deferred minors in the SDD ledger** (`progress.md`, "minor (deferred)"):
 
