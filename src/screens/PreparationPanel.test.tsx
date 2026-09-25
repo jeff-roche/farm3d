@@ -190,11 +190,38 @@ describe("PreparationPanel", () => {
       (printerState.list[0] as { runtimeStatus?: unknown }).runtimeStatus = { operationalState: "ready" };
       await open();
       const roster = within(panel()).getByRole("button", { name: "2 matching Printers" });
-      fireEvent.focus(roster);
+      fireEvent.click(roster);
       const first = (await screen.findByText("CC 1")).closest("li")!;
       expect(first).toHaveTextContent("CC 1 · Bench 1");
       expect(first).toHaveTextContent("Ready");
       expect(screen.getByText("CC 2").closest("li")).toHaveTextContent("Status unavailable");
+    });
+
+    it("keeps the Tab order through the matching Printers chip, both ways", async () => {
+      await open();
+      const roster = within(panel()).getByRole("button", { name: "2 matching Printers" });
+      // Tabbing onto the chip leaves focus there and opens nothing.
+      roster.focus();
+      fireEvent.focus(roster);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(document.activeElement).toBe(roster);
+      expect(roster).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // Opened with Enter, the roster's Tab goes on to the Material section…
+      fireEvent.click(roster);
+      const list = await screen.findByRole("dialog");
+      await waitFor(() => expect(list).toHaveFocus());
+      fireEvent.keyDown(list, { key: "Tab" });
+      await waitFor(() => expect(selectTrigger(/Filament preset/)).toHaveFocus());
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // …and its Shift+Tab back to the chip, before Slice for.
+      fireEvent.click(roster);
+      const again = await screen.findByRole("dialog");
+      await waitFor(() => expect(again).toHaveFocus());
+      fireEvent.keyDown(again, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(roster).toHaveFocus());
     });
 
     it("reaches any catalog profile through Other printer profile…, with no Printers at all", async () => {

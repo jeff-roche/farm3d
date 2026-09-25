@@ -535,32 +535,116 @@ describe("PrinterRoster", () => {
         printers={[{ id: "a", name: "CC 1", detail: "Bench 1", stateLabel: "Ready" }]}
       />
     ));
-    screen.getByLabelText("1 matching Printers").focus();
+    await fireEvent.click(screen.getByLabelText("1 matching Printers"));
     expect(await screen.findByText("· Bench 1")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
-  it("opens on keyboard focus and returns focus after Escape", async () => {
+  it("keeps focus on the chip when it's focused, without opening", async () => {
     render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
 
     const trigger = screen.getByLabelText("10 offline Printers");
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-
     trigger.focus();
+    await fireEvent.focus(trigger);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
+  });
+
+  it("opens on press and returns focus to the chip after Escape", async () => {
+    render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
+
+    const trigger = screen.getByLabelText("10 offline Printers");
+    trigger.focus();
+    // Enter and Space press a button through its click.
+    await fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(screen.getByRole("dialog", { hidden: true }).contains(document.activeElement)).toBe(true));
 
-    const viewAll = screen.getByRole("button", { name: "View all" });
-    viewAll.focus();
-    expect(viewAll).toHaveFocus();
-
-    await fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
+    await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     await waitFor(() => {
+      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
       expect(trigger).toHaveFocus();
       expect(trigger).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
     });
+  });
+
+  it("continues the Tab order after the chip, either way, from the open roster", async () => {
+    render(() => (
+      <div>
+        <button type="button">Before</button>
+        <PrinterRoster label="Printers" count={10} printers={rosterPrinters} />
+        <button type="button">After</button>
+      </div>
+    ));
+    const trigger = screen.getByLabelText("10 Printers");
+
+    await fireEvent.click(trigger);
+    const viewAll = await screen.findByRole("button", { name: "View all", hidden: true });
+    viewAll.focus();
+    await fireEvent.keyDown(viewAll, { key: "Tab" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "After", hidden: true })).toHaveFocus();
+    });
+
+    await fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    dialog.focus();
+    await fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+  });
+
+  it("moves on from a roster with nothing to press, when tabbed", async () => {
+    render(() => (
+      <div>
+        <PrinterRoster label="Printers" count={2} printers={rosterPrinters.slice(0, 2)} />
+        <button type="button" disabled>Disabled</button>
+        <button type="button">After</button>
+      </div>
+    ));
+    await fireEvent.click(screen.getByLabelText("2 Printers"));
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await fireEvent.keyDown(dialog, { key: "Tab" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "After", hidden: true })).toHaveFocus());
+  });
+
+  it("opens on hover without taking focus", async () => {
+    render(() => (
+      <div>
+        <button type="button">Elsewhere</button>
+        <PrinterRoster label="Printers" count={3} printers={rosterPrinters.slice(0, 3)} />
+      </div>
+    ));
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere", hidden: true });
+    elsewhere.focus();
+    const trigger = screen.getByLabelText("3 Printers");
+
+    await fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
+    expect(elsewhere).toHaveFocus();
+
+    await fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it("stays open when the hovered chip is clicked", async () => {
+    render(() => <PrinterRoster label="Printers" count={3} printers={rosterPrinters.slice(0, 3)} />);
+    const trigger = screen.getByLabelText("3 Printers");
+    await fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
+    await fireEvent.click(trigger);
+    await fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.getByText("Printer 1")).toBeVisible();
   });
 
   it("opens on pointer hover and bounds rows with a View all action", async () => {

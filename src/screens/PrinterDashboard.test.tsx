@@ -100,8 +100,8 @@ describe("PrinterDashboard", () => {
     render(() => <PrinterDashboard store={monitor} />);
 
     const heading = screen.getByRole("heading", { name: "X1 Carbon" });
-    await fireEvent.focus(screen.getByRole("button", { name: "9 Printers" }));
-    await fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    await fireEvent.click(screen.getByRole("button", { name: "9 Printers" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "View all" }));
     await waitFor(() => expect(heading).toHaveFocus());
   });
 
