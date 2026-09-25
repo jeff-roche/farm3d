@@ -49,6 +49,7 @@
 }
 
 .main {
+  position: relative;
   flex: 1;
   display: flex;
   min-height: 0;
@@ -128,6 +129,21 @@
   overflow-y: auto;
   border-left: 1px solid var(--f3d-color-border);
   background-color: var(--f3d-color-surface-raised);
+}
+
+/* 1024 × 700: the panel lies over the workspace's right edge while shown. */
+.dockOverlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  width: 22rem;
+  max-width: 100%;
+}
+
+.dock[hidden] {
+  display: none;
 }
 
 .footer {

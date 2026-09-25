@@ -3,6 +3,7 @@ import { Button } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import type { ModelRecord } from "../library/types";
 import { createPreparation, slicing } from "../slicing/slicing-store";
+import { PreparationPanel } from "./PreparationPanel";
 import { createPreparationSession } from "./preparation-session";
 import { PreparationWorkspace } from "./PreparationWorkspace";
 import styles from "./PreparationMode.module.css";
@@ -59,7 +60,13 @@ export function PreparationMode(props: PreparationModeProps) {
         >
           {(_id) => {
             const session = createPreparationSession(() => props.model);
-            return <PreparationWorkspace session={session} onBack={props.onBack} />;
+            return (
+              <PreparationWorkspace
+                session={session}
+                onBack={props.onBack}
+                dock={<PreparationPanel session={session} />}
+              />
+            );
           }}
         </Show>
       </Match>

@@ -33,7 +33,8 @@ export interface PreparationWorkspaceProps {
 }
 
 /** Below this width the object list folds under the viewport behind a
- *  toggle (Accessibility and adaptation, 1024 × 700). */
+ *  toggle, and the dock becomes an overlay behind **Settings panel**
+ *  (Accessibility and adaptation, 1024 × 700). */
 const INLINE_OBJECTS_MIN_WIDTH = 1280;
 
 const ARROWS: Record<string, [number, number]> = {
@@ -185,6 +186,8 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   const [narrow, setNarrow] = createSignal(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
   // Folded by default when narrow, so the viewport keeps its room.
   const [objectsOpen, setObjectsOpen] = createSignal(!narrow());
+  const [dockOpen, setDockOpen] = createSignal(false);
+  const dockId = createUniqueId();
   onMount(() => {
     const onResize = () => setNarrow(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
     window.addEventListener("resize", onResize);
@@ -354,13 +357,24 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
 
 
   return (
-    <div class={styles.workspace}>
+    <div class={styles.workspace} data-preparation-workspace="">
       <div class={styles.header}>
         <Button variant="ghost" size="sm" onClick={() => props.onBack()}>
           <IconArrowLeft size={14} aria-hidden="true" /> Back to Library
         </Button>
         <h2 ref={heading} class={styles.title} tabIndex={-1}>Preparing {session.model().name}</h2>
         <span class={styles.saveState}>{saveState()}</span>
+        <Show when={props.dock && narrow()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={dockOpen()}
+            aria-controls={dockId}
+            onClick={() => setDockOpen((open) => !open)}
+          >
+            Settings panel
+          </Button>
+        </Show>
       </div>
       <Show when={noticeText(session.editor.notice())}>
         {(text) => (
@@ -512,7 +526,15 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
           </Show>
         </div>
         <Show when={props.dock}>
-          <aside class={styles.dock} aria-label="Preparation settings">{props.dock}</aside>
+          <aside
+            id={dockId}
+            class={styles.dock}
+            classList={{ [styles.dockOverlay]: narrow() }}
+            hidden={narrow() && !dockOpen()}
+            aria-label="Preparation settings"
+          >
+            {props.dock}
+          </aside>
         </Show>
       </div>
       <div class={styles.footer}>

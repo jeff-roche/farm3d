@@ -3,9 +3,14 @@ import { NumberField } from "../design-system";
 
 export interface CommitNumberFieldProps {
   label: string;
-  value: number;
+  /** `undefined` shows the field empty, with its `placeholder`. */
+  value: number | undefined;
   /** Called with a finite number that differs from `value`. */
   onCommit: (value: number) => void;
+  /** Called when a set value is emptied and committed. Without it, an
+   *  emptied field puts the current value back. */
+  onClear?: () => void;
+  placeholder?: string;
   step?: number;
   minValue?: number;
   maxValue?: number;
@@ -36,7 +41,11 @@ export function CommitNumberField(props: CommitNumberFieldProps) {
   const commit = (settle: boolean, refocus = false) => {
     const before = props.value;
     const typed = latest;
-    if (Number.isFinite(typed) && typed !== before) props.onCommit(typed);
+    if (typed !== undefined && Number.isFinite(typed)) {
+      if (typed !== before) props.onCommit(typed);
+    } else if (settle && before !== undefined && props.onClear) {
+      props.onClear();
+    }
     if (!settle) return;
     // If nothing took (an empty field, or a value that clamps back to the
     // current one), show the current value again.
@@ -78,6 +87,7 @@ export function CommitNumberField(props: CommitNumberFieldProps) {
             minValue={props.minValue}
             maxValue={props.maxValue}
             suffix={props.suffix}
+            placeholder={props.placeholder}
             disabled={props.disabled}
           />
         )}
