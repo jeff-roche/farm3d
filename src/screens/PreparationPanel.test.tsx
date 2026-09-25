@@ -356,7 +356,7 @@ describe("PreparationPanel", () => {
       setSlicingState({
         runtime: runtimeStatus({
           engine: { state: "notFound" },
-          presetSource: { state: "unavailable", reason: "there is no engine" },
+          presetSource: { state: "unavailable", reason: "there is no engine", origin: "engine" },
           canSlice: false,
           engineCandidates: [
             { source: "path", executableName: "orca-slicer", path: "/usr/bin/orca-slicer", result: { kind: "probeFailed", reason: "exit status 127" } },

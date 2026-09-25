@@ -166,8 +166,12 @@ pub enum PresetSourceState {
     NotConfigured,
     /// The presets are only in a format farm3d can't read (`.opc`).
     PresetsUnreadable,
+    /// `origin` says whether the source that failed is the engine's own
+    /// presets or one chosen in Settings, so the Settings section offers
+    /// **Use the engine's presets** only when there is a choice to undo.
     Unavailable {
         reason: String,
+        origin: PresetSourceOrigin,
     },
 }
 
@@ -1173,6 +1177,7 @@ pub fn sweep_stale_profile_caches(cache_dir: &Path, keep_hashes: &[&str]) -> io:
 /// must be a supported version.
 fn source_version(
     executable: &Path,
+    origin: PresetSourceOrigin,
     env: &DiscoveryEnv,
     caches: &RuntimeCaches,
 ) -> Result<OrcaVersion, PresetSourceState> {
@@ -1180,8 +1185,9 @@ fn source_version(
         ProbeOutcome::Supported(version) => Ok(version),
         ProbeOutcome::UnsupportedVersion(version) => Err(PresetSourceState::Unavailable {
             reason: format!("OrcaSlicer {version} presets are not supported."),
+            origin,
         }),
-        ProbeOutcome::Failed(reason) => Err(PresetSourceState::Unavailable { reason }),
+        ProbeOutcome::Failed(reason) => Err(PresetSourceState::Unavailable { reason, origin }),
     }
 }
 
@@ -1214,7 +1220,7 @@ pub fn resolve_preset_source_with(
     cache_dir: &Path,
     caches: &RuntimeCaches,
 ) -> (PresetSourceState, Option<ResolvedPresetSource>) {
-    let unavailable = |reason: String| (PresetSourceState::Unavailable { reason }, None);
+    let unavailable = |reason: String| (PresetSourceState::Unavailable { reason, origin }, None);
     let name = basename(path);
     let (lookup, cache_hash, version_executable) = if path.is_dir() {
         (
@@ -1255,7 +1261,7 @@ pub fn resolve_preset_source_with(
     };
     let version = match (engine_version, version_executable) {
         (Some(version), _) => version.clone(),
-        (None, Some(executable)) => match source_version(&executable, env, caches) {
+        (None, Some(executable)) => match source_version(&executable, origin, env, caches) {
             Ok(version) => version,
             Err(state) => return (state, None),
         },
@@ -1559,7 +1565,7 @@ pub fn pick_preset_source(
                 "This OrcaSlicer build stores its presets in a format farm3d can't read. Choose an OrcaSlicer 2.4 install or AppImage.",
             ))
         }
-        PresetSourceState::Unavailable { reason } => {
+        PresetSourceState::Unavailable { reason, .. } => {
             return Err(CommandError::preset_source_unavailable(&reason))
         }
         // Never produced for a chosen source.
@@ -1732,7 +1738,8 @@ mod tests {
         assert_eq!(
             state,
             PresetSourceState::Unavailable {
-                reason: "gone no longer exists.".to_string()
+                reason: "gone no longer exists.".to_string(),
+                origin: PresetSourceOrigin::Configured,
             }
         );
     }
@@ -2272,6 +2279,52 @@ mod fake_executable_tests {
             nothing.status.preset_source,
             PresetSourceState::NotConfigured
         );
+    }
+
+    #[test]
+    fn an_unavailable_preset_source_says_whether_it_was_configured() {
+        let temp = tempfile::tempdir().unwrap();
+        // An engine with no presets at all beside it.
+        let engine = fake_orca(&temp.path().join("opt/bin"), "orca-slicer", "2.4.2");
+        let engine_path = Some(engine.to_str().unwrap().to_string());
+        let from_engine = resolve_runtime(
+            &SlicerRuntimeConfig {
+                revision: 1,
+                engine_path: engine_path.clone(),
+                preset_source_path: None,
+                updated_at: None,
+            },
+            &env(None, None),
+            temp.path(),
+        );
+        assert!(matches!(
+            from_engine.status.preset_source,
+            PresetSourceState::Unavailable {
+                origin: PresetSourceOrigin::Engine,
+                ..
+            }
+        ));
+
+        let configured = resolve_runtime(
+            &SlicerRuntimeConfig {
+                revision: 1,
+                engine_path,
+                preset_source_path: Some(temp.path().join("gone").to_str().unwrap().to_string()),
+                updated_at: None,
+            },
+            &env(None, None),
+            temp.path(),
+        );
+        assert_eq!(
+            configured.status.preset_source,
+            PresetSourceState::Unavailable {
+                reason: "gone no longer exists.".to_string(),
+                origin: PresetSourceOrigin::Configured,
+            }
+        );
+        let json = serde_json::to_value(&configured.status.preset_source).unwrap();
+        assert_eq!(json["state"], "unavailable");
+        assert_eq!(json["origin"], "configured");
     }
 
     fn config(storage: &Storage) -> SlicerRuntimeConfig {

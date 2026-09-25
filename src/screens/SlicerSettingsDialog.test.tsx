@@ -357,6 +357,25 @@ describe("Reset", () => {
     await waitFor(() => expect(slicingStoreMock.resetSlicerRuntime).toHaveBeenCalledWith({ engine: true, presetSource: false }));
   });
 
+  it("offers the preset-source reset only when a source was chosen in Settings, working or not", async () => {
+    setSlicingState({
+      runtime: runtimeStatus({ presetSource: { state: "unavailable", reason: "no presets beside orca-slicer", origin: "engine" }, canSlice: false }),
+    });
+    renderHost();
+    const dialog = await openDialog();
+    const presets = section(dialog, "Preset source");
+    expect(presets).toHaveTextContent("The presets couldn't be read: no presets beside orca-slicer");
+    expect(within(presets).queryByRole("button", { name: "Use the engine's presets…" })).toBeNull();
+
+    setSlicingState({
+      runtime: runtimeStatus({ presetSource: { state: "unavailable", reason: "orca-2.4 no longer exists.", origin: "configured" }, canSlice: false }),
+    });
+    fireEvent.click(within(presets).getByRole("button", { name: "Use the engine's presets…" }));
+    expect(within(dialog).getByRole("group", { name: "Confirm" })).toHaveTextContent(
+      "farm3d will forget the preset source chosen in Settings and read the presets from the engine instead.",
+    );
+  });
+
   it("resets the preset source to the engine's presets", async () => {
     setSlicingState({
       runtime: runtimeStatus({
@@ -366,8 +385,11 @@ describe("Reset", () => {
       }),
     });
     renderHost();
-    await openDialog();
+    const dialog = await openDialog();
     fireEvent.click(button("Use the engine's presets…"));
+    expect(within(dialog).getByRole("group", { name: "Confirm" })).toHaveTextContent(
+      "farm3d will forget /opt/orca and read the presets from the engine instead.",
+    );
     fireEvent.click(button("Use the engine's presets"));
     await waitFor(() => expect(slicingStoreMock.resetSlicerRuntime).toHaveBeenCalledWith({ engine: false, presetSource: true }));
   });

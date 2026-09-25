@@ -149,11 +149,17 @@ function fellThrough(runtime: SlicerRuntimeStatus): EngineCandidate | undefined 
   return configured && configured.result.kind !== "chosen" ? configured : undefined;
 }
 
-/** Whether a preset source chosen in Settings may be in use, so **Use the
- *  engine's presets** has something to undo. An unavailable source may be
- *  the chosen one or the engine's; resetting is harmless either way. */
+/** Whether a preset source was chosen in Settings, working or not, so
+ *  **Use the engine's presets** has a choice to undo. */
 function presetSourceConfigured(presets: PresetSourceState): boolean {
-  return (presets.state === "available" && presets.origin === "configured") || presets.state === "unavailable";
+  return (presets.state === "available" || presets.state === "unavailable") && presets.origin === "configured";
+}
+
+/** What resetting the preset source forgets: the chosen path when it is
+ *  known (an unavailable source reports only why it failed). */
+function presetResetText(presets: PresetSourceState): string {
+  const forgets = presets.state === "available" ? presets.path : "the preset source chosen in Settings";
+  return `farm3d will forget ${forgets} and read the presets from the engine instead.`;
 }
 
 function Channel(props: { channel: RuntimeChannel }) {
@@ -279,9 +285,9 @@ export function SlicerSettingsDialog(props: SlicerSettingsDialogProps) {
                 </p>
                 <Show when={confirming() === "resetPresets"}>
                   <Confirmation
-                    text="farm3d will forget the chosen preset source and read the presets from the engine."
+                    text={presetResetText(runtime().presetSource)}
                     confirmLabel="Use the engine's presets"
-                    cancelLabel="Keep this source"
+                    cancelLabel="Keep the chosen source"
                     onConfirm={() => void run("resetPresets")}
                     onCancel={() => endConfirmation("resetPresets")}
                   />

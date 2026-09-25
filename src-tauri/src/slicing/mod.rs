@@ -1036,7 +1036,7 @@ pub fn preset_source_reason(state: &PresetSourceState) -> String {
         PresetSourceState::PresetsUnreadable => {
             "This OrcaSlicer build stores its presets in a format farm3d can't read. Choose an OrcaSlicer 2.4 install or AppImage as the preset source.".to_string()
         }
-        PresetSourceState::Unavailable { reason } => reason.clone(),
+        PresetSourceState::Unavailable { reason, .. } => reason.clone(),
     }
 }
 

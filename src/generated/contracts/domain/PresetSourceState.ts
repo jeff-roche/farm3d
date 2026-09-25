@@ -6,4 +6,4 @@ import type { RuntimeChannel } from "./RuntimeChannel";
  * D2: the preset-source part of the runtime status. `path` is the engine
  * or the chosen preset source, shown only in the Settings section.
  */
-export type PresetSourceState = { "state": "available", version: string, channel: RuntimeChannel, origin: PresetSourceOrigin, vendorCount: number, path: string, } | { "state": "notConfigured" } | { "state": "presetsUnreadable" } | { "state": "unavailable", reason: string, };
+export type PresetSourceState = { "state": "available", version: string, channel: RuntimeChannel, origin: PresetSourceOrigin, vendorCount: number, path: string, } | { "state": "notConfigured" } | { "state": "presetsUnreadable" } | { "state": "unavailable", reason: string, origin: PresetSourceOrigin, };
