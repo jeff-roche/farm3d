@@ -1,6 +1,6 @@
 import { Collapsible } from "@kobalte/core/collapsible";
 import { IconChevronRight } from "@tabler/icons-solidjs";
-import { createEffect, createMemo, on, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show, type JSX } from "solid-js";
 import { PrinterRoster, Select, type SelectGroup } from "../design-system";
 import { printers } from "../printers/printer-store";
 import {
@@ -10,6 +10,7 @@ import {
   type NumericControl,
   type PanelField,
 } from "../slicing/slice-presentation";
+import { operationalLabel } from "../monitor/monitor-store";
 import type {
   BrimType,
   CatalogRef,
@@ -21,6 +22,7 @@ import type {
   SupportMode,
 } from "../slicing/types";
 import { CommitNumberField } from "./CommitNumberField";
+import { TargetProfileDialog } from "./TargetProfileDialog";
 import type { PreparationSession } from "./preparation-session";
 import styles from "./PreparationPanel.module.css";
 
@@ -33,23 +35,6 @@ export const ADVANCED_FIELDS: ReadonlySet<PanelField> = new Set<PanelField>([
   "skirtLoops",
 ]);
 
-/** Each field's name, for links to it ("Go to Walls"). */
-export const FIELD_LABELS: Record<PanelField, string> = {
-  target: "Target",
-  material: "Material",
-  quality: "Quality",
-  layerHeightMm: "Layer height",
-  wallLoops: "Walls",
-  topShellLayers: "Top shells",
-  bottomShellLayers: "Bottom shells",
-  infillDensityPercent: "Infill density",
-  infillPattern: "Infill pattern",
-  supports: "Supports",
-  supportThresholdAngleDeg: "Overhang angle",
-  brimType: "Brim",
-  brimWidthMm: "Brim width",
-  skirtLoops: "Skirt loops",
-};
 
 /** Shown in an unset control: it takes the quality preset's value (D4). */
 const PRESET_PLACEHOLDER = "Preset";
@@ -91,6 +76,9 @@ interface TargetEntry {
   label: string;
   target: SliceTarget;
 }
+
+/** The entry that opens the catalog, rather than being a target itself. */
+const OTHER_PROFILE = "other-profile";
 
 function profileKey(ref: CatalogRef): string {
   return `profile:${ref.vendor}|${ref.model}|${ref.variant}`;
@@ -149,7 +137,13 @@ export function PreparationControls(props: PreparationControlsProps) {
     for (const printer of activePrinters()) addProfile(printer.catalogRef);
     const groups: SelectGroup<TargetEntry>[] = [];
     if (printerEntries.length > 0) groups.push({ label: "Printers", options: printerEntries });
-    groups.push({ label: "Printer profiles", options: [...profiles.values()].sort((a, b) => a.label.localeCompare(b.label)) });
+    groups.push({
+      label: "Printer profiles",
+      // Any other catalog profile is one pick away.
+      options: [...[...profiles.values()].sort((a, b) => a.label.localeCompare(b.label)), {
+        key: OTHER_PROFILE, label: "Other printer profile…", target: current,
+      }],
+    });
     return groups;
   });
   const chosenTarget = () => {
@@ -161,7 +155,12 @@ export function PreparationControls(props: PreparationControlsProps) {
   // presets it doesn't offer become its defaults (D3). Only after the user
   // changed the target here, never behind their back.
   let retargeted = false;
+  const [otherOpen, setOtherOpen] = createSignal(false);
   const chooseTarget = (entry: TargetEntry) => {
+    if (entry.key === OTHER_PROFILE) {
+      setOtherOpen(true);
+      return;
+    }
     if (entry.key === targetKey(props.document.target)) return;
     retargeted = true;
     edit((document) => ({ ...document, target: entry.target }));
@@ -185,7 +184,12 @@ export function PreparationControls(props: PreparationControlsProps) {
     const ids = new Set(session.options()?.matchingPrinterIds ?? []);
     return activePrinters()
       .filter((printer) => ids.has(printer.id))
-      .map((printer) => ({ id: printer.id, name: printer.name, stateLabel: printer.location ?? "" }));
+      .map((printer) => ({
+        id: printer.id,
+        name: printer.name,
+        detail: printer.location,
+        stateLabel: operationalLabel(printer.runtimeStatus),
+      }));
   });
 
   // --- Presets -------------------------------------------------------------------
@@ -219,7 +223,7 @@ export function PreparationControls(props: PreparationControlsProps) {
     const limits = CONTROL_LIMITS[control];
     const unknownLimit = () => control === "layerHeightMm" && maxFor(control) === undefined;
     return (
-      <div class={styles.control} data-panel-field={control}>
+      <div class={styles.control} data-panel-field={control} tabIndex={-1}>
         <CommitNumberField
           label={label}
           value={controls()[control]}
@@ -244,7 +248,7 @@ export function PreparationControls(props: PreparationControlsProps) {
     label: string,
     choices: Choice<T>[],
   ): JSX.Element => (
-    <div class={styles.control} data-panel-field={control}>
+    <div class={styles.control} data-panel-field={control} tabIndex={-1}>
       <Select<Choice<T>>
         label={label}
         options={choices}
@@ -260,7 +264,7 @@ export function PreparationControls(props: PreparationControlsProps) {
     <div class={styles.controls}>
       <section class={styles.section} aria-labelledby="preparation-target">
         <h3 id="preparation-target" class={styles.heading}>Target</h3>
-        <div data-panel-field="target">
+        <div data-panel-field="target" tabIndex={-1}>
           <Select<TargetEntry>
             label="Slice for"
             groups={targetGroups()}
@@ -271,6 +275,14 @@ export function PreparationControls(props: PreparationControlsProps) {
             onChange={chooseTarget}
           />
         </div>
+        <TargetProfileDialog
+          open={otherOpen()}
+          onOpenChange={setOtherOpen}
+          onPick={(catalogRef) => {
+            setOtherOpen(false);
+            chooseTarget({ key: profileKey(catalogRef), label: catalogRef.variant, target: { kind: "profile", catalogRef } });
+          }}
+        />
         <Show when={session.options()}>
           {(options) => (
             <div class={styles.targetFacts}>
@@ -283,7 +295,7 @@ export function PreparationControls(props: PreparationControlsProps) {
 
       <section class={styles.section} aria-labelledby="preparation-material">
         <h3 id="preparation-material" class={styles.heading}>Material</h3>
-        <div data-panel-field="material">
+        <div data-panel-field="material" tabIndex={-1}>
           <Select<FilamentPresetOption>
             label="Filament preset"
             options={filaments()}
@@ -302,7 +314,7 @@ export function PreparationControls(props: PreparationControlsProps) {
 
       <section class={styles.section} aria-labelledby="preparation-quality">
         <h3 id="preparation-quality" class={styles.heading}>Quality</h3>
-        <div data-panel-field="quality">
+        <div data-panel-field="quality" tabIndex={-1}>
           <Select<string>
             label="Process preset"
             options={processNames()}

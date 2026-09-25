@@ -540,7 +540,9 @@ export async function cancelSliceOperation(sliceOperationId: string): Promise<Sl
   return operation;
 }
 
-/** Not cached: a running operation's log grows. */
+/** Not cached: the backend stores an operation's log only once it
+ *  finishes, so a queued or running operation's log is empty (and one
+ *  that never ran stays empty). */
 export async function loadOperationLog(sliceOperationId: string): Promise<SliceOperationLog> {
   if (!desktopAvailable()) {
     const log = (await requireWebFixture()).logs[sliceOperationId];

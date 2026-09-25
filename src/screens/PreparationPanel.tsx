@@ -5,6 +5,7 @@ import { plateLabel } from "../slicing/preparation-edits";
 import { openSlicerSettings } from "../slicing/slicer-settings-opener";
 import {
   candidateLines,
+  FIELD_LABELS,
   NOTHING_TRIED,
   runtimeProblems,
   sliceErrorView,
@@ -13,7 +14,7 @@ import {
 } from "../slicing/slice-presentation";
 import { refreshSlicing, slicing, startSlice } from "../slicing/slicing-store";
 import { issuesForPlates, type PreparationIssue } from "../slicing/validation";
-import { ADVANCED_FIELDS, FIELD_LABELS, PreparationControls } from "./PreparationControls";
+import { ADVANCED_FIELDS, PreparationControls } from "./PreparationControls";
 import type { PreparationSession } from "./preparation-session";
 import { SliceOperationPanel } from "./SliceOperationPanel";
 import styles from "./PreparationPanel.module.css";
@@ -60,7 +61,12 @@ export function PreparationPanel(props: PreparationPanelProps) {
   };
   const focusField = (field: PanelField) => {
     if (ADVANCED_FIELDS.has(field)) setAdvancedOpen(true);
-    focusLater(() => panel?.querySelector<HTMLElement>(`[data-panel-field="${field}"] :is(button, input)`));
+    // A disabled control (its presets still loading) can't take focus, so
+    // the field itself does, which reads out its label and note.
+    focusLater(() => {
+      const wrapper = panel?.querySelector<HTMLElement>(`[data-panel-field="${field}"]`);
+      return wrapper?.querySelector<HTMLElement>(":is(button, input):not(:disabled)") ?? wrapper;
+    });
   };
   const focusPlate = (plateKey: string) => {
     session.selectPlate(plateKey);
@@ -144,7 +150,13 @@ export function PreparationPanel(props: PreparationPanelProps) {
    *  (Accessibility: a disabled action shows its reason). */
   const blocker = (plateKeys: string[]): string | undefined => {
     if (starting()) return "Starting the slice…";
-    if (!session.record() || !document()) return "The Preparation isn't loaded.";
+    const record = session.record();
+    if (!record || !document()) return "The Preparation isn't loaded.";
+    // One slice per plate at a time: a second would queue a duplicate.
+    const busy = [...new Set(slicing.operationsForPreparation(record.id)
+      .filter((operation) => (operation.state === "queued" || operation.state === "running") && plateKeys.includes(operation.plateKey))
+      .map((operation) => operation.plateKey))];
+    if (busy.length > 0) return `Already slicing ${busy.map(plateName).join(", ")}.`;
     if (!runtime()) return "Checking for OrcaSlicer…";
     if (plateKeys.length === 0) return "There is no plate to slice.";
     if (session.loadFailed()) return "The Model's geometry didn't load.";
@@ -184,15 +196,21 @@ export function PreparationPanel(props: PreparationPanelProps) {
     setStarting(true);
     setSliceError(undefined);
     try {
-      // `start_slice` sends the held revision, so the edits go first.
+      // `start_slice` sends the held revision, so the edits go first. A
+      // notice left from before (dismissed or not) doesn't stop the slice;
+      // only a save that fails now does.
+      const noticeBefore = session.editor.notice();
       await session.editor.flush();
       if (disposed) return;
-      if (session.editor.notice()) {
+      const noticeAfter = session.editor.notice();
+      if (noticeAfter && noticeAfter !== noticeBefore) {
         setSliceError({
           message: "Your latest changes weren't saved, so nothing was sliced.",
           stale: false,
           openSettings: false,
           retry: false,
+          // The workspace's notice already says why, as an alert.
+          announced: true,
         });
         setAttempt(undefined);
         return;
@@ -330,7 +348,7 @@ export function PreparationPanel(props: PreparationPanelProps) {
 
         <Show when={sliceError()}>
           {(error) => (
-            <div class={styles.sliceError} role="alert">
+            <div class={styles.sliceError} role={error().announced ? undefined : "alert"}>
               <p class={styles.errorText}>{error().message}</p>
               <Show when={error().stale}>
                 <p class={styles.note}>
@@ -374,7 +392,11 @@ export function PreparationPanel(props: PreparationPanelProps) {
       </section>
 
       <Show when={session.record()}>
-        {(record) => <SliceOperationPanel preparationId={record().id} onOpenRevision={props.onOpenRevision} />}
+        {(record) => <SliceOperationPanel
+            preparationId={record().id}
+            onOpenRevision={props.onOpenRevision}
+            onFailure={session.revealPanel}
+          />}
       </Show>
     </div>
   );

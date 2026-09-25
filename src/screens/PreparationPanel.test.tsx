@@ -18,6 +18,9 @@ import type { PreparationDocument, PreparationRecord, SliceOperationRecord } fro
 import type { WebSlicingFixture } from "../slicing/web-fixtures";
 import { lastFakeRenderer } from "../slicing/viewport/fake-renderer";
 import { PreparationMode } from "./PreparationMode";
+import { PreparationPanel } from "./PreparationPanel";
+import { createPreparationSession, type PreparationSession } from "./preparation-session";
+import { PreparationWorkspace } from "./PreparationWorkspace";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
@@ -27,6 +30,16 @@ vi.mock("../settings/settings-store", () => ({
 }));
 const printerState = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("../printers/printer-store", () => ({ printers: () => printerState.list }));
+vi.mock("../printers/printer-catalog", () => ({
+  listCatalogModels: vi.fn(async () => [
+    { modelId: "Elegoo-CC", vendor: "Elegoo", model: "Elegoo Centauri Carbon" },
+    { modelId: "Prusa-MK4", vendor: "Prusa", model: "Prusa MK4" },
+  ]),
+  listCatalogVariants: vi.fn(async (vendor: string) => (vendor === "Prusa"
+    ? [{ variant: "Prusa MK4 0.4 nozzle", printerVariant: "0.4" }, { variant: "Prusa MK4 0.6 nozzle", printerVariant: "0.6" }]
+    : [{ variant: "Elegoo Centauri Carbon 0.4 nozzle", printerVariant: "0.4" }])),
+  previewProfile: vi.fn(async () => ({})),
+}));
 
 const NOW = new Date("2026-09-24T12:00:00Z");
 const library = buildWebLibraryFixture(NOW);
@@ -173,12 +186,44 @@ describe("PreparationPanel", () => {
       expect(shownDocument().controls.skirtLoops).toBe(10);
     });
 
-    it("shows the matching Printers with the roster", async () => {
+    it("shows the matching Printers with the roster, each with its state and place", async () => {
+      (printerState.list[0] as { runtimeStatus?: unknown }).runtimeStatus = { operationalState: "ready" };
       await open();
       const roster = within(panel()).getByRole("button", { name: "2 matching Printers" });
       fireEvent.focus(roster);
-      expect(await screen.findByText("CC 1")).toBeInTheDocument();
-      expect(screen.getByText("CC 2")).toBeInTheDocument();
+      const first = (await screen.findByText("CC 1")).closest("li")!;
+      expect(first).toHaveTextContent("CC 1 · Bench 1");
+      expect(first).toHaveTextContent("Ready");
+      expect(screen.getByText("CC 2").closest("li")).toHaveTextContent("Status unavailable");
+    });
+
+    it("reaches any catalog profile through Other printer profile…, with no Printers at all", async () => {
+      printerState.list = [];
+      await open();
+      await choose(/Slice for/, "Other printer profile…");
+      const dialog = await screen.findByRole("dialog", { name: "Other printer profile" });
+      // Nothing changed yet.
+      expect(shownDocument().target).toEqual({ kind: "profile", catalogRef: CENTAURI });
+      const brand = within(dialog).getByRole("combobox", { name: "Brand" });
+      await fireEvent.pointerDown(brand, { pointerType: "mouse", button: 0 });
+      await fireEvent.input(brand, { target: { value: "Prusa" } });
+      await fireEvent.pointerUp(await screen.findByRole("option", { name: "Prusa" }), { pointerType: "mouse", button: 0 });
+      await fireEvent.pointerDown(await within(dialog).findByRole("button", { name: /^Model/ }), { pointerType: "mouse", button: 0 });
+      await fireEvent.pointerUp(await screen.findByRole("option", { name: "MK4" }), { pointerType: "mouse", button: 0 });
+      // The 0.4 mm nozzle is chosen by default.
+      const use = within(dialog).getByRole("button", { name: "Use this profile" });
+      await waitFor(() => expect(use).toBeEnabled());
+      fireEvent.click(use);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(shownDocument().target).toEqual({
+        kind: "profile",
+        catalogRef: { vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle", modelId: "Prusa-MK4", printerVariant: "0.4" },
+      }), { timeout: SAVE_DEBOUNCE_MS * 3 });
+      expect(selectTrigger(/Slice for/)).toHaveTextContent("Prusa MK4 0.4 nozzle");
+      expect(slicingStoreMock.listSliceOptions).toHaveBeenLastCalledWith({
+        kind: "profile",
+        catalogRef: expect.objectContaining({ variant: "Prusa MK4 0.4 nozzle" }),
+      });
     });
 
     it("re-queries the options for a new target, and takes its defaults for presets it doesn't offer", async () => {
@@ -291,6 +336,22 @@ describe("PreparationPanel", () => {
       await waitFor(() => expect(within(panel()).queryByText("Checking placement…")).toBeNull());
     });
 
+    it("won't slice a plate that is already slicing", async () => {
+      await open();
+      setSlicingState({
+        operations: [...fixture.operations, operation({
+          id: "sop-busy", preparationId: PREPARATION, plateKey: LID_PLATE, plateName: "Lid", state: "queued",
+        })],
+      });
+      expect(await within(panel()).findByText("Already slicing Lid.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Slice plate" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Slice all plates" })).toBeDisabled();
+      // The Latch alone is free.
+      fireEvent.click(screen.getByRole("tab", { name: /Latch/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Slice plate" })).toBeEnabled());
+      expect(within(panel()).getByText("Slice all plates: Already slicing Lid.")).toBeInTheDocument();
+    });
+
     it("replaces the actions with the runtime's state and a way to its settings", async () => {
       setSlicingState({
         runtime: runtimeStatus({
@@ -350,6 +411,41 @@ describe("PreparationPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "Slice plate" }));
       await waitFor(() => expect(slicingStoreMock.startSlice).toHaveBeenCalled());
       expect(savedFirst).toBe(true);
+    });
+
+    it("slices despite a notice left from an earlier save", async () => {
+      await open();
+      slicingStoreMock.updatePreparation.mockRejectedValueOnce(commandError({ code: "VALIDATION", message: "Walls are wrong." }));
+      typeInto("Walls", "3");
+      expect(await screen.findByText("Your latest edit was not saved: Walls are wrong.", {}, { timeout: SAVE_DEBOUNCE_MS * 3 }))
+        .toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Slice plate" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Slice plate" }));
+      await waitFor(() => expect(slicingStoreMock.startSlice).toHaveBeenCalledTimes(1));
+    });
+
+    it("refuses when the save made just before starting fails, with a single alert", async () => {
+      // An edit that lands between the click and the flush (Slice is
+      // disabled while edits are pending, so only a race gets here).
+      let session: PreparationSession | undefined;
+      render(() => {
+        session = createPreparationSession(() => enclosure());
+        return <PreparationWorkspace session={session} onBack={() => {}} dock={<PreparationPanel session={session} />} />;
+      });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Slice plate" })).toBeEnabled());
+      const editor = session!.editor;
+      const flush = editor.flush;
+      editor.flush = () => {
+        editor.edit((document) => ({ ...document, controls: { ...document.controls, wallLoops: 7 } }));
+        return flush();
+      };
+      slicingStoreMock.updatePreparation.mockRejectedValueOnce(commandError({ code: "VALIDATION", message: "Walls are wrong." }));
+      fireEvent.click(screen.getByRole("button", { name: "Slice plate" }));
+      expect(await within(panel()).findByText("Your latest changes weren't saved, so nothing was sliced.")).toBeInTheDocument();
+      expect(slicingStoreMock.startSlice).not.toHaveBeenCalled();
+      const alerts = screen.getAllByRole("alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toHaveTextContent("Your latest edit was not saved: Walls are wrong.");
     });
 
     it("sends the continue choice for a stale Preparation", async () => {
@@ -415,6 +511,18 @@ describe("PreparationPanel", () => {
       await waitFor(() => expect(document.activeElement).toBe(selectTrigger(/Filament preset/)));
     });
 
+    it("focuses a field whose control is disabled while its presets reload", async () => {
+      await open();
+      slicingStoreMock.startSlice.mockRejectedValueOnce(commandError({ code: "FILAMENT_INCOMPATIBLE", message: "Not for this printer." }));
+      fireEvent.click(screen.getByRole("button", { name: "Slice plate" }));
+      const alert = await within(panel()).findByRole("alert");
+      slicingStoreMock.listSliceOptions.mockImplementation(() => new Promise(() => {}));
+      await choose(/Slice for/, "CC 1");
+      await waitFor(() => expect(selectTrigger(/Filament preset/)).toBeDisabled());
+      fireEvent.click(within(alert).getByRole("button", { name: "Go to Material" }));
+      await waitFor(() => expect(document.activeElement).toBe(panel().querySelector("[data-panel-field='material']")));
+    });
+
     it("links an unsupported setting to its control, opening Advanced, and offers the settings", async () => {
       await open();
       slicingStoreMock.startSlice.mockRejectedValueOnce(commandError({
@@ -472,6 +580,25 @@ describe("PreparationPanel", () => {
       addOperation(running());
       fireEvent.click(await within(panel()).findByRole("button", { name: "Cancel" }));
       await waitFor(() => expect(slicingStoreMock.cancelSliceOperation).toHaveBeenCalledWith("sop-running"));
+    });
+
+    it("cancels a queued operation", async () => {
+      await open();
+      addOperation(running({ state: "queued", startedAt: undefined }));
+      expect(await within(panel()).findByRole("progressbar")).toHaveTextContent("Waiting to start…");
+      fireEvent.click(within(panel()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(slicingStoreMock.cancelSliceOperation).toHaveBeenCalledWith("sop-running"));
+    });
+
+    it("says a running slice's log comes when it finishes, and there is nothing to copy yet", async () => {
+      await open();
+      addOperation(running());
+      slicingStoreMock.loadOperationLog.mockImplementation(async () => ({ text: "", truncated: false, noiseLines: [] }));
+      const row = await waitFor(() => rowFor("Plate 1: Lid"));
+      fireEvent.click(within(row).getByRole("button", { name: "Show log" }));
+      expect(await within(row).findByText("The log is saved when the slice finishes.")).toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Copy log" }));
+      expect(await within(row).findByText("There's nothing to copy. The log is saved when the slice finishes.")).toBeInTheDocument();
     });
 
     it("says why a cancel was refused", async () => {
@@ -540,6 +667,38 @@ describe("PreparationPanel", () => {
       fireEvent.click(within(succeeded).getByRole("button", { name: "Copy log" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(fixture.logs["sop-web-enclosure-lid"].text));
       expect(await within(succeeded).findByText("Log copied.")).toBeInTheDocument();
+    });
+
+    it("says so when the clipboard refuses", async () => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: vi.fn(async () => { throw new Error("denied"); }) },
+      });
+      await open();
+      const succeeded = rowFor("Plate 1: Lid");
+      fireEvent.click(within(succeeded).getByRole("button", { name: "Copy log" }));
+      expect(await within(succeeded).findByText("The log couldn't be copied.")).toBeInTheDocument();
+    });
+
+    it("shows the folded panel when a slice fails, and Escape folds it again", async () => {
+      Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1024 });
+      render(() => <PreparationMode model={enclosure()} onBack={() => {}} />);
+      const toggle = await screen.findByRole("button", { name: "Settings panel" });
+      addOperation(running());
+      slicingStoreMock.loadOperationLog.mockImplementation(async () => ({ text: "[error] boom", truncated: false, noiseLines: [] }));
+      expect(screen.queryByRole("complementary", { name: "Preparation settings" })).toBeNull();
+      setSlicingState({
+        operations: [...fixture.operations, running({
+          state: "failed",
+          failure: { code: { kind: "spawnFailed" }, message: "farm3d couldn't start OrcaSlicer." },
+        })],
+      });
+      const aside = await screen.findByRole("complementary", { name: "Preparation settings" });
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await waitFor(() => expect(document.activeElement).toBe(within(aside).getByLabelText("Log for Plate 1: Lid")));
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("complementary", { name: "Preparation settings" })).toBeNull();
+      expect(document.activeElement).toBe(toggle);
     });
 
     it("says so when a log went with its deleted Slice Revision", async () => {

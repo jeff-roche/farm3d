@@ -12,6 +12,9 @@ export const RECENT_OPERATION_LIMIT = 10;
 
 export interface SliceOperationPanelProps {
   preparationId: string;
+  /** An operation shown here failed: its host shows the panel, so the log
+   *  can take focus. */
+  onFailure?: () => void;
   /** Opens a published Slice Revision's review, when the host has one. */
   onOpenRevision?: (sliceRevisionId: string) => void;
 }
@@ -41,7 +44,7 @@ export function SliceOperationPanel(props: SliceOperationPanelProps) {
       <Show when={operations().length > 0} fallback={<p class={styles.note}>Nothing sliced yet.</p>}>
         <ol class={styles.list}>
           <For each={shown()}>
-            {(id) => <SliceOperationRow id={id} onOpenRevision={props.onOpenRevision} />}
+            {(id) => <SliceOperationRow id={id} onOpenRevision={props.onOpenRevision} onFailure={props.onFailure} />}
           </For>
         </ol>
         <Show when={operations().length > RECENT_OPERATION_LIMIT}>
@@ -64,7 +67,7 @@ function plateTitle(operation: SliceOperationRecord): string {
   return operation.plateName ? `Plate ${operation.plateIndex}: ${operation.plateName}` : `Plate ${operation.plateIndex}`;
 }
 
-function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) => void }) {
+function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) => void; onFailure?: () => void }) {
   // The last record held: a row being removed may outlive its record.
   const operation = createMemo<SliceOperationRecord>((held) => slicing.operation(props.id) ?? held!);
   const active = () => operation().state === "queued" || operation().state === "running";
@@ -84,6 +87,7 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
   createEffect(on(() => operation().state, (state, previous) => {
     if (state !== "failed" || previous === undefined || previous === "failed") return;
     setLogOpen(true);
+    props.onFailure?.();
     queueMicrotask(() => logElement?.focus());
   }));
 
@@ -115,8 +119,9 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
       return undefined;
     }
   };
-  // Loaded when shown, and again when the operation moves on (a running
-  // operation's log grows).
+  // Loaded when shown, and again when the operation moves on: the backend
+  // stores the log only when the operation finishes, so until then it is
+  // empty.
   createEffect(on([logOpen, () => operation().state], ([open]) => {
     if (open) void loadLog();
   }));
@@ -128,6 +133,10 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
     if (disposed) return;
     if (!loaded) {
       setCopyStatus("The log couldn't be loaded, so nothing was copied.");
+      return;
+    }
+    if (loaded.text === "") {
+      setCopyStatus(`There's nothing to copy. ${emptyLogText()}`);
       return;
     }
     try {
@@ -152,6 +161,10 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
       if (!disposed) setCancelling(false);
     }
   };
+
+  /** Why a loaded log is empty: not saved yet, or never written (the
+   *  slice was cancelled or interrupted before it ran). */
+  const emptyLogText = () => (active() ? "The log is saved when the slice finishes." : "This slice left no log.");
 
   const segments = createMemo(() => {
     const held = loadedLog();
@@ -221,6 +234,9 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
       <Show when={logOpen()}>
         <div class={styles.logArea}>
           <Show when={logFailure()}>{(message) => <p class={styles.note}>{message()}</p>}</Show>
+          <Show when={loadedLog()?.text === ""}>
+            <p class={styles.note}>{emptyLogText()}</p>
+          </Show>
           <Show when={loadedLog()?.truncated}>
             <p class={styles.note}>The middle of this log was left out because it was too long.</p>
           </Show>

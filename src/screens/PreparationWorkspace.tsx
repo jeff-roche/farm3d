@@ -1,5 +1,5 @@
 import { IconArrowLeft } from "@tabler/icons-solidjs";
-import { createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { Button } from "../design-system";
 import { loadRevisions } from "../library/library-store";
 import { measureBetween } from "../slicing/bounds";
@@ -188,6 +188,17 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   const [objectsOpen, setObjectsOpen] = createSignal(!narrow());
   const [dockOpen, setDockOpen] = createSignal(false);
   const dockId = createUniqueId();
+  let dockToggle: HTMLButtonElement | undefined;
+  // Resolved once: each read of a JSX prop would build another panel.
+  const dock = children(() => props.dock);
+  // A failed slice is shown (and takes focus) even while the panel is folded.
+  createEffect(on(session.panelReveals, () => setDockOpen(true), { defer: true }));
+  const onDockKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !narrow()) return;
+    event.preventDefault();
+    setDockOpen(false);
+    dockToggle?.focus();
+  };
   onMount(() => {
     const onResize = () => setNarrow(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
     window.addEventListener("resize", onResize);
@@ -364,8 +375,9 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
         </Button>
         <h2 ref={heading} class={styles.title} tabIndex={-1}>Preparing {session.model().name}</h2>
         <span class={styles.saveState}>{saveState()}</span>
-        <Show when={props.dock && narrow()}>
+        <Show when={dock() && narrow()}>
           <Button
+            ref={dockToggle}
             variant="ghost"
             size="sm"
             aria-expanded={dockOpen()}
@@ -525,15 +537,16 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
             </PlateTabs>
           </Show>
         </div>
-        <Show when={props.dock}>
+        <Show when={dock()}>
           <aside
             id={dockId}
             class={styles.dock}
             classList={{ [styles.dockOverlay]: narrow() }}
             hidden={narrow() && !dockOpen()}
             aria-label="Preparation settings"
+            onKeyDown={onDockKeyDown}
           >
-            {props.dock}
+            {dock()}
           </aside>
         </Show>
       </div>

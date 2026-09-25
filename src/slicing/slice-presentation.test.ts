@@ -111,6 +111,11 @@ describe("sliceErrorView", () => {
       .toMatchObject({ field: "quality" });
     expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "controls.wallLoops" } })))
       .toMatchObject({ field: "wallLoops" });
+    // A path the panel has no field for links nowhere.
+    expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "controls.ironing" } })).field)
+      .toBeUndefined();
+    expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "controls.target" } })).field)
+      .toBeUndefined();
     expect(sliceErrorView(commandError({ code: "PREPARATION_INVALID", details: { plateKey: "plt-2", reason: "empty" } })))
       .toMatchObject({ plateKey: "plt-2" });
   });

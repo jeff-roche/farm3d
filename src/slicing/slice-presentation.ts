@@ -78,8 +78,29 @@ export const SETTING_KEY_CONTROLS: Record<string, keyof SliceControls> = {
   skirt_loops: "skirtLoops",
 };
 
+/** Every control the panel has, by its `SliceControls` name. */
+const CONTROL_FIELDS: ReadonlySet<string> = new Set(Object.values(SETTING_KEY_CONTROLS));
+
 /** A panel field an issue or error can move focus to. */
 export type PanelField = "target" | "material" | "quality" | keyof SliceControls;
+
+/** Each field's name, for links to it ("Go to Walls"). */
+export const FIELD_LABELS: Record<PanelField, string> = {
+  target: "Target",
+  material: "Material",
+  quality: "Quality",
+  layerHeightMm: "Layer height",
+  wallLoops: "Walls",
+  topShellLayers: "Top shells",
+  bottomShellLayers: "Bottom shells",
+  infillDensityPercent: "Infill density",
+  infillPattern: "Infill pattern",
+  supports: "Supports",
+  supportThresholdAngleDeg: "Overhang angle",
+  brimType: "Brim",
+  brimWidthMm: "Brim width",
+  skirtLoops: "Skirt loops",
+};
 
 // --- Operations (D10, D11) ------------------------------------------------------------
 
@@ -214,6 +235,9 @@ export interface SliceErrorView {
   /** No answer came back (a transport failure): **Try again** resends
    *  the same operation id. */
   retry: boolean;
+  /** Already announced elsewhere (the editor's notice), so it is shown
+   *  without an alert of its own. */
+  announced?: boolean;
 }
 
 const PRESET_FIELDS: Record<string, PanelField> = {
@@ -230,7 +254,10 @@ function detail(error: CommandError, key: string): string | undefined {
 /** The field a `VALIDATION` error's `fieldPath` names, if the panel has it. */
 function fieldAt(path: string | undefined): PanelField | undefined {
   if (!path) return undefined;
-  if (path.startsWith("controls.")) return path.slice("controls.".length) as keyof SliceControls;
+  if (path.startsWith("controls.")) {
+    const control = path.slice("controls.".length);
+    return CONTROL_FIELDS.has(control) ? (control as PanelField) : undefined;
+  }
   if (path === "processPreset") return "quality";
   if (path === "filamentPreset") return "material";
   if (path === "target" || path.startsWith("target.")) return "target";

@@ -73,6 +73,11 @@ export interface PreparationSession {
   select: (instanceKey: string | null) => void;
   /** **Continue with revision M**, as held in the store for `start_slice`. */
   continueWithSourceRevision: () => string | undefined;
+  /** Asks the workspace to show the Preparation panel (folded behind
+   *  **Settings panel** when narrow), e.g. for a slice that failed. */
+  revealPanel: () => void;
+  /** Counts {@link revealPanel} requests, for the workspace to follow. */
+  panelReveals: () => number;
 }
 
 /** How many footprints stay cached (one per object, rotation and scale). */
@@ -300,6 +305,8 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     return key && plate?.instances.some((instance) => instance.instanceKey === key) ? key : null;
   });
 
+  const [panelReveals, setPanelReveals] = createSignal(0);
+
   return {
     model,
     record,
@@ -326,5 +333,7 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     selectedInstanceKey,
     select: setSelected,
     continueWithSourceRevision,
+    revealPanel: () => setPanelReveals((count) => count + 1),
+    panelReveals,
   };
 }
