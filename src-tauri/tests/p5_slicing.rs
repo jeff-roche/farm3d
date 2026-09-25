@@ -337,6 +337,35 @@ impl Running {
         })
     }
 
+    /// The recorded engine pid of operation `id`.
+    fn pid(&self, id: &str) -> i64 {
+        self.services
+            .storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT pid FROM slice_operations WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap()
+    }
+
+    /// How many content blobs and Slice Revisions are stored.
+    fn stored_counts(&self) -> (i64, i64) {
+        self.services
+            .storage
+            .read(|connection| {
+                Ok((
+                    connection
+                        .query_row("SELECT COUNT(*) FROM content_blobs", [], |row| row.get(0))?,
+                    connection
+                        .query_row("SELECT COUNT(*) FROM slice_revisions", [], |row| row.get(0))?,
+                ))
+            })
+            .unwrap()
+    }
+
     fn events_of(&self, id: &str) -> Vec<Value> {
         self.events
             .lock()
@@ -412,6 +441,16 @@ impl Farm {
         fs::copy(fixtures().join("library").join(name), &path).unwrap();
         path
     }
+}
+
+/// Whether process `pid` still exists and hasn't exited (a zombie has).
+fn process_alive(pid: i64) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map(|stat| {
+            let state = stat.rsplit_once(')').map(|(_, rest)| rest.trim_start());
+            !state.is_some_and(|rest| rest.starts_with('Z'))
+        })
+        .unwrap_or(false)
 }
 
 fn plates(preparation: &Value) -> Vec<Value> {
@@ -989,6 +1028,8 @@ fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
     first.wait_state(&hung, "running");
     let work = first.work_dir(&hung);
     assert!(work.exists());
+    let engine_pid = first.pid(&hung);
+    let stored_before = first.stored_counts();
 
     // Restart: a new Storage over the same roots runs D10's recovery, as
     // `build_runtime_services` does, while the old engine still runs.
@@ -1012,8 +1053,15 @@ fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
         .unwrap_or(false));
 
     let second = farm.start();
-    // The old supervisor sees its engine end and must store nothing.
-    std::thread::sleep(Duration::from_millis(500));
+    // The old supervisor sees its engine end and must store nothing: wait
+    // for the engine to be gone and the old worker to finish with it.
+    wait_for("the old engine to exit", || {
+        (!process_alive(engine_pid)).then_some(())
+    });
+    wait_for("the old worker to go idle", || {
+        first.services.slicing.scheduler_idle().then_some(())
+    });
+    assert_eq!(second.stored_counts(), stored_before, "nothing new stored");
     let interrupted = second.operation(&hung);
     assert_eq!(interrupted["state"], "interrupted");
     assert!(interrupted["finishedAt"].is_string());
@@ -1113,15 +1161,280 @@ fn a_revision_can_be_deleted_and_the_stream_says_so() {
         running.ok("list_slice_revisions", json!({ "modelId": model_id })),
         json!([])
     );
-    assert!(running
-        .events_of(&revision_id)
+    let events = running.events.lock().unwrap().clone();
+    let removed = events
         .iter()
-        .any(|event| event["type"] == "slicing.revision.removed"));
+        .position(|event| {
+            event["type"] == "slicing.revision.removed" && event["subject"]["id"] == revision_id
+        })
+        .expect("revision.removed");
+    // The operation that made it loses its link, and the stream says so
+    // right after.
+    let changed = &events[removed + 1];
+    assert_eq!(changed["type"], "slicing.operation.changed");
+    assert_eq!(changed["subject"]["id"], id);
+    assert_eq!(changed["payload"]["state"], "succeeded");
+    assert!(
+        changed["payload"].get("sliceRevisionId").is_none(),
+        "{changed}"
+    );
     let error = running.error(
         "get_slice_revision",
         json!({ "sliceRevisionId": revision_id }),
     );
     assert_eq!(error["code"], "NOT_FOUND");
+    // Its log was the revision's, so it went too: NOT_FOUND, not empty.
+    let error = running.error("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert_eq!(error["code"], "NOT_FOUND", "{error}");
+    assert_eq!(
+        error["message"],
+        "This slice's log was deleted with its Slice Revision."
+    );
+}
+
+#[test]
+fn a_cancel_racing_the_enqueue_waits_for_it_and_nothing_spawns() {
+    use farm3d_lib::slicing::operations::{cancel_slice_operation, SchedulerPoint};
+    use std::sync::mpsc;
+
+    enum Seen {
+        CancelWaits,
+        Cancelled(Value),
+    }
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = plates(&preparation)[0].clone();
+
+    // Hold `start_slice` between its commit and its enqueue.
+    let (committed, on_commit) = mpsc::channel::<Vec<String>>();
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let (seen, on_seen) = mpsc::channel::<Seen>();
+    let seen_waiting = Mutex::new(seen.clone());
+    let spawned = Arc::new(Mutex::new(Vec::<String>::new()));
+    let spawning = Arc::clone(&spawned);
+    running
+        .services
+        .slicing
+        .set_scheduler_hook(Some(Arc::new(move |point| match point {
+            SchedulerPoint::Committed(ids) => {
+                committed.send(ids.to_vec()).unwrap();
+                released.lock().unwrap().recv().unwrap();
+            }
+            SchedulerPoint::CancelAwaitsStart(_) => {
+                seen_waiting
+                    .lock()
+                    .unwrap()
+                    .send(Seen::CancelWaits)
+                    .unwrap();
+            }
+            SchedulerPoint::Spawning(id) => spawning.lock().unwrap().push(id.to_string()),
+        })));
+    let slicing = Arc::clone(&running.services.slicing);
+    let request = farm3d_lib::slicing::operations::StartSliceRequest {
+        operation_id: "op-race".to_string(),
+        preparation_id: preparation["id"].as_str().unwrap().to_string(),
+        expected_revision: preparation["revision"].as_i64().unwrap(),
+        plate_keys: vec![plate["plateKey"].as_str().unwrap().to_string()],
+        continue_with_source_revision: None,
+    };
+    let starter = std::thread::spawn(move || {
+        farm3d_lib::slicing::operations::start_slice(&slicing, &request).unwrap()
+    });
+    let id = on_commit.recv().unwrap().remove(0);
+    assert_eq!(running.operation(&id)["state"], "queued", "committed");
+
+    let slicing = Arc::clone(&running.services.slicing);
+    let cancel_id = id.clone();
+    let canceller = std::thread::spawn(move || {
+        let record = cancel_slice_operation(&slicing, &cancel_id).unwrap();
+        seen.send(Seen::Cancelled(serde_json::to_value(record).unwrap()))
+            .unwrap();
+    });
+    // The cancel must wait for the start, not end the row under it.
+    assert!(
+        matches!(on_seen.recv().unwrap(), Seen::CancelWaits),
+        "the cancel finished while the start still held its jobs"
+    );
+    // And it stays blocked while the start holds its lock (a fixed cancel
+    // can never finish here, so this can't flake; it only bounds how long
+    // a broken one gets to show itself).
+    assert!(
+        matches!(
+            on_seen.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the cancel finished while the start still held its jobs"
+    );
+    release.send(()).unwrap();
+    starter.join().unwrap();
+    let Seen::Cancelled(record) = on_seen.recv().unwrap() else {
+        panic!("expected the cancel's result");
+    };
+    canceller.join().unwrap();
+    assert_eq!(record["state"], "cancelled", "{record}");
+
+    wait_for("the scheduler to go idle", || {
+        running.services.slicing.scheduler_idle().then_some(())
+    });
+    running.services.slicing.set_scheduler_hook(None);
+    assert!(
+        !spawned.lock().unwrap().contains(&id),
+        "OrcaSlicer was started for a cancelled operation"
+    );
+    let operation = running.operation(&id);
+    assert_eq!(operation["state"], "cancelled");
+    assert!(operation.get("startedAt").is_none(), "it never spawned");
+    // A spawned engine reports progress even when its row can't start.
+    assert!(
+        running.events_of(&id).iter().all(|event| {
+            event["type"] != "slicing.operation.progress" && event["payload"]["state"] != "running"
+        }),
+        "it never spawned: {:#?}",
+        running.events_of(&id)
+    );
+    assert!(!running.work_dir(&id).exists());
+
+    // The queue still runs.
+    let next = ids(&running.start("op-after-race", &preparation, &[&plate])).remove(0);
+    running.wait_state(&next, "succeeded");
+}
+
+#[test]
+fn deleting_a_model_mid_slice_stops_it_and_the_queue_drains() {
+    let farm = Farm::new();
+    let running = farm.start();
+    running.scenario(&[("FAKE_ORCA_SCENARIO", "hang")]);
+    let doomed = running.import(&farm.source("orca-two-plates.3mf", "two.3mf"), "managed");
+    let kept = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let doomed_id = doomed["id"].as_str().unwrap().to_string();
+    let preparation = running.prepare(&doomed_id);
+    let two = plates(&preparation);
+    let operations = ids(&running.start("op-doomed", &preparation, &[&two[0], &two[1]]));
+    running.wait_state(&operations[0], "running");
+    let engine_pid = running.pid(&operations[0]);
+    let stored_before = running.stored_counts();
+
+    let doomed = running.ok("list_library", json!({}))["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == doomed_id.as_str())
+        .cloned()
+        .unwrap();
+    running.ok(
+        "delete_model",
+        json!({ "id": doomed_id, "expectedRevision": doomed["revision"] }),
+    );
+    wait_for("the engine to be stopped", || {
+        (!process_alive(engine_pid)).then_some(())
+    });
+    wait_for("the scheduler to go idle", || {
+        running.services.slicing.scheduler_idle().then_some(())
+    });
+    for id in &operations {
+        assert!(!running.work_dir(id).exists());
+    }
+    let rows: i64 = running
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM slice_operations", [], |row| {
+                row.get(0)
+            })
+        })
+        .unwrap();
+    assert_eq!(rows, 0, "the operations went with the Model");
+    assert_eq!(running.stored_counts().1, stored_before.1, "no revision");
+
+    // The next slice, of another Model, runs.
+    running.scenario(&[]);
+    let preparation = running.prepare(kept["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-kept", &preparation, &[plate])).remove(0);
+    running.wait_state(&id, "succeeded");
+}
+
+#[test]
+fn a_preparation_with_active_slices_is_not_deleted() {
+    let farm = Farm::new();
+    let running = farm.start();
+    running.scenario(&[("FAKE_ORCA_SCENARIO", "hang")]);
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-busy", &preparation, &[plate])).remove(0);
+    running.wait_state(&id, "running");
+    let error = running.error(
+        "delete_preparation",
+        json!({ "preparationId": preparation["id"], "expectedRevision": preparation["revision"] }),
+    );
+    assert_eq!(error["code"], "CONFLICT", "{error}");
+    running.ok("cancel_slice_operation", json!({ "sliceOperationId": id }));
+    running.ok(
+        "delete_preparation",
+        json!({ "preparationId": preparation["id"], "expectedRevision": preparation["revision"] }),
+    );
+}
+
+#[test]
+fn continuing_with_another_source_revision_is_invalid() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let error = running.error(
+        "start_slice",
+        json!({
+            "operationId": "op-mismatch",
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+            "plateKeys": [plate["plateKey"]],
+            "continueWithSourceRevision": "msr-00000000-0000-0000-0000-000000000000",
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "continueWithSourceRevision");
+    assert_eq!(running.slicing()["activeAndRecentOperations"], json!([]));
+}
+
+#[test]
+fn a_slice_that_cannot_be_stored_fails_with_its_log() {
+    use farm3d_lib::library::content::ContentFailurePoint;
+
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plate = &plates(&preparation)[0];
+    // The revision's placement fails once, as a full disk would.
+    running
+        .services
+        .library
+        .content
+        .inject_failure_once(ContentFailurePoint::AfterPlacementBeforeCommit);
+    let id = ids(&running.start("op-unstored", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "failed");
+    assert_eq!(
+        operation["failure"]["code"]["kind"], "storageFailed",
+        "{operation}"
+    );
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([])
+    );
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert!(
+        log["text"]
+            .as_str()
+            .unwrap()
+            .contains("fake-orca scenario success"),
+        "the log is kept: {log}"
+    );
 }
 
 /// The same IPC path against a real OrcaSlicer (spec D23): `FARM3D_ORCA`
