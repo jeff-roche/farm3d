@@ -28,6 +28,13 @@ PDEATHSIG test. A race in the SIGTERM-grace test is fixed, and five minor
 review findings are fixed. The details are in
 [Final fix round](#final-fix-round) below.
 
+**Update, cleanup round (after the final fix round):** the known issues
+left over are fixed. Unpublished operation logs are now pruned, a worker
+panic after the engine ran keeps the run's log, the process-test guards
+no longer risk signalling a reused pid, and the 7 Printer Profile override
+keys have a real-Orca header test. The details are in
+[Cleanup round](#cleanup-round) below.
+
 ## Environment
 
 - Linux 7.2.6-1-cachyos, x86_64. KDE Plasma on Wayland, with Xwayland 24.1.13.
@@ -190,7 +197,7 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 |---|---|---|---|
 | 1 | Migration | **met** | `p5_migration`: `fresh_database_records_the_v6_ledger_row_with_a_matching_checksum`, `upgrading_v5_to_v6_keeps_every_existing_row_and_survives_a_restart`, `a_crash_before_commit_leaves_the_database_unchanged_at_v5`, `revisions_and_their_blobs_reject_updates_but_allow_a_guarded_delete`, and `revision_checks_enforce_plate_and_runtime_exclusivity`. |
 | 2 | Runtime | **met** | `slicing::runtime` tests: `version_lines_parse_as_d2_specifies`, `garbage_output_is_a_probe_failure`, `a_release_ranks_above_a_prerelease_of_the_same_version`, `the_probe_runs_in_a_scratch_directory_with_the_allowlisted_environment`, `appimage_profiles_are_extracted_once_and_keep_only_json`, `a_cache_only_appimage_is_unreadable`, and `an_engine_without_readable_presets_is_presets_unreadable`. Also `real_orca_engine_probes_as_a_supported_version`. |
-| 3 | Presets | **met** (final fix round) | `flattening_merges_the_chain_and_keeps_system_identity`, the committed `flat-presets.json` fixture, the offered and compatibility tests, `a_missing_preset_is_preset_not_found`, and `real_orca_preset_source_knows_every_mapped_key`. Writing each mapped control changes the G-code header: `real_orca_each_mapped_control_changes_its_gcode_header_claim` passes on v2.4.2 for all 11 controls (12 keys; results under [Final fix round](#final-fix-round)). This pass had found no such test. The 7 Printer Profile override keys are checked as known to v2.4.2 and as reaching the machine preset JSON, but no test slices with each one and compares headers. |
+| 3 | Presets | **met** (final fix round) | `flattening_merges_the_chain_and_keeps_system_identity`, the committed `flat-presets.json` fixture, the offered and compatibility tests, `a_missing_preset_is_preset_not_found`, and `real_orca_preset_source_knows_every_mapped_key`. Writing each mapped control changes the G-code header: `real_orca_each_mapped_control_changes_its_gcode_header_claim` passes on v2.4.2 for all 11 controls (12 keys; results under [Final fix round](#final-fix-round)). This pass had found no such test. Each of the 7 Printer Profile override keys changes its header too: `real_orca_each_profile_override_changes_its_gcode_header_claim` passes on v2.4.2 (cleanup round, `05e4bb8`; results under [Cleanup round](#cleanup-round)). |
 | 4 | Mapping | **met** | `every_profile_field_is_mapped_or_not_applicable`, `an_unmapped_override_blocks_slicing`, `an_unknown_override_key_blocks_slicing_for_a_printer`, and `every_mapped_key_is_known_to_the_fixture_preset_source`. |
 | 5 | Deterministic invocation fixtures | **met** | `the_deterministic_invocation_fixtures_match_the_committed_ones` (plate 3MF, argument vectors, flat presets). Regenerating gives no diff. |
 | 6 | Two-plate identity | **met** | `a_two_plate_preparation_slices_into_two_revisions_of_one_source` (fake-orca), `real_orca_places_a_written_plate_exactly`, and both tracers. Native: two revisions with distinct plate keys and one source, in dev, the packaged .deb binary, and the AppImage. |
@@ -276,8 +283,8 @@ On v2.4.2 (the AppImage above), every key changed as expected:
 | `skirtLoops` | 2 | `skirt_loops` | 0 → 2 |
 
 The test takes about 8 s for 12 slices. The Printer Profile override keys
-(`printable_area`, `nozzle_diameter`, and the others) are not covered by
-this test; see spec AC3 above.
+(`printable_area`, `nozzle_diameter`, and the others) have their own test,
+added in the cleanup round; see [Cleanup round](#cleanup-round).
 
 ### The SIGTERM-grace race
 
@@ -354,12 +361,118 @@ deleted.
 
 ### Follow-ups
 
-- **Operation-log retention.** The logs of failed and cancelled operations
-  (up to 4 MiB each) are kept until their Preparation or Model is deleted.
-  Nothing prunes them sooner.
+- **Operation-log retention.** Resolved in the cleanup round (`368a518`):
+  each Preparation keeps the logs of only its 5 most recent failed or
+  cancelled operations. See [Cleanup round](#cleanup-round).
 - **Focus after the P4 import dialog.** After **Done**, focus returns to
   the start of the document, not to **Import…** (see "Other observations"
   below). This is still open.
+
+## Cleanup round
+
+Fixes for the known issues left after the final fix round, on branch
+`feature/p5-runtime-slicing`.
+
+| Commit | What it does |
+|---|---|
+| `368a518` | Prunes unpublished operation logs past 5 per Preparation |
+| `f5c4962` | Keeps the run's log when the worker panics after the engine ran |
+| `41463e9` | Disarms the PDEATHSIG tests' process guards, and dedupes a wait loop |
+| `05e4bb8` | Adds the real-Orca header test for the Printer Profile override keys |
+
+### Operation-log retention
+
+For each Preparation, only the 5 most recent failed or cancelled
+operations (by end time, then id) keep their logs
+(`KEPT_UNPUBLISHED_LOGS` in `slicing/repository.rs`). Older ones keep
+their rows, with `log_sha256` set to NULL. Their blobs are marked through
+`mark_unreferenced_blobs` and unlinked after commit by
+`release_unreferenced`. The pruning runs in the same transaction as every
+move to `failed` or `cancelled`, including `record_unpublished`. Startup
+recovery runs it once over every Preparation, and startup then releases
+the freed blobs. Succeeded, queued, running, and interrupted operations
+are never touched, and neither are Slice Revision logs.
+
+A log-less failed or cancelled operation (for example, one cancelled
+before it spawned) counts toward the 5, as the ruling reads. The schema
+can't tell a pruned log from one that was never written, so the operation
+panel's empty-log note now reads "No log is kept for this attempt." for
+both.
+
+Tests: `a_sixth_unpublished_log_drops_the_oldest_and_marks_its_blob`,
+`a_tie_in_ending_time_prunes_the_lower_id_first`, and
+`pruning_leaves_succeeded_active_and_revision_logs_alone`
+(`slicing::repository`); `a_sixth_failure_prunes_the_oldest_log_and_releases_its_blob`
+and `startup_recovery_prunes_a_database_seeded_with_more_than_five_logs`
+(`slicing::publish`); and "says no log is kept for a finished attempt
+whose log is empty" (`PreparationPanel.test.tsx`).
+
+### A worker panic after the engine ran
+
+`run_job` now catches a panic in the stage after the engine exits (the
+`Exited` hook, the last progress event, and `finish_run`) and fails the
+operation with `internalError` and the run's log. `run_worker`'s guard
+still covers a panic before or during the run. The existing panic test now
+injects at `Spawning`, where there is no log. A new test,
+`a_worker_panic_after_the_engine_ran_keeps_its_log`, injects at `Exited`
+and finds fake-orca's output in the failed operation's log. It fails
+without the fix.
+
+### Test hygiene
+
+The PDEATHSIG tests disarm their `KillOnDrop` guard once `gone_within`
+confirms the engine is gone, so a reaped and reused pid is never
+signalled. The intermediate parent process has a `ReapOnDrop` guard, so a
+failed assertion never leaves it running.
+`real_orca_slices_a_cube_through_the_commands` now calls
+`wait_for_real_success` instead of repeating its wait loop.
+
+### AC3: the Printer Profile override keys
+
+`real_orca_each_profile_override_changes_its_gcode_header_claim` is in
+`tests/p5_process.rs`, beside the other real-Orca process tests. It uses
+the engine's own Elegoo Centauri Carbon presets. It first slices the
+golden plate with the machine preset as it is. It then writes each mapped
+override through D4's `apply_profile_overrides` and slices again. It
+requires that the `CONFIG_BLOCK` claim equals the value written and
+differs from the baseline, and that every mapped field in
+`PROFILE_FIELD_MAPPINGS` has a case.
+
+It drives the mapping directly, not the commands. A Printer can override
+only `bedShape`, `printableHeightMm`, `bedExcludeAreas`, and
+`defaultBedType` (`PrinterProfileOverrides`), so the commands can never
+write `nozzle_diameter`, `nozzle_type`, or `gcode_flavor`.
+
+On v2.4.2, every key changed as expected, and every slice was valid:
+
+| Field | Key | Baseline → header |
+|---|---|---|
+| `bedShape` | `printable_area` | 0x0,256x0,256x256,0x256 → 0x0,300x0,300x280,0x280 |
+| `printableHeightMm` | `printable_height` | 256 → 200 |
+| `bedExcludeAreas` | `bed_exclude_area` | 246x0,256x0,256x20,246x20 → 0x0,20x0,20x20,0x20 |
+| `nozzleDiameterMm` | `nozzle_diameter` | 0.4 → 0.6 |
+| `nozzleType` | `nozzle_type` | hardened_steel → stainless_steel |
+| `gcodeFlavor` | `gcode_flavor` | klipper → marlin2 |
+| `defaultBedType` | `default_bed_type` | 4 → Cool Plate |
+
+The test takes about 12 s for 8 slices.
+
+### Gates (cleanup round)
+
+Run at `05e4bb8`, with `source "$HOME/.cargo/env"`.
+
+| Command | Exit | Result |
+|---|---|---|
+| `just build` | 0 | `tsc` and the Vite build pass. |
+| `just test` | 0 | 89 files, 1157 tests passed. |
+| `cd src-tauri && cargo test --features test-support` | 0 | 971 passed, 0 failed, 16 ignored, across 39 test binaries. |
+| `cargo clippy --all-targets --features test-support` | 0 | No new warnings in the files this round changed. |
+| `cargo fmt --check` | 0 | Clean. |
+| `just gen-contracts`, then `git status` | 0 | No diff. |
+| `FARM3D_ORCA=~/Downloads/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage just test-orca` | 0 | All 10 `real_orca*` tests pass, including the new override test. No `/tmp/.mount_*` or `orca-slicer` process was left. |
+
+The native app was not re-checked in this round. The only visible change
+is the wording of the empty-log note.
 
 ## Defects found
 
@@ -518,8 +631,10 @@ redone.
 - **Recovery can miss a real AppImage engine** during its `/bin/sh`
   `orca-slicer-env` wrapper phase. PDEATHSIG is the primary guard, and the
   gap is documented in D10 and ADR-0009.
-- **When the slicing worker panics after its engine ran,** the run's log is
-  lost (`fail_operation(…, None, …)`).
+- **When the slicing worker panics after its engine ran,** the run's log
+  used to be lost (`fail_operation(…, None, …)`). Resolved in the cleanup
+  round (`f5c4962`): the operation fails with `internalError` and keeps the
+  log.
 - **`SchedulerPoint::Exited`** is a `#[doc(hidden)]` test seam in
   production code.
 - **Spec D20's wording** differs from the Task 12 ledger ruling.
