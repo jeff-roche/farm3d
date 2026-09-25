@@ -1965,9 +1965,10 @@ fn config_claims(gcode: &[u8]) -> std::collections::BTreeMap<String, String> {
 fn real_orca_each_mapped_control_changes_its_gcode_header_claim() {
     use farm3d_lib::slicing::mapping::CONTROL_MAPPINGS;
 
-    // Each control, the value written, and the header claim expected for
-    // each OrcaSlicer key it maps to.
-    let cases: [(&str, Value, &[(&str, &str)]); 11] = [
+    /// A control, the value written, and the header claim expected for
+    /// each OrcaSlicer key it maps to.
+    type Case = (&'static str, Value, &'static [(&'static str, &'static str)]);
+    let cases: [Case; 11] = [
         ("layerHeightMm", json!(0.12), &[("layer_height", "0.12")]),
         ("wallLoops", json!(5), &[("wall_loops", "5")]),
         ("topShellLayers", json!(6), &[("top_shell_layers", "6")]),
