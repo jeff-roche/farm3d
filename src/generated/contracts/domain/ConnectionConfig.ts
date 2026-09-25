@@ -2,7 +2,8 @@
 
 export type ConnectionConfig = {
 /**
- * `"moonraker"` today; phase 3 adds `"octoprint"` and `"elegoolink"`.
+ * `"moonraker"` or `"octoprint"` today; `"elegoolink"` is pending its
+ * protocol spike.
  * A free string rather than an enum so an unknown kind written by a
  * newer farm3d round-trips through an older one instead of failing the
  * whole `printers.json` load.

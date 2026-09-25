@@ -35,3 +35,6 @@ packaging/arch/*.deb
 *.njsproj
 *.sln
 *.sw?
+
+# Local denylist for `just check-hosts` (never commit it)
+.private-hosts

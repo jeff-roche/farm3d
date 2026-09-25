@@ -49,9 +49,9 @@ export interface IntakeResult {
   warnings: IntakeIssue[];
 }
 
-/** Adapter kinds this build actually supports (mirrors
- *  `PrinterConnectionPanel`'s `KINDS` — only Moonraker today). */
-const SUPPORTED_PROTOCOLS = new Set(["moonraker"]);
+/** Adapter kinds this build actually supports (mirrors `ConnectionFields`'
+ *  `KINDS` and the backend's `SUPPORTED_KINDS`). */
+const SUPPORTED_PROTOCOLS = new Set(["moonraker", "octoprint"]);
 
 const KNOWN_COLUMNS = new Set(["name", "location", "host", "port", "protocol", "tls"]);
 
@@ -107,6 +107,10 @@ function splitFields(line: string, delimiter: string): string[] {
 function parseTls(value: string): boolean {
   return ["true", "yes", "1"].includes(value.trim().toLowerCase());
 }
+
+/** No adapter speaks TLS yet (A0.1, #9, decision B4), so a row that asks
+ *  for it is an error rather than a Connection that can never connect. */
+const TLS_UNSUPPORTED = "TLS connections are not supported yet.";
 
 export function parseIntake(text: string, newRowId: () => string): IntakeResult {
   const lines = text.split(/\r\n|\r|\n/);
@@ -171,7 +175,10 @@ export function parseIntake(text: string, newRowId: () => string): IntakeResult 
     const host = hostIndex === -1 ? "" : (fields[hostIndex] ?? "").trim();
     const protocolRaw = protocolIndex === -1 ? "" : (fields[protocolIndex] ?? "").trim();
     const protocol = protocolRaw === "" ? "moonraker" : protocolRaw.toLowerCase();
-    const useTls = tlsIndex === -1 ? false : parseTls(fields[tlsIndex] ?? "");
+    if (tlsIndex !== -1 && parseTls(fields[tlsIndex] ?? "")) {
+      errors.push({ line: lineNumber, message: TLS_UNSUPPORTED });
+      continue;
+    }
 
     let port: number | null = null;
     const portRaw = portIndex === -1 ? "" : (fields[portIndex] ?? "").trim();
@@ -193,7 +200,7 @@ export function parseIntake(text: string, newRowId: () => string): IntakeResult 
       host,
       port,
       protocol,
-      useTls,
+      useTls: false,
       credential: { source: "none" },
       selected: true,
     });

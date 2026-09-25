@@ -332,7 +332,7 @@ describe("PrinterBatchDialog — Connect step", () => {
     expect(screen.getByLabelText("Port for row 3")).toHaveValue("7125");
   });
 
-  it("applies protocol, port, TLS, and credential source to the selected rows only", async () => {
+  it("applies protocol, port, and credential source to the selected rows only, offering no TLS option", async () => {
     renderDialog();
     await toConnectStep();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Voron 03" }));
@@ -340,7 +340,8 @@ describe("PrinterBatchDialog — Connect step", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: /^Protocol/ }), { pointerType: "mouse", button: 0 });
     fireEvent.click(await screen.findByRole("option", { name: "Moonraker (Klipper)" }));
     fireEvent.input(screen.getByLabelText("Port"), { target: { value: "7130" } });
-    fireEvent.click(screen.getByLabelText("Use TLS"));
+    // A0.1 (#9), decision B4: no adapter supports TLS yet.
+    expect(screen.queryByLabelText("Use TLS")).not.toBeInTheDocument();
     fireEvent.pointerDown(screen.getByRole("button", { name: /^Credential source/ }), { pointerType: "mouse", button: 0 });
     fireEvent.click(await screen.findByRole("option", { name: "Shared" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply to selected" }));
@@ -348,11 +349,9 @@ describe("PrinterBatchDialog — Connect step", () => {
     const rows = screen.getAllByTestId(/^row-/);
     for (const row of rows.slice(0, 2)) {
       expect(within(row).getByLabelText(/^Port for row/)).toHaveValue("7130");
-      expect(within(row).getByText("On")).toBeInTheDocument();
       expect(within(row).getByText("Shared")).toBeInTheDocument();
     }
     expect(within(rows[2]).getByLabelText(/^Port for row/)).toHaveValue("");
-    expect(within(rows[2]).getByText("Off")).toBeInTheDocument();
     expect(within(rows[2]).getByText("None")).toBeInTheDocument();
   });
 

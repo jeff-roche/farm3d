@@ -43,11 +43,12 @@ describe("parseIntake", () => {
     expect(result.errors[0].message).toMatch(/name/i);
   });
 
-  it("parses tls yes as true", () => {
-    const text = "name,host,tls\nVoron A,v1.local,yes";
+  it("rejects a row that asks for TLS, which no adapter supports yet", () => {
+    // A0.1 (#9), decision B4.
+    const text = "name,host,tls\nVoron A,v1.local,yes\nVoron B,v2.local,no";
     const result = parseIntake(text, idGen());
-    expect(result.errors).toEqual([]);
-    expect(result.rows[0].useTls).toBe(true);
+    expect(result.errors).toEqual([{ line: 2, message: "TLS connections are not supported yet." }]);
+    expect(result.rows.map((row) => [row.name, row.useTls])).toEqual([["Voron B", false]]);
   });
 
   it("reports a bad port as a line error while other lines survive", () => {
@@ -185,9 +186,16 @@ describe("mapDiscovery", () => {
   });
 
   it("flags an unsupported kind as unsupported", () => {
-    const candidates = [candidate({ kind: "octoprint", host: "oct.local", port: 80 })];
+    const candidates = [candidate({ kind: "elegoolink", host: "cc.local", port: 3030 })];
     const result = mapDiscovery(candidates, [], []);
-    expect(result.get("oct.local:80")).toEqual({ kind: "unsupported" });
+    expect(result.get("cc.local:3030")).toEqual({ kind: "unsupported" });
+  });
+
+  it("treats a discovered OctoPrint instance as supported", () => {
+    const candidates = [candidate({ kind: "octoprint", host: "octopi.local", port: 80 })];
+    const rows = [row({ rowId: "row-1", host: "octopi.local", port: 80, protocol: "octoprint" })];
+    const result = mapDiscovery(candidates, rows, []);
+    expect(result.get("octopi.local:80")).toEqual({ kind: "assignable", rowId: "row-1" });
   });
 
   it("matches a row whose host is candidate's addresses[1]", () => {

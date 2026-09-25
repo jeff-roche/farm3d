@@ -1125,6 +1125,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "quick-xml",
+ "reqwest",
  "rusqlite",
  "rustix",
  "serde",

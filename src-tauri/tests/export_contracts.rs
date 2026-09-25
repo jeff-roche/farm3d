@@ -15,8 +15,9 @@ use farm3d_lib::connections::supervisor::{
     PrinterStatusEventType, PrinterStatusRow,
 };
 use farm3d_lib::connections::{
-    status_repository::PrinterTelemetry, ConnectionConfig, ConnectionState, PrinterStatus,
-    ProbeResult, ReportedCapabilities, StatusCacheWarning, StatusCacheWarningOperation,
+    status_repository::{PrinterTelemetry, ToolTemperature},
+    ConnectionConfig, ConnectionState, PrinterStatus, ProbeResult, ReportedCapabilities,
+    StatusCacheWarning, StatusCacheWarningOperation,
 };
 use farm3d_lib::contracts::command::{
     CommandError, CommandSuccess, CorrelationId, ErrorCode, JsonNumber, JsonValue, RecoveryCode,
@@ -281,6 +282,7 @@ fn export_registry() -> Vec<Export> {
         export::<OperationalResult>(),
         export::<PrinterStatus>(),
         export::<PrinterTelemetry>(),
+        export::<ToolTemperature>(),
         export::<PrinterSetupFacts>(),
         export::<PrinterStatusEventType>(),
         export::<PrinterStatusEventPayload>(),

@@ -3,4 +3,4 @@
 /**
  * The normalized activity vocabulary supplied by a host adapter.
  */
-export type HostActivity = "idle" | "printing" | "paused" | "busy" | "unknown";
+export type HostActivity = "idle" | "printing" | "paused" | "busy" | "finished" | "cancelled" | "failed" | "unknown";

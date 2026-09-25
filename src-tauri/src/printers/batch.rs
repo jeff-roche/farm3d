@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 
 use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, ResolvedPrinter};
 use crate::catalog::{BedShape, PrinterProfile};
-use crate::connections::{ConnectionConfig, ProbeResult, ReportedCapabilities, MOONRAKER_KIND};
+use crate::connections::{ConnectionConfig, ProbeResult, ReportedCapabilities};
 use crate::contracts::command::{
     CommandError, CommandSuccess, ErrorCode, IncomingContractVersion, JsonValue,
 };
@@ -564,7 +564,7 @@ impl PlanState<'_> {
         connection: BatchRowConnection,
     ) -> Result<Result<PlannedConnection, BatchRowError>, CommandError> {
         let path = |field: &str| format!("rows[{index}].connection.{field}");
-        if connection.kind != MOONRAKER_KIND {
+        if !crate::connections::is_supported_kind(&connection.kind) {
             return Ok(Err(row_error(
                 &CommandError::unsupported_adapter(&connection.kind),
                 Some(path("kind")),
@@ -578,6 +578,12 @@ impl PlanState<'_> {
             return Ok(Err(validation_error(
                 path("port"),
                 "The port must be positive.",
+            )));
+        }
+        if connection.use_tls {
+            return Ok(Err(validation_error(
+                path("useTls"),
+                crate::connections::TLS_UNSUPPORTED_MESSAGE,
             )));
         }
         let secret = match &connection.credential {

@@ -1,5 +1,12 @@
 # OctoPrint Adapter Implementation Plan
 
+> **Status (2026-09-25, issue #10):** Implemented on
+> `feature/a0-2-octoprint-monitoring`, adapted to the P1–P5 trait shape
+> (`ConnectionObservation`, `PrinterTelemetry`, `HostActivity`) and to the
+> five kind gates that exist by now. The task-by-task code below is kept
+> as the original design record. For the differences and the live
+> evidence, see `docs/verification/2026-09-25-a0-2-octoprint.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make OctoPrint the second real `PrinterConnection` — configure an OctoPrint printer, test the connection, and stream its live temperatures, job state, and progress onto the dashboard, exactly as phase 2 did for Moonraker.

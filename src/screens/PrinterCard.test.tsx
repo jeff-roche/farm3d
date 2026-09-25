@@ -47,4 +47,20 @@ describe("PrinterCard", () => {
     expect(screen.getByText("Nozzle — / —")).toBeInTheDocument();
     expect(screen.queryByText("0 °C")).not.toBeInTheDocument();
   });
+
+  it("shows each tool of a multi-tool printer in place of the single Nozzle reading", () => {
+    // A0.1 (#9), decision B2.
+    render(() => <PrinterCard printer={view({
+      readings: {
+        nozzleTempC: 24, nozzleTargetC: 0, bedTempC: 22, bedTargetC: 0,
+        tools: [{ index: 0, tempC: 24, targetC: 0 }, { index: 1, tempC: 25, targetC: 210 }, { index: 2 }],
+      },
+    })} onSelect={vi.fn()} />);
+
+    expect(screen.getByText("T0 24 °C / 0 °C")).toBeInTheDocument();
+    expect(screen.getByText("T1 25 °C / 210 °C")).toBeInTheDocument();
+    expect(screen.getByText("T2 — / —")).toBeInTheDocument();
+    expect(screen.getByText("Bed 22 °C / 0 °C")).toBeInTheDocument();
+    expect(screen.queryByText(/^Nozzle/)).not.toBeInTheDocument();
+  });
 });

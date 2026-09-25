@@ -30,7 +30,7 @@ export interface MonitorPrinterView {
   hasMissingReadings: boolean;
   readings: Pick<
     PrinterStatus["telemetry"],
-    "progress" | "nozzleTempC" | "nozzleTargetC" | "bedTempC" | "bedTargetC" | "printDurationS"
+    "progress" | "nozzleTempC" | "nozzleTargetC" | "bedTempC" | "bedTargetC" | "printDurationS" | "tools"
   >;
   lastObservedAt?: string;
   freshUntil?: string;
@@ -118,6 +118,9 @@ const operationalLabels: Record<NonNullable<PrinterStatus["operationalState"]>, 
   printing: "Printing",
   paused: "Paused",
   busy: "Busy",
+  finished: "Finished",
+  cancelled: "Cancelled",
+  failed: "Print failed",
   ready: "Ready",
   unknown: "Unknown",
 };
@@ -129,6 +132,8 @@ const readinessLabels = {
   refreshing: "Refreshing status",
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
+  bedNeedsClearing: "Bed needs clearing",
+  printFailed: "Check the printer",
   unknownState: "Unknown state",
   archived: "Archived",
 } as const;
@@ -141,6 +146,11 @@ export function operationalLabel(status: PrinterStatus | undefined): string {
 
 function statusSummary(status: PrinterStatus | undefined): string {
   if (!status || status.freshness === "unavailable") return "Telemetry unavailable";
+  // An ended job's host name ("complete", "error") says less than the action
+  // it calls for.
+  if (status.readiness.reason === "bedNeedsClearing" || status.readiness.reason === "printFailed") {
+    return readinessLabels[status.readiness.reason];
+  }
   const telemetry = status.telemetry;
   const activity = telemetry.hostActivity === "printing" ? "Host print" : "Host activity";
   const detail = telemetry.hostActivityName
@@ -170,7 +180,8 @@ function severityLabel(severity: MonitorSeverity): string | undefined {
 function hasMissingReadings(status: PrinterStatus | undefined): boolean {
   const telemetry = status?.telemetry;
   return telemetry?.nozzleTempC === undefined || telemetry?.nozzleTargetC === undefined
-    || telemetry?.bedTempC === undefined || telemetry?.bedTargetC === undefined;
+    || telemetry?.bedTempC === undefined || telemetry?.bedTargetC === undefined
+    || (telemetry.tools ?? []).some((tool) => tool.tempC === undefined || tool.targetC === undefined);
 }
 
 function capitalize(value: string): string {
@@ -222,6 +233,7 @@ function toView(printer: ResolvedPrinter): MonitorPrinterView {
       bedTempC: telemetry?.bedTempC,
       bedTargetC: telemetry?.bedTargetC,
       printDurationS: telemetry?.printDurationS,
+      tools: telemetry?.tools,
     },
     lastObservedAt: status?.lastObservedAt,
     freshUntil: status?.freshUntil,

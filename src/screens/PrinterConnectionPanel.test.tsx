@@ -56,6 +56,28 @@ describe("buildMismatches", () => {
     expect(buildMismatches(PROFILE, { bedWidthMm: 256.4 })).toEqual([]);
   });
 
+  it("does not warn when the host reports more travel than the catalog volume", () => {
+    // A0.1 (#9), decision B3: a Snapmaker U1 reports 271 × 335 × 281 mm of
+    // axis travel for a 270 mm cube, because parking and tool-change moves
+    // inflate the limits. Extra travel is not a wrong variant.
+    const cube = {
+      bedShape: { kind: "rectangular", widthMm: 270, depthMm: 270, originXMm: 0, originYMm: 0 },
+      printableHeightMm: 270,
+    } as unknown as PrinterProfile;
+    expect(
+      buildMismatches(cube, { bedWidthMm: 271, bedDepthMm: 335, printableHeightMm: 281 }),
+    ).toEqual([]);
+  });
+
+  it("warns only for the axes where the host reports less than the catalog", () => {
+    const cube = {
+      bedShape: { kind: "rectangular", widthMm: 270, depthMm: 270, originXMm: 0, originYMm: 0 },
+      printableHeightMm: 270,
+    } as unknown as PrinterProfile;
+    const mismatches = buildMismatches(cube, { bedWidthMm: 271, bedDepthMm: 220, printableHeightMm: 281 });
+    expect(mismatches).toEqual(["Bed depth: catalog says 270 mm, the printer reports 220 mm"]);
+  });
+
   it("says nothing for a non-rectangular bed", () => {
     const polygon = { bedShape: { kind: "polygon", points: [] }, printableHeightMm: 256 } as never;
     expect(buildMismatches(polygon, { bedWidthMm: 1 })).toEqual([]);
@@ -76,6 +98,22 @@ describe("PrinterConnectionPanel", () => {
     } as unknown as ResolvedPrinter;
     render(() => <PrinterConnectionPanel printer={suggested} />);
     expect(await screen.findByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
+  });
+
+  it("defaults to OctoPrint on port 80 when the catalog suggests it", async () => {
+    const suggested = {
+      ...printer,
+      profile: { ...PROFILE, suggestedHostType: "octoprint" },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={suggested} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "octopi.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: /OctoPrint/ })).toBeInTheDocument();
+    expect(setConnection).toHaveBeenCalledWith(
+      "prn-1",
+      expect.objectContaining({ kind: "octoprint", host: "octopi.local", port: 80 }),
+    );
   });
 
   it("submits host and port without echoing an unset API key", async () => {

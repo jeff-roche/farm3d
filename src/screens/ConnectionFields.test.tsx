@@ -88,6 +88,43 @@ describe("ConnectionFields", () => {
     expect(screen.queryByText(/Moonraker 0\.9/)).not.toBeInTheDocument();
   });
 
+  it("offers OctoPrint as a selectable kind and switches to its default port", async () => {
+    render(() => <Harness onTest={vi.fn()} />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Moonraker/ }), { pointerType: "mouse", button: 0 });
+    fireEvent.click(await screen.findByRole("option", { name: "OctoPrint" }));
+
+    expect(await screen.findByRole("button", { name: /OctoPrint/ })).toBeInTheDocument();
+    expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe("80");
+  });
+
+  it("seeds OctoPrint and port 80 from a catalog-suggested octoprint host type", () => {
+    const onChange = vi.fn();
+    render(() => (
+      <ConnectionFields value={DEFAULT_DRAFT} onChange={onChange} suggestedKind="octoprint" onTest={vi.fn()} />
+    ));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ kind: "octoprint", port: 80 }));
+  });
+
+  it("renders an OctoPrint probe without an empty firmware slot", async () => {
+    const onTest = vi.fn().mockResolvedValue({
+      kind: "octoprint",
+      hostSoftware: "1.11.8",
+      firmware: "",
+      reportedName: "Default",
+      state: "Operational",
+      stateMessage: "",
+      reported: {},
+    });
+    render(() => <Harness onTest={onTest} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+
+    expect(await screen.findByText("Operational")).toBeInTheDocument();
+    expect(screen.getByText("Default — 1.11.8")).toBeInTheDocument();
+  });
+
   it("ignores a catalog-suggested kind this build can't connect to", () => {
     const onChange = vi.fn();
     render(() => (

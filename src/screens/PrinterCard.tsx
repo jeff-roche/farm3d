@@ -1,7 +1,7 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { Button, SeverityMarker } from "../design-system";
 import type { MonitorPrinterView } from "../monitor/monitor-store";
-import { formatTemperature } from "./monitor-printer-presentation";
+import { formatTemperature, nozzleReadings } from "./monitor-printer-presentation";
 import styles from "./PrinterCard.module.css";
 
 export interface PrinterCardProps {
@@ -28,7 +28,9 @@ export function PrinterCard(props: PrinterCardProps) {
       </div>
       <span class={styles.detail}>{props.printer.statusSummary}</span>
       <div class={styles.readings}>
-        <span>Nozzle {formatTemperature(props.printer.readings.nozzleTempC, props.printer.readings.nozzleTargetC)}</span>
+        <For each={nozzleReadings(props.printer.readings)}>
+          {(reading) => <span>{reading.label} {reading.value}</span>}
+        </For>
         <span>Bed {formatTemperature(props.printer.readings.bedTempC, props.printer.readings.bedTargetC)}</span>
       </div>
       <Show when={props.printer.freshnessLabel}>

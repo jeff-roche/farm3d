@@ -94,11 +94,13 @@ describe("BatchRowsTable — edit mode", () => {
 });
 
 describe("BatchRowsTable — connect mode", () => {
-  it("edits host and port inline and shows protocol, TLS, and credential source", () => {
+  it("edits host and port inline and shows protocol and credential source, with no TLS column", () => {
     const props = renderTable({
       mode: "connect",
-      rows: [row({ host: "10.0.0.5", port: 7125, useTls: true, credential: { source: "shared" } })],
+      rows: [row({ host: "10.0.0.5", port: 7125, credential: { source: "shared" } })],
     });
+    // A0.1 (#9), decision B4: no adapter supports TLS yet.
+    expect(screen.queryByText("TLS")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Host for row 1")).toHaveValue("10.0.0.5");
     fireEvent.input(screen.getByLabelText("Port for row 1"), { target: { value: "7130" } });
     expect(props.onChange).toHaveBeenCalledWith("r1", { port: 7130 });
@@ -106,7 +108,6 @@ describe("BatchRowsTable — connect mode", () => {
     expect(props.onChange).toHaveBeenCalledWith("r1", { host: "10.0.0.6" });
     const cells = screen.getByTestId("row-r1");
     expect(within(cells).getByText("moonraker")).toBeInTheDocument();
-    expect(within(cells).getByText("On")).toBeInTheDocument();
     expect(within(cells).getByText("Shared")).toBeInTheDocument();
   });
 
