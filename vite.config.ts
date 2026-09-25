@@ -9,8 +9,10 @@ export default defineConfig(async () => ({
   plugins: [solid()],
 
   build: {
-    // three.js alone is a ~550 kB chunk. It is loaded lazily, only when a
-    // 3D viewport first mounts (src/slicing/viewport/renderer-factory.ts).
+    // Only the three.js chunk (~557 kB) is above Vite's 500 kB default. It
+    // is loaded lazily, when a 3D viewport first mounts
+    // (src/slicing/viewport/renderer-factory.ts); the main chunk stays
+    // under 500 kB.
     chunkSizeWarningLimit: 600,
   },
 

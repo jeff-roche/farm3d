@@ -5,6 +5,7 @@ import {
   createSignal,
   createUniqueId,
   For,
+  lazy,
   Match,
   on,
   onCleanup,
@@ -37,7 +38,10 @@ import {
 } from "./library-presentation";
 import styles from "./ModelDetailsPanel.module.css";
 import { ModelThumbnail } from "./ModelGrid";
-import { ModelPlateInspector } from "./ModelPlateInspector";
+
+// The 3D inspector (and the viewport it builds on) loads on first use, to
+// keep it out of the main chunk.
+const ModelPlateInspector = lazy(async () => ({ default: (await import("./ModelPlateInspector")).ModelPlateInspector }));
 
 export interface ModelDetailsPanelProps {
   model: ModelRecord;

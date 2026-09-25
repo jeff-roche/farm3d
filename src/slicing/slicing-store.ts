@@ -7,12 +7,11 @@ import {
   retryOnTransportFailure,
 } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
-import { buildWebLibraryFixture } from "../library/web-fixtures";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import { desktopOnlyError } from "./desktop-only";
 import { decodeMeshBuffer, type MeshBuffer } from "./mesh-buffer";
-import { buildWebSlicingFixture, type WebSlicingFixture } from "./web-fixtures";
+import type { WebSlicingFixture } from "./web-fixtures";
 import {
   isSlicingEvent,
   isTerminalOperationState,
@@ -310,7 +309,7 @@ function disposeListener(): void {
 export async function startSlicing(): Promise<() => void> {
   disposeListener();
   if (!desktopAvailable()) {
-    webFixture = buildWebSlicingFixture();
+    webFixture = (await import("./web-fixtures")).buildWebSlicingFixture();
     setState({
       runtime: webFixture.runtime,
       preparations: keyPreparations(webFixture.preparations),
@@ -431,7 +430,7 @@ export async function resetSlicerRuntime(reset: { engine: boolean; presetSource:
 
 /** Not cached: presets change with the runtime. */
 export async function listSliceOptions(target: SliceTarget): Promise<SliceOptions> {
-  if (!desktopAvailable()) return clone(requireWebFixture().sliceOptions);
+  if (!desktopAvailable()) return clone((await requireWebFixture()).sliceOptions);
   return command("list_slice_options", { target });
 }
 
@@ -440,7 +439,7 @@ export async function listSliceOptions(target: SliceTarget): Promise<SliceOption
  *  spec's `geometry-cache.ts` caches for the preparation view. */
 export async function loadGeometry(revisionId: string): Promise<RevisionGeometry> {
   if (!desktopAvailable()) {
-    const geometry = requireWebFixture().geometry[revisionId];
+    const geometry = (await requireWebFixture()).geometry[revisionId];
     if (!geometry) throw notFound(revisionId);
     return clone(geometry);
   }
@@ -452,7 +451,7 @@ export async function loadGeometry(revisionId: string): Promise<RevisionGeometry
  *  `MeshBufferError` for a malformed buffer. */
 export async function loadMesh(revisionId: string, objectKey: number): Promise<MeshBuffer> {
   if (!desktopAvailable()) {
-    const buffer = requireWebFixture().meshes[revisionId]?.[objectKey];
+    const buffer = (await requireWebFixture()).meshes[revisionId]?.[objectKey];
     if (!buffer) throw notFound(`${revisionId}/${objectKey}`);
     return decodeMeshBuffer(buffer.slice(0));
   }
@@ -539,7 +538,7 @@ export async function cancelSliceOperation(sliceOperationId: string): Promise<Sl
 /** Not cached: a running operation's log grows. */
 export async function loadOperationLog(sliceOperationId: string): Promise<SliceOperationLog> {
   if (!desktopAvailable()) {
-    const log = requireWebFixture().logs[sliceOperationId];
+    const log = (await requireWebFixture()).logs[sliceOperationId];
     if (!log) throw notFound(sliceOperationId);
     return clone(log);
   }
@@ -566,7 +565,7 @@ export function loadSliceRevision(sliceRevisionId: string): Promise<SliceRevisio
   if (cached) return cached;
   const load = (async () => {
     if (desktopAvailable()) return command("get_slice_revision", { sliceRevisionId });
-    const record = requireWebFixture().revisionRecords[sliceRevisionId];
+    const record = (await requireWebFixture()).revisionRecords[sliceRevisionId];
     if (!record || removedRevisions.has(sliceRevisionId)) throw notFound(sliceRevisionId);
     return clone(record);
   })();
@@ -605,8 +604,13 @@ export async function deleteSliceRevision(sliceRevisionId: string): Promise<void
 
 const MAX_PLATES = 36;
 
-function requireWebFixture(): WebSlicingFixture {
-  webFixture ??= buildWebSlicingFixture();
+/** Web mode only: the fixtures load on first use, so they stay out of the
+ *  desktop bundle's main chunk. */
+async function requireWebFixture(): Promise<WebSlicingFixture> {
+  if (!webFixture) {
+    const { buildWebSlicingFixture } = await import("./web-fixtures");
+    webFixture ??= buildWebSlicingFixture();
+  }
   return webFixture;
 }
 
@@ -639,10 +643,11 @@ function validateDocument(document: PreparationDocument): void {
 /** A simplified D5 seed: one plate per source plate (or one plate), each
  *  printable build item once at the bed's centre, and the default
  *  presets. */
-function webCreatePreparation(modelId: string, target?: SliceTarget): PreparationRecord {
+async function webCreatePreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
+  const fixture = await requireWebFixture();
+  const { buildWebLibraryFixture } = await import("../library/web-fixtures");
   const existing = state.preparations[modelId];
   if (existing) return existing;
-  const fixture = requireWebFixture();
   const model = buildWebLibraryFixture().models.find((m) => m.id === modelId);
   if (!model) throw notFound(modelId);
   if (model.format === "gcode") {

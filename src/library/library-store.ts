@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store";
 import { command, desktopAvailable, isCommandError, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
-import { buildWebLibraryFixture, type WebLibraryFixture } from "./web-fixtures";
+import type { WebLibraryFixture } from "./web-fixtures";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import {
@@ -243,6 +243,8 @@ function applySnapshot(snapshot: LibrarySnapshot): void {
 export async function startLibrary(): Promise<() => void> {
   disposeListener();
   if (!desktopAvailable()) {
+    // Loaded only in web mode, so the fixtures stay out of the main chunk.
+    const { buildWebLibraryFixture } = await import("./web-fixtures");
     webFixture = buildWebLibraryFixture();
     setState({
       projects: webFixture.projects,
