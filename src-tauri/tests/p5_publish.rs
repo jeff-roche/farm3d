@@ -15,8 +15,10 @@ use farm3d_lib::persistence::{MetadataRootLease, Storage, StoragePaths};
 use farm3d_lib::printers::CatalogRef;
 use farm3d_lib::slicing::facts::{Farm3dFacts, ProfileSnapshot};
 use farm3d_lib::slicing::invocation::{EngineIdentity, PresetSourceIdentity, WorkDir};
-use farm3d_lib::slicing::process::{run_slice, SliceCommand, SliceObserver, SliceProgress};
-use farm3d_lib::slicing::publish::{finish_run, FinishedRun, PublishInputs};
+use farm3d_lib::slicing::process::{
+    output_missing, run_slice, SliceCommand, SliceObserver, SliceProgress,
+};
+use farm3d_lib::slicing::publish::{self, finish_run, FinishedRun, PublishInputs};
 use farm3d_lib::slicing::repository::{
     insert_operation, insert_preparation, transition_operation, NewSliceOperation,
     OperationTransition,
@@ -337,24 +339,19 @@ fn a_fake_orca_success_publishes_a_revision_with_its_six_blobs_and_the_exact_gco
     );
 }
 
-/// Whether a failure code is the one a case expects.
-type ExpectedCode = fn(&SliceFailureCode) -> bool;
+fn invalid(reason: &str) -> SliceFailureCode {
+    SliceFailureCode::OutputInvalid {
+        reason: reason.to_string(),
+    }
+}
 
 #[test]
 fn fake_orca_output_failures_fail_the_operation_with_only_its_log() {
-    let cases: [(&str, ExpectedCode); 4] = [
-        ("wrongPresetNames", |code| {
-            matches!(code, SliceFailureCode::OutputInvalid { .. })
-        }),
-        ("malformedOutput", |code| {
-            matches!(code, SliceFailureCode::OutputInvalid { .. })
-        }),
-        ("oversizedOutput", |code| {
-            matches!(code, SliceFailureCode::OutputInvalid { .. })
-        }),
-        ("successNoOutput", |code| {
-            *code == SliceFailureCode::OutputMissing
-        }),
+    let cases = [
+        ("wrongPresetNames", invalid(publish::WRONG_PRINTER_PRESET)),
+        ("malformedOutput", invalid(publish::NOT_GCODE)),
+        ("oversizedOutput", invalid(publish::TOO_LARGE)),
+        ("successNoOutput", output_missing().code),
     ];
     for (scenario, expected) in cases {
         let fixture = Fixture::new();
@@ -365,7 +362,7 @@ fn fake_orca_output_failures_fail_the_operation_with_only_its_log() {
 
         assert_eq!(operation.state, SliceOperationState::Failed, "{scenario}");
         let failure = operation.failure.unwrap();
-        assert!(expected(&failure.code), "{scenario}: {failure:?}");
+        assert_eq!(failure.code, expected, "{scenario}");
         assert_eq!(
             fixture.count("SELECT COUNT(*) FROM slice_revisions"),
             0,
@@ -387,5 +384,150 @@ fn fake_orca_output_failures_fail_the_operation_with_only_its_log() {
             .map(|prefix| fs::read_dir(prefix.unwrap().path()).unwrap().count())
             .sum();
         assert_eq!(files, 1, "{scenario}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Real OrcaSlicer (spec D23): `FARM3D_ORCA=<engine>`, optional
+// `FARM3D_ORCA_PRESETS=<preset source>`; run with `just test-orca`.
+// ---------------------------------------------------------------------------
+
+mod real {
+    use std::time::Duration;
+
+    use super::*;
+    use farm3d_lib::catalog::PointMm;
+    use farm3d_lib::slicing::presets::{
+        default_filament, default_process, PresetIndex, PresetKind,
+    };
+    use farm3d_lib::slicing::repository::SlicerRuntimeConfig;
+    use farm3d_lib::slicing::runtime::{resolve_runtime, DiscoveryEnv};
+
+    /// A stock profile whose start G-code purges off the bed (`G1 Y-3`),
+    /// outside the 2 mm XY tolerance.
+    const OFF_BED_PURGE_MACHINE: &str = "Prusa MK3S 0.4 nozzle";
+
+    /// The engine, its version, and the preset source's `profiles`
+    /// directory, or a panic: an ignored real-Orca test must never pass
+    /// without running.
+    fn real_orca() -> (PathBuf, OrcaVersion, PathBuf, tempfile::TempDir) {
+        let engine = std::env::var_os("FARM3D_ORCA")
+            .map(PathBuf::from)
+            .expect("FARM3D_ORCA must name an OrcaSlicer engine; run through `just test-orca`");
+        let presets = std::env::var_os("FARM3D_ORCA_PRESETS").map(PathBuf::from);
+        let cache = tempfile::tempdir().unwrap();
+        let runtime = resolve_runtime(
+            &SlicerRuntimeConfig {
+                revision: 1,
+                engine_path: Some(engine.to_str().unwrap().to_string()),
+                preset_source_path: presets.map(|path| path.to_str().unwrap().to_string()),
+                updated_at: None,
+            },
+            &DiscoveryEnv {
+                home: None,
+                path_var: None,
+                probe_timeout: Duration::from_secs(20),
+            },
+            cache.path(),
+        );
+        let engine = runtime.engine.expect("an accepted engine");
+        let source = runtime.preset_source.expect("a readable preset source");
+        (engine.path, engine.version, source.profiles_dir, cache)
+    }
+
+    /// The machine preset's rectangular `printable_area` and height.
+    fn profile_of(machine: &serde_json::Map<String, serde_json::Value>) -> ProfileSnapshot {
+        let points: Vec<PointMm> = machine["printable_area"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| {
+                let (x, y) = point.as_str().unwrap().split_once('x').unwrap();
+                PointMm {
+                    x_mm: x.parse().unwrap(),
+                    y_mm: y.parse().unwrap(),
+                }
+            })
+            .collect();
+        let height = &machine["printable_height"];
+        let height = height
+            .as_str()
+            .map(|text| text.parse().unwrap())
+            .or_else(|| height.as_f64())
+            .unwrap();
+        ProfileSnapshot {
+            bed_shape: BedShape::Polygon { points },
+            printable_height_mm: height,
+            ..a_profile()
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
+    fn real_orca_an_off_bed_purge_in_the_start_gcode_still_publishes() {
+        let (engine, version, profiles, _cache) = real_orca();
+        let mut fixture = Fixture::new();
+        let index = PresetIndex::build(&profiles, "real", &CancelFlag::never()).unwrap();
+        let machine = OFF_BED_PURGE_MACHINE;
+        let process = default_process(&index.offered(PresetKind::Process, machine)).unwrap();
+        let filament = default_filament(
+            &index.offered(PresetKind::Filament, machine),
+            &[MaterialFamily::Pla],
+        )
+        .unwrap();
+        let flat_machine = index.flatten(PresetKind::Machine, machine).unwrap();
+        for (kind, name, path) in [
+            (PresetKind::Machine, machine, fixture.work.machine_json()),
+            (
+                PresetKind::Process,
+                process.as_str(),
+                fixture.work.process_json(),
+            ),
+            (
+                PresetKind::Filament,
+                filament.as_str(),
+                fixture.work.filament_json(),
+            ),
+        ] {
+            let flat = index.flatten(kind, name).unwrap();
+            fs::write(path, serde_json::to_vec_pretty(&flat).unwrap()).unwrap();
+        }
+        let target = &mut fixture.inputs.target;
+        target.machine_preset = machine.to_string();
+        target.process_preset = process;
+        target.filament_preset = filament;
+        target.profile = profile_of(&flat_machine);
+        fixture.inputs.engine = EngineIdentity::of(&engine, &version).unwrap();
+
+        let command = SliceCommand::new(engine, fixture.work.clone(), Some(profiles));
+        let run = run_slice(&command, &CancelFlag::never(), &mut NoObserver);
+        let finished = finish_run(
+            &fixture.store,
+            &fixture.storage,
+            &fixture.inputs,
+            &fixture.work,
+            &run,
+            &CancelFlag::never(),
+        )
+        .unwrap();
+
+        let FinishedRun::Published(revision) = finished else {
+            panic!(
+                "expected a published revision, got {finished:?}\nlog:\n{}",
+                run.log.text
+            );
+        };
+        // The start G-code did purge off the bed, before the first layer.
+        let gcode = fs::read_to_string(fixture.work.gcode()).unwrap();
+        let purge = gcode.find("G1 Y-3").expect("an off-bed purge move");
+        assert!(purge < gcode.find(";LAYER_CHANGE").unwrap());
+        let manifest =
+            fixture.text("SELECT sha256 FROM slice_revision_blobs WHERE role = 'manifest'");
+        let manifest: serde_json::Value = serde_json::from_slice(&fixture.blob(&manifest)).unwrap();
+        assert_eq!(
+            manifest["boundsCheck"],
+            serde_json::json!({ "status": "checked", "scope": "printBody" })
+        );
+        assert_eq!(revision.summary.plate.as_ref().unwrap().plate_index, 1);
     }
 }

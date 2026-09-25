@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::printed_bounds::BoundsCheck;
 use super::runtime::{sha256_file, OrcaVersion, PresetSourceOrigin};
 use super::{RuntimeChannel, SliceControls, SliceRevisionTarget, SliceRuntimeInfo};
 
@@ -246,8 +247,12 @@ pub struct InvocationManifest {
     pub plate_3mf_sha256: String,
     pub controls: SliceControls,
     /// The machine-preset keys farm3d wrote from the target's Printer
-    /// Profile overrides (D4).
+    /// Profile overrides (D4). Only the keys: the values are in the
+    /// `machinePreset` blob, whose hash is `presets.machine.sha256`.
     pub profile_overrides: Vec<String>,
+    /// Whether D11 check 5 (the printed bounds) ran, or why it was
+    /// skipped.
+    pub bounds_check: BoundsCheck,
 }
 
 impl InvocationManifest {
@@ -262,6 +267,7 @@ impl InvocationManifest {
         target: &SliceRevisionTarget,
         profile_overrides: &[String],
         hashes: &InputHashes,
+        bounds_check: &BoundsCheck,
     ) -> Self {
         let root = work.root().to_string_lossy().into_owned();
         let arguments = std::iter::once(ENGINE_PLACEHOLDER.to_string())
@@ -288,6 +294,7 @@ impl InvocationManifest {
             plate_3mf_sha256: hashes.plate_3mf.clone(),
             controls: target.controls.clone(),
             profile_overrides: profile_overrides.to_vec(),
+            bounds_check: bounds_check.clone(),
         }
     }
 
@@ -384,6 +391,9 @@ mod tests {
             &target,
             &["bed_exclude_area".to_string()],
             &hashes,
+            &BoundsCheck::Skipped {
+                reason: "The G-code uses inch units.".to_string(),
+            },
         );
         let json: serde_json::Value = serde_json::from_slice(&manifest.to_bytes()).unwrap();
 
@@ -397,6 +407,10 @@ mod tests {
         assert_eq!(json["plate3mfSha256"], "a".repeat(64));
         assert_eq!(json["controls"]["wallLoops"], 3);
         assert_eq!(json["profileOverrides"][0], "bed_exclude_area");
+        assert_eq!(
+            json["boundsCheck"],
+            serde_json::json!({ "status": "skipped", "reason": "The G-code uses inch units." })
+        );
         let arguments: Vec<&str> = json["arguments"]
             .as_array()
             .unwrap()
@@ -413,9 +427,20 @@ mod tests {
         assert!(arguments.contains(&"--pipe"));
         assert!(arguments.iter().all(|arg| !arg.contains("/c/")));
         assert_eq!(
-            InvocationManifest::new(&work, false, &engine, &presets, &target, &[], &hashes)
-                .arguments
-                .len(),
+            InvocationManifest::new(
+                &work,
+                false,
+                &engine,
+                &presets,
+                &target,
+                &[],
+                &hashes,
+                &BoundsCheck::Checked {
+                    scope: crate::slicing::printed_bounds::BoundsScope::PrintBody,
+                },
+            )
+            .arguments
+            .len(),
             arguments.len() - 2
         );
     }

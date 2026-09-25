@@ -21,6 +21,7 @@ pub mod invocation;
 pub mod mapping;
 pub mod plate3mf;
 pub mod presets;
+pub mod printed_bounds;
 pub mod process;
 pub mod process_group;
 pub mod publish;

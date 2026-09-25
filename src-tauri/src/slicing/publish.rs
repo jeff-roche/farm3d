@@ -5,9 +5,11 @@
 //!   must be a regular file (not a symlink) of at most 1 GiB. It is staged
 //!   first, and the staged copy is what the P4 G-code inspector reads: it
 //!   must be G-code, name OrcaSlicer as its producer, hold at least one
-//!   command, move only inside the target's printable area (2 mm of XY
-//!   tolerance) and height, and claim the machine and filament presets
-//!   farm3d passed. Checks 1–2 (the return code and a missing output) are
+//!   command, keep its printed bounds ([`super::printed_bounds`]) inside
+//!   the target's printable area (2 mm of XY tolerance) and height (0.05 mm
+//!   of Z tolerance), and claim the machine and filament presets farm3d
+//!   passed. Untrackable positioning skips the bounds check, and the
+//!   manifest says so. Checks 1–2 (the return code and a missing output) are
 //!   [`process::outcome`]'s.
 //! - **Estimates** ([`estimates_from_claims`], D12) come from the same
 //!   inspection's claims. The inspector streams the file one bounded line at
@@ -40,6 +42,7 @@ use super::facts::{Farm3dFacts, ProfileSnapshot};
 use super::invocation::{
     runtime_info, EngineIdentity, InputHashes, InvocationManifest, PresetSourceIdentity, WorkDir,
 };
+use super::printed_bounds::{BoundsCheck, PrintedBounds, PrintedBoundsScanner};
 use super::process::{self, output_missing, SliceLog, SliceOutcome, SliceRun};
 use super::repository::{
     insert_farm3d_revision, load_operation, transition_operation, NewFarm3dRevision,
@@ -54,9 +57,13 @@ use super::{
 /// D11 check 3: the largest G-code farm3d publishes.
 pub const MAX_OUTPUT_BYTES: u64 = MAX_SOURCE_BYTES;
 
-/// D11 check 5: how far outside the printable area, on X and Y, a move may
-/// land.
+/// D11 check 5: how far outside the printable area, on X and Y, the
+/// printed bounds may reach.
 pub const BOUNDS_XY_TOLERANCE_MM: f64 = 2.0;
+
+/// D11 check 5: how far above the printable height the printed bounds may
+/// reach.
+pub const BOUNDS_Z_TOLERANCE_MM: f64 = 0.05;
 
 /// D11 check 4: the producer the G-code must name.
 pub const ENGINE_PRODUCER: &str = "OrcaSlicer";
@@ -92,16 +99,22 @@ pub struct PublishInputs {
     pub profile_overrides: Vec<String>,
 }
 
-/// A G-code that passed D11 checks 3–6, staged, with its estimates.
+/// A G-code that passed D11 checks 3–6, staged, with its estimates and
+/// whether the bounds check ran.
 #[derive(Debug)]
 pub struct ValidatedOutput {
     gcode: StagedFile,
     estimates: SliceEstimates,
+    bounds_check: BoundsCheck,
 }
 
 impl ValidatedOutput {
     pub fn estimates(&self) -> &SliceEstimates {
         &self.estimates
+    }
+
+    pub fn bounds_check(&self) -> &BoundsCheck {
+        &self.bounds_check
     }
 }
 
@@ -144,9 +157,21 @@ fn output_invalid(reason: impl Into<String>) -> SliceFailure {
     }
 }
 
-const NOT_A_FILE: &str = "OrcaSlicer's G-code isn't a regular file.";
-const TOO_LARGE: &str = "OrcaSlicer's G-code is larger than 1 GiB.";
-const UNREADABLE: &str = "OrcaSlicer's G-code couldn't be read.";
+// The `outputInvalid` reasons (D11 checks 3–6).
+pub const NOT_A_FILE: &str = "OrcaSlicer's G-code isn't a regular file.";
+pub const TOO_LARGE: &str = "OrcaSlicer's G-code is larger than 1 GiB.";
+pub const UNREADABLE: &str = "OrcaSlicer's G-code couldn't be read.";
+pub const NOT_GCODE: &str = "OrcaSlicer's output isn't G-code.";
+pub const NOT_INSPECTABLE: &str = "OrcaSlicer's G-code couldn't be inspected: ";
+pub const WRONG_PRODUCER: &str = "The G-code doesn't say OrcaSlicer wrote it.";
+pub const NO_COMMANDS: &str = "The G-code has no commands.";
+pub const EMPTY_BED: &str = "The target printer has no printable area.";
+pub const OUTSIDE_AREA: &str = "The G-code prints outside the printable area.";
+pub const ABOVE_HEIGHT: &str = "The G-code prints above the printable height.";
+pub const WRONG_PRINTER_PRESET: &str =
+    "The G-code names a different printer preset than farm3d passed.";
+pub const WRONG_FILAMENT_PRESET: &str =
+    "The G-code names a different filament preset than farm3d passed.";
 
 /// D11 checks 3–6 on `work`'s `out/plate_1.gcode`, for an operation whose
 /// run ended with return code 0. The G-code is staged under
@@ -196,109 +221,130 @@ fn stage_and_check(
             ContentError::Cancelled => OutputRejection::Cancelled,
             other => OutputRejection::Store(other),
         })?;
-    let estimates = check_gcode(&gcode.path, target, cancel)?;
-    Ok(ValidatedOutput { gcode, estimates })
+    let (estimates, bounds_check) = check_gcode(&gcode.path, target, cancel)?;
+    Ok(ValidatedOutput {
+        gcode,
+        estimates,
+        bounds_check,
+    })
 }
 
-/// D11 checks 4–6 on the staged G-code at `path`, and its D12 estimates.
+/// D11 checks 4–6 on the staged G-code at `path`, with its D12 estimates
+/// and how check 5 went. The inspector's one streaming pass also feeds the
+/// printed-bounds scanner.
 fn check_gcode(
     path: &Path,
     target: &SliceRevisionTarget,
     cancel: &CancelFlag,
-) -> Result<SliceEstimates, OutputRejection> {
+) -> Result<(SliceEstimates, BoundsCheck), OutputRejection> {
     let invalid = |reason: &str| OutputRejection::Invalid(output_invalid(reason));
     let mut head = Vec::new();
     File::open(path)
         .and_then(|file| file.take(GCODE_HEAD_BYTES).read_to_end(&mut head))
         .map_err(|_| invalid(UNREADABLE))?;
     if !gcode::looks_like_gcode(&head) {
-        return Err(invalid("OrcaSlicer's output isn't G-code."));
+        return Err(invalid(NOT_GCODE));
     }
-    let (inspection, _, _) = gcode::inspect(path, cancel).map_err(|error| match error {
-        InspectError::Cancelled => OutputRejection::Cancelled,
-        other => OutputRejection::Invalid(output_invalid(format!(
-            "OrcaSlicer's G-code couldn't be inspected: {}",
-            other.message()
-        ))),
-    })?;
+    let mut printed = PrintedBoundsScanner::new();
+    let (inspection, _, _) = gcode::inspect_visiting(path, cancel, &mut |line| printed.line(line))
+        .map_err(|error| match error {
+            InspectError::Cancelled => OutputRejection::Cancelled,
+            other => OutputRejection::Invalid(output_invalid(format!(
+                "{NOT_INSPECTABLE}{}",
+                other.message()
+            ))),
+        })?;
     if inspection
         .producer
         .as_ref()
         .is_none_or(|producer| producer.name != ENGINE_PRODUCER)
     {
-        return Err(invalid("The G-code doesn't say OrcaSlicer wrote it."));
+        return Err(invalid(WRONG_PRODUCER));
     }
+    // D11 restated on purpose: today the inspector already rejects a
+    // G-code without commands, so this can't fail, but check 4 must hold
+    // even if the inspector's rules change.
     if inspection.command_count == 0 {
-        return Err(invalid("The G-code has no commands."));
+        return Err(invalid(NO_COMMANDS));
     }
-    if let Some(bounds) = &inspection.observed_bounds_mm {
-        if !within_printable_area(bounds, &target.profile) {
-            return Err(invalid("The G-code moves outside the printable area."));
+    let bounds_check = match printed.finish() {
+        PrintedBounds::Tracked { scope, bounds } => {
+            if let Some(bounds) = bounds {
+                check_printed_bounds(&bounds, &target.profile).map_err(invalid)?;
+            }
+            BoundsCheck::Checked { scope }
         }
-        if bounds.max[2] > target.profile.printable_height_mm {
-            return Err(invalid("The G-code moves above the printable height."));
-        }
-    }
+        PrintedBounds::Untracked { reason } => BoundsCheck::Skipped {
+            reason: reason.to_string(),
+        },
+    };
     if claimed_preset(&inspection.claims, PRINTER_PRESET_CLAIM)
         != Some(target.machine_preset.as_str())
     {
-        return Err(invalid(
-            "The G-code names a different printer preset than farm3d passed.",
-        ));
+        return Err(invalid(WRONG_PRINTER_PRESET));
     }
     if claimed_preset(&inspection.claims, FILAMENT_PRESET_CLAIM)
         != Some(target.filament_preset.as_str())
     {
-        return Err(invalid(
-            "The G-code names a different filament preset than farm3d passed.",
-        ));
+        return Err(invalid(WRONG_FILAMENT_PRESET));
     }
-    Ok(estimates_from_claims(&inspection.claims))
+    Ok((estimates_from_claims(&inspection.claims), bounds_check))
 }
 
-/// D11 check 5 on X and Y: `bounds` lies within the bed, grown by
-/// [`BOUNDS_XY_TOLERANCE_MM`]. A polygon bed is checked against its
-/// bounding box; a bed with no points can't be checked and passes.
-fn within_printable_area(bounds: &BoundsMm, profile: &ProfileSnapshot) -> bool {
-    let (min_x, min_y, max_x, max_y) = match &profile.bed_shape {
+/// D11 check 5: the printed bounds lie within the bed grown by
+/// [`BOUNDS_XY_TOLERANCE_MM`], and no higher than the printable height plus
+/// [`BOUNDS_Z_TOLERANCE_MM`]. Returns the failure reason.
+fn check_printed_bounds(bounds: &BoundsMm, profile: &ProfileSnapshot) -> Result<(), &'static str> {
+    let (min_x, min_y, max_x, max_y) = printable_xy(&profile.bed_shape).ok_or(EMPTY_BED)?;
+    let tolerance = BOUNDS_XY_TOLERANCE_MM;
+    let within = bounds.min[0] >= min_x - tolerance
+        && bounds.min[1] >= min_y - tolerance
+        && bounds.max[0] <= max_x + tolerance
+        && bounds.max[1] <= max_y + tolerance;
+    if !within {
+        return Err(OUTSIDE_AREA);
+    }
+    if bounds.max[2] > profile.printable_height_mm + BOUNDS_Z_TOLERANCE_MM {
+        return Err(ABOVE_HEIGHT);
+    }
+    Ok(())
+}
+
+/// The bed's XY extent: the rectangle, or a polygon's bounding box. A
+/// polygon of fewer than three points has no area, which the catalog
+/// never produces but a stored snapshot could hold; it is `None`, and the
+/// check fails rather than passing unchecked.
+fn printable_xy(shape: &BedShape) -> Option<(f64, f64, f64, f64)> {
+    match shape {
         BedShape::Rectangular {
             width_mm,
             depth_mm,
             origin_x_mm,
             origin_y_mm,
-        } => (
+        } => Some((
             *origin_x_mm,
             *origin_y_mm,
             origin_x_mm + width_mm,
             origin_y_mm + depth_mm,
-        ),
-        BedShape::Polygon { points } => {
-            if points.is_empty() {
-                return true;
-            }
-            points.iter().fold(
+        )),
+        BedShape::Polygon { points } if points.len() < 3 => None,
+        BedShape::Polygon { points } => Some(points.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(min_x, min_y, max_x, max_y), point| {
                 (
-                    f64::INFINITY,
-                    f64::INFINITY,
-                    f64::NEG_INFINITY,
-                    f64::NEG_INFINITY,
-                ),
-                |(min_x, min_y, max_x, max_y), point| {
-                    (
-                        min_x.min(point.x_mm),
-                        min_y.min(point.y_mm),
-                        max_x.max(point.x_mm),
-                        max_y.max(point.y_mm),
-                    )
-                },
-            )
-        }
-    };
-    let tolerance = BOUNDS_XY_TOLERANCE_MM;
-    bounds.min[0] >= min_x - tolerance
-        && bounds.min[1] >= min_y - tolerance
-        && bounds.max[0] <= max_x + tolerance
-        && bounds.max[1] <= max_y + tolerance
+                    min_x.min(point.x_mm),
+                    min_y.min(point.y_mm),
+                    max_x.max(point.x_mm),
+                    max_y.max(point.y_mm),
+                )
+            },
+        )),
+    }
 }
 
 fn claim<'a>(claims: &'a [GcodeClaim], key: &str) -> Option<&'a str> {
@@ -418,6 +464,7 @@ fn stage_and_commit(
         &inputs.target,
         &inputs.profile_overrides,
         &hashes,
+        &output.bounds_check,
     );
     let manifest = store.stage_bytes(&manifest.to_bytes(), key, MANIFEST_NAME)?;
     let log = store.stage_bytes(run.log.text.as_bytes(), key, LOG_NAME)?;
@@ -886,33 +933,110 @@ mod tests {
         assert!(fixture.staging_is_empty());
     }
 
+    /// The first outer wall of the first layer, inside the print body.
+    const FIRST_WALL: &str = ";TYPE:Outer wall\n";
+
+    /// `orca-cube.gcode` with `extra` printed at the start of the first
+    /// outer wall.
+    fn with_body_move(extra: &str) -> String {
+        orca_cube().replacen(FIRST_WALL, &format!("{FIRST_WALL}{extra}\n"), 1)
+    }
+
+    fn published(fixture: &Fixture) -> SliceRevisionRecord {
+        match fixture.finish(&a_run(0, "log")).unwrap() {
+            FinishedRun::Published(revision) => revision,
+            other => panic!("expected a published revision, got {other:?}"),
+        }
+    }
+
+    fn manifest_of(fixture: &Fixture) -> serde_json::Value {
+        let sha256: String = fixture
+            .storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT sha256 FROM slice_revision_blobs WHERE role = 'manifest'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        serde_json::from_slice(&fixture.blob_bytes(&sha256)).unwrap()
+    }
+
     #[test]
-    fn a_quoted_printer_preset_claim_and_a_move_within_the_tolerance_still_publish() {
+    fn a_quoted_printer_preset_claim_and_a_print_within_the_xy_tolerance_still_publish() {
+        let fixture = Fixture::new();
+        let gcode = with_body_move("G1 X257.9 Y-1.9 E.1").replace(
+            &format!("; printer_settings_id = {MACHINE}"),
+            &format!("; printer_settings_id = \"{MACHINE}\""),
+        );
+        fs::write(fixture.work.gcode(), gcode).unwrap();
+
+        published(&fixture);
+    }
+
+    #[test]
+    fn a_print_reaching_the_printable_height_within_the_z_tolerance_publishes() {
+        // orca-cube's last layer extrudes at Z 10.0.
+        for height in [10.0, 9.96] {
+            let mut fixture = Fixture::new();
+            fixture.inputs.target.profile.printable_height_mm = height;
+
+            published(&fixture);
+        }
+    }
+
+    #[test]
+    fn an_off_bed_purge_and_park_outside_the_print_body_still_publish() {
         let fixture = Fixture::new();
         let gcode = orca_cube()
-            .replace(
-                &format!("; printer_settings_id = {MACHINE}"),
-                &format!("; printer_settings_id = \"{MACHINE}\""),
+            .replacen(
+                ";LAYER_CHANGE\n",
+                "G1 Z0.2 F720\nG1 Y-3 F1000 ; go outside print area\nG92 E0\n\
+                 G1 X60 E9 F1000 ; intro line\nG1 X100 E12.5 F1000 ; intro line\n\
+                 G92 E0\n;LAYER_CHANGE\n",
+                1,
             )
             .replace(
-                "; CONFIG_BLOCK_START",
-                "G1 X257.9 Y-1.9\n; CONFIG_BLOCK_START",
+                "; EXECUTABLE_BLOCK_END",
+                "G1 Z300 F720 ; park\nG1 X300 Y300 E2 ; an end-code extrusion\n\
+                 ; EXECUTABLE_BLOCK_END",
             );
         fs::write(fixture.work.gcode(), gcode).unwrap();
 
-        assert!(matches!(
-            fixture.finish(&a_run(0, "log")).unwrap(),
-            FinishedRun::Published(_)
-        ));
+        published(&fixture);
+
+        assert_eq!(
+            manifest_of(&fixture)["boundsCheck"],
+            serde_json::json!({ "status": "checked", "scope": "printBody" })
+        );
     }
 
-    /// The output is rewritten (or removed) by `setup`, and the run fails
-    /// with `code`, storing only its log.
+    #[test]
+    fn untrackable_positioning_skips_the_bounds_check_and_the_manifest_says_so() {
+        let fixture = Fixture::new();
+        // Inch units make every position unknowable; even this far-off
+        // extrusion can't be judged.
+        fs::write(fixture.work.gcode(), with_body_move("G20\nG1 X900 E1")).unwrap();
+
+        published(&fixture);
+
+        assert_eq!(
+            manifest_of(&fixture)["boundsCheck"],
+            serde_json::json!({
+                "status": "skipped",
+                "reason": crate::slicing::printed_bounds::INCH_UNITS,
+            })
+        );
+    }
+
+    /// `setup` rewrites (or removes) the output or the target, and the run
+    /// fails with exactly `expected`, storing only its log.
     fn assert_fails_with_only_its_log(
         name: &str,
         setup: impl FnOnce(&mut Fixture),
         run: SliceRun,
-        expected: impl Fn(&SliceFailureCode) -> bool,
+        expected: SliceFailureCode,
     ) {
         let mut fixture = Fixture::new();
         setup(&mut fixture);
@@ -924,7 +1048,10 @@ mod tests {
         };
         assert_eq!(operation.state, SliceOperationState::Failed, "{name}");
         let failure = operation.failure.expect("a failure");
-        assert!(expected(&failure.code), "{name}: {failure:?}");
+        assert_eq!(failure.code, expected, "{name}");
+        if let SliceFailureCode::OutputInvalid { reason } = &failure.code {
+            assert_eq!(&failure.message, reason, "{name}");
+        }
         assert_eq!(
             fixture.count("SELECT COUNT(*) FROM slice_revisions"),
             0,
@@ -954,8 +1081,10 @@ mod tests {
         assert!(fixture.staging_is_empty(), "{name}");
     }
 
-    fn invalid(code: &SliceFailureCode) -> bool {
-        matches!(code, SliceFailureCode::OutputInvalid { .. })
+    fn invalid(reason: &str) -> SliceFailureCode {
+        SliceFailureCode::OutputInvalid {
+            reason: reason.to_string(),
+        }
     }
 
     fn rewrite(fixture: &Fixture, edit: impl FnOnce(String) -> String) {
@@ -968,7 +1097,7 @@ mod tests {
             "missing output",
             |fixture| fs::remove_file(fixture.work.gcode()).unwrap(),
             a_run(0, "Success."),
-            |code| *code == SliceFailureCode::OutputMissing,
+            process::output_missing().code,
         );
         #[cfg(unix)]
         assert_fails_with_only_its_log(
@@ -979,7 +1108,7 @@ mod tests {
                 std::os::unix::fs::symlink(&real, fixture.work.gcode()).unwrap();
             },
             a_run(0, "log"),
-            invalid,
+            invalid(NOT_A_FILE),
         );
         assert_fails_with_only_its_log(
             "a directory",
@@ -988,7 +1117,7 @@ mod tests {
                 fs::create_dir(fixture.work.gcode()).unwrap();
             },
             a_run(0, "log"),
-            invalid,
+            invalid(NOT_A_FILE),
         );
         assert_fails_with_only_its_log(
             "over 1 GiB",
@@ -1001,13 +1130,13 @@ mod tests {
                     .unwrap();
             },
             a_run(0, "log"),
-            invalid,
+            invalid(TOO_LARGE),
         );
         assert_fails_with_only_its_log(
             "not G-code",
             |fixture| fs::write(fixture.work.gcode(), b"\x00\x01binary\x02").unwrap(),
             a_run(0, "log"),
-            invalid,
+            invalid(NOT_GCODE),
         );
         assert_fails_with_only_its_log(
             "another producer",
@@ -1017,8 +1146,9 @@ mod tests {
                 })
             },
             a_run(0, "log"),
-            invalid,
+            invalid(WRONG_PRODUCER),
         );
+        // The P4 inspector already refuses a G-code without commands.
         assert_fails_with_only_its_log(
             "no commands",
             |fixture| {
@@ -1031,48 +1161,91 @@ mod tests {
                 })
             },
             a_run(0, "log"),
-            invalid,
+            invalid(&format!(
+                "{NOT_INSPECTABLE}This G-code file has no commands."
+            )),
         );
         assert_fails_with_only_its_log(
-            "outside the plate",
-            |fixture| {
-                rewrite(fixture, |gcode| {
-                    gcode.replace("; CONFIG_BLOCK_START", "G1 X258.5\n; CONFIG_BLOCK_START")
-                })
-            },
+            "an extrusion in the print body outside the plate",
+            |fixture| rewrite(fixture, |_| with_body_move("G1 X258.5 Y130 E.1")),
             a_run(0, "log"),
-            invalid,
+            invalid(OUTSIDE_AREA),
         );
         assert_fails_with_only_its_log(
             "above the printable height",
-            |fixture| fixture.inputs.target.profile.printable_height_mm = 10.0,
+            |fixture| fixture.inputs.target.profile.printable_height_mm = 9.0,
             a_run(0, "log"),
-            invalid,
+            invalid(ABOVE_HEIGHT),
+        );
+        assert_fails_with_only_its_log(
+            "a bed with no printable area",
+            |fixture| {
+                fixture.inputs.target.profile.bed_shape = BedShape::Polygon { points: Vec::new() }
+            },
+            a_run(0, "log"),
+            invalid(EMPTY_BED),
         );
         assert_fails_with_only_its_log(
             "another printer preset",
             |fixture| fixture.inputs.target.machine_preset = "Other 0.4 nozzle".to_string(),
             a_run(0, "log"),
-            invalid,
+            invalid(WRONG_PRINTER_PRESET),
         );
         assert_fails_with_only_its_log(
             "another filament preset",
             |fixture| fixture.inputs.target.filament_preset = "Other PLA".to_string(),
             a_run(0, "log"),
-            invalid,
+            invalid(WRONG_FILAMENT_PRESET),
         );
         assert_fails_with_only_its_log(
             "a nonzero return code",
             |_| {},
             a_run(-5, "load_from_json: failed"),
-            |code| *code == SliceFailureCode::PresetInvalid,
+            SliceFailureCode::PresetInvalid,
         );
+    }
+
+    /// The operation's `log_sha256` names a new blob holding `log`, and the
+    /// startup sweep keeps it.
+    fn assert_log_is_kept(fixture: &Fixture, log: &str) {
+        let sha256: String = fixture
+            .storage
+            .read(|connection| {
+                connection.query_row("SELECT log_sha256 FROM slice_operations", [], |row| {
+                    row.get(0)
+                })
+            })
+            .unwrap();
+        assert_eq!(fixture.blob_bytes(&sha256), log.as_bytes());
+
+        let report = fixture.store.startup_sweep(&fixture.storage).unwrap();
+
+        assert_eq!(report.orphans_removed, 0);
+        assert_eq!(report.pending_released, 0);
+        assert_eq!(fixture.blob_bytes(&sha256), log.as_bytes());
+        assert_eq!(
+            fixture.count("SELECT COUNT(*) FROM content_blobs"),
+            SEEDED_BLOBS + 1
+        );
+    }
+
+    #[test]
+    fn a_failed_run_keeps_its_log_through_the_startup_sweep() {
+        let fixture = Fixture::new();
+
+        let FinishedRun::Unpublished(operation) = fixture.finish(&a_run(-5, "failed log")).unwrap()
+        else {
+            panic!("expected a failed operation");
+        };
+
+        assert_eq!(operation.state, SliceOperationState::Failed);
+        assert_log_is_kept(&fixture, "failed log");
     }
 
     #[test]
     fn a_cancelled_run_is_cancelled_with_only_its_log() {
         let fixture = Fixture::new();
-        let mut run = a_run(0, "cancelled");
+        let mut run = a_run(0, "cancelled log");
         run.exit = RunExit::Cancelled;
         run.result = None;
 
@@ -1082,11 +1255,8 @@ mod tests {
 
         assert_eq!(operation.state, SliceOperationState::Cancelled);
         assert_eq!(fixture.count("SELECT COUNT(*) FROM slice_revisions"), 0);
-        assert_eq!(
-            fixture.count("SELECT COUNT(*) FROM content_blobs"),
-            SEEDED_BLOBS + 1
-        );
         assert_eq!(fixture.blob_files().len(), 1);
+        assert_log_is_kept(&fixture, "cancelled log");
     }
 
     #[test]
@@ -1183,8 +1353,27 @@ mod tests {
             max: [max_x, max_y, 1.0],
         };
 
-        assert!(within_printable_area(&bounds(101.9, 81.9), &profile));
-        assert!(!within_printable_area(&bounds(102.1, 10.0), &profile));
-        assert!(!within_printable_area(&bounds(10.0, 82.1), &profile));
+        assert_eq!(check_printed_bounds(&bounds(101.9, 81.9), &profile), Ok(()));
+        assert_eq!(
+            check_printed_bounds(&bounds(102.1, 10.0), &profile),
+            Err(OUTSIDE_AREA)
+        );
+        assert_eq!(
+            check_printed_bounds(&bounds(10.0, 82.1), &profile),
+            Err(OUTSIDE_AREA)
+        );
+        profile.bed_shape = BedShape::Polygon {
+            points: vec![
+                PointMm {
+                    x_mm: 0.0,
+                    y_mm: 0.0
+                };
+                2
+            ],
+        };
+        assert_eq!(
+            check_printed_bounds(&bounds(1.0, 1.0), &profile),
+            Err(EMPTY_BED)
+        );
     }
 }
