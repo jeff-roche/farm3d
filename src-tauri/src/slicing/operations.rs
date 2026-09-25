@@ -54,7 +54,9 @@ use super::invocation::{EngineIdentity, PresetSourceIdentity, WorkDir, WORK_ROOT
 use super::mapping::{apply_overrides_and_controls, SlicePresetDocuments, SliceSettingsInput};
 use super::plate3mf::write_plate_3mf;
 use super::presets::{material_family_for, resolve_target, PresetKind};
-use super::process::{run_slice, SliceCommand, SliceLog, SliceObserver, SliceProgress, STOP_GRACE};
+use super::process::{
+    run_slice, SliceCommand, SliceLog, SliceObserver, SliceProgress, SliceRun, STOP_GRACE,
+};
 use super::process_group::{process_executable, process_start_time, stop_recorded_group};
 use super::publish::{finish_run, record_unpublished, FinishedRun, PublishInputs, Unpublished};
 use super::repository::{
@@ -211,7 +213,9 @@ fn run_worker<R: tauri::Runtime>(services: Arc<SlicingServices<R>>) {
         let operation_id = job.operation_id.clone();
         let ran = std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&services, job)));
         if ran.is_err() {
-            // The supervisor's guard has stopped the process group; the row
+            // A panic before or during the run: there is no log to keep
+            // (`run_job` catches a later one itself, with the log). The
+            // supervisor's guard has stopped the process group; the row
             // must not stay `running` until the next start.
             let events = fail_operation(&services, &operation_id, None, internal_failure());
             services.publish(events);
@@ -314,43 +318,67 @@ fn run_job<R: tauri::Runtime>(services: &SlicingServices<R>, job: Job) {
             cancel: Arc::clone(&job.cancel_sender),
         };
         let run = run_slice(&command, &job.cancel, &mut observer);
-        services
-            .scheduler
-            .reach(SchedulerPoint::Exited(&job.operation_id));
-        let last = observer.throttle.finish();
-        observer.emit(last);
-        match finish_run(
-            &services.content,
-            &services.storage,
-            &job.inputs,
-            &work,
-            &run,
-            &job.cancel,
-        ) {
-            Ok(FinishedRun::Published {
-                revision,
-                operation,
-            }) => vec![
-                events::revision_created(&revision.summary),
-                events::operation_changed(&operation),
-            ],
-            Ok(FinishedRun::Unpublished(operation)) => vec![events::operation_changed(&operation)],
-            Err(error) => {
-                eprintln!(
-                    "farm3d: slice {} could not be stored: {error}",
-                    job.operation_id
-                );
-                fail_operation(
-                    services,
-                    &job.operation_id,
-                    Some(&run.log),
-                    storage_failure(),
-                )
-            }
-        }
+        // The engine has exited, so a panic from here on still has the
+        // run's log to keep. `run_worker`'s own guard covers the rest.
+        let stored = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            services
+                .scheduler
+                .reach(SchedulerPoint::Exited(&job.operation_id));
+            let last = observer.throttle.finish();
+            observer.emit(last);
+            store_run(services, &job, &work, &run)
+        }));
+        stored.unwrap_or_else(|_| {
+            fail_operation(
+                services,
+                &job.operation_id,
+                Some(&run.log),
+                internal_failure(),
+            )
+        })
     };
     let _ = fs::remove_dir_all(work.root());
     services.publish(events);
+}
+
+/// D11–D13 for a run whose engine has exited: publishes it, or records
+/// why it didn't, and returns the events to publish. A store that fails
+/// fails the operation with `storageFailed`, keeping the log if it can.
+fn store_run<R: tauri::Runtime>(
+    services: &SlicingServices<R>,
+    job: &Job,
+    work: &WorkDir,
+    run: &SliceRun,
+) -> Vec<events::SlicingEventSpec> {
+    match finish_run(
+        &services.content,
+        &services.storage,
+        &job.inputs,
+        work,
+        run,
+        &job.cancel,
+    ) {
+        Ok(FinishedRun::Published {
+            revision,
+            operation,
+        }) => vec![
+            events::revision_created(&revision.summary),
+            events::operation_changed(&operation),
+        ],
+        Ok(FinishedRun::Unpublished(operation)) => vec![events::operation_changed(&operation)],
+        Err(error) => {
+            eprintln!(
+                "farm3d: slice {} could not be stored: {error}",
+                job.operation_id
+            );
+            fail_operation(
+                services,
+                &job.operation_id,
+                Some(&run.log),
+                storage_failure(),
+            )
+        }
+    }
 }
 
 /// `storageFailed`: the run finished, but farm3d couldn't store it.

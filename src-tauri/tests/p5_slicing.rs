@@ -1241,20 +1241,12 @@ fn a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues() 
     let model_id = model["id"].as_str().unwrap();
     let preparation = running.prepare(model_id);
     let plate = &plates(&preparation)[0];
-    // The worker panics once, after its engine has run. `resume_unwind`
-    // skips the panic hook, so the test output stays quiet.
-    let armed = Arc::new(Mutex::new(true));
-    let fire = Arc::clone(&armed);
-    running
-        .services
-        .slicing
-        .set_scheduler_hook(Some(Arc::new(move |point| {
-            if matches!(point, SchedulerPoint::Exited(_))
-                && std::mem::take(&mut *fire.lock().unwrap())
-            {
-                std::panic::resume_unwind(Box::new("injected worker panic"));
-            }
-        })));
+    // The worker panics once, before its engine runs, so there is no log.
+    // A panic after the engine ran is
+    // `a_worker_panic_after_the_engine_ran_keeps_its_log`.
+    let armed = arm_worker_panic(&running, |point| {
+        matches!(point, SchedulerPoint::Spawning(_))
+    });
 
     let id = ids(&running.start("op-panic", &preparation, &[plate])).remove(0);
     let operation = running.wait_state(&id, "failed");
@@ -1279,6 +1271,66 @@ fn a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues() 
 
     // The queue continues.
     let next = ids(&running.start("op-after-panic", &preparation, &[plate])).remove(0);
+    running.wait_state(&next, "succeeded");
+    running.services.slicing.set_scheduler_hook(None);
+}
+
+/// Makes the worker panic once, at the first [`SchedulerPoint`] `at`
+/// matches. The returned flag is `false` once the panic was injected.
+/// `resume_unwind` skips the panic hook, so the test output stays quiet.
+fn arm_worker_panic(
+    running: &Running,
+    at: impl Fn(&SchedulerPoint<'_>) -> bool + Send + Sync + 'static,
+) -> Arc<Mutex<bool>> {
+    let armed = Arc::new(Mutex::new(true));
+    let fire = Arc::clone(&armed);
+    running
+        .services
+        .slicing
+        .set_scheduler_hook(Some(Arc::new(move |point| {
+            if at(&point) && std::mem::take(&mut *fire.lock().unwrap()) {
+                std::panic::resume_unwind(Box::new("injected worker panic"));
+            }
+        })));
+    armed
+}
+
+#[test]
+fn a_worker_panic_after_the_engine_ran_keeps_its_log() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plate = &plates(&preparation)[0];
+    // The engine has exited when the worker panics.
+    let armed = arm_worker_panic(&running, |point| matches!(point, SchedulerPoint::Exited(_)));
+
+    let id = ids(&running.start("op-late-panic", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "failed");
+
+    assert!(!*armed.lock().unwrap(), "the panic was injected");
+    assert_eq!(
+        operation["failure"]["code"]["kind"], "internalError",
+        "{operation}"
+    );
+    assert!(operation.get("sliceRevisionId").is_none());
+    assert!(!running.work_dir(&id).exists());
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([])
+    );
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert!(
+        log["text"]
+            .as_str()
+            .unwrap()
+            .contains("fake-orca scenario success"),
+        "the run's log is kept: {log}"
+    );
+
+    // The queue continues.
+    let next = ids(&running.start("op-after-late-panic", &preparation, &[plate])).remove(0);
     running.wait_state(&next, "succeeded");
     running.services.slicing.set_scheduler_hook(None);
 }
