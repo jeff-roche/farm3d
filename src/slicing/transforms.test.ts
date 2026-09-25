@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   composeTransform,
@@ -9,6 +7,7 @@ import {
   transformPoint,
 } from "./transforms";
 import type { BoundsMm, InstanceTransform } from "./types";
+import committedVectors from "../../src-tauri/tests/fixtures/slicing/transform-vectors.json";
 
 interface TransformCase {
   name: string;
@@ -24,9 +23,7 @@ interface TransformVectors {
 }
 
 // Shared with the Rust side (`tests/p5_geometry.rs`), which pins it.
-const vectors = JSON.parse(
-  readFileSync(resolve(__dirname, "../../src-tauri/tests/fixtures/slicing/transform-vectors.json"), "utf8"),
-) as TransformVectors;
+const vectors = committedVectors as unknown as TransformVectors;
 const positions = Float32Array.from(vectors.positions.flat());
 
 function expectClose(actual: readonly number[], expected: readonly number[], what: string) {
