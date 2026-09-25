@@ -143,6 +143,14 @@ vi.mock("./library/library-store", async () => {
 
 vi.mock("./slicing/slicing-store", async () => (await import("./slicing/slicing-store-mock")).slicingStoreMock);
 
+vi.mock("./screens/SlicerSettingsDialog", () => ({
+  SlicerSettingsDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
+    <div role="dialog" aria-label="Slicer">
+      <button onClick={() => props.onOpenChange(false)}>Close Slicer</button>
+    </div>
+  ),
+}));
+
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
 }));
@@ -279,6 +287,19 @@ afterEach(() => {
 });
 
 describe("App", () => {
+  it("mounts the Slicer settings once, at app level, whenever the opener asks, on any screen", async () => {
+    const { App } = await importAppAndNavigation();
+    const opener = await import("./slicing/slicer-settings-opener");
+    render(() => <App />);
+    expect(screen.queryByRole("dialog", { name: "Slicer" })).toBeNull();
+
+    opener.openSlicerSettings();
+    expect(await screen.findByRole("dialog", { name: "Slicer" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close Slicer" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Slicer" })).toBeNull());
+    expect(opener.slicerSettingsOpen()).toBe(false);
+  });
+
   it("loads settings and durable Printers before listener/backfill startup, retaining Printer content while status syncs", async () => {
     const callOrder: string[] = [];
     appState.loadSettings.mockImplementation(async () => {

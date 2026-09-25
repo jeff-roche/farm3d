@@ -2,6 +2,7 @@
 import { createSignal, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from "solid-js";
 import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./monitor/monitor-store";
 import { AppShell } from "./screens/AppShell";
+import { SlicerSettingsHost } from "./screens/SlicerSettingsHost";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { LibraryWorkspace } from "./screens/LibraryWorkspace";
@@ -370,6 +371,8 @@ function App() {
           )}
         </Show>
       </Show>
+      {/* Portalled: it renders over the whole app, whatever the screen. */}
+      <SlicerSettingsHost />
     </AppShell>
   );
 }

@@ -182,7 +182,8 @@ export function failureText(failure: SliceFailure): string {
 
 // --- Runtime (D2, D22) ------------------------------------------------------------------
 
-const PRESETS_UNREADABLE =
+/** D22's text for presets farm3d can't read (a cache-only nightly build). */
+export const PRESETS_UNREADABLE =
   "This OrcaSlicer build stores its presets in a format farm3d can't read. Choose an OrcaSlicer 2.4 install or AppImage as the preset source.";
 
 /** Why the runtime can't slice, one sentence per part that isn't
@@ -216,7 +217,8 @@ export function runtimeProblems(runtime: SlicerRuntimeStatus): string[] {
   return problems;
 }
 
-const CANDIDATE_SOURCES: Record<EngineCandidate["source"], string> = {
+/** Where D2's discovery found an engine, in words. */
+export const CANDIDATE_SOURCES: Record<EngineCandidate["source"], string> = {
   configured: "chosen in Settings",
   path: "on PATH",
   wellKnown: "in a usual download folder",
