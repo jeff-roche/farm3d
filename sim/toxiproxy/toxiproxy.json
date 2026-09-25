@@ -1,0 +1,20 @@
+[
+  {
+    "name": "moonraker",
+    "listen": "127.0.0.1:27125",
+    "upstream": "127.0.0.1:27126",
+    "enabled": true
+  },
+  {
+    "name": "moonraker-multi",
+    "listen": "127.0.0.1:27135",
+    "upstream": "127.0.0.1:27136",
+    "enabled": true
+  },
+  {
+    "name": "octoprint",
+    "listen": "127.0.0.1:25000",
+    "upstream": "127.0.0.1:25001",
+    "enabled": true
+  }
+]

@@ -1,0 +1,30 @@
+# Seed config for the OctoPrint simulator (sim/compose.yaml).
+#
+# Copied into an empty data volume on first start (see entrypoint.sh), so
+# every `sim-down`/`sim-up` cycle starts from this exact state. OctoPrint
+# rewrites its own copy at runtime; this file is never modified.
+#
+# The Virtual Printer plugin is OctoPrint's own bundled serial simulator.
+# `serial.autoconnect` + `port: VIRTUAL` make OctoPrint attach to it at
+# startup, so the printer reaches "Operational" without a UI click.
+server:
+  firstRun: false
+  onlineCheck:
+    enabled: false
+  pluginBlacklist:
+    enabled: false
+serial:
+  autoconnect: true
+  port: VIRTUAL
+  baudrate: 0
+plugins:
+  # Bundled plugins that phone home. Disabling them keeps startup offline
+  # and deterministic; none of them affects the REST API farm3d uses.
+  _disabled:
+    - announcements
+    - errortracking
+    - pluginmanager
+    - softwareupdate
+    - tracking
+  virtual_printer:
+    enabled: true
