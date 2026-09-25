@@ -510,7 +510,10 @@ fn the_argument_vectors_carry_no_absolute_path_and_no_forbidden_flag() {
             .collect();
         assert_eq!(arguments[0], "<engine>", "{platform}");
         for argument in &arguments {
-            assert!(!argument.contains("/any/"), "{platform}: {argument}");
+            assert!(
+                !argument.starts_with('/') && !argument.contains("/any/"),
+                "{platform}: {argument}"
+            );
             for forbidden in ["--allow-newer-file", "--mstpp", "--no-check", "--debug"] {
                 assert_ne!(*argument, forbidden, "{platform}");
             }

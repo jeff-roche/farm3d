@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use farm3d_lib::persistence::Storage;
 use farm3d_lib::slicing::invocation::WORK_ROOT_DIR;
-use farm3d_lib::slicing::operations::recover_after_restart;
+use farm3d_lib::slicing::operations::{recover_after_restart, SchedulerPoint};
 use farm3d_lib::slicing::repository::{load_runtime_config, save_runtime_config};
 use farm3d_lib::slicing::runtime::DiscoveryEnv;
 use serde_json::{json, Value};
@@ -682,6 +682,20 @@ fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
     let gcode_before = first.blob(&gcode_sha256);
 
     first.scenario(&[("FAKE_ORCA_SCENARIO", "hang")]);
+    // The old worker is held once its engine exits, as a dead farm3d's
+    // would be, so only recovery can remove the work directory.
+    let (exited, on_exit) = std::sync::mpsc::channel::<String>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (exited, released) = (Mutex::new(exited), Mutex::new(released));
+    first
+        .services
+        .slicing
+        .set_scheduler_hook(Some(Arc::new(move |point| {
+            if let SchedulerPoint::Exited(id) = point {
+                exited.lock().unwrap().send(id.to_string()).unwrap();
+                released.lock().unwrap().recv().unwrap();
+            }
+        })));
     let hung = ids(&first.start("op-hung", &preparation, &[plate])).remove(0);
     first.wait_state(&hung, "running");
     let work = first.work_dir(&hung);
@@ -701,7 +715,13 @@ fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
         vec![hung.clone()],
         "the engine was still ours"
     );
-    assert!(!work.exists(), "the work directory is removed");
+    assert_eq!(
+        on_exit.recv_timeout(DEADLINE).unwrap(),
+        hung,
+        "the old worker saw its engine end and is held"
+    );
+    assert_eq!(recovery.work_dirs_removed, 1, "{recovery:?}");
+    assert!(!work.exists(), "recovery removed the work directory");
     assert!(!storage
         .paths()
         .content_root()
@@ -711,14 +731,14 @@ fn a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions() {
         .unwrap_or(false));
 
     let second = farm.start();
-    // The old supervisor sees its engine end and must store nothing: wait
-    // for the engine to be gone and the old worker to finish with it.
-    wait_for("the old engine to exit", || {
-        (!process_alive(engine_pid)).then_some(())
-    });
+    // Let the old worker go: it must store nothing.
+    assert!(!process_alive(engine_pid), "recovery stopped the engine");
+    release.send(()).unwrap();
     wait_for("the old worker to go idle", || {
         first.services.slicing.scheduler_idle().then_some(())
     });
+    first.services.slicing.set_scheduler_hook(None);
+    assert!(!work.exists());
     assert_eq!(second.stored_counts(), stored_before, "nothing new stored");
     let interrupted = second.operation(&hung);
     assert_eq!(interrupted["state"], "interrupted");
@@ -852,7 +872,7 @@ fn a_revision_can_be_deleted_and_the_stream_says_so() {
 
 #[test]
 fn a_cancel_racing_the_enqueue_waits_for_it_and_nothing_spawns() {
-    use farm3d_lib::slicing::operations::{cancel_slice_operation, SchedulerPoint};
+    use farm3d_lib::slicing::operations::cancel_slice_operation;
     use std::sync::mpsc;
 
     enum Seen {
@@ -1099,6 +1119,56 @@ fn a_slice_that_cannot_be_stored_fails_with_its_log() {
 // ---------------------------------------------------------------------------
 // Task 9: `create_external_slice_revision` (D16)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let model_id = model["id"].as_str().unwrap();
+    let preparation = running.prepare(model_id);
+    let plate = &plates(&preparation)[0];
+    // The worker panics once, after its engine has run. `resume_unwind`
+    // skips the panic hook, so the test output stays quiet.
+    let armed = Arc::new(Mutex::new(true));
+    let fire = Arc::clone(&armed);
+    running
+        .services
+        .slicing
+        .set_scheduler_hook(Some(Arc::new(move |point| {
+            if matches!(point, SchedulerPoint::Exited(_))
+                && std::mem::take(&mut *fire.lock().unwrap())
+            {
+                std::panic::resume_unwind(Box::new("injected worker panic"));
+            }
+        })));
+
+    let id = ids(&running.start("op-panic", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "failed");
+    assert_eq!(
+        operation["failure"]["code"]["kind"], "internalError",
+        "{operation}"
+    );
+    assert_eq!(
+        operation["failure"]["message"],
+        "farm3d stopped this slice after an internal error."
+    );
+    assert!(!*armed.lock().unwrap(), "the panic was injected");
+    assert!(operation.get("sliceRevisionId").is_none());
+    assert!(!running.work_dir(&id).exists());
+    assert_eq!(
+        running.ok("list_slice_revisions", json!({ "modelId": model_id })),
+        json!([])
+    );
+    // A panic path has no log to keep; the log read still answers.
+    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert_eq!(log["text"], "", "{log}");
+
+    // The queue continues.
+    let next = ids(&running.start("op-after-panic", &preparation, &[plate])).remove(0);
+    running.wait_state(&next, "succeeded");
+    running.services.slicing.set_scheduler_hook(None);
+}
 
 #[test]
 fn an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_source_blob() {
