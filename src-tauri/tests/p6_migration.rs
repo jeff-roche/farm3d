@@ -1,8 +1,8 @@
 //! Migration 0007 (P6 `host_operations`). Covers: a fresh database's ledger
-//! row, the v6->v7 upgrade (Printers, Spools, Library, slicing, and the P5
-//! operations ledger unchanged, plus a restart), every `CHECK` the
-//! migration adds, the partial unique index (at most one unresolved row
-//! per Printer), the `BEFORE UPDATE` terminal-row trigger, the `RESTRICT`/
+//! row, the v6->v7 upgrade (a seeded Printer row and the P5 operations
+//! ledger's rows unchanged, plus a restart), every `CHECK` the migration
+//! adds, the partial unique index (at most one unresolved row per
+//! Printer), the `BEFORE UPDATE` terminal-row trigger, the `RESTRICT`/
 //! `SET NULL` foreign keys, the migration's crash-boundary behaviour, and
 //! that no column can hold a credential. See spec D2.
 
@@ -166,10 +166,10 @@ fn fresh_database_records_the_v7_ledger_row_with_a_matching_checksum() {
     assert_eq!(checksum, expected_checksum);
 }
 
-/// 2. Upgrading a v6 database keeps its Printers, Spools, and the P5
-///    operations ledger rows unchanged; the rebuilt ledger accepts the six
-///    P6 kinds and still rejects unknown ones; and the upgraded database
-///    reopens (restart) without change.
+/// 2. Upgrading a v6 database keeps its seeded Printer row and the P5
+///    operations ledger's rows unchanged; the rebuilt ledger accepts the
+///    six P6 kinds and still rejects unknown ones; and the upgraded
+///    database reopens (restart) without change.
 #[test]
 fn upgrading_v6_to_v7_keeps_every_existing_row_and_survives_a_restart() {
     let temp = tempfile::tempdir().expect("temporary root");
@@ -186,8 +186,8 @@ fn upgrading_v6_to_v7_keeps_every_existing_row_and_survives_a_restart() {
                    overrides_json, created_at, updated_at)
                  VALUES ('prn-a', 3, 'Printer', '', '', '', '', '', '', '{{}}', '{NOW}', '{NOW}');
                  INSERT INTO operations(id, kind, request_digest, created_at) VALUES
-                   ('op-move', 'moveSpool', 'digest-1', '{NOW}'),
-                   ('op-start-slice', 'startSlice', 'digest-2', '{NOW}');"
+                   ('op-move', 'moveSpool', 'digest-1', '2026-01-01T00:00:01.000Z'),
+                   ('op-start-slice', 'startSlice', 'digest-2', '2026-01-01T00:00:02.000Z');"
             ),
         );
     }
@@ -208,12 +208,14 @@ fn upgrading_v6_to_v7_keeps_every_existing_row_and_survives_a_restart() {
         .expect("printer");
     assert_eq!(printer, ("prn-a".to_string(), 3, "Printer".to_string()));
 
-    let ledger: Vec<(String, String)> = {
+    let ledger: Vec<(String, String, String, String)> = {
         let mut statement = connection
-            .prepare("SELECT id, kind FROM operations ORDER BY id")
+            .prepare("SELECT id, kind, request_digest, created_at FROM operations ORDER BY id")
             .expect("prepare");
         statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .expect("query")
             .collect::<rusqlite::Result<_>>()
             .expect("collect")
@@ -221,8 +223,18 @@ fn upgrading_v6_to_v7_keeps_every_existing_row_and_survives_a_restart() {
     assert_eq!(
         ledger,
         vec![
-            ("op-move".to_string(), "moveSpool".to_string()),
-            ("op-start-slice".to_string(), "startSlice".to_string()),
+            (
+                "op-move".to_string(),
+                "moveSpool".to_string(),
+                "digest-1".to_string(),
+                "2026-01-01T00:00:01.000Z".to_string(),
+            ),
+            (
+                "op-start-slice".to_string(),
+                "startSlice".to_string(),
+                "digest-2".to_string(),
+                "2026-01-01T00:00:02.000Z".to_string(),
+            ),
         ]
     );
 

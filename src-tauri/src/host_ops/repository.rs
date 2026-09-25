@@ -71,6 +71,12 @@ fn illegal(id: &str, from: HostOperationState, to: HostOperationState) -> Reposi
     }
 }
 
+/// Wraps a `state::transition` rejection as a `RepositoryError`, reporting
+/// the state the rejected event would have reached.
+fn illegal_from(id: &str, error: state::IllegalTransition) -> RepositoryError {
+    illegal(id, error.from, error.attempted_target())
+}
+
 fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostOperation> {
     let last_attempt_at: Option<String> = row.get(14)?;
     let last_attempt_reason: Option<String> = row.get(15)?;
@@ -296,19 +302,23 @@ pub fn insert_dispatching(
 
 /// D3 "two commits around the send": commits `dispatched_at` immediately
 /// before the adapter opens its connection. Only legal once, on a
-/// `dispatching` row that hasn't been sent yet — [`RepositoryError::NotFound`]
-/// covers both "no such row" and "already sent, or not dispatching" (an
-/// executor bug either way; the invariant is that the executor sends
-/// nothing unless this returns `Ok`).
+/// `dispatching` row that hasn't been sent yet: no such row is
+/// [`RepositoryError::NotFound`], and a row that exists but is already
+/// sent or isn't `dispatching` is
+/// [`RepositoryError::HostOperationAlreadySent`] — an executor bug either
+/// way (the invariant is that the executor sends nothing unless this
+/// returns `Ok`), but a distinct error so the two can't be confused.
 pub fn mark_sent(tx: &Transaction<'_>, id: &str) -> Result<HostOperation, RepositoryError> {
-    let affected = tx.execute(
-        "UPDATE host_operations SET dispatched_at = ?2
-         WHERE id = ?1 AND state = 'dispatching' AND dispatched_at IS NULL",
+    let current = load(tx, id)?.ok_or_else(|| not_found(id))?;
+    if current.state != HostOperationState::Dispatching || current.dispatched_at.is_some() {
+        return Err(RepositoryError::HostOperationAlreadySent {
+            host_operation_id: id.to_string(),
+        });
+    }
+    tx.execute(
+        "UPDATE host_operations SET dispatched_at = ?2 WHERE id = ?1",
         params![id, now_rfc3339()],
     )?;
-    if affected == 0 {
-        return Err(not_found(id));
-    }
     load(tx, id)?.ok_or_else(|| not_found(id))
 }
 
@@ -347,17 +357,52 @@ impl Outcome {
     }
 }
 
+/// Which D3 event an `Outcome` fires, given the row's current state. The
+/// same `Outcome` variant maps to a different event depending on where
+/// the row is coming from — `Succeeded`/`Failed` from `dispatching` are
+/// the executor's definitive dispatch answer; from anywhere else (in
+/// practice, only `reconciling`) they're a reconcile read's proof. That
+/// distinction is exactly why `state.rs` is keyed on events, not bare
+/// `(from, to)` pairs (see its module docs): a `(from, to)`-keyed check
+/// couldn't tell `record_attempt`'s `reconciling -> uncertain`
+/// (`Inconclusive`) apart from this function's own `dispatching ->
+/// uncertain` (`Indeterminate`), and letting the latter fire from
+/// `reconciling` would reset `uncertain_since` — exactly the bug this
+/// event-keyed table prevents.
+fn event_for(current_state: HostOperationState, outcome: &Outcome) -> state::Event {
+    match outcome {
+        Outcome::Succeeded { .. } if current_state == HostOperationState::Dispatching => {
+            state::Event::DefinitiveSuccess
+        }
+        Outcome::Succeeded { .. } => state::Event::ProvedApplied,
+        Outcome::Failed { .. } if current_state == HostOperationState::Dispatching => {
+            state::Event::DefinitiveFailure
+        }
+        Outcome::Failed { .. } => state::Event::ProvedNotApplied,
+        Outcome::Uncertain { .. } => state::Event::Indeterminate,
+        Outcome::Reconciling => state::Event::AttemptBegins,
+        Outcome::Abandoned { .. } => state::Event::Abandon,
+    }
+}
+
 /// Moves `id` to `outcome`'s target state, after checking `state::transition`
-/// allows it from the row's current state — nothing is written otherwise
-/// ([`RepositoryError::IllegalHostOperationTransition`]).
+/// allows the resulting event ([`event_for`]) from the row's current state
+/// — nothing is written otherwise
+/// ([`RepositoryError::IllegalHostOperationTransition`]). D3/D5's extra
+/// rule beyond state alone: `reconciling`'s "proved not applied"
+/// (`ProvedNotApplied`) only ever fires for an `upload` row — a start,
+/// pause, resume, or cancel is never failed by reconciliation.
 pub fn transition(
     tx: &Transaction<'_>,
     id: &str,
     outcome: Outcome,
 ) -> Result<HostOperation, RepositoryError> {
     let current = load(tx, id)?.ok_or_else(|| not_found(id))?;
-    let to = outcome.target();
-    state::transition(current.state, to).map_err(|_| illegal(id, current.state, to))?;
+    let event = event_for(current.state, &outcome);
+    if event == state::Event::ProvedNotApplied && current.kind != HostOperationKind::Upload {
+        return Err(illegal(id, current.state, outcome.target()));
+    }
+    state::transition(current.state, event).map_err(|error| illegal_from(id, error))?;
 
     let now = now_rfc3339();
     match outcome {
@@ -395,10 +440,11 @@ pub fn transition(
     load(tx, id)?.ok_or_else(|| not_found(id))
 }
 
-/// D3 `reconciling -> uncertain` (inconclusive): `attempts += 1`, the
-/// reason recorded, `uncertain_since` left untouched. Only legal from
-/// `reconciling` — narrower than `state.rs`'s table, which also allows
-/// `dispatching -> uncertain` (that edge is [`transition`]'s job, and
+/// D3 `reconciling -> uncertain` (`Event::Inconclusive`): `attempts += 1`,
+/// the reason recorded, `uncertain_since` left untouched. Only legal from
+/// `reconciling` — `Event::Inconclusive`'s own required source state, so
+/// this can never fire on a `dispatching` row (that's [`transition`]'s
+/// `Event::Indeterminate`, a different event to the same target, and it
 /// never counts an attempt).
 pub fn record_attempt(
     tx: &Transaction<'_>,
@@ -406,9 +452,8 @@ pub fn record_attempt(
     reason: InconclusiveReason,
 ) -> Result<HostOperation, RepositoryError> {
     let current = load(tx, id)?.ok_or_else(|| not_found(id))?;
-    if current.state != HostOperationState::Reconciling {
-        return Err(illegal(id, current.state, HostOperationState::Uncertain));
-    }
+    state::transition(current.state, state::Event::Inconclusive)
+        .map_err(|error| illegal_from(id, error))?;
     tx.execute(
         "UPDATE host_operations
          SET state = 'uncertain', attempts = attempts + 1,
@@ -474,25 +519,47 @@ pub fn recover_after_restart(
         "SELECT id FROM host_operations WHERE state = 'reconciling'",
     )?;
 
-    let never_sent_failure = to_json(&HostOperationFailure {
-        code: HostOperationFailureCode::NeverSent,
-        message: "farm3d closed before sending this. Nothing reached the printer.".to_string(),
-    });
+    // Every row this touches is already known (by its `WHERE` clause) to
+    // be in the one state each event requires, so these can never fail —
+    // but going through `state::transition` still ties the state written
+    // below to D3's table, rather than a hand-typed literal that could
+    // drift from it.
+    let never_sent_state = state::transition(
+        HostOperationState::Dispatching,
+        state::Event::StartupNeverSent,
+    )
+    .expect("D3: dispatching -> failed (StartupNeverSent) is always legal");
+    let interrupted_state =
+        state::transition(HostOperationState::Dispatching, state::Event::StartupSent)
+            .expect("D3: dispatching -> uncertain (StartupSent) is always legal");
+    let reconciling_state = state::transition(
+        HostOperationState::Reconciling,
+        state::Event::StartupReconciling,
+    )
+    .expect("D3: reconciling -> uncertain (StartupReconciling) is always legal");
+
+    let never_sent_failure = to_json(&HostOperationFailure::for_code(
+        HostOperationFailureCode::NeverSent,
+    ));
     tx.execute(
-        "UPDATE host_operations SET state = 'failed', failure_json = ?2, resolved_at = ?1
+        "UPDATE host_operations SET state = ?3, failure_json = ?2, resolved_at = ?1
          WHERE state = 'dispatching' AND dispatched_at IS NULL",
-        params![now, never_sent_failure],
+        params![now, never_sent_failure, encode_enum(never_sent_state)],
     )?;
     tx.execute(
         "UPDATE host_operations
-         SET state = 'uncertain', uncertain_since = ?1, last_attempt_at = ?1,
+         SET state = ?3, uncertain_since = ?1, last_attempt_at = ?1,
              last_attempt_reason = ?2
          WHERE state = 'dispatching' AND dispatched_at IS NOT NULL",
-        params![now, encode_enum(InconclusiveReason::InterruptedByRestart)],
+        params![
+            now,
+            encode_enum(InconclusiveReason::InterruptedByRestart),
+            encode_enum(interrupted_state),
+        ],
     )?;
     tx.execute(
-        "UPDATE host_operations SET state = 'uncertain' WHERE state = 'reconciling'",
-        [],
+        "UPDATE host_operations SET state = ?1 WHERE state = 'reconciling'",
+        params![encode_enum(reconciling_state)],
     )?;
 
     let mut recovered = Vec::new();
@@ -514,6 +581,7 @@ mod tests {
     use crate::host_ops::{
         HostOperationLastAttempt, HostOperationObservedState, StartEvidenceSource,
     };
+    use crate::persistence::StorageError;
     use crate::printers::repository::PrinterRepository;
     use crate::printers::StoredPrinter;
 
@@ -565,6 +633,46 @@ mod tests {
         }
     }
 
+    /// A non-upload (control) row: `pause`, which `reconciling -> failed`
+    /// (m1) must never reach.
+    fn pause(operation_id: &str, printer_id: &str, host_path: &str) -> NewHostOperation {
+        NewHostOperation {
+            operation_id: operation_id.to_string(),
+            operation_kind: OperationKind::PauseHostPrint,
+            request_digest: format!("digest-{printer_id}-{host_path}"),
+            printer_id: printer_id.to_string(),
+            kind: HostOperationKind::Pause,
+            slice_revision_id: None,
+            source_host_operation_id: None,
+            gcode_sha256: None,
+            gcode_size: None,
+            host_path: host_path.to_string(),
+            history_mark: None,
+            endpoint: endpoint(),
+        }
+    }
+
+    /// Drives a freshly `insert_dispatching`-ed row through
+    /// `dispatching -> uncertain -> reconciling`, the path every
+    /// `reconciling`-only test needs before it can exercise its own event.
+    fn advance_to_reconciling(storage: &std::sync::Arc<crate::persistence::Storage>, id: &str) {
+        storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    id,
+                    Outcome::Uncertain {
+                        reason: InconclusiveReason::ResponseLost,
+                        no_longer_pending: false,
+                    },
+                )
+            })
+            .expect("dispatching -> uncertain");
+        storage
+            .write_repo(|tx| transition(tx, id, Outcome::Reconciling))
+            .expect("uncertain -> reconciling");
+    }
+
     #[test]
     fn insert_dispatching_writes_a_dispatching_row_with_the_ledger_claim() {
         let (_temp, _lease, storage) = crate::test_storage();
@@ -577,7 +685,7 @@ mod tests {
         assert_eq!(operation.state, HostOperationState::Dispatching);
         assert!(operation.id.starts_with("hop-"));
         assert_eq!(operation.printer_id, "prn-a");
-        assert!(operation.created_at.len() > 0);
+        assert!(!operation.created_at.is_empty());
         assert!(operation.dispatched_at.is_none());
     }
 
@@ -626,7 +734,17 @@ mod tests {
         let result = storage
             .write_repo(|tx| insert_dispatching(tx, &upload("op-2", "prn-a", "farm3d/b.gcode")));
 
-        assert!(result.is_err(), "a second unresolved row must be rejected");
+        // The raw SQLite constraint violation, unmapped to any
+        // Host-Operation-specific error — a later task's guard is meant
+        // to catch this case earlier and report `HOST_OPERATION_PENDING`
+        // instead of ever reaching this index.
+        assert!(
+            matches!(
+                result,
+                Err(RepositoryError::Storage(StorageError::Database))
+            ),
+            "unexpected error: {result:?}"
+        );
     }
 
     #[test]
@@ -643,7 +761,46 @@ mod tests {
         assert!(sent.dispatched_at.is_some());
 
         let second = storage.write_repo(|tx| mark_sent(tx, &operation.id));
-        assert!(matches!(second, Err(RepositoryError::NotFound { .. })));
+        assert!(matches!(
+            second,
+            Err(RepositoryError::HostOperationAlreadySent { .. })
+        ));
+    }
+
+    #[test]
+    fn mark_sent_on_a_missing_row_is_not_found() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        let result = storage.write_repo(|tx| mark_sent(tx, "hop-missing"));
+        assert!(matches!(result, Err(RepositoryError::NotFound { .. })));
+    }
+
+    #[test]
+    fn mark_sent_on_a_non_dispatching_row_is_already_sent_not_not_found() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_printer_arc(&storage, "prn-a");
+        let operation = storage
+            .write_repo(|tx| insert_dispatching(tx, &upload("op-1", "prn-a", "farm3d/a.gcode")))
+            .expect("insert");
+        storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    &operation.id,
+                    Outcome::Failed {
+                        failure: HostOperationFailure {
+                            code: HostOperationFailureCode::HostUnreachable,
+                            message: "unreachable".to_string(),
+                        },
+                    },
+                )
+            })
+            .expect("fail");
+
+        let result = storage.write_repo(|tx| mark_sent(tx, &operation.id));
+        assert!(matches!(
+            result,
+            Err(RepositoryError::HostOperationAlreadySent { .. })
+        ));
     }
 
     #[test]
@@ -705,10 +862,12 @@ mod tests {
             .uncertain_since
             .clone()
             .expect("uncertain_since set");
+        // `last_attempt_at` and `uncertain_since` are set from the same
+        // `now` in this one UPDATE.
         assert_eq!(
             uncertain.last_attempt,
             Some(HostOperationLastAttempt {
-                at: uncertain.last_attempt.clone().unwrap().at,
+                at: first_uncertain_since.clone(),
                 reason: InconclusiveReason::ResponseLost,
             })
         );
@@ -742,6 +901,150 @@ mod tests {
             result,
             Err(RepositoryError::IllegalHostOperationTransition { .. })
         ));
+    }
+
+    /// Regression test for the bug fix round 1 exists to close: a
+    /// `(from, to)`-keyed `transition` let a `reconciling` row accept the
+    /// dispatch-time `Indeterminate` event (`Outcome::Uncertain`) because it
+    /// shares `reconciling`'s own `Inconclusive` target (`uncertain`). That
+    /// reset `uncertain_since` and skipped `attempts += 1`, breaking the
+    /// binding rule that `uncertain_since` is never changed on
+    /// `reconciling -> uncertain`. The event-keyed `state::transition` must
+    /// reject it outright, writing nothing.
+    #[test]
+    fn a_reconciling_row_rejects_the_dispatch_time_indeterminate_event_and_keeps_uncertain_since() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_printer_arc(&storage, "prn-a");
+        let operation = storage
+            .write_repo(|tx| insert_dispatching(tx, &upload("op-1", "prn-a", "farm3d/a.gcode")))
+            .expect("insert");
+        advance_to_reconciling(&storage, &operation.id);
+        let uncertain_since_before = load_row(&storage, &operation.id)
+            .uncertain_since
+            .expect("uncertain_since set");
+
+        // The dispatch-time Indeterminate event (Outcome::Uncertain) is
+        // dispatching-only; a reconciling row must reject it, not silently
+        // reset uncertain_since via the shared `uncertain` target.
+        let result = storage.write_repo(|tx| {
+            transition(
+                tx,
+                &operation.id,
+                Outcome::Uncertain {
+                    reason: InconclusiveReason::HostUnreachable,
+                    no_longer_pending: false,
+                },
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(RepositoryError::IllegalHostOperationTransition { .. })
+        ));
+
+        let reloaded = load_row(&storage, &operation.id);
+        assert_eq!(reloaded.state, HostOperationState::Reconciling);
+        assert_eq!(
+            reloaded.uncertain_since,
+            Some(uncertain_since_before),
+            "a rejected transition must never touch uncertain_since"
+        );
+        assert_eq!(
+            reloaded.attempts, 0,
+            "a rejected transition never counts an attempt"
+        );
+    }
+
+    #[test]
+    fn reconciling_to_succeeded_and_failed_are_legal_for_an_upload_row() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_printer_arc(&storage, "prn-a");
+
+        let succeed_target = storage
+            .write_repo(|tx| insert_dispatching(tx, &upload("op-1", "prn-a", "farm3d/a.gcode")))
+            .expect("insert");
+        advance_to_reconciling(&storage, &succeed_target.id);
+        let succeeded = storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    &succeed_target.id,
+                    Outcome::Succeeded {
+                        resolution: HostOperationResolution::ArtifactVerified { reconciled: true },
+                    },
+                )
+            })
+            .expect("reconciling -> succeeded");
+        assert_eq!(succeeded.state, HostOperationState::Succeeded);
+
+        let fail_target = storage
+            .write_repo(|tx| insert_dispatching(tx, &upload("op-2", "prn-a", "farm3d/b.gcode")))
+            .expect("insert");
+        advance_to_reconciling(&storage, &fail_target.id);
+        let failed = storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    &fail_target.id,
+                    Outcome::Failed {
+                        failure: HostOperationFailure::for_code(
+                            HostOperationFailureCode::NotApplied,
+                        ),
+                    },
+                )
+            })
+            .expect("reconciling -> failed");
+        assert_eq!(failed.state, HostOperationState::Failed);
+    }
+
+    /// m1: `reconciling -> failed` ("proved not applied") is legal only for
+    /// an `upload` row — start and control operations are never failed by
+    /// reconciliation.
+    #[test]
+    fn reconciling_to_failed_is_illegal_for_a_non_upload_kind() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_printer_arc(&storage, "prn-a");
+        let operation = storage
+            .write_repo(|tx| insert_dispatching(tx, &pause("op-1", "prn-a", "farm3d/a.gcode")))
+            .expect("insert");
+        advance_to_reconciling(&storage, &operation.id);
+
+        let result = storage.write_repo(|tx| {
+            transition(
+                tx,
+                &operation.id,
+                Outcome::Failed {
+                    failure: HostOperationFailure::for_code(HostOperationFailureCode::NotApplied),
+                },
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(RepositoryError::IllegalHostOperationTransition { .. })
+        ));
+
+        let reloaded = load_row(&storage, &operation.id);
+        assert_eq!(reloaded.state, HostOperationState::Reconciling);
+    }
+
+    /// m4: a non-terminal illegal pair not covered by any of the tests
+    /// above — rejected by `state::transition` before any SQL runs.
+    #[test]
+    fn dispatching_to_reconciling_is_illegal_and_writes_nothing() {
+        let (_temp, _lease, storage) = crate::test_storage();
+        seed_printer_arc(&storage, "prn-a");
+        let operation = storage
+            .write_repo(|tx| insert_dispatching(tx, &upload("op-1", "prn-a", "farm3d/a.gcode")))
+            .expect("insert");
+
+        let result = storage.write_repo(|tx| transition(tx, &operation.id, Outcome::Reconciling));
+        assert!(matches!(
+            result,
+            Err(RepositoryError::IllegalHostOperationTransition { .. })
+        ));
+
+        let reloaded = load_row(&storage, &operation.id);
+        assert_eq!(reloaded.state, HostOperationState::Dispatching);
+        assert!(reloaded.dispatched_at.is_none());
     }
 
     #[test]

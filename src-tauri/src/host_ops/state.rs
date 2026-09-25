@@ -2,54 +2,129 @@
 //! repository can reject an illegal move before it ever reaches SQL.
 //!
 //! ```text
-//! dispatching ─ definitive success ────────────> succeeded
-//! dispatching ─ definitive failure ────────────> failed
-//! dispatching ─ indeterminate/timeout/panic ───> uncertain
-//! uncertain ─ reconcile attempt begins ────────> reconciling
-//! reconciling ─ proved applied ────────────────> succeeded
-//! reconciling ─ proved not applied (upload) ───> failed
-//! reconciling ─ inconclusive/startup ──────────> uncertain
-//! uncertain ─ operator abandons ────────────────> abandoned
+//! dispatching ─ definitive success ────────────> succeeded         (DefinitiveSuccess)
+//! dispatching ─ definitive failure ────────────> failed            (DefinitiveFailure)
+//! dispatching ─ indeterminate/timeout/panic ───> uncertain         (Indeterminate)
+//! dispatching ─ startup, never sent ───────────> failed{neverSent} (StartupNeverSent)
+//! dispatching ─ startup, sent ─────────────────> uncertain         (StartupSent)
+//! uncertain ─ reconcile attempt begins ────────> reconciling       (AttemptBegins)
+//! uncertain ─ operator abandons ────────────────> abandoned        (Abandon)
+//! reconciling ─ proved applied ────────────────> succeeded         (ProvedApplied)
+//! reconciling ─ proved not applied (upload) ───> failed            (ProvedNotApplied)
+//! reconciling ─ inconclusive ──────────────────> uncertain         (Inconclusive)
+//! reconciling ─ startup ───────────────────────> uncertain         (StartupReconciling)
 //! ```
 //!
-//! Every other `(from, to)` pair is illegal. This module only checks state
-//! *legality* — which companion columns a move writes (`resolution_json`,
-//! `uncertain_since`, `attempts`, ...) is `repository.rs`'s job.
+//! The spec binds `transition(from, event)`, not `transition(from, to)`:
+//! each event names exactly one D3 edge (its own fixed source and target
+//! state), so `reconciling -> uncertain` and `dispatching -> uncertain`
+//! are different events even though they share a target. That matters
+//! because they aren't interchangeable — a reconciler's inconclusive
+//! attempt ([`Event::Inconclusive`]) counts an attempt and leaves
+//! `uncertain_since` alone, while the executor's indeterminate dispatch
+//! result ([`Event::Indeterminate`]) is `dispatching`-only and is the one
+//! and only place `uncertain_since` is written (D2). A `(from, to)`-keyed
+//! table couldn't tell those apart — see `repository.rs`'s
+//! `record_attempt` vs. its `transition`/`Outcome::Uncertain`.
+//!
+//! Every other `(from, event)` pair is illegal. This module only checks
+//! state *legality* — which companion columns a move writes
+//! (`resolution_json`, `uncertain_since`, `attempts`, ...), and any rule
+//! beyond state (e.g. D3's "proved not applied" is upload-only) is
+//! `repository.rs`'s job.
 
 use super::HostOperationState;
 
-/// `transition`'s rejection: `from` never legally moves to `to`.
+/// D3's events, each legal from exactly one state. `AttemptBegins` and
+/// `Abandon` are `uncertain`'s two exits; every other event is
+/// `dispatching`'s or `reconciling`'s.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Event {
+    /// `dispatching -> succeeded`: the executor's dispatch answer proved
+    /// the write applied.
+    DefinitiveSuccess,
+    /// `dispatching -> failed`: the executor's dispatch answer proved the
+    /// write did not apply (or a local precondition failed before it sent
+    /// anything).
+    DefinitiveFailure,
+    /// `dispatching -> uncertain`: the executor's dispatch answer proved
+    /// neither (timeout, lost response, panic, ...).
+    Indeterminate,
+    /// `uncertain -> reconciling`: a reconcile attempt begins.
+    AttemptBegins,
+    /// `reconciling -> succeeded`: the reconcile read proved the write
+    /// applied.
+    ProvedApplied,
+    /// `reconciling -> failed`: the reconcile read proved the write did
+    /// not apply. D3/repository rule: only ever raised for an `upload`
+    /// row (`repository::transition` enforces this; this module doesn't
+    /// know about `kind`).
+    ProvedNotApplied,
+    /// `reconciling -> uncertain`: the reconcile read proved neither.
+    /// Counts an attempt (`repository::record_attempt`).
+    Inconclusive,
+    /// `dispatching -> failed{neverSent}`: startup found the row unsent.
+    StartupNeverSent,
+    /// `dispatching -> uncertain`: startup found the row sent, but with no
+    /// answer recorded.
+    StartupSent,
+    /// `reconciling -> uncertain`: startup found a reconcile attempt in
+    /// progress (a crash mid-attempt). Never counts an attempt.
+    StartupReconciling,
+    /// `uncertain -> abandoned`: the operator abandons (D8).
+    Abandon,
+}
+
+impl Event {
+    /// The one `(from, to)` edge this event is legal for.
+    fn edge(self) -> (HostOperationState, HostOperationState) {
+        use HostOperationState::{
+            Abandoned, Dispatching, Failed, Reconciling, Succeeded, Uncertain,
+        };
+        match self {
+            Event::DefinitiveSuccess => (Dispatching, Succeeded),
+            Event::DefinitiveFailure => (Dispatching, Failed),
+            Event::Indeterminate => (Dispatching, Uncertain),
+            Event::StartupNeverSent => (Dispatching, Failed),
+            Event::StartupSent => (Dispatching, Uncertain),
+            Event::AttemptBegins => (Uncertain, Reconciling),
+            Event::Abandon => (Uncertain, Abandoned),
+            Event::ProvedApplied => (Reconciling, Succeeded),
+            Event::ProvedNotApplied => (Reconciling, Failed),
+            Event::Inconclusive => (Reconciling, Uncertain),
+            Event::StartupReconciling => (Reconciling, Uncertain),
+        }
+    }
+}
+
+/// `transition`'s rejection: `event` never legally fires from `from`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct IllegalTransition {
     pub from: HostOperationState,
-    pub to: HostOperationState,
+    pub event: Event,
 }
 
-/// Whether D3 allows `from -> to`. `Ok(to)` on a legal move (returned
-/// unchanged, so callers can chain this straight into their own result);
-/// [`IllegalTransition`] otherwise.
+impl IllegalTransition {
+    /// The state `event` would have moved to, had it been legal — for a
+    /// caller (the repository) that wants to report *what* was attempted,
+    /// not just that it failed.
+    pub fn attempted_target(&self) -> HostOperationState {
+        self.event.edge().1
+    }
+}
+
+/// Whether D3 lets `event` fire while a row is `from`. `Ok(to)` on a
+/// legal move (the event's fixed target, returned so callers can chain
+/// this straight into their own result); [`IllegalTransition`] otherwise.
 pub fn transition(
     from: HostOperationState,
-    to: HostOperationState,
+    event: Event,
 ) -> Result<HostOperationState, IllegalTransition> {
-    use HostOperationState::{Abandoned, Dispatching, Failed, Reconciling, Succeeded, Uncertain};
-
-    let legal = matches!(
-        (from, to),
-        (Dispatching, Succeeded)
-            | (Dispatching, Failed)
-            | (Dispatching, Uncertain)
-            | (Uncertain, Reconciling)
-            | (Uncertain, Abandoned)
-            | (Reconciling, Succeeded)
-            | (Reconciling, Failed)
-            | (Reconciling, Uncertain)
-    );
-
-    if legal {
+    let (required_from, to) = event.edge();
+    if from == required_from {
         Ok(to)
     } else {
-        Err(IllegalTransition { from, to })
+        Err(IllegalTransition { from, event })
     }
 }
 
@@ -67,56 +142,79 @@ mod tests {
         Abandoned,
     ];
 
-    /// D3's table, exhaustively: every legal `(from, to)` pair the diagram
-    /// draws an arrow for, and nothing else.
-    const LEGAL_EDGES: [(HostOperationState, HostOperationState); 8] = [
-        (Dispatching, Succeeded),
-        (Dispatching, Failed),
-        (Dispatching, Uncertain),
-        (Uncertain, Reconciling),
-        (Uncertain, Abandoned),
-        (Reconciling, Succeeded),
-        (Reconciling, Failed),
-        (Reconciling, Uncertain),
+    const ALL_EVENTS: [Event; 11] = [
+        Event::DefinitiveSuccess,
+        Event::DefinitiveFailure,
+        Event::Indeterminate,
+        Event::StartupNeverSent,
+        Event::StartupSent,
+        Event::AttemptBegins,
+        Event::Abandon,
+        Event::ProvedApplied,
+        Event::ProvedNotApplied,
+        Event::Inconclusive,
+        Event::StartupReconciling,
     ];
 
+    /// Every event, from every state: legal only from the one state its
+    /// `edge()` names, and always returns that edge's target there.
     #[test]
-    fn every_legal_edge_succeeds_and_returns_its_target() {
-        for (from, to) in LEGAL_EDGES {
-            assert_eq!(
-                transition(from, to),
-                Ok(to),
-                "{from:?} -> {to:?} must be legal"
+    fn every_event_is_legal_only_from_its_one_required_state() {
+        for event in ALL_EVENTS {
+            let (required_from, to) = event.edge();
+            for from in ALL_STATES {
+                let result = transition(from, event);
+                if from == required_from {
+                    assert_eq!(result, Ok(to), "{event:?} must be legal from {from:?}");
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(IllegalTransition { from, event }),
+                        "{event:?} must be illegal from {from:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// D3's two same-target-different-source pairs stay distinct events,
+    /// so a `reconciling` row can never take the `dispatching`-only
+    /// `Indeterminate`/`StartupSent`/`StartupNeverSent` route to
+    /// `uncertain`/`failed` — only its own `Inconclusive`/
+    /// `StartupReconciling` (this is the fix for the bug where a
+    /// `(from, to)`-keyed table let `reconciling -> uncertain` through
+    /// the executor's event and reset `uncertain_since`).
+    #[test]
+    fn reconciling_never_takes_a_dispatching_only_event_to_uncertain_or_failed() {
+        for event in [
+            Event::Indeterminate,
+            Event::StartupSent,
+            Event::StartupNeverSent,
+            Event::DefinitiveSuccess,
+            Event::DefinitiveFailure,
+        ] {
+            assert!(
+                transition(Reconciling, event).is_err(),
+                "{event:?} must be illegal from reconciling"
             );
         }
     }
 
     #[test]
-    fn every_other_pair_in_the_full_cross_product_is_illegal() {
-        let mut checked = 0;
-        for from in ALL_STATES {
-            for to in ALL_STATES {
-                if LEGAL_EDGES.contains(&(from, to)) {
-                    continue;
-                }
-                checked += 1;
-                assert_eq!(
-                    transition(from, to),
-                    Err(IllegalTransition { from, to }),
-                    "{from:?} -> {to:?} must be illegal"
+    fn terminal_states_reject_every_event() {
+        for terminal in [Succeeded, Failed, Abandoned] {
+            for event in ALL_EVENTS {
+                assert!(
+                    transition(terminal, event).is_err(),
+                    "{event:?} must be illegal from terminal state {terminal:?}"
                 );
             }
         }
-        // 6 states x 6 states minus the 8 legal edges.
-        assert_eq!(checked, 36 - 8);
     }
 
     #[test]
-    fn terminal_states_never_move_anywhere_including_themselves() {
-        for terminal in [Succeeded, Failed, Abandoned] {
-            for to in ALL_STATES {
-                assert!(transition(terminal, to).is_err());
-            }
-        }
+    fn attempted_target_reports_what_the_illegal_event_would_have_reached() {
+        let error = transition(Dispatching, Event::AttemptBegins).unwrap_err();
+        assert_eq!(error.attempted_target(), Reconciling);
     }
 }

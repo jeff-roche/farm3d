@@ -1071,6 +1071,9 @@ impl CommandError {
             // Likewise a caller bug until a later task's guard rejects the
             // request itself before this ever runs.
             RepositoryError::IllegalHostOperationTransition { .. } => Self::internal(),
+            // Likewise: `mark_sent` runs exactly once per row; a second
+            // call is an executor bug, not something a user triggers.
+            RepositoryError::HostOperationAlreadySent { .. } => Self::internal(),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

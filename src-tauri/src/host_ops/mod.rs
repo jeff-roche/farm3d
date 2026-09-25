@@ -83,6 +83,39 @@ pub struct HostOperationFailure {
     pub message: String,
 }
 
+impl HostOperationFailure {
+    /// D11's fixed message for `code` (the table's "Message" column,
+    /// reproduced verbatim). The one place that text lives, so
+    /// `repository::recover_after_restart` and a later task's executor
+    /// raise the exact same wording for the same code.
+    pub fn for_code(code: HostOperationFailureCode) -> Self {
+        use HostOperationFailureCode as Code;
+        let message = match code {
+            Code::NeverSent => "farm3d closed before sending this. Nothing reached the printer.",
+            Code::HostUnreachable => "farm3d couldn't connect to the printer. Nothing was sent.",
+            Code::AuthRejected => "The printer rejected farm3d's API key.",
+            Code::ChecksumRejected => "The printer found the upload damaged and discarded it.",
+            Code::FileLoaded => {
+                "The printer is using a file with this name, so it refused the upload."
+            }
+            Code::HostBusy => "The printer is busy with another print.",
+            Code::FileMissing => "The printer couldn't find the staged file.",
+            Code::HostRejected => "The printer refused the request.",
+            Code::HostNotReady => "Klipper isn't running on the printer.",
+            Code::NotApplied => {
+                "The file isn't on the printer, and it didn't appear within a minute."
+            }
+            Code::HostFileDiffers => {
+                "A different file is at farm3d's path on the printer. Staging again replaces it."
+            }
+        };
+        Self {
+            code,
+            message: message.to_string(),
+        }
+    }
+}
+
 /// D11 `HostOperationResolution.startObserved.source`: where the start
 /// evidence came from.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
@@ -210,6 +243,25 @@ mod tests {
     #[test]
     fn new_host_operation_id_uses_the_hop_prefix() {
         assert!(new_host_operation_id().starts_with("hop-"));
+    }
+
+    /// `for_code`'s match has no wildcard arm, so a code the compiler
+    /// doesn't cover here fails to build; this spot-checks a few against
+    /// D11's table text verbatim.
+    #[test]
+    fn for_code_reproduces_d11s_message_verbatim() {
+        assert_eq!(
+            HostOperationFailure::for_code(HostOperationFailureCode::NeverSent).message,
+            "farm3d closed before sending this. Nothing reached the printer."
+        );
+        assert_eq!(
+            HostOperationFailure::for_code(HostOperationFailureCode::HostFileDiffers).message,
+            "A different file is at farm3d's path on the printer. Staging again replaces it."
+        );
+        assert_eq!(
+            HostOperationFailure::for_code(HostOperationFailureCode::AuthRejected).code,
+            HostOperationFailureCode::AuthRejected
+        );
     }
 
     /// The migration's `kind`/`state` `CHECK` lists spell each stored enum

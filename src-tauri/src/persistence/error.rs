@@ -137,6 +137,15 @@ pub enum RepositoryError {
         from: crate::host_ops::HostOperationState,
         to: crate::host_ops::HostOperationState,
     },
+    /// P6 D3: `mark_sent` was called on a row that isn't `dispatching`, or
+    /// that already has `dispatched_at` set — an executor bug either way
+    /// (`mark_sent` runs exactly once per row, immediately before the
+    /// send). Distinct from `NotFound` so the two can't be confused: this
+    /// means the row exists but is past the point `mark_sent` may touch
+    /// it. Nothing was written.
+    HostOperationAlreadySent {
+        host_operation_id: String,
+    },
     Storage(StorageError),
 }
 
