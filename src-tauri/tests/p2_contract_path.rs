@@ -651,8 +651,12 @@ fn first_time_set_printer_connection_never_probes() {
 
     // Exactly one factory call is expected: supervision start. A second,
     // separate call would mean a probe was (wrongly) performed before the
-    // first-ever set.
-    let mut factory_calls = 0;
+    // first-ever set. Supervision calls it from its own task, which load
+    // can hold up past the 300 ms quiet window, so wait for that call first.
+    calls
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the connection factory should have been called for supervision start");
+    let mut factory_calls = 1;
     while calls.recv_timeout(Duration::from_millis(300)).is_ok() {
         factory_calls += 1;
     }
