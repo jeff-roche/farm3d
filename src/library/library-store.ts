@@ -89,10 +89,6 @@ function commandError(code: ErrorCode, message: string, details?: Record<string,
   };
 }
 
-/** Web mode has no files and no content store, so anything that reads real
- *  files is refused rather than faked. */
-const needsDesktop = needsDesktopError;
-
 function notFound(kind: "Project" | "Model", id: string): CommandError {
   return commandError("NOT_FOUND", `This ${kind} no longer exists.`, { entityId: id });
 }
@@ -495,12 +491,12 @@ export function loadThumbnail(revisionId: string): Promise<string | null> {
 
 /** `null` when the user cancels the picker. */
 export async function pickFiles(purpose: SelectionPurpose): Promise<ImportSelectionSummary | null> {
-  if (!desktopAvailable()) throw needsDesktop(purpose === "import" ? "Importing Models" : "Locating a source file");
+  if (!desktopAvailable()) throw needsDesktopError(purpose === "import" ? "Importing Models" : "Locating a source file");
   return command("pick_model_files", { purpose });
 }
 
 export async function inspectSelection(selectionId: string): Promise<ImportInspection> {
-  if (!desktopAvailable()) throw needsDesktop("Importing Models");
+  if (!desktopAvailable()) throw needsDesktopError("Importing Models");
   return command("inspect_import_selection", { selectionId });
 }
 
@@ -512,7 +508,7 @@ export async function importModels(
   items: ImportItemRequest[],
   operationId: string = crypto.randomUUID(),
 ): Promise<ImportModelsResult> {
-  if (!desktopAvailable()) throw needsDesktop("Importing Models");
+  if (!desktopAvailable()) throw needsDesktopError("Importing Models");
   const result = await retryOnTransportFailure(() => command("import_models", { selectionId, operationId, items }));
   for (const item of result.items) if (item.model) settleModel(item.model);
   void refreshContentInfo();
@@ -535,7 +531,7 @@ let lastSourceCheckAt: number | undefined;
  *  toward the throttle, so a focus storm can't retry it in a loop. Settles
  *  the Models that changed. */
 export async function checkSources(modelIds?: string[], options: { force?: boolean } = {}): Promise<void> {
-  if (!desktopAvailable()) throw needsDesktop("Checking linked sources");
+  if (!desktopAvailable()) throw needsDesktopError("Checking linked sources");
   const now = Date.now();
   if (!options.force && lastSourceCheckAt !== undefined && now - lastSourceCheckAt < SOURCE_CHECK_INTERVAL_MS) return;
   lastSourceCheckAt = now;
@@ -552,7 +548,7 @@ export async function locateSource(
   fileIndex: number,
   acceptDifferentContent: boolean,
 ): Promise<ModelRecord> {
-  if (!desktopAvailable()) throw needsDesktop("Locating a source file");
+  if (!desktopAvailable()) throw needsDesktopError("Locating a source file");
   const expectedRevision = heldModel(modelId).revision;
   const { model } = await withConflictRefresh(() => command("locate_linked_source", {
     modelId, expectedRevision, selectionId, fileIndex, acceptDifferentContent,
@@ -562,7 +558,7 @@ export async function locateSource(
 }
 
 export async function convertToManaged(modelId: string): Promise<void> {
-  if (!desktopAvailable()) throw needsDesktop("Converting to managed storage");
+  if (!desktopAvailable()) throw needsDesktopError("Converting to managed storage");
   const expectedRevision = heldModel(modelId).revision;
   const { model } = await withConflictRefresh(() => command("convert_model_to_managed", { modelId, expectedRevision }));
   settleModel(model);
