@@ -740,7 +740,10 @@ fn a_revision_log_is_read_by_revision_id_and_external_revisions_have_none() {
         }),
     );
     let error = running.error("get_slice_operation_log", json!({ "sliceOperationId": id }));
-    assert_eq!(error["code"], "NOT_FOUND", "the operation went with its Preparation");
+    assert_eq!(
+        error["code"], "NOT_FOUND",
+        "the operation went with its Preparation"
+    );
 
     let by_revision = running.ok(
         "get_slice_revision_log",

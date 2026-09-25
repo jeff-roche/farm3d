@@ -79,7 +79,8 @@ use farm3d_lib::settings::commands::{
     SettingsRecord,
 };
 use farm3d_lib::slicing::commands::{
-    PresetSourceKind, SliceOperationLog, SliceRevisionLog, SlicingDeleted, SlicingSnapshot, StartSliceData,
+    PresetSourceKind, SliceOperationLog, SliceRevisionLog, SlicingDeleted, SlicingSnapshot,
+    StartSliceData,
 };
 use farm3d_lib::slicing::events::{
     SliceProgressPayload, SlicingEvent, SlicingEventPayload, SlicingEventType,
