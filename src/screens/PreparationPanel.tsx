@@ -12,7 +12,6 @@ import {
   type SliceErrorView,
 } from "../slicing/slice-presentation";
 import { refreshSlicing, slicing, startSlice } from "../slicing/slicing-store";
-import type { PreparationDocument } from "../slicing/types";
 import { issuesForPlates, type PreparationIssue } from "../slicing/validation";
 import { ADVANCED_FIELDS, FIELD_LABELS, PreparationControls } from "./PreparationControls";
 import type { PreparationSession } from "./preparation-session";
@@ -233,7 +232,7 @@ export function PreparationPanel(props: PreparationPanelProps) {
         {(shown) => (
           <PreparationControls
             session={session}
-            document={shown() as PreparationDocument}
+            document={shown()}
             advancedOpen={advancedOpen()}
             onAdvancedOpenChange={setAdvancedOpen}
           />

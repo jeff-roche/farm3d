@@ -68,7 +68,7 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
   // The last record held: a row being removed may outlive its record.
   const operation = createMemo<SliceOperationRecord>((held) => slicing.operation(props.id) ?? held!);
   const active = () => operation().state === "queued" || operation().state === "running";
-  const progress = () => slicing.progress(operation().id);
+  const progress = () => slicing.progress(props.id);
   const percent = () => progress()?.totalPercent ?? progress()?.platePercent;
   const message = () => progress()?.message ?? (operation().state === "queued" ? "Waiting to start…" : "Slicing…");
 
@@ -89,12 +89,20 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
 
   // --- Log -------------------------------------------------------------------
   const [log, setLog] = createSignal<LogState>({ status: "idle" });
+  const loadedLog = () => {
+    const held = log();
+    return held.status === "loaded" ? held.log : undefined;
+  };
+  const logFailure = () => {
+    const held = log();
+    return held.status === "failed" ? held.message : undefined;
+  };
   let request = 0;
   const loadLog = async (): Promise<SliceOperationLog | undefined> => {
     const id = ++request;
     setLog({ status: "loading" });
     try {
-      const loaded = await loadOperationLog(operation().id);
+      const loaded = await loadOperationLog(props.id);
       if (disposed || id !== request) return loaded;
       setLog({ status: "loaded", log: loaded });
       return loaded;
@@ -116,8 +124,7 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
   const [copyStatus, setCopyStatus] = createSignal<string | undefined>();
   const copyLog = async () => {
     setCopyStatus(undefined);
-    const held = log();
-    const loaded = held.status === "loaded" ? held.log : await loadLog();
+    const loaded = loadedLog() ?? await loadLog();
     if (disposed) return;
     if (!loaded) {
       setCopyStatus("The log couldn't be loaded, so nothing was copied.");
@@ -138,7 +145,7 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
     setCancelling(true);
     setCancelError(undefined);
     try {
-      await cancelSliceOperation(operation().id);
+      await cancelSliceOperation(props.id);
     } catch (error) {
       if (!disposed) setCancelError(isCommandError(error) ? error.message : "The slice couldn't be cancelled.");
     } finally {
@@ -147,8 +154,8 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
   };
 
   const segments = createMemo(() => {
-    const held = log();
-    return held.status === "loaded" ? logSegments(held.log.text, held.log.noiseLines) : [];
+    const held = loadedLog();
+    return held ? logSegments(held.text, held.noiseLines) : [];
   });
 
   return (
@@ -213,23 +220,13 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
       </div>
       <Show when={logOpen()}>
         <div class={styles.logArea}>
-          <Switch>
-            <Match when={log().status === "failed" && log()}>
-              {(failed) => <p class={styles.note}>{(failed() as { message: string }).message}</p>}
-            </Match>
-            <Match when={log().status === "loaded" && log()}>
-              {(loaded) => (
-                <>
-                  <Show when={(loaded() as { log: SliceOperationLog }).log.truncated}>
-                    <p class={styles.note}>The middle of this log was left out because it was too long.</p>
-                  </Show>
-                  <Show when={(loaded() as { log: SliceOperationLog }).log.noiseLines.length > 0}>
-                    <p class={styles.note}>Dimmed lines are known, harmless messages.</p>
-                  </Show>
-                </>
-              )}
-            </Match>
-          </Switch>
+          <Show when={logFailure()}>{(message) => <p class={styles.note}>{message()}</p>}</Show>
+          <Show when={loadedLog()?.truncated}>
+            <p class={styles.note}>The middle of this log was left out because it was too long.</p>
+          </Show>
+          <Show when={(loadedLog()?.noiseLines.length ?? 0) > 0}>
+            <p class={styles.note}>Dimmed lines are known, harmless messages.</p>
+          </Show>
           <pre
             ref={logElement}
             id={logId}
