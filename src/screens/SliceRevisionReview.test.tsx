@@ -192,9 +192,17 @@ describe("SliceRevisionReview", () => {
     expect(alert).toHaveTextContent("Plate 1: Lid can't be deleted yet.");
     expect(alert).toHaveTextContent("A Queue Entry uses it.");
 
+    // The delete lands: the store drops the revision, as the real one does.
+    slicingStoreMock.deleteSliceRevision.mockImplementationOnce(async (id: string) => {
+      const held = slicingStoreMock.slicing.revisions("mdl-web-enclosure");
+      setSlicingState({ revisionsByModel: { "mdl-web-enclosure": held.filter((revision) => revision.id !== id) } });
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(slicingStoreMock.deleteSliceRevision).toHaveBeenLastCalledWith(WEB_SLICING_REVISION_FARM3D));
-    expect(await screen.findByRole("heading", { name: "Slice Revisions" })).toBeInTheDocument();
+    // Its entry is gone, so focus lands on the section.
+    const heading = await screen.findByRole("heading", { name: "Slice Revisions" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.getAllByRole("button", { name: /^Open Plate 1: Lid/ })).toHaveLength(1);
   });
 
   it("says so when the revision is deleted elsewhere while open", async () => {

@@ -19,6 +19,7 @@ import {
   FACT_KEYS,
   FACT_LABELS,
   factValueText,
+  formatDateTime,
   NEEDS_MANUAL_PRINTER,
   profileRows,
   revisionKindLabel,
@@ -44,11 +45,6 @@ export interface SliceRevisionReviewProps {
 
 /** P12: the queue-handoff intent. Queueing arrives with P7. */
 const QUEUE_LATER_REASON = "The Queue arrives in a later version.";
-
-function formatDateTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
 
 function Rows(props: { rows: FactRow[] }) {
   return (
@@ -200,8 +196,8 @@ function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => vo
             {(key) => (
               <li class={styles.fact} data-fact={key}>
                 <span class={styles.factLabel}>{FACT_LABELS[key]}</span>
-                <span class={styles.factBody}>
-                  <span class={styles.factValue}>{factValueText(revision().facts, key) ?? "—"}</span>
+                <span class={styles.factValue}>{factValueText(revision().facts, key) ?? "—"}</span>
+                <span class={styles.factBadge}>
                   <ProvenanceBadge provenance={revision().facts[key].provenance} />
                 </span>
               </li>
@@ -211,7 +207,7 @@ function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => vo
         <Show when={revision().facts.printerProfile.value}>
           {(profile) => (
             <Show when={revision().kind === "external"}>
-              <Rows rows={profileRows(profile()).slice(1)} />
+              <Rows rows={profileRows(profile(), { withProfileName: false })} />
             </Show>
           )}
         </Show>

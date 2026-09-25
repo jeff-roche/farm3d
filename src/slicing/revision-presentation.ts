@@ -43,6 +43,12 @@ export const PROVENANCE_LABELS: Record<FactProvenance, string> = {
 
 export const NEEDS_MANUAL_PRINTER = "Needs manual Printer selection";
 
+/** "Sep 24, 2026, 12:00 PM": when a revision was made. */
+export function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 // --- Estimates (D12) --------------------------------------------------------------
 
 /** "1 h 30 min", "23 min 41 s", "41 s". */
@@ -114,10 +120,11 @@ export interface FactRow {
   value: string;
 }
 
-/** A profile snapshot as label/value rows. */
-export function profileRows(profile: ProfileSnapshot): FactRow[] {
+/** A profile snapshot as label/value rows. `withProfileName: false` leaves
+ *  out the profile's name, for where it is already shown. */
+export function profileRows(profile: ProfileSnapshot, options: { withProfileName?: boolean } = {}): FactRow[] {
   return [
-    { label: "Printer profile", value: profile.catalogRef.variant },
+    ...(options.withProfileName === false ? [] : [{ label: "Printer profile", value: profile.catalogRef.variant }]),
     { label: "Bed", value: bedLabel(profile.bedShape) },
     { label: "Printable height", value: formatMm(profile.printableHeightMm) },
     ...(profile.bedExcludeAreas.length > 0

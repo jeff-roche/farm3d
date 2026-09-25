@@ -1,4 +1,4 @@
-import { createSignal, createUniqueId, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createMemo, createResource, createSignal, createUniqueId, For, onCleanup, Show, type JSX } from "solid-js";
 import { Button, Dialog, Select, TextField } from "../design-system";
 import type { GcodeClaim } from "../generated/contracts/domain/GcodeClaim";
 import { isCommandError } from "../ipc/client";
@@ -35,6 +35,9 @@ export interface GcodeFactsDialogProps {
   sourceRevisionSequence: number;
   /** The file's allowlisted claims (P4 D11), untrusted. */
   claims: readonly GcodeClaim[];
+  /** Whether `claims` has been read: the file's inspection loads with the
+   *  Model's revision history, and can fail. */
+  claimsState: "loading" | "ready" | "failed";
   /** The revision was created; the dialog closes. */
   onCreated: (record: SliceRevisionRecord) => void;
 }
@@ -43,6 +46,8 @@ export interface GcodeFactsDialogProps {
 type FileValue<T> = { value: T } | { reason: string };
 
 const NOT_IN_FILE = "Not in the file.";
+const CLAIMS_LOADING = "Reading the file…";
+const CLAIMS_FAILED = "The file's claims couldn't be read.";
 
 /** D16/P8's **Create Slice Revision…** for imported G-code. Every fact
  *  starts empty: farm3d never infers one from the file. The file's claims
@@ -50,24 +55,30 @@ const NOT_IN_FILE = "Not in the file.";
  *  one into the field for the operator to check and confirm. A fact left
  *  empty is recorded as absent. */
 export function GcodeFactsDialog(props: GcodeFactsDialogProps) {
+  // No closing (the X, Escape, or outside) mid-request: the result would
+  // land on a closed dialog.
+  const [busy, setBusy] = createSignal(false);
   return (
     <Dialog
       title="Create Slice Revision"
       description={`Confirm what revision ${props.sourceRevisionSequence} of this G-code is for. Leave a fact empty if you don't know it.`}
       open={props.open}
-      onOpenChange={props.onOpenChange}
+      onOpenChange={(open) => {
+        if (open || !busy()) props.onOpenChange(open);
+      }}
     >
       {/* Mounted only while open, so every opening starts empty. */}
-      <FactsForm {...props} />
+      <FactsForm {...props} busy={busy()} setBusy={setBusy} />
     </Dialog>
   );
 }
 
-function FactsForm(props: GcodeFactsDialogProps) {
+function FactsForm(props: GcodeFactsDialogProps & { busy: boolean; setBusy: (busy: boolean) => void }) {
   const [draft, setDraft] = createSignal<FactsDraft>(emptyFactsDraft());
   const [errors, setErrors] = createSignal<FactErrors>({});
   const [formError, setFormError] = createSignal<{ message: string; retry: boolean } | undefined>();
-  const [busy, setBusy] = createSignal(false);
+  const busy = () => props.busy;
+  const setBusy = props.setBusy;
   let form: HTMLFormElement | undefined;
   let disposed = false;
   onCleanup(() => { disposed = true; });
@@ -89,13 +100,25 @@ function FactsForm(props: GcodeFactsDialogProps) {
   const claimsOf = (key: FactKey) => claimsFor(props.claims, FACT_CLAIM_KEYS[key]);
   const claimValue = (key: string) => props.claims.find((claim) => claim.key === key)?.value;
 
+  /** Why no claim can be shown yet: the file's inspection is still
+   *  loading, or failed. Never "Not in the file" then. */
+  const claimsUnavailable = (): string | undefined => {
+    if (props.claimsState === "loading") return CLAIMS_LOADING;
+    if (props.claimsState === "failed") return CLAIMS_FAILED;
+    return undefined;
+  };
+
   const diameterFromFile = (key: "nozzleDiameterMm" | "filamentDiameterMm"): FileValue<number> => {
+    const unavailable = claimsUnavailable();
+    if (unavailable) return { reason: unavailable };
     const claim = claimsOf(key)[0];
     if (!claim) return { reason: NOT_IN_FILE };
     const value = parseDiameterClaim(claim.value);
     return value === undefined ? { reason: "farm3d can't read this as one diameter from 0 to 5 mm." } : { value };
   };
   const materialFromFile = (): FileValue<{ family: MaterialFamily; other?: string }> => {
+    const unavailable = claimsUnavailable();
+    if (unavailable) return { reason: unavailable };
     const claim = claimsOf("materialFamily")[0];
     if (!claim) return { reason: NOT_IN_FILE };
     const value = parseMaterialClaim(claim.value);
@@ -103,43 +126,56 @@ function FactsForm(props: GcodeFactsDialogProps) {
   };
 
   // The printer claim names a catalog model; finding its profile needs the
-  // catalog, which loads when the dialog opens.
-  const [printerFromFile, setPrinterFromFile] = createSignal<FileValue<SliceTarget>>(
-    claimValue("printer_model") === undefined ? { reason: NOT_IN_FILE } : { reason: "Looking the printer up in the catalog…" },
+  // catalog. Keyed on the claims it reads, so claims that arrive after the
+  // dialog opened are looked up too.
+  const printerClaims = createMemo(
+    () => (props.claimsState === "ready"
+      ? {
+          model: claimValue("printer_model"),
+          settingsId: claimValue("printer_settings_id"),
+          nozzle: claimValue("nozzle_diameter"),
+        }
+      : undefined),
+    undefined,
+    { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
   );
-  onMount(async () => {
-    const model = claimValue("printer_model");
-    if (model === undefined) return;
-    try {
-      const match = matchCatalogModel(model, await listCatalogModels());
-      if (!match) {
-        if (!disposed) setPrinterFromFile({ reason: "This printer isn't in farm3d's printer catalog." });
-        return;
-      }
-      const nozzle = claimValue("nozzle_diameter");
+  const [printerLookup] = createResource(
+    () => {
+      const claims = printerClaims();
+      return claims?.model === undefined ? false : { ...claims, model: claims.model };
+    },
+    async (claims): Promise<FileValue<SliceTarget>> => {
+      const match = matchCatalogModel(claims.model, await listCatalogModels());
+      if (!match) return { reason: "This printer isn't in farm3d's printer catalog." };
       const variant = matchCatalogVariant(await listCatalogVariants(match.vendor, match.model), {
-        settingsId: claimValue("printer_settings_id"),
-        nozzleMm: nozzle === undefined ? undefined : parseDiameterClaim(nozzle),
+        settingsId: claims.settingsId,
+        nozzleMm: claims.nozzle === undefined ? undefined : parseDiameterClaim(claims.nozzle),
       });
-      if (disposed) return;
-      setPrinterFromFile(variant
-        ? {
-            value: {
-              kind: "profile",
-              catalogRef: {
-                vendor: match.vendor,
-                model: match.model,
-                variant: variant.variant,
-                modelId: match.modelId,
-                printerVariant: variant.printerVariant,
-              },
-            },
-          }
-        : { reason: "The file doesn't say which nozzle this printer has." });
-    } catch {
-      if (!disposed) setPrinterFromFile({ reason: "The printer catalog couldn't be loaded." });
-    }
-  });
+      if (!variant) return { reason: "The file doesn't say which nozzle this printer has." };
+      return {
+        value: {
+          kind: "profile",
+          catalogRef: {
+            vendor: match.vendor,
+            model: match.model,
+            variant: variant.variant,
+            modelId: match.modelId,
+            printerVariant: variant.printerVariant,
+          },
+        },
+      };
+    },
+  );
+  // Read by state, never by calling a pending resource, which would
+  // suspend the dialog.
+  const printerFromFile = (): FileValue<SliceTarget> => {
+    const unavailable = claimsUnavailable();
+    if (unavailable) return { reason: unavailable };
+    if (claimValue("printer_model") === undefined) return { reason: NOT_IN_FILE };
+    if (printerLookup.state === "ready") return printerLookup();
+    if (printerLookup.state === "errored") return { reason: "The printer catalog couldn't be loaded." };
+    return { reason: "Looking the printer up in the catalog…" };
+  };
 
   // --- Submitting (D16: idempotent by operationId) -------------------------------
   // One operation id per attempt. A retry of the same facts after the
@@ -375,7 +411,7 @@ function FactRow<T>(props: FactRowProps<T>) {
       <div class={styles.claim}>
         <div id={claimId}>
           <span class={styles.srOnly}>What the file says (not verified): </span>
-          <Show when={props.claims.length > 0} fallback={<span class={styles.muted}>{NOT_IN_FILE}</span>}>
+          <Show when={props.claims.length > 0} fallback={<span class={styles.muted}>{reason() ?? NOT_IN_FILE}</span>}>
             <For each={props.claims}>
               {(claim) => (
                 <span class={styles.claimValue}>

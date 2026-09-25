@@ -3,6 +3,7 @@ import { Button, Dialog } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { deleteModel } from "../library/library-store";
 import type { ModelRecord } from "../library/types";
+import type { LifecycleBlockerCode } from "../generated/contracts/domain/LifecycleBlockerCode";
 import styles from "./DeleteModelDialog.module.css";
 
 export interface DeleteModelDialogProps {
@@ -24,7 +25,7 @@ interface DeleteFailure {
 /** P5 D14: a Model's Slice Revisions block its deletion. */
 const SLICE_REVISIONS_HINT = "Open each one under Slice Revisions in this Model's details to delete it.";
 
-function hasBlocker(details: Record<string, unknown> | undefined, code: string): boolean {
+function hasBlocker(details: Record<string, unknown> | undefined, code: LifecycleBlockerCode): boolean {
   const blockers = details?.blockers;
   return Array.isArray(blockers) && blockers.some((blocker) =>
     typeof blocker === "object" && blocker !== null && (blocker as { code?: unknown }).code === code);

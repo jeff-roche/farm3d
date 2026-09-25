@@ -102,22 +102,30 @@
   list-style: none;
 }
 
+/* The label sits above the value, and the badge has its own column on
+   the right, so the badges line up down the list and the value keeps the
+   rest of the dock's width. */
 .fact {
   display: grid;
-  grid-template-columns: 7.5rem 1fr;
-  align-items: baseline;
-  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "label badge"
+    "value badge";
+  align-items: center;
+  column-gap: 0.5rem;
 }
 
-/* The badge sits after the value, and drops below it when the dock is
-   too narrow for both. */
-.factBody {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.25rem 0.5rem;
-  min-width: 0;
+.fact .factLabel {
+  grid-area: label;
+}
+
+.fact .factValue {
+  grid-area: value;
+}
+
+.factBadge {
+  grid-area: badge;
+  justify-self: end;
 }
 
 .factLabel {

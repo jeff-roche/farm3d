@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GcodeClaim } from "../generated/contracts/domain/GcodeClaim";
 import { libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
@@ -70,6 +71,7 @@ function renderDialog(claims: GcodeClaim[] = CLAIMS) {
       sourceRevisionId="msr-web-cube-gcode-1"
       sourceRevisionSequence={1}
       claims={claims}
+      claimsState="ready"
       onCreated={onCreated}
     />
   ));
@@ -297,7 +299,98 @@ describe("GcodeFactsDialog", () => {
   });
 });
 
+describe("GcodeFactsDialog before the file's claims are read", () => {
+  it("looks the claims up once they arrive after the dialog opened", async () => {
+    const [claims, setClaims] = createSignal<GcodeClaim[]>([]);
+    const [state, setState] = createSignal<"loading" | "ready" | "failed">("loading");
+    render(() => (
+      <GcodeFactsDialog
+        open
+        onOpenChange={vi.fn()}
+        sourceRevisionId="msr-web-cube-gcode-1"
+        sourceRevisionSequence={1}
+        claims={claims()}
+        claimsState={state()}
+        onCreated={vi.fn()}
+      />
+    ));
+    for (const fact of ["Printer profile", "Nozzle diameter", "Material", "Filament diameter"]) {
+      expect(row(fact)).toHaveTextContent("Reading the file…");
+      expect(row(fact)).not.toHaveTextContent("Not in the file.");
+      expect(useFile(fact)).toBeDisabled();
+    }
+
+    setClaims(CLAIMS);
+    setState("ready");
+    expect(row("Nozzle diameter")).toHaveTextContent("nozzle_diameter 0.4 (line 14)");
+    expect(useFile("Nozzle diameter")).toBeEnabled();
+    expect(row("Filament diameter")).toHaveTextContent("Not in the file.");
+    // The printer lookup runs for the claims that arrived.
+    await waitFor(() => expect(useFile("Printer profile")).toBeEnabled());
+    fireEvent.click(useFile("Printer profile"));
+    expect(within(row("Printer profile")).getByRole("button", { name: /Elegoo Centauri Carbon 0\.4 nozzle/ })).toBeInTheDocument();
+  });
+
+  it("can't be closed while a create is in flight", async () => {
+    let finish!: () => void;
+    slicingStoreMock.createExternalSliceRevision.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve(buildWebSlicingFixture(NOW).revisionRecords[WEB_SLICING_REVISION_EXTERNAL]);
+    }));
+    const { onOpenChange, dialog } = renderDialog();
+    fireEvent.click(submitButton());
+    await screen.findByRole("button", { name: "Creating…" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create Slice Revision" })).toBeEnabled());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("Create Slice Revision… in a G-code Model's details", () => {
+  const renderGcodeDetails = () => {
+    const model = library.models.find((candidate) => candidate.id === "mdl-web-cube-gcode")!;
+    render(() => (
+      <ModelDetailsPanel
+        model={model}
+        projects={library.projects}
+        onLocateSource={vi.fn()}
+        onConvertToManaged={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    ));
+  };
+
+  it("says the file is still being read while the history loads, then shows its claims", async () => {
+    let arrive!: () => void;
+    libraryStoreMock.loadRevisions.mockImplementation(() => new Promise((resolve) => {
+      arrive = () => resolve(library.revisions["mdl-web-cube-gcode"]);
+    }));
+    renderGcodeDetails();
+    fireEvent.click(screen.getByRole("button", { name: "Create Slice Revision…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create Slice Revision" }, { timeout: 5000 });
+    expect(within(dialog).getByRole("group", { name: "Material" })).toHaveTextContent("Reading the file…");
+    expect(dialog).not.toHaveTextContent("Not in the file.");
+    arrive();
+    await waitFor(() => expect(within(dialog).getByRole("group", { name: "Material" })).toHaveTextContent("filament_type PLA"));
+    expect(within(dialog).getByRole("button", { name: "Use the file's value for Material" })).toBeEnabled();
+  });
+
+  it("says the claims couldn't be read when the history fails", async () => {
+    libraryStoreMock.loadRevisions.mockRejectedValue(new Error("storage busy"));
+    renderGcodeDetails();
+    fireEvent.click(screen.getByRole("button", { name: "Create Slice Revision…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create Slice Revision" }, { timeout: 5000 });
+    await waitFor(() => expect(within(dialog).getByRole("group", { name: "Material" }))
+      .toHaveTextContent("The file's claims couldn't be read."));
+    expect(dialog).not.toHaveTextContent("Not in the file.");
+    expect(within(dialog).getByRole("button", { name: "Use the file's value for Material" })).toBeDisabled();
+    // The facts can still be confirmed by hand.
+    expect(within(dialog).getByRole("button", { name: "Create Slice Revision" })).toBeEnabled();
+  });
+
   it("opens the dialog, and the new revision's review once it is created", async () => {
     const model = library.models.find((candidate) => candidate.id === "mdl-web-cube-gcode")!;
     render(() => (

@@ -1,8 +1,9 @@
 import { IconAlertTriangle } from "@tabler/icons-solidjs";
-import { createResource, Show } from "solid-js";
+import { createEffect, createResource, on, Show } from "solid-js";
 import { Button, Timeline, type TimelineItem } from "../design-system";
 import {
   filamentSummary,
+  formatDateTime,
   isPrerelease,
   NEEDS_MANUAL_PRINTER,
   revisionTitle,
@@ -16,11 +17,11 @@ export interface SliceRevisionListProps {
   /** G-code Models make external revisions; others are sliced. */
   external: boolean;
   onOpen: (sliceRevisionId: string) => void;
-}
-
-function formatDateTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  /** Focus this revision's entry once it is listed (back from its review). */
+  focusRevisionId?: string | null;
+  /** The focus request was acted on: `false` when the revision isn't
+   *  listed (it was deleted), so the caller can focus something else. */
+  onFocusHandled?: (focused: boolean) => void;
 }
 
 /** D21: a Model's Slice Revisions as a Timeline, newest first. Each entry
@@ -32,6 +33,21 @@ export function SliceRevisionList(props: SliceRevisionListProps) {
   // revisions created or removed later show up without a reload.
   const [load] = createResource(() => props.modelId, (modelId) => loadSliceRevisions(modelId));
   const revisions = () => slicing.revisions(props.modelId);
+  let root: HTMLDivElement | undefined;
+
+  // Waits for the entry while the list is still loading; once it has
+  // loaded, a revision that isn't listed was deleted.
+  createEffect(on(
+    [() => props.focusRevisionId, () => revisions().some((revision) => revision.id === props.focusRevisionId), () => load.loading],
+    ([id, listed, loading]) => {
+      if (!id || (!listed && loading)) return;
+      queueMicrotask(() => {
+        const entry = root?.querySelector<HTMLElement>(`[data-revision-open="${id}"]`);
+        entry?.focus();
+        props.onFocusHandled?.(entry !== undefined && entry !== null);
+      });
+    },
+  ));
 
   const detail = (revision: SliceRevisionSummary) => {
     const title = revisionTitle(revision);
@@ -69,7 +85,7 @@ export function SliceRevisionList(props: SliceRevisionListProps) {
   }));
 
   return (
-    <>
+    <div ref={root}>
       <Show when={load.error}>
         <p class={styles.note}>The Slice Revisions couldn't be loaded.</p>
       </Show>
@@ -87,6 +103,6 @@ export function SliceRevisionList(props: SliceRevisionListProps) {
       >
         <Timeline label="Slice Revisions" items={items()} />
       </Show>
-    </>
+    </div>
   );
 }

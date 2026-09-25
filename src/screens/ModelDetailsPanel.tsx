@@ -15,7 +15,6 @@ import {
 } from "solid-js";
 import { Button, Chip, Combobox, SeverityMarker, TextField, Timeline, type TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
-import { slicing } from "../slicing/slicing-store";
 import {
   createProject,
   loadRevisions,
@@ -99,26 +98,28 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
     props.onRevisionOpened?.();
   }));
   let panel: HTMLDivElement | undefined;
-  /** Back from a review: focus returns to that revision's entry, or to the
-   *  section if it was deleted. */
+  // Back from a review, focus returns to that revision's entry (the list
+  // focuses it once listed), or to the section if it was deleted.
+  const [focusRevisionId, setFocusRevisionId] = createSignal<string | null>(null);
   const endReview = (revisionId: string) => {
+    setFocusRevisionId(revisionId);
     setReviewing(null);
-    const stillThere = slicing.revision(revisionId) !== undefined;
-    // The list mounts again (and its chunk may still be arriving), so its
-    // entry can take a moment to appear.
-    const refocus = (tries: number) => {
-      const entry = panel?.querySelector<HTMLElement>(`[data-revision-open="${revisionId}"]`);
-      const heading = panel?.querySelector<HTMLElement>("[data-slice-revisions-heading]");
-      if (entry) entry.focus();
-      else if (stillThere && tries > 0) setTimeout(() => refocus(tries - 1), 16);
-      else heading?.focus();
-    };
-    queueMicrotask(() => refocus(30));
+  };
+  const revisionFocused = (focused: boolean) => {
+    setFocusRevisionId(null);
+    if (!focused) panel?.querySelector<HTMLElement>("[data-slice-revisions-heading]")?.focus();
   };
 
   return (
     <div ref={panel} class={styles.dock}>
-      <Show when={reviewing()} keyed fallback={<ModelDetails {...props} onReview={setReviewing} />}>
+      <Show when={reviewing()} keyed fallback={
+        <ModelDetails
+          {...props}
+          onReview={setReviewing}
+          focusRevisionId={focusRevisionId()}
+          onRevisionFocused={revisionFocused}
+        />
+      }>
         {(revisionId) => (
           <Suspense fallback={<p class={styles.note} role="status">Loading the Slice Revision…</p>}>
             <SliceRevisionReview
@@ -133,7 +134,13 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
   );
 }
 
-function ModelDetails(props: ModelDetailsPanelProps & { onReview: (sliceRevisionId: string) => void }) {
+interface ModelDetailsProps extends ModelDetailsPanelProps {
+  onReview: (sliceRevisionId: string) => void;
+  focusRevisionId: string | null;
+  onRevisionFocused: (focused: boolean) => void;
+}
+
+function ModelDetails(props: ModelDetailsProps) {
   // The newest revision this panel has heard of: the record's current one,
   // or a `library.revision.created` that got here first. Both arrive for
   // one capture, in either order, and name the same revision.
@@ -167,6 +174,14 @@ function ModelDetails(props: ModelDetailsPanelProps & { onReview: (sliceRevision
   const gcodeClaims = () => {
     const inspection = readyInspection();
     return inspection?.format === "gcode" ? inspection.claims : [];
+  };
+  // The claims come with the revision history: not read yet, read, or
+  // unreadable (the history failed, or has no inspection for this
+  // revision). Only "ready" may say a claim isn't in the file.
+  const claimsState = (): "loading" | "ready" | "failed" => {
+    if (revisions.state === "errored") return "failed";
+    if (revisions.state !== "ready" && revisions.state !== "refreshing") return "loading";
+    return readyInspection()?.format === "gcode" ? "ready" : "failed";
   };
   // Reading an errored resource throws, so check the error first.
   const currentInspection = (): Inspection | undefined =>
@@ -231,6 +246,8 @@ function ModelDetails(props: ModelDetailsPanelProps & { onReview: (sliceRevision
             modelId={props.model.id}
             external={props.model.format === "gcode"}
             onOpen={props.onReview}
+            focusRevisionId={props.focusRevisionId}
+            onFocusHandled={props.onRevisionFocused}
           />
         </Suspense>
       </section>
@@ -279,6 +296,7 @@ function ModelDetails(props: ModelDetailsPanelProps & { onReview: (sliceRevision
             sourceRevisionId={props.model.currentRevision.id}
             sourceRevisionSequence={props.model.currentRevision.sequence}
             claims={gcodeClaims()}
+            claimsState={claimsState()}
             onCreated={(record) => {
               setFactsOpen(false);
               props.onReview(record.id);

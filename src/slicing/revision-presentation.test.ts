@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bedLabel,
   controlRows,
+  profileRows,
   estimateRows,
   factValueText,
   filamentSummary,
@@ -57,6 +58,13 @@ describe("revision presentation", () => {
     expect(factValueText(external.facts, "materialFamily")).toBeUndefined();
     expect(factValueText({ ...external.facts, materialFamily: { provenance: "operatorConfirmed", value: "OTHER" }, materialOther: "Wood PLA" }, "materialFamily"))
       .toBe("Wood PLA");
+  });
+
+  it("lists a profile snapshot, with or without its name", () => {
+    const profile = farm3d.target!.profile;
+    expect(profileRows(profile)[0]).toEqual({ label: "Printer profile", value: "Elegoo Centauri Carbon 0.4 nozzle" });
+    const unnamed = profileRows(profile, { withProfileName: false });
+    expect(unnamed.map((row) => row.label)).toEqual(["Bed", "Printable height", "Nozzle type", "G-code flavor"]);
   });
 
   it("describes the bed, the controls and the runtime", () => {
