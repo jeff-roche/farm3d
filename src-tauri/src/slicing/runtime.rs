@@ -809,7 +809,8 @@ fn directory_executable(dir: &Path) -> Option<PathBuf> {
         .find(|candidate| is_executable_file(candidate))
 }
 
-fn sha256_file(path: &Path) -> io::Result<String> {
+/// The lowercase hex SHA-256 of the file at `path`, streamed in 1 MiB reads.
+pub(crate) fn sha256_file(path: &Path) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1 << 20];

@@ -867,6 +867,9 @@ pub struct SliceRun {
     /// Whether stopping the group needed SIGKILL (then the stale-mount
     /// check ran).
     pub killed: bool,
+    /// Whether `--pipe` was passed, which the invocation manifest records
+    /// (D8). Only Linux passes it, and only when the FIFO opened.
+    pub progress_piped: bool,
 }
 
 /// What a run means for the operation.
@@ -1034,6 +1037,7 @@ pub fn run_slice(
                 result: None,
                 log: snapshot(&ring),
                 killed: false,
+                progress_piped: with_progress,
             };
         }
     };
@@ -1108,6 +1112,7 @@ pub fn run_slice(
         result,
         log: snapshot(&ring),
         killed: ended.killed,
+        progress_piped: with_progress,
     }
 }
 
@@ -1120,6 +1125,14 @@ fn failure(code: SliceFailureCode, message: impl Into<String>) -> SliceOutcome {
         code,
         message: message.into(),
     })
+}
+
+/// D11's `outputMissing`: return code 0 without `out/plate_1.gcode`.
+pub fn output_missing() -> SliceFailure {
+    SliceFailure {
+        code: SliceFailureCode::OutputMissing,
+        message: "OrcaSlicer reported success but wrote no G-code.".to_string(),
+    }
 }
 
 /// D11's code and text for a nonzero OrcaSlicer return code.
@@ -1204,10 +1217,7 @@ pub fn outcome(run: &SliceRun, work: &WorkDir) -> SliceOutcome {
             if fs::symlink_metadata(work.gcode()).is_ok() {
                 SliceOutcome::OutputWritten
             } else {
-                failure(
-                    SliceFailureCode::OutputMissing,
-                    "OrcaSlicer reported success but wrote no G-code.",
-                )
+                SliceOutcome::Failed(output_missing())
             }
         }
     }
