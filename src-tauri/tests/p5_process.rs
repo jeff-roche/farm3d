@@ -982,6 +982,176 @@ mod real {
         assert_no_absolute_paths(&run.log.text, &[work.root(), &home(), &engine, &profiles]);
     }
 
+    /// The `; key = value` claims of a G-code's `CONFIG_BLOCK`.
+    fn config_claims(gcode: &str) -> std::collections::BTreeMap<String, String> {
+        gcode
+            .lines()
+            .skip_while(|line| line.trim() != "; CONFIG_BLOCK_START")
+            .take_while(|line| line.trim() != "; CONFIG_BLOCK_END")
+            .filter_map(|line| {
+                let (key, value) = line.strip_prefix("; ")?.split_once(" = ")?;
+                Some((key.to_string(), value.to_string()))
+            })
+            .collect()
+    }
+
+    /// Spec AC3 for D4's Printer Profile overrides: writing each mapped
+    /// override key into the machine preset changes its G-code header
+    /// claim. One baseline slice of the golden plate with the engine's own
+    /// Elegoo Centauri Carbon presets, then one slice per key, each with a
+    /// value that preset doesn't have.
+    ///
+    /// This drives D4's mapping (`apply_profile_overrides`) directly, not
+    /// the commands: a Printer can override only `bedShape`,
+    /// `printableHeightMm`, `bedExcludeAreas`, and `defaultBedType`
+    /// (`PrinterProfileOverrides`), so the commands can never write
+    /// `nozzle_diameter`, `nozzle_type`, or `gcode_flavor`, yet D4 maps
+    /// them all.
+    #[test]
+    #[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
+    fn real_orca_each_profile_override_changes_its_gcode_header_claim() {
+        use farm3d_lib::catalog::{BedShape, PointMm, PrinterProfile};
+        use farm3d_lib::slicing::mapping::{
+            apply_profile_overrides, ProfileFieldMapping, PROFILE_FIELD_MAPPINGS,
+        };
+
+        let point = |x_mm, y_mm| PointMm { x_mm, y_mm };
+        // Only the overridden field of the profile is ever written, so the
+        // rest of it is never read.
+        let base = PrinterProfile {
+            bed_shape: BedShape::Rectangular {
+                width_mm: 256.0,
+                depth_mm: 256.0,
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
+            },
+            printable_height_mm: 256.0,
+            bed_exclude_areas: Vec::new(),
+            default_bed_type: String::new(),
+            nozzle_diameter_mm: vec![0.4],
+            nozzle_type: String::new(),
+            gcode_flavor: String::new(),
+            has_auxiliary_fan: false,
+            supports_air_filtration: false,
+            supports_multi_filament: false,
+            suggested_host_type: None,
+        };
+        /// A profile field, the profile with its override, the machine key
+        /// it maps to, and the header claim expected.
+        type Case = (&'static str, PrinterProfile, &'static str, &'static str);
+        let with = |edit: &dyn Fn(&mut PrinterProfile)| {
+            let mut profile = base.clone();
+            edit(&mut profile);
+            profile
+        };
+        let cases: Vec<Case> = vec![
+            (
+                "bedShape",
+                with(&|p| {
+                    p.bed_shape = BedShape::Rectangular {
+                        width_mm: 300.0,
+                        depth_mm: 280.0,
+                        origin_x_mm: 0.0,
+                        origin_y_mm: 0.0,
+                    }
+                }),
+                "printable_area",
+                "0x0,300x0,300x280,0x280",
+            ),
+            (
+                "printableHeightMm",
+                with(&|p| p.printable_height_mm = 200.0),
+                "printable_height",
+                "200",
+            ),
+            (
+                "bedExcludeAreas",
+                with(&|p| {
+                    p.bed_exclude_areas = vec![
+                        point(0.0, 0.0),
+                        point(20.0, 0.0),
+                        point(20.0, 20.0),
+                        point(0.0, 20.0),
+                    ]
+                }),
+                "bed_exclude_area",
+                "0x0,20x0,20x20,0x20",
+            ),
+            (
+                "nozzleDiameterMm",
+                with(&|p| p.nozzle_diameter_mm = vec![0.6]),
+                "nozzle_diameter",
+                "0.6",
+            ),
+            (
+                "nozzleType",
+                with(&|p| p.nozzle_type = "stainless_steel".to_string()),
+                "nozzle_type",
+                "stainless_steel",
+            ),
+            (
+                "gcodeFlavor",
+                with(&|p| p.gcode_flavor = "marlin2".to_string()),
+                "gcode_flavor",
+                "marlin2",
+            ),
+            (
+                "defaultBedType",
+                with(&|p| p.default_bed_type = "Cool Plate".to_string()),
+                "default_bed_type",
+                "Cool Plate",
+            ),
+        ];
+        // Every mapped field has a case, with the key it maps to.
+        for (field, mapping) in PROFILE_FIELD_MAPPINGS {
+            let ProfileFieldMapping::Mapped(key) = mapping else {
+                continue;
+            };
+            let case = cases
+                .iter()
+                .find(|(name, ..)| *name == field)
+                .unwrap_or_else(|| panic!("no case for {field}"));
+            assert_eq!(case.2, key, "{field}");
+        }
+        assert_eq!(cases.len(), 7);
+
+        let (engine, profiles, _cache) = real_orca();
+        let slice_with = |label: &str, overridden: Option<(&str, &PrinterProfile)>| {
+            let temp = tempfile::tempdir().unwrap();
+            let (work, _, _) = real_work(temp.path(), &profiles);
+            if let Some((field, profile)) = overridden {
+                let mut machine: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_slice(&fs::read(work.machine_json()).unwrap()).unwrap();
+                apply_profile_overrides(&mut machine, profile, &[field.to_string()], &[]).unwrap();
+                fs::write(
+                    work.machine_json(),
+                    serde_json::to_vec_pretty(&machine).unwrap(),
+                )
+                .unwrap();
+            }
+            let command = SliceCommand::new(engine.clone(), work.clone(), Some(profiles.clone()));
+            let (run, _) = slice(&command);
+            assert_eq!(
+                outcome(&run, &work),
+                SliceOutcome::OutputWritten,
+                "{label}: {}",
+                run.log.text
+            );
+            config_claims(&fs::read_to_string(work.gcode()).unwrap())
+        };
+
+        let baseline = slice_with("baseline", None);
+        assert!(!baseline.is_empty(), "the G-code has no CONFIG_BLOCK");
+        for (field, profile, key, expected) in &cases {
+            let header = slice_with(field, Some((field, profile)));
+            let before = baseline.get(*key).map(String::as_str);
+            let after = header.get(*key).map(String::as_str);
+            eprintln!("{field}: {key} {before:?} -> {after:?}");
+            assert_eq!(after, Some(*expected), "{field}: the header claim of {key}");
+            assert_ne!(before, after, "{field}: {key} did not change");
+        }
+    }
+
     #[test]
     #[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
     fn real_orca_cancel_stops_the_group_quickly() {
