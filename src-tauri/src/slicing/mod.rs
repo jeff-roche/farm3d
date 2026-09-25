@@ -9,6 +9,9 @@
 //! lists the slice options (D3), and [`mapping`] holds the D4 tables.
 //! [`geometry`] and [`hull`] compute revision geometry and the D5 instance
 //! transforms (D6), and [`plate3mf`] writes the per-plate input 3MF (D7).
+//! [`invocation`] lays out an operation's work directory and records its
+//! manifest (D8), [`process`] supervises OrcaSlicer (D9), and [`publish`]
+//! validates the output and publishes the Slice Revision (D11-D13).
 
 pub mod blockers;
 pub mod facts;
@@ -20,6 +23,7 @@ pub mod plate3mf;
 pub mod presets;
 pub mod process;
 pub mod process_group;
+pub mod publish;
 pub mod repository;
 pub mod runtime;
 

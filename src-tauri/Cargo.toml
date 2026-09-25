@@ -38,6 +38,12 @@ name = "p5_process"
 path = "tests/p5_process.rs"
 required-features = ["test-support"]
 
+# Publishes what `fake-orca` slices.
+[[test]]
+name = "p5_publish"
+path = "tests/p5_publish.rs"
+required-features = ["test-support"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
