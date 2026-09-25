@@ -78,6 +78,22 @@ describe("PrinterConnectionPanel", () => {
     expect(await screen.findByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
   });
 
+  it("defaults to OctoPrint on port 80 when the catalog suggests it", async () => {
+    const suggested = {
+      ...printer,
+      profile: { ...PROFILE, suggestedHostType: "octoprint" },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={suggested} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "octopi.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: /OctoPrint/ })).toBeInTheDocument();
+    expect(setConnection).toHaveBeenCalledWith(
+      "prn-1",
+      expect.objectContaining({ kind: "octoprint", host: "octopi.local", port: 80 }),
+    );
+  });
+
   it("submits host and port without echoing an unset API key", async () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
