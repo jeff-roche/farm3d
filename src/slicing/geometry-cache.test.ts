@@ -73,6 +73,25 @@ describe("geometry cache", () => {
     expect(loadGeometry).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects every concurrent reader of a failed load, then retries", async () => {
+    const pending = deferred<MeshBuffer>();
+    const failure = new Error("offline");
+    const loaded = mesh(1);
+    const loadMesh = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(loaded);
+    const cache = createGeometryCache({ loadGeometry: vi.fn(), loadMesh });
+
+    const a = cache.mesh("msr-a", 1);
+    const b = cache.mesh("msr-a", 1);
+    pending.reject(failure);
+    await expect(a).rejects.toBe(failure);
+    await expect(b).rejects.toBe(failure);
+    expect(loadMesh).toHaveBeenCalledOnce();
+    expect(await cache.mesh("msr-a", 1)).toBe(loaded);
+    expect(loadMesh).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts the least recently used geometry past its capacity", async () => {
     const loadGeometry = vi.fn(async (id: string) => geometry(id.length));
     const cache = createGeometryCache({ loadGeometry, loadMesh: vi.fn(), maxGeometries: 2 });
