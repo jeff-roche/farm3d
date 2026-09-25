@@ -9,7 +9,6 @@ import {
   WEB_FIXTURE_EQUIPPED_PRINTER_ID,
 } from "../printers/printer-store";
 import { resolvePrinterRecord } from "../printers/types";
-import { buildWebInventoryFixture } from "./web-fixtures";
 import type { AmountConfidence } from "../generated/contracts/domain/AmountConfidence";
 import type { AmountEntry } from "../generated/contracts/domain/AmountEntry";
 import type { AmountEvent } from "../generated/contracts/domain/AmountEvent";
@@ -297,6 +296,9 @@ export async function loadInventory(): Promise<void> {
   disposeListener();
   lastAuthoritativeSequence.clear();
   if (!desktopAvailable()) {
+    // Web mode only: loaded on use, so the fixture stays out of the desktop
+    // bundle's main chunk.
+    const { buildWebInventoryFixture } = await import("./web-fixtures");
     const fixture = buildWebInventoryFixture();
     setState({ spools: fixture.spools, tares: fixture.tares, loaded: true, error: null });
     syncWebPrinterOccupancy(WEB_FIXTURE_EQUIPPED_PRINTER_ID);
