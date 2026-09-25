@@ -287,6 +287,48 @@ describe("PreparationPanel", () => {
     expect(screen.getByRole("complementary", { name: "Preparation settings" })).toBeVisible();
   });
 
+  it("opens on a chosen printer profile when there are no Printers to prepare for", async () => {
+    printerState.list = [];
+    const seeded = held();
+    setSlicingState({ preparations: {} });
+    slicingStoreMock.createPreparation.mockImplementation(async (modelId, target) => {
+      if (!target) {
+        throw commandError({
+          code: "VALIDATION",
+          message: "Add a Printer, or choose a printer profile, to prepare for.",
+          details: { fieldPath: "target" },
+        });
+      }
+      const record = { ...seeded, document: { ...seeded.document, target } };
+      setSlicingState({ preparations: { [modelId]: record } });
+      return record;
+    });
+
+    render(() => <PreparationMode model={enclosure()} onBack={() => {}} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Add a Printer, or choose a printer profile, to prepare for.");
+    fireEvent.click(screen.getByRole("button", { name: "Choose a printer profile…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Other printer profile" });
+    const brand = within(dialog).getByRole("combobox", { name: "Brand" });
+    await fireEvent.pointerDown(brand, { pointerType: "mouse", button: 0 });
+    await fireEvent.input(brand, { target: { value: "Prusa" } });
+    await fireEvent.pointerUp(await screen.findByRole("option", { name: "Prusa" }), { pointerType: "mouse", button: 0 });
+    await fireEvent.pointerDown(await within(dialog).findByRole("button", { name: /^Model/ }), { pointerType: "mouse", button: 0 });
+    await fireEvent.pointerUp(await screen.findByRole("option", { name: "MK4" }), { pointerType: "mouse", button: 0 });
+    const use = within(dialog).getByRole("button", { name: "Use this profile" });
+    await waitFor(() => expect(use).toBeEnabled());
+    fireEvent.click(use);
+
+    const profile = {
+      kind: "profile",
+      catalogRef: { vendor: "Prusa", model: "Prusa MK4", variant: "Prusa MK4 0.4 nozzle", modelId: "Prusa-MK4", printerVariant: "0.4" },
+    };
+    await waitFor(() => expect(slicingStoreMock.createPreparation).toHaveBeenLastCalledWith(ENCLOSURE, profile));
+    expect(await screen.findByRole("tab", { name: "Lid" })).toBeInTheDocument();
+    expect(await screen.findByRole("complementary", { name: "Preparation settings" })).toBeInTheDocument();
+    expect(selectTrigger(/Slice for/)).toHaveTextContent("Prusa MK4 0.4 nozzle");
+  });
+
   describe("validation", () => {
     it("links an object's issue to the object, on its plate", async () => {
       setPreparation((record) => {

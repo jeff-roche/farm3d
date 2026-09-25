@@ -690,6 +690,27 @@ describe("web mode", () => {
     expect(slicing.preparation("mdl-web-bracket")?.id).toBe(first.id);
   });
 
+  it("a local create needs a target once the Farm has no active Printer, as the backend does", async () => {
+    vi.doMock("../printers/printer-store", () => ({
+      printerStoreStatus: () => "ready",
+      printers: () => [{ id: "prn-web-cc-1", archivedAt: "2026-09-25T00:00:00Z" }],
+    }));
+    try {
+      const { deletePreparation, createPreparation, slicing } = await startedStore();
+      const target = slicing.preparation("mdl-web-enclosure")!.document.target;
+      await deletePreparation(slicing.preparation("mdl-web-enclosure")!.id);
+
+      await expect(createPreparation("mdl-web-enclosure")).rejects.toMatchObject({
+        code: "VALIDATION",
+        details: { fieldPath: "target" },
+      });
+      const created = await createPreparation("mdl-web-enclosure", target);
+      expect(created.document.target).toEqual(target);
+    } finally {
+      vi.doUnmock("../printers/printer-store");
+    }
+  });
+
   it("a local Preparation for a 3MF leaves unprintable build items out", async () => {
     const { deletePreparation, createPreparation, slicing } = await startedStore();
     await deletePreparation(slicing.preparation("mdl-web-enclosure")!.id);

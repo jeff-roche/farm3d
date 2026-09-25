@@ -8,7 +8,7 @@ import {
 } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
 import { desktopOnlyError } from "./desktop-only";
-import { notFound } from "./local-errors";
+import { notFound, validationError } from "./local-errors";
 import { decodeMeshBuffer, type MeshBuffer } from "./mesh-buffer";
 import type { WebSlicingFixture } from "./web-fixtures";
 import {
@@ -659,9 +659,19 @@ async function seedWebPreparation(modelId: string, target?: SliceTarget): Promis
   if (existing) return existing;
   const model = buildWebLibraryFixture().models.find((m) => m.id === modelId);
   if (!model) throw notFound(modelId);
+  if (!target) await requireWebPrinterToDefaultTo();
   const preparation = seedLocalPreparation(fixture, model, target);
   settlePreparation(preparation, "result");
   return preparation;
+}
+
+/** As the backend's `default_target`: with the Farm loaded and no active
+ *  Printer, a Preparation needs a target (`VALIDATION` at `target`). */
+async function requireWebPrinterToDefaultTo(): Promise<void> {
+  const { printers, printerStoreStatus } = await import("../printers/printer-store");
+  if (printerStoreStatus() === "ready" && !printers().some((printer) => !printer.archivedAt)) {
+    throw validationError("target", "Add a Printer, or choose a printer profile, to prepare for.");
+  }
 }
 
 async function webUpdatePreparation(preparationId: string, document: PreparationDocument): Promise<PreparationRecord> {

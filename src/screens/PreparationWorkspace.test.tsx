@@ -91,7 +91,7 @@ async function menu(item: string) {
 describe("PreparationWorkspace", () => {
   it("opens the Model's Preparation with its plates, and goes back to the Library", async () => {
     const renderer = await open();
-    expect(slicingStoreMock.createPreparation).toHaveBeenCalledWith(ENCLOSURE);
+    expect(slicingStoreMock.createPreparation).toHaveBeenCalledWith(ENCLOSURE, undefined);
     expect(screen.getByRole("tab", { name: "Latch" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Lid" })).toHaveAttribute("aria-selected", "true");
     expect(renderer.buildVolume?.bed).toEqual({ kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 });

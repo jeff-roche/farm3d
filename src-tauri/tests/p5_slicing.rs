@@ -467,6 +467,30 @@ fn a_gcode_model_has_no_preparation() {
 }
 
 #[test]
+fn with_no_printers_a_preparation_needs_a_profile_target() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+
+    // No Printer to default to: the error names the target, which the
+    // app answers with a printer profile.
+    let error = running.error("create_preparation", json!({ "modelId": model["id"] }));
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "target");
+    assert_eq!(running.slicing()["preparations"], json!([]));
+
+    let preparation = running.ok(
+        "create_preparation",
+        json!({ "modelId": model["id"], "target": { "kind": "profile", "catalogRef": a_ref_json() } }),
+    );
+    assert_eq!(preparation["document"]["target"]["kind"], "profile");
+    assert_eq!(
+        preparation["document"]["target"]["catalogRef"],
+        a_ref_json()
+    );
+}
+
+#[test]
 fn a_stale_source_is_refused_then_continued_and_reload_keeps_transforms() {
     let farm = Farm::new();
     let running = farm.start();
