@@ -552,7 +552,7 @@ fn extrusion_extents(gcode: &str, z_low: f64, z_high: f64, x_split: f64) -> [Bou
 }
 
 #[test]
-#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA"]
+#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
 fn real_orca_places_a_written_plate_exactly() {
     use farm3d_lib::slicing::presets::{
         default_filament, default_process, PresetIndex, PresetKind,
@@ -561,10 +561,9 @@ fn real_orca_places_a_written_plate_exactly() {
     use farm3d_lib::slicing::runtime::{orca_environment, resolve_runtime, DiscoveryEnv};
     use farm3d_lib::spools::MaterialFamily;
 
-    let Some(engine) = std::env::var_os("FARM3D_ORCA").map(PathBuf::from) else {
-        eprintln!("FARM3D_ORCA is not set; skipping");
-        return;
-    };
+    let engine = std::env::var_os("FARM3D_ORCA")
+        .map(PathBuf::from)
+        .expect("FARM3D_ORCA must name an OrcaSlicer engine; run through `just test-orca`");
     let presets = std::env::var_os("FARM3D_ORCA_PRESETS").map(PathBuf::from);
     let cache = tempfile::tempdir().unwrap();
     let runtime = resolve_runtime(

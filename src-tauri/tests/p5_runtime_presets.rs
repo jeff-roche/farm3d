@@ -4,7 +4,7 @@
 //!
 //! The real-OrcaSlicer tests read `FARM3D_ORCA` (the engine) and, when set,
 //! `FARM3D_ORCA_PRESETS` (a separate preset source). Run them with
-//! `cargo test --test p5_runtime_presets -- --ignored --nocapture`.
+//! `just test-orca`.
 
 mod common;
 
@@ -332,10 +332,14 @@ fn missing_targets_and_presets_are_refused() {
 // `FARM3D_ORCA_PRESETS=<preset source>`.
 // ---------------------------------------------------------------------------
 
-fn real_orca() -> Option<(PathBuf, Option<PathBuf>)> {
-    let engine = std::env::var_os("FARM3D_ORCA").map(PathBuf::from)?;
+/// The engine and optional preset source. Panics when `FARM3D_ORCA` is
+/// unset, so an ignored real-Orca test never passes without running.
+fn real_orca() -> (PathBuf, Option<PathBuf>) {
+    let engine = std::env::var_os("FARM3D_ORCA")
+        .map(PathBuf::from)
+        .expect("FARM3D_ORCA must name an OrcaSlicer engine; run through `just test-orca`");
     let presets = std::env::var_os("FARM3D_ORCA_PRESETS").map(PathBuf::from);
-    Some((engine, presets))
+    (engine, presets)
 }
 
 fn real_config(engine: &Path, presets: Option<&Path>) -> SlicerRuntimeConfig {
@@ -356,12 +360,9 @@ fn no_discovery() -> DiscoveryEnv {
 }
 
 #[test]
-#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA"]
+#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
 fn real_orca_engine_probes_as_a_supported_version() {
-    let Some((engine, presets)) = real_orca() else {
-        eprintln!("FARM3D_ORCA is not set; skipping");
-        return;
-    };
+    let (engine, presets) = real_orca();
     let probe = probe_engine(&engine, Duration::from_secs(10));
     eprintln!("probe: {probe:?}");
     assert!(
@@ -417,12 +418,9 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "needs a real OrcaSlicer with readable presets: set FARM3D_ORCA (and FARM3D_ORCA_PRESETS)"]
+#[ignore = "needs a real OrcaSlicer with readable presets: set FARM3D_ORCA (and FARM3D_ORCA_PRESETS); just test-orca"]
 fn real_orca_preset_source_knows_every_mapped_key() {
-    let Some((engine, presets)) = real_orca() else {
-        eprintln!("FARM3D_ORCA is not set; skipping");
-        return;
-    };
+    let (engine, presets) = real_orca();
     let cache = tempfile::tempdir().unwrap();
     let runtime = resolve_runtime(
         &real_config(&engine, presets.as_deref()),
