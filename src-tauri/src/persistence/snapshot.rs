@@ -315,5 +315,7 @@ fn snapshot_timestamp(path: &Path) -> Option<u128> {
 fn sync_directory(path: &Path) -> Result<(), StorageError> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }

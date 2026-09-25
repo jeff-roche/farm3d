@@ -46,6 +46,7 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
 | `just test-rust` | — | Run the Tauri backend's Rust test suite; builds with `--features test-support`, which adds the `fake-orca` OrcaSlicer test double |
 | `just test-orca` | — | Run the ignored `real_orca*` tests against a real OrcaSlicer; set `FARM3D_ORCA` to the engine (for example the v2.4.2 AppImage), and optionally `FARM3D_ORCA_PRESETS` to a preset source |
+| `just check-windows` | — | Type-check the backend for Windows (`x86_64-pc-windows-gnu`) from Linux, with no mingw toolchain: bundled C is stubbed and nothing is linked, so it proves the code compiles, not that it runs. `just check-windows clippy` lints instead. Needs `rustup target add x86_64-pc-windows-gnu` and LLVM (`llvm-ar`, `llvm-windres`) |
 | `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
 | `just gen-contracts` | — | Regenerate committed TypeScript contracts from Rust wire types |
 | `just gen-slicing-fixtures` | — | Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF, argument vectors, flat presets) |

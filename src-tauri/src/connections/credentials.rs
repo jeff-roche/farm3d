@@ -19,6 +19,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use crate::file_links::file_has_multiple_links;
+
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// `keyring`'s "service" argument. The per-printer part goes in the username.
 const KEYCHAIN_SERVICE: &str = "farm3d";
@@ -44,27 +46,10 @@ fn open_credential_file(path: &Path) -> Result<Option<fs::File>, String> {
     let metadata = file
         .metadata()
         .map_err(|_| "credential store unavailable".to_string())?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || has_multiple_links(&metadata) {
+    if !metadata.is_file() || metadata.file_type().is_symlink() || file_has_multiple_links(&file) {
         return Err("credential store unavailable".to_string());
     }
     Ok(Some(file))
-}
-
-#[cfg(unix)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.nlink() > 1
-}
-
-#[cfg(windows)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.number_of_links().is_some_and(|links| links > 1)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn has_multiple_links(_: &fs::Metadata) -> bool {
-    false
 }
 
 fn fallback_lock() -> &'static Mutex<()> {
@@ -375,6 +360,7 @@ mod tests {
 
     #[test]
     fn baseline_file_backed_credentials_fixture_loads_through_the_storage_seam() {
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut tempdir = tempfile::Builder::new();
         #[cfg(unix)]
         {

@@ -27,6 +27,10 @@ test-orca:
         --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing --test p5_tracer \
         real_orca -- --ignored --test-threads=1
 
+# Type-check the backend for Windows from Linux (no mingw needed; nothing is linked). `just check-windows clippy` lints instead
+check-windows mode="check":
+    scripts/check-windows.sh {{mode}}
+
 # Regenerate TypeScript contracts from the Rust wire types
 gen-contracts:
     cargo test --locked --manifest-path src-tauri/Cargo.toml --test export_contracts regenerate_contracts -- --ignored --exact

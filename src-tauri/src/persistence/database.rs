@@ -10,6 +10,7 @@ use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use super::error::StorageError;
 use super::{migrations, snapshot};
+use crate::file_links::{file_has_multiple_links, metadata_has_multiple_links};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -430,7 +431,7 @@ fn validate_database_path(metadata_root: &Path) -> Result<PathBuf, StorageError>
         Ok(metadata)
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
-                || has_multiple_links(&metadata) =>
+                || metadata_has_multiple_links(&metadata) =>
         {
             Err(StorageError::PathCollision)
         }
@@ -438,23 +439,6 @@ fn validate_database_path(metadata_root: &Path) -> Result<PathBuf, StorageError>
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(database),
         Err(error) => Err(error.into()),
     }
-}
-
-#[cfg(unix)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.nlink() > 1
-}
-
-#[cfg(windows)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.number_of_links().is_some_and(|links| links > 1)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn has_multiple_links(_: &fs::Metadata) -> bool {
-    false
 }
 
 fn trees_overlap(left: &Path, right: &Path) -> bool {
@@ -471,7 +455,7 @@ fn open_private_lock_file(path: &Path) -> Result<File, StorageError> {
         Ok(metadata)
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
-                || has_multiple_links(&metadata) =>
+                || metadata_has_multiple_links(&metadata) =>
         {
             return Err(StorageError::PersistenceUnavailable);
         }
@@ -499,7 +483,7 @@ fn open_private_lock_file(path: &Path) -> Result<File, StorageError> {
     let metadata = file
         .metadata()
         .map_err(|_| StorageError::PersistenceUnavailable)?;
-    if !metadata.is_file() || has_multiple_links(&metadata) {
+    if !metadata.is_file() || file_has_multiple_links(&file) {
         return Err(StorageError::PersistenceUnavailable);
     }
     set_private_handle_permissions(&file).map_err(|_| StorageError::PersistenceUnavailable)?;
@@ -512,6 +496,8 @@ pub(super) fn set_private_handle_permissions(file: &File) -> Result<(), StorageE
         use std::os::unix::fs::PermissionsExt;
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    let _ = file;
     Ok(())
 }
 
@@ -532,7 +518,7 @@ pub(super) fn create_private_file(path: &Path) -> Result<(), StorageError> {
     }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || has_multiple_links(&metadata) {
+    if !metadata.is_file() || metadata.file_type().is_symlink() || file_has_multiple_links(&file) {
         return Err(StorageError::PathCollision);
     }
     set_private_handle_permissions(&file)
