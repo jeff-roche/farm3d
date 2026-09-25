@@ -858,8 +858,16 @@ Every Slice Revision carries `facts: SliceFacts`. Each field is a
 - `sourceRevisionId` must be a G-code Model Source Revision.
 - `facts` holds, for each fact, either `{ kind: "confirmed", value }` or
   `{ kind: "absent" }`.
-- The Printer Profile is confirmed either as `{ printerId }` (resolved to a
-  snapshot at creation) or as `{ catalogRef }`.
+- The Printer Profile is confirmed as a `SliceTarget`: either
+  `{ kind: "printer", printerId }` (resolved to a snapshot at creation) or
+  `{ kind: "profile", catalogRef }`. The single-nozzle rule that applies to
+  slicing does not apply here, because nothing is sliced. Resolution errors
+  are reported on `facts.printerProfile`.
+- Confirmed values are validated: diameters must be finite and positive
+  (the nozzle at most 5 mm, the filament at most 5 mm), and `OTHER` requires
+  a `materialOther` of 1–32 characters, the same rule as Spools. A
+  confirmed fact is immutable, so a bad value is refused rather than
+  stored.
 
 **The resulting revision:**
 
