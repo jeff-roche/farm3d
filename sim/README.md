@@ -18,7 +18,7 @@ Each running simulavr keeps one CPU core busy, so run `just sim-down` when
 you are done.
 
 `just test-sim` skips with a message if the simulators are not running.
-Set `FARM3D_SIM_REQUIRED=1` (CI does) to make that a failure instead.
+Set `FARM3D_SIM_REQUIRED=1` to make that a failure instead.
 Every run writes `manifest.json` and `test.log` to
 `src-tauri/target/sim-runs/<UTC time>/`. Cite that manifest in any
 evidence that relies on a simulator.

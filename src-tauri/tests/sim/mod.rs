@@ -15,7 +15,7 @@
 //! | `FARM3D_SIM_OCTOPRINT_API_KEY` | The sim's fixed API key (a fixture, not a secret) |
 //! | `FARM3D_SIM_TOXIPROXY` | The fault proxy's API |
 //! | `FARM3D_SIM_CTL` | Path to `sim/simctl`, for faults that need the container engine |
-//! | `FARM3D_SIM_REQUIRED` | `1` turns "simulator missing" from a skip into a failure (CI) |
+//! | `FARM3D_SIM_REQUIRED` | `1` turns "simulator missing" from a skip into a failure |
 //!
 //! Two rules hold for every helper here:
 //!
@@ -62,8 +62,8 @@ macro_rules! require_sim {
     };
 }
 
-/// Reports a skip. With `FARM3D_SIM_REQUIRED=1` it fails instead, so CI
-/// cannot pass by skipping everything.
+/// Reports a skip. With `FARM3D_SIM_REQUIRED=1` it fails instead, so a run
+/// meant to exercise the simulators cannot pass by skipping everything.
 pub fn skip(skip: Skip) {
     if std::env::var("FARM3D_SIM_REQUIRED").as_deref() == Ok("1") {
         panic!(

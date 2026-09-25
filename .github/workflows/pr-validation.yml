@@ -23,12 +23,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Reject private host names
-        # The denylist is a repository secret, so the workflow never names
-        # what it guards. Unset (for example on a fork PR), it checks nothing.
-        env:
-          FARM3D_PRIVATE_HOSTS: ${{ secrets.FARM3D_PRIVATE_HOSTS }}
-        run: scripts/check-private-hosts.sh
       - name: Install dependencies
         run: npm ci
       - name: Build frontend

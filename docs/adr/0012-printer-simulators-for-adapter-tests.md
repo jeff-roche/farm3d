@@ -93,9 +93,10 @@ ElegooLink fake needs no container, so its tests run in the normal suite.
 
 ## Consequences
 
-- Adapter behavior is checked against the real server software in CI, at
-  the cost of a 10–20 minute image build per run. The CI job is therefore
-  non-blocking until the Klipper image is cached or published.
+- Adapter behavior is checked against the real server software, but only
+  locally (`just sim-up && just test-sim`). The simulators do not run in
+  CI: building the Klipper image takes 10–20 minutes and ~5.5 GB per run,
+  which is too expensive for every pull request.
 - The Moonraker and OctoPrint live-evidence gates can be met without the
   owner's hardware, but only for what the simulators can show. Emulated
   sensors read fixed values, heaters cannot really heat, and simulavr
