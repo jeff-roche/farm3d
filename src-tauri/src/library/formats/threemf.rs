@@ -2,12 +2,17 @@
 //!
 //! Every ZIP entry is read through [`LimitedRead`], which enforces D10's
 //! size and ratio limits and the cancel flag. XML is streamed (no DOM), and
-//! `quick-xml` never expands external or custom entities. Meshes are reduced
-//! to per-object bounds and a triangle count as they stream past; vertex
-//! arrays are never kept.
+//! `quick-xml` never expands external or custom entities. For [`inspect`],
+//! meshes are reduced to per-object bounds and a triangle count as they
+//! stream past; vertex arrays are never kept.
+//!
+//! [`read_mesh`] (P5 D6) runs the same reader in a collecting mode that also
+//! keeps each mesh's vertices and triangles, capped by
+//! [`MAX_MESH_VERTICES`] and [`MAX_MESH_TRIANGLES`], and then flattens each
+//! build item's object, components included, into its own frame.
 
 use std::cell::Cell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
@@ -22,8 +27,9 @@ use zip::ZipArchive;
 
 use super::png::{self, MAX_THUMBNAIL_BYTES};
 use super::{
-    include_point, BoundsMm, InspectError, Plate, ThreeMfInspection, ThumbnailBytes,
-    ThumbnailImageFormat, ThumbnailInfo, UnsupportedCode, UnsupportedEntry,
+    include_point, BoundsMm, InspectError, MeshBuildItem, MeshModel, MeshObject, ObjectMesh, Plate,
+    ThreeMfInspection, ThumbnailBytes, ThumbnailImageFormat, ThumbnailInfo, UnsupportedCode,
+    UnsupportedEntry, MAX_MESH_TRIANGLES, MAX_MESH_VERTICES,
 };
 use crate::library::content::CancelFlag;
 use crate::library::ImportWarning;
@@ -80,6 +86,10 @@ pub(crate) struct ZipLimits {
     /// Distinct `requiredextensions` prefixes in one model part, and across
     /// the package. Past this the inspection is refused.
     pub max_extensions: usize,
+    /// P5 D6, collecting reads only: vertices and triangles kept across
+    /// every model part, and again across the flattened objects.
+    pub max_mesh_vertices: u64,
+    pub max_mesh_triangles: u64,
 }
 
 impl ZipLimits {
@@ -93,8 +103,13 @@ impl ZipLimits {
         max_objects: 1_000_000,
         max_listed: super::gcode::MAX_LISTED,
         max_extensions: 64,
+        max_mesh_vertices: MAX_MESH_VERTICES,
+        max_mesh_triangles: MAX_MESH_TRIANGLES,
     };
 }
+
+/// Plates, per-object setting keys, and object names by id.
+type SettingsModel = (Vec<Plate>, BTreeSet<String>, HashMap<u32, String>);
 
 type Inspected = (
     ThreeMfInspection,
@@ -124,6 +139,43 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
     cancel: &CancelFlag,
     limits: &ZipLimits,
 ) -> Result<Inspected, InspectError> {
+    read_package(reader, cancel, limits, false).map(|(inspected, _)| inspected)
+}
+
+/// P5 D6: the 3MF's build-item objects, components flattened into each
+/// object's frame and converted to millimetres, and its build items. Every
+/// rejection [`inspect`] makes applies here too.
+pub fn read_mesh<R: Read + Seek>(
+    reader: R,
+    cancel: &CancelFlag,
+) -> Result<MeshModel, InspectError> {
+    read_mesh_with(reader, cancel, &ZipLimits::SPEC)
+}
+
+pub(crate) fn read_mesh_with<R: Read + Seek>(
+    reader: R,
+    cancel: &CancelFlag,
+    limits: &ZipLimits,
+) -> Result<MeshModel, InspectError> {
+    let ((inspection, _, _), collected) = read_package(reader, cancel, limits, true)?;
+    let collected = collected.expect("a collecting read keeps its parts");
+    mesh_model(&collected, &inspection.plates, cancel, limits)
+}
+
+/// What a collecting read keeps for [`read_mesh`].
+struct Collected {
+    start_part: String,
+    parts: HashMap<String, ModelPart>,
+    /// Object names from `model_settings.config`, by start-part object id.
+    settings_names: HashMap<u32, String>,
+}
+
+fn read_package<R: Read + Seek>(
+    reader: R,
+    cancel: &CancelFlag,
+    limits: &ZipLimits,
+    collect: bool,
+) -> Result<(Inspected, Option<Collected>), InspectError> {
     if cancel.is_cancelled() {
         return Err(InspectError::Cancelled);
     }
@@ -168,7 +220,7 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
                 "This 3MF references {name}, which is missing."
             )));
         }
-        let part = package.model_part(&name, name == start_part)?;
+        let part = package.model_part(&name, name == start_part, collect)?;
         pending.extend(part.referenced_parts());
         parts.insert(name, part);
     }
@@ -194,10 +246,10 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
         _ => return Err(InspectError::invalid(NO_OBJECTS)),
     };
 
-    let (plates, per_object_keys) = if package.has(MODEL_SETTINGS) {
-        package.model_settings()?
+    let (plates, per_object_keys, settings_names) = if package.has(MODEL_SETTINGS) {
+        package.model_settings(collect)?
     } else {
-        (Vec::new(), BTreeSet::new())
+        (Vec::new(), BTreeSet::new(), HashMap::new())
     };
     let unsupported = unsupported_entries(&entry_names, &parts, &per_object_keys);
     let (thumbnails, thumbnail, warnings) = package.thumbnails(root.thumbnail_middle.as_deref())?;
@@ -222,23 +274,25 @@ pub(crate) fn inspect_reader<R: Read + Seek>(
         }
     }
 
-    Ok((
-        ThreeMfInspection {
-            unit: root.unit.clone(),
-            producer: root.application.clone(),
-            title: root.title.clone(),
-            object_count: root.object_count,
-            build_item_count: root.build.len() as u32,
-            triangle_count,
-            bounds_mm,
-            plates,
-            required_extensions,
-            unsupported,
-            thumbnails,
-        },
-        thumbnail,
-        warnings,
-    ))
+    let inspection = ThreeMfInspection {
+        unit: root.unit.clone(),
+        producer: root.application.clone(),
+        title: root.title.clone(),
+        object_count: root.object_count,
+        build_item_count: root.build.len() as u32,
+        triangle_count,
+        bounds_mm,
+        plates,
+        required_extensions,
+        unsupported,
+        thumbnails,
+    };
+    let collected = collect.then_some(Collected {
+        start_part,
+        parts,
+        settings_names,
+    });
+    Ok(((inspection, thumbnail, warnings), collected))
 }
 
 /// A model element's `requiredextensions` prefixes, once each in document
@@ -827,18 +881,29 @@ impl<R: Read + Seek> Package<'_, R> {
         }
     }
 
-    fn model_part(&mut self, name: &str, is_start: bool) -> Result<ModelPart, InspectError> {
+    fn model_part(
+        &mut self,
+        name: &str,
+        is_start: bool,
+        collect: bool,
+    ) -> Result<ModelPart, InspectError> {
         let mut parser = ModelParser::new(name, is_start, self.limits, self.counts);
+        parser.collect = collect;
         self.parse(name, |event| parser.event(event))?;
         self.counts = parser.counts;
         Ok(parser.part)
     }
 
-    /// Plates and per-object setting keys from `model_settings.config`.
-    fn model_settings(&mut self) -> Result<(Vec<Plate>, BTreeSet<String>), InspectError> {
+    /// Plates, per-object setting keys, and (when `collect_names`) object
+    /// names from `model_settings.config`. Names are kept for at most
+    /// `max_listed` objects.
+    fn model_settings(&mut self, collect_names: bool) -> Result<SettingsModel, InspectError> {
         let max_listed = self.limits.max_listed;
         let mut plates = Vec::new();
         let mut per_object_keys = BTreeSet::new();
+        let mut names: HashMap<u32, String> = HashMap::new();
+        let mut object_id: Option<u32> = None;
+        let mut in_part = false;
         let mut object_depth = 0usize;
         let mut plate: Option<Plate> = None;
         let mut plate_id: Option<u32> = None;
@@ -850,6 +915,7 @@ impl<R: Read + Seek> Package<'_, R> {
                 Event::End(element) => {
                     match element.local_name().as_ref() {
                         "object" => object_depth = object_depth.saturating_sub(1),
+                        "part" => in_part = false,
                         "model_instance" => in_instance = false,
                         "plate" => {
                             if let Some(mut finished) = plate.take() {
@@ -864,7 +930,14 @@ impl<R: Read + Seek> Package<'_, R> {
                 _ => return Ok(()),
             };
             match element.local_name().as_ref() {
-                "object" if is_start => object_depth += 1,
+                "object" if is_start => {
+                    if object_depth == 0 && collect_names {
+                        object_id = attribute(element, "id", MODEL_SETTINGS)?
+                            .and_then(|id| id.trim().parse().ok());
+                    }
+                    object_depth += 1;
+                }
+                "part" if is_start => in_part = true,
                 // Plates past the listing cap are read but not kept.
                 "plate" if is_start => {
                     plate = (plates.len() < max_listed).then(|| Plate {
@@ -880,6 +953,13 @@ impl<R: Read + Seek> Package<'_, R> {
                     let value = attribute(element, "value", MODEL_SETTINGS)?.unwrap_or_default();
                     let value = value.trim();
                     if object_depth > 0 {
+                        if let (Some(id), "name", false, 1) =
+                            (object_id, key.as_str(), in_part, object_depth)
+                        {
+                            if !value.is_empty() && names.len() < max_listed {
+                                names.entry(id).or_insert_with(|| value.to_string());
+                            }
+                        }
                         if key != "name" && per_object_keys.len() < max_listed {
                             per_object_keys.insert(key);
                         }
@@ -902,7 +982,7 @@ impl<R: Read + Seek> Package<'_, R> {
             }
             Ok(())
         })?;
-        Ok((plates, per_object_keys))
+        Ok((plates, per_object_keys, names))
     }
 
     /// D12: `Thumbnail_Middle`, then `Metadata/thumbnail.png`, then
@@ -986,14 +1066,26 @@ struct Placement {
     part: String,
     object_id: u32,
     transform: Transform,
+    /// A build item's `printable` attribute (Orca/Bambu); read only when
+    /// collecting.
+    printable: bool,
 }
 
 enum Shape {
     Mesh {
         bounds: Option<BoundsMm>,
         triangles: u64,
+        /// The vertices and triangles, when collecting.
+        mesh: Option<RawMesh>,
     },
     Components(Vec<Placement>),
+}
+
+/// A mesh as written: vertices in the model's unit, indices checked.
+#[derive(Default)]
+struct RawMesh {
+    vertices: Vec<[f64; 3]>,
+    triangles: Vec<[u32; 3]>,
 }
 
 /// What one model part contributes. Only the start part's metadata, unit,
@@ -1004,7 +1096,8 @@ struct ModelPart {
     application: Option<String>,
     thumbnail_middle: Option<String>,
     object_count: u32,
-    objects: HashMap<u32, Shape>,
+    /// Each object's shape and, when collecting, its `name` attribute.
+    objects: HashMap<u32, (Shape, Option<String>)>,
     build: Vec<Placement>,
     required: Vec<String>,
     materials: bool,
@@ -1014,7 +1107,7 @@ struct ModelPart {
 impl ModelPart {
     /// Each part a component or build item names, once.
     fn referenced_parts(&self) -> BTreeSet<String> {
-        let components = self.objects.values().flat_map(|shape| match shape {
+        let components = self.objects.values().flat_map(|(shape, _)| match shape {
             Shape::Components(list) => list.as_slice(),
             Shape::Mesh { .. } => &[],
         });
@@ -1026,24 +1119,31 @@ impl ModelPart {
     }
 }
 
-/// Build items plus components, and objects, seen so far in the package.
+/// Build items plus components, and objects, seen so far in the package,
+/// and the vertices and triangles collected.
 #[derive(Clone, Copy, Debug, Default)]
 struct Counts {
     placements: usize,
     objects: usize,
+    vertices: u64,
+    triangles: u64,
 }
 
 struct ObjectInProgress {
     id: u32,
+    name: Option<String>,
     bounds: Option<BoundsMm>,
     triangles: u64,
     components: Option<Vec<Placement>>,
+    mesh: Option<RawMesh>,
 }
 
 struct ModelParser {
     name: String,
     limits: ZipLimits,
     counts: Counts,
+    /// Keep vertices and triangles (P5 D6).
+    collect: bool,
     base_dir: String,
     is_start: bool,
     depth: usize,
@@ -1061,6 +1161,7 @@ impl ModelParser {
             name: name.to_string(),
             limits: *limits,
             counts,
+            collect: false,
             base_dir: parent_dir(name).to_string(),
             is_start,
             depth: 0,
@@ -1092,7 +1193,7 @@ impl ModelParser {
             Event::End(element) => {
                 self.depth = self.depth.saturating_sub(1);
                 match element.local_name().as_ref() {
-                    "object" => self.finish_object(),
+                    "object" => self.finish_object()?,
                     "build" => self.in_build = false,
                     "metadata" => self.finish_metadata()?,
                     _ => {}
@@ -1148,23 +1249,56 @@ impl ModelParser {
                     )));
                 }
                 self.part.object_count += 1;
+                let name = match self.collect {
+                    true => attribute(element, "name", &self.name)?
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| !name.is_empty()),
+                    false => None,
+                };
                 self.object = Some(ObjectInProgress {
                     id: self.id_attribute(element, "id")?,
+                    name,
                     bounds: None,
                     triangles: 0,
                     components: None,
+                    mesh: self.collect.then(RawMesh::default),
                 });
                 if !has_body {
-                    self.finish_object();
+                    self.finish_object()?;
                 }
             }
             "vertex" => {
                 let point = self.vertex(element)?;
+                if self.collect {
+                    self.counts.vertices += 1;
+                    if self.counts.vertices > self.limits.max_mesh_vertices {
+                        return Err(limit_exceeded(format!(
+                            "it has more than {} vertices",
+                            self.limits.max_mesh_vertices
+                        )));
+                    }
+                }
                 if let Some(object) = &mut self.object {
                     include_point(&mut object.bounds, point);
+                    if let Some(mesh) = &mut object.mesh {
+                        mesh.vertices.push(point);
+                    }
                 }
             }
             "triangle" => {
+                if self.collect {
+                    self.counts.triangles += 1;
+                    if self.counts.triangles > self.limits.max_mesh_triangles {
+                        return Err(limit_exceeded(format!(
+                            "it has more than {} triangles",
+                            self.limits.max_mesh_triangles
+                        )));
+                    }
+                    let indices = self.triangle_indices(element)?;
+                    if let Some(mesh) = self.object.as_mut().and_then(|o| o.mesh.as_mut()) {
+                        mesh.triangles.push(indices);
+                    }
+                }
                 if let Some(object) = &mut self.object {
                     object.triangles += 1;
                 }
@@ -1273,6 +1407,29 @@ impl ModelParser {
         }
     }
 
+    /// A triangle's `v1`, `v2`, and `v3` (collecting only). Whether they
+    /// name vertices is checked when the object ends.
+    fn triangle_indices(&self, element: &BytesStart<'_>) -> Result<[u32; 3], InspectError> {
+        let mut indices = [None; 3];
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|_| malformed(&self.name))?;
+            let slot = match attribute.key.local_name().as_ref() {
+                "v1" => 0,
+                "v2" => 1,
+                "v3" => 2,
+                _ => continue,
+            };
+            indices[slot] = attribute.value.trim().parse().ok();
+        }
+        match indices {
+            [Some(a), Some(b), Some(c)] => Ok([a, b, c]),
+            _ => Err(InspectError::invalid(format!(
+                "{} has a triangle without valid vertex indices.",
+                self.name
+            ))),
+        }
+    }
+
     fn id_attribute(&self, element: &BytesStart<'_>, local: &str) -> Result<u32, InspectError> {
         attribute(element, local, &self.name)?
             .and_then(|value| value.trim().parse().ok())
@@ -1298,24 +1455,44 @@ impl ModelParser {
             })?,
             None => IDENTITY,
         };
+        let printable = !self.collect
+            || attribute(element, "printable", &self.name)?
+                .is_none_or(|value| !matches!(value.trim(), "0" | "false"));
         Ok(Placement {
             part,
             object_id,
             transform,
+            printable,
         })
     }
 
-    fn finish_object(&mut self) {
+    fn finish_object(&mut self) -> Result<(), InspectError> {
         if let Some(object) = self.object.take() {
+            if let Some(mesh) = &object.mesh {
+                let count = mesh.vertices.len() as u64;
+                if mesh
+                    .triangles
+                    .iter()
+                    .flatten()
+                    .any(|&index| u64::from(index) >= count)
+                {
+                    return Err(InspectError::invalid(format!(
+                        "{} has a triangle that names a missing vertex.",
+                        self.name
+                    )));
+                }
+            }
             let shape = match object.components {
                 Some(components) if object.triangles == 0 => Shape::Components(components),
                 _ => Shape::Mesh {
                     bounds: object.bounds,
                     triangles: object.triangles,
+                    mesh: object.mesh,
                 },
             };
-            self.part.objects.insert(object.id, shape);
+            self.part.objects.insert(object.id, (shape, object.name));
         }
+        Ok(())
     }
 
     fn finish_metadata(&mut self) -> Result<(), InspectError> {
@@ -1428,7 +1605,7 @@ impl Resolver<'_> {
             ));
         }
         let parts = self.parts;
-        let shape = parts
+        let (shape, _) = parts
             .get(part)
             .and_then(|model| model.objects.get(&id))
             .ok_or_else(|| {
@@ -1437,7 +1614,9 @@ impl Resolver<'_> {
                 ))
             })?;
         let result = match shape {
-            Shape::Mesh { bounds, triangles } => (*bounds, *triangles),
+            Shape::Mesh {
+                bounds, triangles, ..
+            } => (*bounds, *triangles),
             Shape::Components(components) => {
                 let mut bounds = None;
                 let mut triangles = 0u64;
@@ -1454,6 +1633,207 @@ impl Resolver<'_> {
         self.visiting.remove(&key);
         self.placed.insert(key, result);
         Ok(result)
+    }
+}
+
+// --- Geometry (P5 D6) -------------------------------------------------------
+
+/// Applies a 3MF transform (row-vector convention) to a point.
+fn apply(m: &Transform, [x, y, z]: [f64; 3]) -> [f64; 3] {
+    [
+        x * m[0] + y * m[3] + z * m[6] + m[9],
+        x * m[1] + y * m[4] + z * m[7] + m[10],
+        x * m[2] + y * m[5] + z * m[8] + m[11],
+    ]
+}
+
+/// The transform that applies `first`, then `then`.
+fn compose(first: &Transform, then: &Transform) -> Transform {
+    let mut out = [0.0; 12];
+    for row in 0..4 {
+        for column in 0..3 {
+            let mut value = if row == 3 { then[9 + column] } else { 0.0 };
+            for k in 0..3 {
+                value += first[row * 3 + k] * then[k * 3 + column];
+            }
+            out[row * 3 + column] = value;
+        }
+    }
+    out
+}
+
+/// Builds [`MeshModel`] from a collecting read. Object keys are the build
+/// items' object ids. Two build items naming the same id in different
+/// parts (the Production extension's `p:path`) are refused, since the key
+/// would be ambiguous.
+fn mesh_model(
+    collected: &Collected,
+    plates: &[Plate],
+    cancel: &CancelFlag,
+    limits: &ZipLimits,
+) -> Result<MeshModel, InspectError> {
+    let root = &collected.parts[&collected.start_part];
+    let scale = unit_scale(&root.unit)?;
+
+    // The k-th build item for an object takes the k-th plate listing it.
+    let mut plate_slots: HashMap<u32, VecDeque<u32>> = HashMap::new();
+    for plate in plates {
+        for id in &plate.object_ids {
+            plate_slots.entry(*id).or_default().push_back(plate.index);
+        }
+    }
+
+    let mut owners: HashMap<u32, &str> = HashMap::new();
+    let mut order = Vec::new();
+    let mut build_items = Vec::with_capacity(root.build.len());
+    for item in &root.build {
+        match owners.get(&item.object_id) {
+            Some(part) if *part != item.part => {
+                return Err(InspectError::invalid(format!(
+                    "This 3MF's build names object {} in two parts.",
+                    item.object_id
+                )));
+            }
+            Some(_) => {}
+            None => {
+                owners.insert(item.object_id, &item.part);
+                order.push(item);
+            }
+        }
+        let mut transform = item.transform;
+        for value in &mut transform[9..] {
+            *value *= scale;
+        }
+        build_items.push(MeshBuildItem {
+            object_id: item.object_id,
+            transform,
+            plate_index: plate_slots
+                .get_mut(&item.object_id)
+                .and_then(VecDeque::pop_front),
+            printable: item.printable,
+        });
+    }
+
+    let mut flattener = Flattener {
+        parts: &collected.parts,
+        cancel,
+        limits,
+        scale,
+        vertices: 0,
+        triangles: 0,
+        steps: 0,
+    };
+    let mut objects = Vec::with_capacity(order.len());
+    for item in order {
+        let mut mesh = ObjectMesh::default();
+        flattener.flatten(&item.part, item.object_id, &IDENTITY, 0, &mut mesh)?;
+        let attribute_name = collected.parts[&item.part]
+            .objects
+            .get(&item.object_id)
+            .and_then(|(_, name)| name.clone());
+        let settings_name = (item.part == collected.start_part)
+            .then(|| collected.settings_names.get(&item.object_id).cloned())
+            .flatten();
+        objects.push(MeshObject {
+            id: item.object_id,
+            name: attribute_name.or(settings_name),
+            mesh,
+        });
+    }
+    Ok(MeshModel {
+        objects,
+        build_items,
+    })
+}
+
+/// Copies meshes into an object's frame, within the revision-wide caps.
+struct Flattener<'a> {
+    parts: &'a HashMap<String, ModelPart>,
+    cancel: &'a CancelFlag,
+    limits: &'a ZipLimits,
+    scale: f64,
+    vertices: u64,
+    triangles: u64,
+    /// Objects visited; bounds the walk when components fan out.
+    steps: u64,
+}
+
+impl Flattener<'_> {
+    fn flatten(
+        &mut self,
+        part: &str,
+        id: u32,
+        transform: &Transform,
+        depth: usize,
+        out: &mut ObjectMesh,
+    ) -> Result<(), InspectError> {
+        self.steps += 1;
+        if self.steps > self.limits.max_mesh_triangles {
+            return Err(limit_exceeded(format!(
+                "its components expand to more than {} placements",
+                self.limits.max_mesh_triangles
+            )));
+        }
+        if self.steps.is_multiple_of(4096) && self.cancel.is_cancelled() {
+            return Err(InspectError::Cancelled);
+        }
+        if depth > MAX_COMPONENT_DEPTH {
+            return Err(InspectError::invalid(
+                "This 3MF's components form a cycle or nest too deeply.",
+            ));
+        }
+        let (shape, _) = self
+            .parts
+            .get(part)
+            .and_then(|model| model.objects.get(&id))
+            .ok_or_else(|| {
+                InspectError::invalid(format!(
+                    "{part} references object {id}, which doesn't exist."
+                ))
+            })?;
+        match shape {
+            Shape::Mesh { mesh, .. } => {
+                let Some(mesh) = mesh else { return Ok(()) };
+                self.vertices += mesh.vertices.len() as u64;
+                self.triangles += mesh.triangles.len() as u64;
+                if self.vertices > self.limits.max_mesh_vertices
+                    || self.triangles > self.limits.max_mesh_triangles
+                {
+                    return Err(limit_exceeded(format!(
+                        "its objects hold more than {} triangles or {} vertices as placed",
+                        self.limits.max_mesh_triangles, self.limits.max_mesh_vertices
+                    )));
+                }
+                let base = out.positions.len() as u32;
+                for vertex in &mesh.vertices {
+                    let point = apply(transform, *vertex).map(|value| (value * self.scale) as f32);
+                    if !point.iter().all(|value| value.is_finite()) {
+                        return Err(InspectError::invalid(format!(
+                            "{part} has a vertex that is out of range once placed."
+                        )));
+                    }
+                    out.positions.push(point);
+                }
+                out.triangles.extend(
+                    mesh.triangles
+                        .iter()
+                        .map(|triangle| triangle.map(|index| base + index)),
+                );
+            }
+            Shape::Components(components) => {
+                for component in components {
+                    let placed = compose(&component.transform, transform);
+                    self.flatten(
+                        &component.part,
+                        component.object_id,
+                        &placed,
+                        depth + 1,
+                        out,
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2545,5 +2925,299 @@ mod tests {
         let reason = invalid_reason(inspect_with(bytes, &extension_limits(2)));
         assert!(reason.contains("safety limit"), "{reason}");
         assert!(reason.contains("required extensions"), "{reason}");
+    }
+
+    // --- P5 D6: collecting reads -------------------------------------------
+
+    fn mesh_bytes(bytes: Vec<u8>) -> Result<MeshModel, InspectError> {
+        read_mesh_with(Cursor::new(bytes), &CancelFlag::never(), &ZipLimits::SPEC)
+    }
+
+    fn mesh_with(bytes: Vec<u8>, limits: &ZipLimits) -> Result<MeshModel, InspectError> {
+        read_mesh_with(Cursor::new(bytes), &CancelFlag::never(), limits)
+    }
+
+    /// The 10 mm cube's corners, as `cube_mesh` writes them, in `f32`.
+    fn cube_positions(offset: [f32; 3], factor: f32) -> Vec<[f32; 3]> {
+        [
+            [0, 0, 0],
+            [10, 0, 0],
+            [10, 10, 0],
+            [0, 10, 0],
+            [0, 0, 10],
+            [10, 0, 10],
+            [10, 10, 10],
+            [0, 10, 10],
+        ]
+        .iter()
+        .map(|corner| {
+            let mut point = [0.0; 3];
+            for axis in 0..3 {
+                point[axis] = (corner[axis] as f32 + offset[axis]) * factor;
+            }
+            point
+        })
+        .collect()
+    }
+
+    #[test]
+    fn mesh_flattens_components_into_each_build_objects_frame() {
+        let body = format!(
+            "<resources>\
+               <object id=\"1\" name=\"Cube A\" type=\"model\">{}</object>\
+               <object id=\"2\" type=\"model\"><components>\
+                 <component objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 20 0 0\"/>\
+                 <component objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 0 30 0\"/>\
+               </components></object>\
+             </resources>\
+             <build>\
+               <item objectid=\"2\"/>\
+               <item objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 5 5 0\"/>\
+               <item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 0 0 7\" printable=\"0\"/>\
+             </build>",
+            cube_mesh("")
+        );
+        let mesh = mesh_bytes(core_package(model("", &body), vec![])).unwrap();
+
+        let ids: Vec<u32> = mesh.objects.iter().map(|object| object.id).collect();
+        assert_eq!(
+            ids,
+            [2, 1],
+            "objects in the order the build first names them"
+        );
+        let [components, cube] = [&mesh.objects[0], &mesh.objects[1]];
+        assert_eq!(cube.name.as_deref(), Some("Cube A"));
+        assert_eq!(cube.mesh.positions, cube_positions([0.0; 3], 1.0));
+        assert_eq!(cube.mesh.triangles.len(), 12);
+        assert_eq!(components.name, None);
+        assert_eq!(components.mesh.positions.len(), 16);
+        assert_eq!(
+            &components.mesh.positions[..8],
+            cube_positions([20.0, 0.0, 0.0], 1.0)
+        );
+        assert_eq!(
+            &components.mesh.positions[8..],
+            cube_positions([0.0, 30.0, 0.0], 1.0)
+        );
+        // The second copy's indices point at its own vertices.
+        assert_eq!(
+            components.mesh.triangles[12],
+            cube.mesh.triangles[0].map(|i| i + 8)
+        );
+
+        let items: Vec<(u32, [f64; 12], Option<u32>, bool)> = mesh
+            .build_items
+            .iter()
+            .map(|item| {
+                (
+                    item.object_id,
+                    item.transform,
+                    item.plate_index,
+                    item.printable,
+                )
+            })
+            .collect();
+        let translate = |x: f64, y: f64, z: f64| {
+            let mut transform = IDENTITY;
+            transform[9..].copy_from_slice(&[x, y, z]);
+            transform
+        };
+        assert_eq!(
+            items,
+            [
+                (2, IDENTITY, None, true),
+                (1, translate(5.0, 5.0, 0.0), None, true),
+                (2, translate(0.0, 0.0, 7.0), None, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn mesh_positions_and_build_translations_are_in_millimetres() {
+        let body = format!(
+            "<resources><object id=\"1\" type=\"model\">{}</object>\
+               <object id=\"2\" type=\"model\"><components>\
+                 <component objectid=\"1\" transform=\"1 0 0 0 1 0 0 0 1 1 0 0\"/>\
+               </components></object></resources>\
+             <build><item objectid=\"2\" transform=\"0 1 0 -1 0 0 0 0 1 5 0 0\"/></build>",
+            cube_mesh("")
+        );
+        let xml = model("", &body).replace("millimeter", "centimeter");
+        let mesh = mesh_bytes(core_package(xml, vec![])).unwrap();
+        assert_eq!(
+            mesh.objects[0].mesh.positions,
+            cube_positions([1.0, 0.0, 0.0], 10.0)
+        );
+        assert_eq!(
+            mesh.build_items[0].transform,
+            [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 50.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn mesh_resolves_production_parts_orca_plates_and_names() {
+        let mesh = mesh_bytes(orca_layout()).unwrap();
+        let summary: Vec<(u32, Option<&str>, usize, usize)> = mesh
+            .objects
+            .iter()
+            .map(|object| {
+                (
+                    object.id,
+                    object.name.as_deref(),
+                    object.mesh.positions.len(),
+                    object.mesh.triangles.len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [(2, Some("Cube"), 8, 12), (4, Some("Cube"), 8, 12)]
+        );
+        let plates: Vec<(u32, Option<u32>, bool)> = mesh
+            .build_items
+            .iter()
+            .map(|item| (item.object_id, item.plate_index, item.printable))
+            .collect();
+        assert_eq!(plates, [(2, Some(1), true), (4, Some(2), true)]);
+        assert_eq!(mesh.build_items[0].transform[9..], [100.0, 100.0, 0.0]);
+    }
+
+    #[test]
+    fn a_core_name_attribute_wins_over_model_settings() {
+        let bytes = orca_layout();
+        let named = String::from_utf8(
+            zip::ZipArchive::new(Cursor::new(bytes.clone()))
+                .unwrap()
+                .by_name("3D/3dmodel.model")
+                .map(|mut entry| {
+                    let mut text = String::new();
+                    entry.read_to_string(&mut text).unwrap();
+                    text
+                })
+                .unwrap()
+                .into_bytes(),
+        )
+        .unwrap()
+        .replace("<object id=\"4\"", "<object id=\"4\" name=\"Core name\"");
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            let name = entry.name().to_string();
+            if name == "3D/3dmodel.model" {
+                data = named.clone().into_bytes();
+            }
+            entries.push((name, data));
+        }
+        let entries: Vec<(&str, Vec<u8>)> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.clone()))
+            .collect();
+        let mesh = mesh_bytes(package(&entries)).unwrap();
+        assert_eq!(mesh.objects[0].name.as_deref(), Some("Cube"));
+        assert_eq!(mesh.objects[1].name.as_deref(), Some("Core name"));
+    }
+
+    #[test]
+    fn a_triangle_naming_a_missing_vertex_is_refused_for_geometry_only() {
+        let broken = single_cube_model("", "").replace(
+            "</triangles>",
+            "<triangle v1=\"0\" v2=\"1\" v3=\"99\"/></triangles>",
+        );
+        let bytes = core_package(broken, vec![]);
+        // Inspection never looks at indices, so it is unchanged.
+        assert!(inspect_bytes(bytes.clone()).is_ok());
+        let reason = match mesh_bytes(bytes) {
+            Err(InspectError::InvalidContent(reason)) => reason,
+            other => panic!("expected INVALID_CONTENT, got {other:?}"),
+        };
+        assert!(reason.contains("missing vertex"), "{reason}");
+
+        let unindexed = single_cube_model("", "")
+            .replace("</triangles>", "<triangle v1=\"0\" v2=\"1\"/></triangles>");
+        assert!(matches!(
+            mesh_bytes(core_package(unindexed, vec![])),
+            Err(InspectError::InvalidContent(_))
+        ));
+    }
+
+    #[test]
+    fn the_same_object_id_in_two_parts_is_an_ambiguous_key() {
+        let root = model(
+            &format!(" xmlns:p=\"{PRODUCTION_NS}\" requiredextensions=\"p\""),
+            &format!(
+                "<resources><object id=\"1\" type=\"model\">{}</object></resources>\
+                 <build><item objectid=\"1\"/>\
+                   <item objectid=\"1\" p:path=\"/3D/Objects/other.model\"/></build>",
+                cube_mesh("")
+            ),
+        );
+        let other = model(
+            "",
+            &format!(
+                "<resources><object id=\"1\" type=\"model\">{}</object></resources><build/>",
+                cube_mesh("")
+            ),
+        );
+        let bytes = core_package(root, vec![("3D/Objects/other.model", other.into_bytes())]);
+        assert!(inspect_bytes(bytes.clone()).is_ok());
+        let reason = match mesh_bytes(bytes) {
+            Err(InspectError::InvalidContent(reason)) => reason,
+            other => panic!("expected INVALID_CONTENT, got {other:?}"),
+        };
+        assert!(reason.contains("two parts"), "{reason}");
+    }
+
+    fn mesh_limits(max_mesh_vertices: u64, max_mesh_triangles: u64) -> ZipLimits {
+        ZipLimits {
+            max_mesh_vertices,
+            max_mesh_triangles,
+            ..ZipLimits::SPEC
+        }
+    }
+
+    #[test]
+    fn collected_and_flattened_meshes_are_capped() {
+        let one_cube = core_package(single_cube_model("", ""), vec![]);
+        assert!(mesh_with(one_cube.clone(), &mesh_limits(8, 12)).is_ok());
+        for limits in [mesh_limits(7, 12), mesh_limits(8, 11)] {
+            let reason = invalid_reason_of(mesh_with(one_cube.clone(), &limits));
+            assert!(reason.contains("safety limit"), "{reason}");
+        }
+
+        // Parsed once, but placed three times by components.
+        let body = format!(
+            "<resources><object id=\"1\" type=\"model\">{}</object>\
+               <object id=\"2\" type=\"model\"><components>\
+                 <component objectid=\"1\"/><component objectid=\"1\"/>\
+                 <component objectid=\"1\"/></components></object></resources>\
+             <build><item objectid=\"2\"/></build>",
+            cube_mesh("")
+        );
+        let fanned = core_package(model("", &body), vec![]);
+        assert!(mesh_with(fanned.clone(), &mesh_limits(24, 36)).is_ok());
+        let reason = invalid_reason_of(mesh_with(fanned, &mesh_limits(24, 35)));
+        assert!(reason.contains("as placed"), "{reason}");
+    }
+
+    fn invalid_reason_of(result: Result<MeshModel, InspectError>) -> String {
+        match result {
+            Err(InspectError::InvalidContent(reason)) => reason,
+            other => panic!("expected INVALID_CONTENT, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_collecting_read_is_cancellable() {
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        sender.send(true).unwrap();
+        let result = read_mesh_with(
+            Cursor::new(core_package(single_cube_model("", ""), vec![])),
+            &CancelFlag::new(receiver),
+            &ZipLimits::SPEC,
+        );
+        assert_eq!(result, Err(InspectError::Cancelled));
     }
 }
