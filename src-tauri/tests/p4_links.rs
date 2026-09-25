@@ -696,6 +696,11 @@ fn a_failed_watch_falls_back_to_polling_with_a_warning() {
     let host = Host::new();
     let path = host.source("proj/part.stl", &fixture("cube-binary.stl"));
     let running = host.start(WatchPolicy::native());
+    // The startup pass runs on its own task and registers every linked
+    // Model again. Under load it can start after the import commits; its
+    // re-registration then drops the polled watch and adds a new one,
+    // natively this time (the failure is one-shot), so wait it out first.
+    running.wait_until_reconciled();
     running.links().fail_next_native_watch();
 
     let item = running.import_linked(&path);
