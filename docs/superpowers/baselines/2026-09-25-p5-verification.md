@@ -21,6 +21,13 @@ evidence is automated tests plus a headless-Chrome run of `just web`
 (details under each defect). The native re-check was **not** redone, so the
 native evidence in this record still describes the app before the fixes.
 
+**Update, final fix round (after the whole-branch review):** spec AC3 and
+AC7 are now fully met by automated tests. AC3 has a real-Orca test that
+slices once per mapped control and checks the G-code header, and AC7 has a
+PDEATHSIG test. A race in the SIGTERM-grace test is fixed, and four minor
+review findings are fixed. The details are in
+[Final fix round](#final-fix-round) below.
+
 ## Environment
 
 - Linux 7.2.6-1-cachyos, x86_64. KDE Plasma on Wayland, with Xwayland 24.1.13.
@@ -172,7 +179,7 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
 | 1 | The runtime spike is approved, and the deterministic invocation fixtures pass | **met** | The spike is approved (`2026-09-24-p5-orca-runtime-spike.md`, "Approval"). `the_deterministic_invocation_fixtures_match_the_committed_ones` passes. `just gen-slicing-fixtures` then `git diff --exit-code` exits 0. |
-| 2 | The cancellation/restart, stale-source, two-plate identity, external provenance/missing-fact, and immutable-artifact tests pass | **met** | All pass in `just test-rust` (names under spec AC6, 7, 9, 10, and 11 below). One sub-item has no automated test (PDEATHSIG, spec AC7); it is verified by hand. |
+| 2 | The cancellation/restart, stale-source, two-plate identity, external provenance/missing-fact, and immutable-artifact tests pass | **met** | All pass in `just test-rust` (names under spec AC6, 7, 9, 10, and 11 below). PDEATHSIG (spec AC7) was verified by hand in this pass, and has an automated test since the final fix round. |
 | 3 | Accessible viewport and keyboard verification pass | **partially met** | The whole flow was done by keyboard in the native app, and reduced motion was checked. **D1** broke linear Tab order in the preparation panel; it is fixed in Task 16c, with automated and `just web` evidence, but the native keyboard pass was not redone. The pass also ran on a nested Xwayland, not `:0`. |
 | 4 | A packaged or installed OrcaSlicer executes on Linux x86_64 | **met** | The packaged farm3d (the .deb's binary, and farm3d's AppImage) sliced the two-plate fixture with the installed v2.4.2 AppImage (see above). An installed-package run remains a user action. |
 | 5 | The tracer completes with all revisions unchanged after restart | **met** | `tracer_runs_against_fake_orca` (CI) and `real_orca_tracer_runs_against_a_real_orcaslicer` (31.0 s) both pass. The native manual restarts also showed byte-identical revisions. |
@@ -183,11 +190,11 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 |---|---|---|---|
 | 1 | Migration | **met** | `p5_migration`: `fresh_database_records_the_v6_ledger_row_with_a_matching_checksum`, `upgrading_v5_to_v6_keeps_every_existing_row_and_survives_a_restart`, `a_crash_before_commit_leaves_the_database_unchanged_at_v5`, `revisions_and_their_blobs_reject_updates_but_allow_a_guarded_delete`, and `revision_checks_enforce_plate_and_runtime_exclusivity`. |
 | 2 | Runtime | **met** | `slicing::runtime` tests: `version_lines_parse_as_d2_specifies`, `garbage_output_is_a_probe_failure`, `a_release_ranks_above_a_prerelease_of_the_same_version`, `the_probe_runs_in_a_scratch_directory_with_the_allowlisted_environment`, `appimage_profiles_are_extracted_once_and_keep_only_json`, `a_cache_only_appimage_is_unreadable`, and `an_engine_without_readable_presets_is_presets_unreadable`. Also `real_orca_engine_probes_as_a_supported_version`. |
-| 3 | Presets | **partially met** | Met: `flattening_merges_the_chain_and_keeps_system_identity`, the committed `flat-presets.json` fixture, the offered and compatibility tests, `a_missing_preset_is_preset_not_found`, and `real_orca_preset_source_knows_every_mapped_key`. Not met: no real-Orca test shows that **writing each mapped key changes the G-code header**. The real test checks that the keys are known and that overrides reach the preset JSON; it doesn't slice and compare headers. |
+| 3 | Presets | **met** (final fix round) | `flattening_merges_the_chain_and_keeps_system_identity`, the committed `flat-presets.json` fixture, the offered and compatibility tests, `a_missing_preset_is_preset_not_found`, and `real_orca_preset_source_knows_every_mapped_key`. Writing each mapped control changes the G-code header: `real_orca_each_mapped_control_changes_its_gcode_header_claim` passes on v2.4.2 for all 11 controls (12 keys; results under [Final fix round](#final-fix-round)). This pass had found no such test. The 7 Printer Profile override keys are checked as known to v2.4.2 and as reaching the machine preset JSON, but no test slices with each one and compares headers. |
 | 4 | Mapping | **met** | `every_profile_field_is_mapped_or_not_applicable`, `an_unmapped_override_blocks_slicing`, `an_unknown_override_key_blocks_slicing_for_a_printer`, and `every_mapped_key_is_known_to_the_fixture_preset_source`. |
 | 5 | Deterministic invocation fixtures | **met** | `the_deterministic_invocation_fixtures_match_the_committed_ones` (plate 3MF, argument vectors, flat presets). Regenerating gives no diff. |
 | 6 | Two-plate identity | **met** | `a_two_plate_preparation_slices_into_two_revisions_of_one_source` (fake-orca), `real_orca_places_a_written_plate_exactly`, and both tracers. Native: two revisions with distinct plate keys and one source, in dev, the packaged .deb binary, and the AppImage. |
-| 7 | Cancellation and restart | **partially met** | Met: `cancel_mid_run_stops_the_grandchild_within_six_seconds`, `cancelling_a_running_slice_stops_it_and_a_queued_one_never_starts`, `real::real_orca_cancel_stops_the_group_quickly`, `a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions`, and the tracer's step 6. Native: cancel in 0.26 s, and an interrupted slice after a crash. Gap: **no automated PDEATHSIG test exists** in the repo (none in `tests/p5_process.rs` or `process_group.rs`). PDEATHSIG is shown only by spike Gate E and by today's manual run (the engine exited within 0.2 s of the app's SIGKILL). |
+| 7 | Cancellation and restart | **met** (final fix round) | `cancel_mid_run_stops_the_grandchild_within_six_seconds`, `cancelling_a_running_slice_stops_it_and_a_queued_one_never_starts`, `real::real_orca_cancel_stops_the_group_quickly`, `a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions`, and the tracer's step 6. Native: cancel in 0.26 s, and an interrupted slice after a crash. PDEATHSIG: `the_engine_exits_when_its_parent_is_killed` and `the_engine_exits_when_the_thread_that_spawned_it_exits` (`tests/p5_process.rs`, final fix round). This pass had found no automated PDEATHSIG test. The manual run also showed it: the engine exited within 0.2 s of the app's SIGKILL. |
 | 8 | Failure | **met** | `every_gate_f_return_code_maps_to_its_d11_failure`, `missing_and_unreadable_inputs_fail_like_orca`, `an_unexpected_signal_is_an_engine_crash`, `an_engine_that_cannot_start_is_spawn_failed_without_its_path`, `a_hung_slice_times_out_through_the_stop_escalation`, `a_slice_that_cannot_be_stored_fails_with_its_log`, `a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues`, `success_without_gcode_is_output_missing`, and the redaction tests. Native: `engineCrashed` with the real engine. |
 | 9 | Stale source | **met (automated only)** | `a_stale_source_is_refused_then_continued_and_reload_keeps_transforms`. Not exercised by hand. |
 | 10 | Immutable artifacts | **met** | `revisions_are_immutable_and_deleting_a_model_cascades_everything`, `revisions_and_their_blobs_reject_updates_but_allow_a_guarded_delete`, `a_model_with_slice_revisions_is_blocked_by_the_registered_source`, `a_model_with_an_external_revision_blocks_delete_model`, and the tracer's `open_verified` hashes. Native: byte-identical across two restarts (an idle SIGKILL, and a SIGKILL mid-slice). |
@@ -197,6 +204,162 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 | 14 | Accessible viewport and keyboard verification | **partially met** | Native, keyboard-only, at 1440 × 900 and 1024 × 700, with reduced motion checked; screenshots `docs/screenshots/p5-*.png`. Reasons for partial: the keyboard ran through a nested Xwayland (see "How the native app was driven"), and the native pass predates the Task 16c fixes. **D1** (the matching-Printers popover broke the panel's Tab order) is fixed in Task 16c, with automated and `just web` evidence only; the native re-check was not redone. |
 | 15 | Packaged OrcaSlicer execution | **met, via the AppImage/unpacked path** | See "Packaged app". The installed-`.deb` variant needs root and is left as a user action with the commands above. |
 | 16 | The tracer | **met** | `tracer_runs_against_fake_orca` and `real_orca_tracer_runs_against_a_real_orcaslicer`. |
+
+## Final fix round
+
+The fixes from the whole-branch review, on top of `fdc8cc6`:
+
+| Commit | Change |
+|---|---|
+| `777ce90` | Fixes the race in the SIGTERM-grace test |
+| `6162579` | Adds the AC7 PDEATHSIG tests |
+| `9e5e53e`, `2bebd7a` | Adds the AC3 real-Orca header test |
+| `058d345` | Makes the preset field paths consistent |
+| `bb9b535` | Refuses a filament preset without its type or diameter |
+| `55873a7` | Corrects the `finish_run` doc comment |
+| `3206384` | Unlinks a deleted revision from its operation |
+| `d71cccc` | Updates the README for P5 |
+
+### AC7: PDEATHSIG tests
+
+Both tests are in `src-tauri/tests/p5_process.rs` and are Linux-only. Each
+starts a `hang` fake-orca through the production
+`slicing::process_group::spawn_group`. Each polls `/proc`, counts a zombie
+as gone, and has no fixed sleep.
+
+- **`the_engine_exits_when_its_parent_is_killed`.** The test re-executes
+  its own binary as an intermediate parent (the ignored helper
+  `pdeathsig_intermediate_parent`, which does nothing without its
+  environment variable). The intermediate spawns the engine and writes its
+  pid (write, then rename). It then parks the spawning thread. The test
+  checks that the engine's parent is the intermediate, SIGKILLs the
+  intermediate, and requires the engine to be gone within 1 s.
+- **`the_engine_exits_when_the_thread_that_spawned_it_exits`.** This test
+  pins the rule in `operations.rs`. PDEATHSIG follows the thread that
+  spawned the engine, not the process. When the spawning thread exits, the
+  engine is gone within 1 s, and its exit status is SIGTERM (15), although
+  farm3d is still running. That is why the scheduler spawns from its own
+  long-lived thread.
+- **Red check.** With the `prctl` changed to `set_parent_process_death_signal(None)`,
+  both tests fail with "the engine outlived … by 1 s". No fake-orca was
+  left behind, because a guard SIGKILLs it on drop.
+
+### AC3: real-Orca header test
+
+`real_orca_each_mapped_control_changes_its_gcode_header_claim` is in
+`tests/p5_slicing.rs`. It is `#[ignore]`d, runs under `just test-orca`, and
+panics when `FARM3D_ORCA` is unset. It uses `Farm::with_real_orca`, so the
+engine is the real OrcaSlicer and the preset source is the TestVendor
+fixtures.
+
+It first slices a cube with no controls. It then slices once for each of
+D4's 11 controls, each with a value the preset doesn't have. For each key
+the control maps to, it requires that the `CONFIG_BLOCK` claim equals the
+value written and differs from the baseline. It also requires a case for
+every entry in `CONTROL_MAPPINGS`.
+
+On v2.4.2 (the AppImage above), every key changed as expected:
+
+| Control | Value | Key | Baseline → header |
+|---|---|---|---|
+| `layerHeightMm` | 0.12 | `layer_height` | 0.2 → 0.12 |
+| `wallLoops` | 5 | `wall_loops` | 3 → 5 |
+| `topShellLayers` | 6 | `top_shell_layers` | 4 → 6 |
+| `bottomShellLayers` | 5 | `bottom_shell_layers` | 3 → 5 |
+| `infillDensityPercent` | 35 | `sparse_infill_density` | 15% → 35% |
+| `infillPattern` | gyroid | `sparse_infill_pattern` | grid → gyroid |
+| `supports` | tree(auto) | `enable_support` | 0 → 1 |
+| `supports` | tree(auto) | `support_type` | normal(auto) → tree(auto) |
+| `supportThresholdAngleDeg` | 45 | `support_threshold_angle` | 30 → 45 |
+| `brimType` | outer_only | `brim_type` | auto_brim → outer_only |
+| `brimWidthMm` | 3 | `brim_width` | 5 → 3 |
+| `skirtLoops` | 2 | `skirt_loops` | 0 → 2 |
+
+The test takes about 8 s for 12 slices. The Printer Profile override keys
+(`printable_area`, `nozzle_diameter`, and the others) are not covered by
+this test; see spec AC3 above.
+
+### The SIGTERM-grace race
+
+`a_process_that_ignores_sigterm_is_killed_after_the_grace` cancelled 300 ms
+after the spawn, and assumed that fake-orca's shell had set its
+`trap '' TERM` by then. Under load, the cancel could come first. SIGTERM
+would then stop the engine, and `run.killed` would be false.
+
+- **The fix.** The `hangIgnoringTerm` shell now runs `trap '' TERM; : >
+  term-ignored; …`. The test cancels only once `<work>/term-ignored`
+  exists, and then asserts that the file does exist.
+- **Other fixed sleeps.** Every `p5_*` test was checked. The only other
+  fixed sleep used as a readiness assumption was a 100 ms pause in
+  `cancel_mid_run_stops_the_grandchild_within_six_seconds`, after the
+  grandchild's pid file appeared. The pid file is already the signal, so
+  the pause was removed. The other sleeps are poll intervals inside
+  deadline loops.
+- **Stability.** The built `p5_process` binary was run 20 times, 4 at a
+  time, and then 24 times, 8 at a time. All 44 runs passed, 17 of 17 tests
+  each time. No fake-orca was left afterwards. `CARGO_PKG_NAME` was set as
+  cargo sets it, because `the_child_gets_only_the_allowlisted_environment`
+  requires it.
+
+### Minor fixes
+
+- **A stale revision link.** When a revision is deleted, the store's
+  `dropRevision` now clears `sliceRevisionId` on any held operation that
+  made it, as the backend's `ON DELETE SET NULL` does. It does this for the
+  `slicing.revision.removed` event and for the delete result. The operation
+  panel shows "Its Slice Revision was deleted." for a succeeded operation
+  with no revision, in place of "Saved as a Slice Revision" and a button
+  that led to NOT_FOUND. Tests: "a removed revision is unlinked from the
+  operation that made it, whether the event or the delete result says so"
+  (`slicing-store.test.ts`) and "says so when a succeeded operation's
+  Slice Revision was deleted" (`PreparationPanel.test.tsx`).
+- **Field paths.** The backend now emits `processPreset` and
+  `filamentPreset`, not `document.…`, as the other preset errors do, so
+  `fieldAt` links them to Quality and Material. Tests:
+  `a_slice_without_a_chosen_preset_names_the_preset_field` (`p5_slicing`)
+  and `sliceErrorView` in `slice-presentation.test.ts`.
+- **Filament facts.** A resolved filament preset without `filament_type`
+  or a usable `filament_diameter` now refuses the slice with
+  `PRESET_INVALID` (kind `filament`, reason "it has no …"), before anything
+  is queued. Before, a missing type was recorded as OTHER, and a missing
+  diameter as 1.75. Tests:
+  `a_filament_preset_without_its_type_or_diameter_is_preset_invalid` (unit)
+  and `a_filament_preset_without_a_diameter_refuses_the_slice` (IPC).
+- **A doc comment.** `publish.rs`'s `finish_run` now says that a
+  content-store failure fails the operation at once with `storageFailed`.
+- **README.** It now covers the user-installed OrcaSlicer 2.x, where
+  farm3d looks for it, and **Settings** → **Slicer...**. It says a nightly
+  also needs a 2.4 preset source. It adds `just test-orca` and `just
+  gen-slicing-fixtures` to the command table, notes that `just test-rust`
+  builds with `--features test-support`, and says `just package` also
+  rejects `fake-orca`.
+
+### Gates (final fix round)
+
+Run at `2bebd7a`, with `source "$HOME/.cargo/env"`.
+
+| Command | Exit | Result |
+|---|---|---|
+| `just build` | 0 | `tsc` and the Vite build pass. |
+| `just test` | 0 | 89 files, 1156 tests passed. |
+| `cd src-tauri && cargo test --features test-support` | 0 | 965 passed, 0 failed, 15 ignored, across 39 test binaries. |
+| `cargo clippy --all-targets --features test-support -- -A clippy::result_large_err` | 0 | Only warnings that were there before this round; none in the files it changed. |
+| `cargo fmt --check` | 0 | Clean. |
+| `just gen-contracts`, then `git diff --exit-code src/generated` | 0 | No diff. |
+| `FARM3D_ORCA=~/Downloads/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage just test-orca` | 0 | All 9 `real_orca*` tests pass, including the new AC3 test. No `/tmp/.mount_*` or `orca-slicer` process was left. |
+
+The native app was not re-checked in this round. The fixes change no
+layout, except that a succeeded operation can now say its revision was
+deleted.
+
+### Follow-ups
+
+- **Operation-log retention.** The logs of failed and cancelled operations
+  (up to 4 MiB each) are kept until their Preparation or Model is deleted.
+  Nothing prunes them sooner.
+- **Focus after the P4 import dialog.** After **Done**, focus returns to
+  the start of the document, not to **Import…** (see "Other observations"
+  below). This is still open.
 
 ## Defects found
 
