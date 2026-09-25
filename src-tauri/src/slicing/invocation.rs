@@ -149,6 +149,20 @@ pub const WORK_PLACEHOLDER: &str = "<work>";
 /// The engine's placeholder as the manifest's first argument.
 pub const ENGINE_PLACEHOLDER: &str = "<engine>";
 
+/// The whole argument vector as the manifest records it: `<engine>`, then
+/// D8's arguments for `work` with the work directory written as `<work>`.
+/// `progress_piped` adds `--pipe`, as on Linux.
+pub fn recorded_arguments(work: &WorkDir, progress_piped: bool) -> Vec<String> {
+    let root = work.root().to_string_lossy().into_owned();
+    std::iter::once(ENGINE_PLACEHOLDER.to_string())
+        .chain(
+            work.arguments(progress_piped)
+                .iter()
+                .map(|arg| arg.to_string_lossy().replace(&root, WORK_PLACEHOLDER)),
+        )
+        .collect()
+}
+
 /// The manifest format written by this build.
 pub const MANIFEST_VERSION: u32 = 1;
 
@@ -271,14 +285,7 @@ impl InvocationManifest {
         hashes: &InputHashes,
         bounds_check: &BoundsCheck,
     ) -> Self {
-        let root = work.root().to_string_lossy().into_owned();
-        let arguments = std::iter::once(ENGINE_PLACEHOLDER.to_string())
-            .chain(
-                work.arguments(progress_piped)
-                    .iter()
-                    .map(|arg| arg.to_string_lossy().replace(&root, WORK_PLACEHOLDER)),
-            )
-            .collect();
+        let arguments = recorded_arguments(work, progress_piped);
         let preset = |name: &str, sha256: &str| ManifestPreset {
             name: name.to_string(),
             sha256: sha256.to_string(),

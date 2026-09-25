@@ -35,7 +35,7 @@ gen-contracts:
 gen-library-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
 
-# Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF)
+# Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF, argument vectors, flat presets)
 gen-slicing-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test p5_geometry regenerate_slicing_fixtures -- --ignored --exact
 
