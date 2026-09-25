@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — awaiting controller approval.
+Approved by the controller (owner-delegated), 2026-09-25, after task review and one fix round.
 
 This is the focused design for GitHub issue #16 (P6, Moonraker). It is
 Task 4 of `docs/superpowers/plans/2026-09-25-p6-connection-command-capabilities.md`.

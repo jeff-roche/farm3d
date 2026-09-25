@@ -1,6 +1,6 @@
 # Composable connection capabilities
 
-**Status:** Draft — awaiting controller approval.
+**Status:** Accepted (approved by the controller, owner-delegated), 2026-09-25.
 
 ## Context
 
