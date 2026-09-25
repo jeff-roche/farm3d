@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
 import type { ModelRecord } from "../library/types";
@@ -458,6 +459,40 @@ describe("PreparationWorkspace", () => {
         .toBeLessThan(slicingStoreMock.reloadPreparation.mock.invocationCallOrder[0]);
       expect(slicingStoreMock.reloadPreparation).toHaveBeenCalledWith("prp-web-enclosure");
       await waitFor(() => expect(screen.queryByRole("region", { name: "Source changed" })).toBeNull());
+    });
+
+    it("leaving while a reload is in flight throws nothing and sets nothing", async () => {
+      // Hosted as the Library hosts it: once preparing ends, its Model is
+      // gone, so a read of it afterwards is the bug.
+      const model = stale();
+      const [preparing, setPreparing] = createSignal(true);
+      let readsAfterLeaving = 0;
+      const host = {
+        get model() {
+          if (!preparing()) readsAfterLeaving += 1;
+          return (preparing() ? model : undefined) as ModelRecord;
+        },
+        onBack,
+      };
+      render(() => <Show when={preparing()}><PreparationMode {...host} /></Show>);
+      const banner = await screen.findByRole("region", { name: "Source changed" });
+      let resolveReload!: () => void;
+      slicingStoreMock.reloadPreparation.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveReload = () => resolve({ preparation: held(), removedObjectKeys: [2], addedObjectKeys: [] });
+      }));
+      const errors = vi.spyOn(console, "error");
+      fireEvent.click(within(banner).getByRole("button", { name: "Reload onto revision 2" }));
+      await waitFor(() => expect(slicingStoreMock.reloadPreparation).toHaveBeenCalled());
+
+      setPreparing(false);
+      expect(screen.queryByRole("heading", { name: /^Preparing/ })).toBeNull();
+      readsAfterLeaving = 0;
+      resolveReload();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(readsAfterLeaving).toBe(0);
+      expect(errors).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Reloaded onto revision/)).toBeNull();
     });
 
     it("shows why a reload failed", async () => {

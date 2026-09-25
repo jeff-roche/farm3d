@@ -309,12 +309,19 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
     .reduce((sum, instance) => sum + (session.object(instance.objectKey)?.triangleCount ?? 0), 0);
 
   // --- Stale source (D5) -------------------------------------------------------
+  // Leaving (Back, or another selection) can happen while a load or reload
+  // is in flight; by then the host's Model is gone, so nothing reactive is
+  // read after an await, and nothing is set once the workspace is gone.
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
   const [pinnedSequence, setPinnedSequence] = createSignal<number | undefined>();
   createEffect(on(() => session.record()?.stale ? session.record()?.sourceRevisionId : undefined, (revisionId) => {
     setPinnedSequence(undefined);
     if (!revisionId) return;
     loadRevisions(session.model().id).then(
-      (revisions) => setPinnedSequence(revisions.find((revision) => revision.id === revisionId)?.sequence),
+      (revisions) => {
+        if (!disposed) setPinnedSequence(revisions.find((revision) => revision.id === revisionId)?.sequence);
+      },
       () => {},
     );
   }));
@@ -322,15 +329,18 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   const reload = async () => {
     const record = session.record();
     if (!record) return;
-    // Named from the revision being left: removed objects aren't in the
+    // Everything the message needs, taken before the awaits. Removed
+    // objects are named from the revision being left: they aren't in the
     // new one.
+    const targetSequence = session.model().currentRevision.sequence;
     const objects = session.geometry()?.objects ?? [];
     const names = (keys: number[]) => keys
       .map((key) => objects.find((object) => object.objectKey === key)?.name ?? `Object ${key}`)
       .join(", ");
     await session.editor.flush();
     const result = await reloadPreparation(record.id);
-    const parts = [`Reloaded onto revision ${session.model().currentRevision.sequence}.`];
+    if (disposed) return;
+    const parts = [`Reloaded onto revision ${targetSequence}.`];
     if (result.removedObjectKeys.length > 0) parts.push(`Removed (no longer in the file): ${names(result.removedObjectKeys)}.`);
     if (result.addedObjectKeys.length > 0) parts.push(`Added to the first plate: ${result.addedObjectKeys.length} new ${result.addedObjectKeys.length === 1 ? "object" : "objects"}.`);
     setReloaded(parts.join(" "));

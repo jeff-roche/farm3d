@@ -1,4 +1,4 @@
-import { createSignal, Match, onMount, Show, Switch } from "solid-js";
+import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { Button } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import type { ModelRecord } from "../library/types";
@@ -20,13 +20,19 @@ type Opening = { kind: "opening" } | { kind: "open" } | { kind: "failed"; messag
  *  with the viewport and the tools. */
 export function PreparationMode(props: PreparationModeProps) {
   const [opening, setOpening] = createSignal<Opening>({ kind: "opening" });
+  // Leaving before the Preparation opens drops the result.
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
   onMount(() => {
     createPreparation(props.model.id).then(
-      () => setOpening({ kind: "open" }),
-      (error: unknown) => setOpening({
-        kind: "failed",
-        message: isCommandError(error) ? error.message : "The Preparation could not be opened.",
-      }),
+      () => { if (!disposed) setOpening({ kind: "open" }); },
+      (error: unknown) => {
+        if (disposed) return;
+        setOpening({
+          kind: "failed",
+          message: isCommandError(error) ? error.message : "The Preparation could not be opened.",
+        });
+      },
     );
   });
 

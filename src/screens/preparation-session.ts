@@ -90,10 +90,16 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
   const cache = createGeometryCache({ loadGeometry, loadMesh });
   onCleanup(() => cache.clear());
 
+  // Loads resolve after the session may be gone (leaving mid-load); their
+  // results are then dropped.
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
+  const revisionId = createMemo(() => record()?.sourceRevisionId);
+  const wanted = (id: string) => !disposed && untrack(revisionId) === id;
+
   const [geometry, setGeometry] = createSignal<RevisionGeometry | undefined>();
   const [meshes, setMeshes] = createSignal<Map<number, MeshBuffer>>(new Map());
   const [loadFailed, setLoadFailed] = createSignal(false);
-  const revisionId = createMemo(() => record()?.sourceRevisionId);
 
   // Loaded without resources, so nothing here suspends the lazy boundary
   // the workspace sits in; each load checks it is still wanted.
@@ -105,8 +111,8 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     });
     if (!id) return;
     cache.geometry(id).then(
-      (loaded) => { if (untrack(revisionId) === id) setGeometry(loaded); },
-      () => { if (untrack(revisionId) === id) setLoadFailed(true); },
+      (loaded) => { if (wanted(id)) setGeometry(loaded); },
+      () => { if (wanted(id)) setLoadFailed(true); },
     );
   }));
 
@@ -123,10 +129,10 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     if (missing.length === 0) return;
     Promise.all(missing.map(async (key) => [key, await cache.mesh(id, key)] as const)).then(
       (entries) => {
-        if (untrack(revisionId) !== id) return;
+        if (!wanted(id)) return;
         setMeshes((held) => new Map([...held, ...entries]));
       },
-      () => { if (untrack(revisionId) === id) setLoadFailed(true); },
+      () => { if (wanted(id)) setLoadFailed(true); },
     );
   }));
 
@@ -144,10 +150,10 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     if (!key) return;
     const target = untrack(document)!.target;
     listSliceOptions(target).then(
-      (loaded) => { if (untrack(targetKey) === key) setOptions(loaded); },
+      (loaded) => { if (!disposed && untrack(targetKey) === key) setOptions(loaded); },
       // No options (e.g. no slicer runtime): no volume to check against.
       (error: unknown) => {
-        if (untrack(targetKey) !== key) return;
+        if (disposed || untrack(targetKey) !== key) return;
         setOptionsError(isCommandError(error) ? error.message : "The slice options could not be loaded.");
       },
     );
