@@ -118,6 +118,9 @@ const operationalLabels: Record<NonNullable<PrinterStatus["operationalState"]>, 
   printing: "Printing",
   paused: "Paused",
   busy: "Busy",
+  finished: "Finished",
+  cancelled: "Cancelled",
+  failed: "Print failed",
   ready: "Ready",
   unknown: "Unknown",
 };
@@ -129,6 +132,7 @@ const readinessLabels = {
   refreshing: "Refreshing status",
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
+  bedNeedsClearing: "Bed needs clearing",
   unknownState: "Unknown state",
   archived: "Archived",
 } as const;
@@ -141,6 +145,9 @@ export function operationalLabel(status: PrinterStatus | undefined): string {
 
 function statusSummary(status: PrinterStatus | undefined): string {
   if (!status || status.freshness === "unavailable") return "Telemetry unavailable";
+  // An ended job's host name ("complete", "error") says less than the action
+  // it calls for.
+  if (status.readiness.reason === "bedNeedsClearing") return readinessLabels.bedNeedsClearing;
   const telemetry = status.telemetry;
   const activity = telemetry.hostActivity === "printing" ? "Host print" : "Host activity";
   const detail = telemetry.hostActivityName

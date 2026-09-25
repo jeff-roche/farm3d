@@ -3,4 +3,4 @@
 /**
  * The single operational state a consumer renders for a printer.
  */
-export type OperationalState = "setupIncomplete" | "error" | "offline" | "connecting" | "unknown" | "printing" | "paused" | "busy" | "ready";
+export type OperationalState = "setupIncomplete" | "error" | "offline" | "connecting" | "unknown" | "printing" | "paused" | "busy" | "finished" | "cancelled" | "failed" | "ready";

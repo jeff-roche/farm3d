@@ -319,6 +319,9 @@ pub fn normalize_host_activity(value: &str) -> HostActivity {
         "printing" => HostActivity::Printing,
         "paused" => HostActivity::Paused,
         "busy" => HostActivity::Busy,
+        "complete" => HostActivity::Finished,
+        "cancelled" => HostActivity::Cancelled,
+        "error" => HostActivity::Failed,
         _ => HostActivity::Unknown,
     }
 }
@@ -601,6 +604,14 @@ mod tests {
         assert_eq!(normalize_host_activity("printing"), HostActivity::Printing);
         assert_eq!(normalize_host_activity("paused"), HostActivity::Paused);
         assert_eq!(normalize_host_activity("busy"), HostActivity::Busy);
+        // Seen live on a Snapmaker U1 (A0.1, #9): a finished print leaves
+        // `complete` until the next job starts. Decision B1: never Idle.
+        assert_eq!(normalize_host_activity("complete"), HostActivity::Finished);
+        assert_eq!(
+            normalize_host_activity("cancelled"),
+            HostActivity::Cancelled
+        );
+        assert_eq!(normalize_host_activity("error"), HostActivity::Failed);
         assert_eq!(
             normalize_host_activity("moonraker-future-state"),
             HostActivity::Unknown
