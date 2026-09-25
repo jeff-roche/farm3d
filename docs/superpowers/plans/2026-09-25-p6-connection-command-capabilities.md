@@ -34,6 +34,33 @@ evidenced yet.
    subscribe, status and file-list queries, and identity and capability
    detection. Every write gate runs on the simulator only.
 
+**Further owner decisions (2026-09-25, later the same day):**
+
+9. **Multi-toolhead printers are supported.** #9 adds multi-extruder
+   monitoring. Every P6 capability that touches tools handles N extruders
+   (`extruder`, `extruder1`, … as the host reports them). No code or test
+   assumes a single `extruder` object. The sim tier's "no heater target
+   set" safety precondition checks **every** extruder and the bed (D6,
+   §Global constraints).
+10. **ElegooLink is the Centauri Carbon only**; the CC2 is dropped from v1.
+    After #8 records a go decision, the ElegooLink P6 path may use the
+    in-repo **fake SDCP server** as its command evidence tier. That fake's
+    behavior is modeled on real passive captures of *other* clients'
+    commands. farm3d never sends commands to a real Carbon (§Other
+    adapters).
+11. **PR #27** (`feature/a0-2-octoprint-monitoring`, open) already
+    consolidates the five supported-kind checks into a `SUPPORTED_KINDS`
+    list, makes `supervisor::build_connection` public, and adds `reqwest`
+    0.13 as a direct dependency. Task 3 builds on it rather than redoing
+    it.
+12. **#9 readiness and TLS:**
+    - `print_stats` `complete`, `cancelled`, and `error` become explicit
+      non-ready states, never Ready.
+    - "Use TLS" is hidden from the Connection fields while no adapter
+      supports TLS.
+
+    P6 follows both (D5, D6, D9).
+
 P6 is planned and gated **per adapter**. This plan covers the shared
 foundation plus the **Moonraker** path only. OctoPrint and ElegooLink get
 their own short adapter plans later (see §Other adapters). Like P5, the
@@ -91,9 +118,9 @@ reconciliation.
   and a capabilities section in Setup (D9).
 
 **Tech stack:** Rust, Tauri 2, rusqlite/SQLite, tokio, tokio-tungstenite
-(existing WebSocket), `reqwest` 0.13 for HTTP upload and download (already
-in `Cargo.lock` through Tauri; P6 adds it as a direct dependency with
-`multipart` and `stream`), ts-rs, SolidJS, TypeScript, Kobalte, CSS
+(existing WebSocket), `reqwest` 0.13 for HTTP upload and download (PR #27
+makes it a direct dependency with `default-features = false`; P6 adds only
+the `multipart` and `stream` features), ts-rs, SolidJS, TypeScript, Kobalte, CSS
 Modules, Vitest, and Rust unit and integration tests.
 
 ## Evidence gathered while planning
@@ -112,8 +139,10 @@ These facts come from the repository at `5c9ead7` and from the issues on
 - #9 (A0.1 Moonraker live validation) is open. Nothing records a real
   Moonraker instance, versions, or behavior. P6's Moonraker command work is
   blocked on it (approach doc, issue #16).
-- #10 (OctoPrint) is open. There is no OctoPrint code in `src-tauri`.
-- #8 (ElegooLink) is open with no go decision.
+- #10 (OctoPrint) is open. Its status-only adapter is in PR #27
+  (`feature/a0-2-octoprint-monitoring`, open, not on `main`). That PR also
+  consolidates the kind checks described below.
+- #8 (ElegooLink, Centauri Carbon only) is open with no go decision.
 
 **The connection seam today** (`src-tauri/src/connections/`):
 
@@ -135,6 +164,16 @@ These facts come from the repository at `5c9ead7` and from the issues on
 
   "Centralize adapter construction" in the issue therefore means one
   registry that owns both the kind check and every per-capability builder.
+
+  PR #27 already collapses these five sites into one
+  `connections::SUPPORTED_KINDS` list (Moonraker and OctoPrint) with an
+  `is_supported_kind` helper. It also renames `supervisor::build` to a
+  public `supervisor::build_connection`, and adds a test that keeps
+  `SUPPORTED_KINDS` and the factory in step. P6's registry starts from
+  that code, not from `main` as of `5c9ead7` (Task 3).
+- The subscription asks only for `extruder`. #9 adds multi-extruder
+  monitoring, so P6 must read tool state from however many `extruder*`
+  objects #9's code subscribes to (answer 9).
 - `ConnectionManager::reconciliation_guard()` already exists. It
   serializes *supervisor* reconciliation. P6's reconciliation is a
   different thing, so this plan always says **host-operation
@@ -258,10 +297,16 @@ pub fn descriptor(kind: &str) -> Option<&'static AdapterDescriptor>;
 - **The supervisor keeps observing.** Command traits are built per
   operation, not held by the supervisor task. A command never shares the
   subscription's socket.
-- **The registry replaces the five kind checks** listed in the evidence
-  section. `supervisor::build` becomes `registry` lookups, and
-  `ConnectionManager::with_clock_and_factory` keeps its test-injection
-  seam by taking a registry instead of one factory function.
+- **The registry grows out of PR #27's `SUPPORTED_KINDS`** (answer 11).
+  - PR #27 already made the five call sites share one list and one public
+    `supervisor::build_connection`.
+  - P6 turns that list into `registry()`. `is_supported_kind` becomes
+    `descriptor(kind).is_some()`, and `build_connection` becomes the
+    descriptor's `observe` builder.
+  - PR #27's "list and factory stay in step" test becomes the
+    descriptor-consistency test below.
+  - `ConnectionManager::with_clock_and_factory` keeps its test-injection
+    seam by taking a registry instead of one factory function.
 - A test asserts that each descriptor's `evidence` row agrees with which
   builders are present. A capability marked supported with no builder, or
   a builder with no evidence, fails the build.
@@ -372,6 +417,12 @@ It serializes per Printer and backs off (reusing
 | `start` | `print_stats.filename` = `host_path` and state is printing, paused, or complete, **or** a history record for `host_path` starting after `dispatched_at` | Host standby with no such history record | `uncertain`; if the host is running a *different* file, stays uncertain with a "host is busy with another print" note |
 | `pause` / `resume` / `cancel` | Observed state matches the request | Observed state proves the request did not take effect | `uncertain` |
 
+- The `start` row reads the host's raw `print_stats.state` as *evidence*
+  that a start took effect. That is separate from farm3d's readiness
+  vocabulary. There, `complete`, `cancelled`, and `error` are explicit
+  non-ready states and never Ready (answer 12). A `complete` host state
+  after `dispatched_at` proves our start applied. It does not make the
+  Printer Ready.
 - **A start is never retried automatically** (umbrella UI spec: "never
   automatically starts when it cannot prove the prior command did not take
   effect"). The operator may start again only after `failed { notApplied }`.
@@ -393,7 +444,11 @@ type CapabilityState =
 type PrinterCapabilities = {
   printerId: string;
   adapterKind: string | null;
-  evidence: { source: string; verifiedHostVersions: string[] } | null;
+  evidence: {
+    source: string;
+    tier: "sim" | "fakeFromCaptures" | "readOnlyHardware";
+    verifiedHostVersions: string[];
+  } | null;
   capabilities: Record<CapabilityKey, CapabilityState>;
   observedAt: string | null;
 };
@@ -418,11 +473,33 @@ type PrinterCapabilities = {
   Task 11. Simulator evidence counts (answer 7). `evidence.verifiedHostVersions`
   names each source, for example "Moonraker vX / Klipper vY (sim)" and
   "Snapmaker U1 (Moonraker vZ)", so the row shows which tier proved it.
+- **Evidence tier.** Each write capability records its tier:
+  - `sim`: Moonraker, the container simulator.
+  - `fakeFromCaptures`: ElegooLink after #8's go (answer 10). The in-repo
+    fake SDCP server, modeled on passive captures of other clients'
+    commands. farm3d never sends a command to a real Carbon.
+  - `readOnlyHardware`: may corroborate `hostState`, `artifactIdentity`,
+    and `camera` only. It never supports a write capability.
+
+  The Setup Capabilities list shows the tier in its detail text, so an
+  operator can see when a capability was proven only against a model of
+  the protocol.
+- **Multiple toolheads (answer 9).** `HostJobState` and the host facts
+  carry a list of tools: each `extruder*` object's name, temperature, and
+  target, plus the bed. They are never collapsed into one nozzle value.
+  - Capability detection enumerates every `extruder*` object from
+    `printer.objects.list`.
+  - No capability assumes a single tool or a preheat of "the" nozzle. P6
+    issues no preheat commands at all.
 - **TLS (decided).** For a Connection with `useTls: true`, `upload`,
   `start`, `pause`, `resume`, and `cancel` report
   `unsupported { reason: "notVerified", detail: "TLS connections are not verified for staging yet" }`
   until a TLS host passes the spike's TLS gate. No TLS feature is added to
   `reqwest` or `tokio-tungstenite` in P6.
+  - #9 hides "Use TLS" from the Connection fields while no adapter
+    supports TLS (answer 12). A `useTls` Connection can therefore reach
+    P6 only from existing data or an import.
+  - The rule above covers that case. P6 adds no TLS control to the UI.
 
 ### D7. Guards: archive/delete, import, Connection, credential, revision
 
@@ -489,6 +566,17 @@ For a host that is gone for good.
   confirm the bed is clear, whatever the Printer's start-safety rule says.
   The confirm button stays disabled until the operator ticks "The bed is
   clear". P6 never starts unattended; the `Unattended` rule stays for P7.
+- **Start follows #9's readiness.** Start is offered only when the
+  Printer's readiness is Ready. When the host reports `complete`,
+  `cancelled`, or `error`, readiness is an explicit non-ready state (answer
+  12). Start is then disabled, with that state as the reason.
+  - P6 adds no way to clear those states; #9 and P7 own that.
+  - Whether the bed-clear confirmation should itself acknowledge
+    `complete` or `cancelled` is a coordination item for the spec. It is
+    not decided here.
+- **Multi-tool display.** The Job tab lists each tool's temperature and
+  target from the host facts. It never shows a single "nozzle" value for a
+  multi-extruder Printer (answer 9).
 - **Slice Revision review:** a **Stage on Printer…** dialog (Kobalte
   Dialog and Select). Printers whose `upload` is unsupported are listed
   but disabled, with the reason. Offline Printers are disabled with
@@ -504,9 +592,12 @@ For a host that is gone for good.
   `role="alert"` with a recovery action. Tests assert the two never share
   copy or styling tokens.
 - The Camera tab is P8. P6 shows camera only as a capability row.
-- `just web` uses deterministic mock fixtures: one supported Moonraker
-  Printer, one `notVerified` OctoPrint Printer, and one Printer with an
-  uncertain upload.
+- `just web` uses deterministic mock fixtures:
+  - one supported Moonraker Printer;
+  - one two-extruder Moonraker Printer;
+  - one `notVerified` OctoPrint Printer;
+  - one Printer in the `complete` non-ready state;
+  - one Printer with an uncertain upload.
 - Tokens only, CSS Modules, Kobalte primitives, and the editor aesthetic
   (AGENTS.md).
 
@@ -594,7 +685,15 @@ explicit manual host actions, not Jobs.
   There is no opt-in variable that enables writes on the real tier. Writes
   on the sim need no safety opt-in (the board is simulated), but the sim
   write fixture still has no heating or motion (comments and `M117`
-  only).
+  only). The fixture contains no `M104`, `M109`, `M140`, `M190`, or
+  tool-change (`T<n>`) command for any tool.
+- **Sim safety precondition: every heater (answer 9).** Before any sim
+  test that starts a print, the test reads every `extruder*` object and
+  `heater_bed`. It refuses to run if **any** of them has a nonzero target,
+  or if a print is already in progress. A unit test feeds a two-extruder
+  status where only `extruder1` has a target and asserts the check
+  refuses. The sim tier also runs the executor and reconciler tests
+  against a multi-extruder config variant, if the harness offers one.
 - **The U1 is a vendor build.** Snapmaker's firmware may run a modified
   Moonraker and Klipper. A difference between the sim and the U1 is
   recorded as a finding for that host. It is not averaged away, and it
@@ -774,25 +873,34 @@ D7, D8, D9, D10) **may be drafted now**.
 
 ### Task 3: Adapter registry (refactor, no behavior change)
 
-**Owner:** Backend. **Prerequisites:** none. **Status: Ready now.** It needs
-no spec decision beyond "one registry", which D1 options B and C both
-require.
+**Owner:** Backend. **Prerequisites:** PR #27 merged to `main`, or this
+branch rebased onto `feature/a0-2-octoprint-monitoring` (answer 11).
+**Status: Ready once PR #27 lands.** It needs no spec decision beyond "one
+registry", which D1 options B and C both require. Starting before #27 would
+redo that PR's consolidation and conflict with it, so don't.
 
-- [ ] Add `connections/adapters.rs` with a Moonraker descriptor that has
-  only `observe`.
-- [ ] Replace the five kind checks (`commands.rs:300`, `create.rs:297`,
-  `batch.rs:567`, `setup.rs:48`, and `supervisor::build`) with
-  `descriptor(kind)`.
+PR #27 already did the consolidation half: one `SUPPORTED_KINDS` list,
+`is_supported_kind`, a public `supervisor::build_connection`, and a
+list-and-factory consistency test. This task only turns that into the
+registry shape D1 needs.
+
+- [ ] Add `connections/adapters.rs`. Moonraker and OctoPrint descriptors
+  have only `observe`, which wraps `build_connection`'s per-kind arms.
+- [ ] Re-point `SUPPORTED_KINDS` and `is_supported_kind` at `registry()`.
+  Either keep them as thin wrappers or replace their call sites; don't
+  re-edit each site's logic.
 - [ ] Change `ConnectionManager::with_clock_and_factory` to take a registry
   (or keep the closure and build it from the registry). The injected-fake
   tests keep working.
+- [ ] Turn PR #27's list-and-factory test into the descriptor-consistency
+  test.
 - **Acceptance:** an unsupported kind still produces `UNSUPPORTED_ADAPTER`
   for set, create, and batch, `SetupGap::UnsupportedAdapter`, and the
-  supervisor's "not supported by this build" status. `grep MOONRAKER_KIND`
-  outside `connections/` and tests returns nothing.
-- **Tests:** the existing suite passes unchanged. Add one test per call site
-  that uses a registry with a second fake kind, to prove the lookup and not
-  a string compare decides.
+  supervisor's "not supported by this build" status. Both Moonraker and
+  OctoPrint still build and monitor exactly as after PR #27.
+- **Tests:** the existing suite, including PR #27's OctoPrint tests,
+  passes unchanged. Add one registry test with a third fake kind, to prove
+  the registry and not the list decides.
 
 ### Task 4: Capability model, matrix, and contracts
 
@@ -815,8 +923,14 @@ Task 3. **Status: After spec.**
   Moonraker Connection, and a Moonraker Connection with `useTls` each
   return the expected matrix. `notVerified` is never reported as
   `supported`.
+- [ ] Carry the evidence `tier` (D6). Host facts carry every tool
+  (`extruder*` objects plus the bed), with no single-nozzle field.
 - **Tests:** the descriptor-consistency test (D1); serialization snapshots;
   a contract export; each `CapabilityState` variant round-trips.
+  Host-fact derivation with one extruder, and with three extruders
+  (`extruder`, `extruder1`, `extruder2`) in a non-contiguous report
+  order. A `readOnlyHardware` tier can never mark a write capability
+  `supported`.
 
 ### Task 5: Schema, state machine, and repository
 
@@ -1100,7 +1214,7 @@ Task 1 spike ─> Task 2 spec ─┬─> Task 4 matrix ┴─┬─> Task 7 Moon
 |---|---|---|
 | 1 Spike | U1 **read-only** checks (A, C, H, and the read part of F) **ready now**; every write gate needs the sim harness | Sim harness landing |
 | 2 Spec + ADR-0011 | **Ready now** to draft in full: every product question is answered. Approval needs the Task 1 sim column | Task 1 (sim) |
-| 3 Registry refactor | **Ready now** | — |
+| 3 Registry refactor | Ready once PR #27 lands (builds on its `SUPPORTED_KINDS`) | PR #27 |
 | 4 Capability model | After spec (can start on approval of the adapter-neutral decisions) | Task 2, Task 3 |
 | 5 Schema / state machine | After spec (same) | Task 2 |
 | 6 Guards | After spec (same) | Task 5 |
@@ -1120,10 +1234,14 @@ Task 1 spike ─> Task 2 spec ─┬─> Task 4 matrix ┴─┬─> Task 7 Moon
   (`feature/printer-simulation-harness`). Every write gate depends on it.
   The U1 is reachable now for read-only checks only (answer 8).
 - **Ready now, in total:**
-  - Task 3 (the registry refactor);
   - drafting the full Task 2 spec;
   - the U1 read-only spike checks (Gates A, C, and H, and the read-only
-    part of F).
+    part of F). Gate H enumerates every `extruder*` object on the U1.
+- **Ready once PR #27 lands:** Task 3 (the registry, built on PR #27's
+  `SUPPORTED_KINDS`).
+- Tasks that touch tool state (4, 7, 8, 10) should rebase onto #9's
+  multi-extruder monitoring once it lands, so they reuse its tool model
+  rather than inventing one.
 - Tasks 4, 5, and 6 can run in parallel with Task 1 once Task 2's
   adapter-neutral decisions are approved. If the user prefers one approval
   for the whole spec, they wait for Task 1's sim column.
@@ -1133,14 +1251,31 @@ Task 1 spike ─> Task 2 spec ─┬─> Task 4 matrix ┴─┬─> Task 7 Moon
 
 Nothing in the shared foundation assumes parity.
 
-- **OctoPrint** needs #10 complete, then a separate command-research spike
-  (the same gate list as Task 1, against OctoPrint's `/api/files` and
-  `/api/job`), then a short adapter plan that does only the equivalents of
-  Tasks 7, 11, and 12. Its registry row stays `notVerified` until then. The
-  schema, state machine, guards, matrix, and UI do not change. Monitoring
-  support from #10 never flips a command capability.
-- **ElegooLink** stays out of the registry entirely until #8 records a go
-  decision. After that, its plan follows the OctoPrint shape.
+- **OctoPrint** needs #10 complete (PR #27), then a separate
+  command-research spike (the same gate list as Task 1, against
+  OctoPrint's `/api/files` and `/api/job`), then a short adapter plan that
+  does only the equivalents of Tasks 7, 11, and 12. Its registry row stays
+  `notVerified` until then. The schema, state machine, guards, matrix, and
+  UI do not change. Monitoring support from #10 never flips a command
+  capability.
+- **ElegooLink (Centauri Carbon only; the CC2 is out of v1).** It stays out
+  of the registry entirely until #8 records a go decision. After that:
+  - **Evidence tier: the in-repo fake SDCP server** (answer 10). Its
+    command behavior is modeled on real passive captures of other clients'
+    commands to a Carbon. Every write gate (the Task 1 gate equivalents)
+    runs against that fake.
+  - **farm3d never sends a command to a real Carbon.** A real Carbon may
+    at most be observed passively, and read-only monitoring stays with #8.
+    The ElegooLink test module refuses any non-fake endpoint for write
+    tests.
+  - The ElegooLink capability row records `tier: "fakeFromCaptures"` and
+    names the captures it was modeled on (D6). A behavior no capture shows
+    stays `notVerified` rather than being inferred.
+  - Capture files follow the same scrubbing rule as the U1 (§Global
+    constraints). Owner addresses and device identifiers never go in the
+    repo.
+  - The adapter plan follows the OctoPrint shape: the equivalents of
+    Tasks 7, 11, and 12 only. The shared foundation does not change.
 - One completed Moonraker path is enough for the first P7 tracer. It does
   not confer parity on the others.
 
@@ -1165,9 +1300,13 @@ Nothing in the shared foundation assumes parity.
     history, webcam queries, and capability detection.
   - Its firmware is a vendor build, so differences in read-only shapes
     from the sim are expected findings.
-- **`reqwest`.** Already in `Cargo.lock` through Tauri (0.13.5), so it adds
-  no new crates. It becomes a direct dependency with `multipart` and
-  `stream`, and no TLS features (answer 6).
+- **PR #27 (OctoPrint monitoring, open).** Task 3 depends on it. It also
+  makes `reqwest` 0.13 a direct dependency (`default-features = false`).
+  P6 adds only the `multipart` and `stream` features, and no TLS features
+  (answer 6).
+- **#9 (multi-extruder monitoring and readiness).** P6's tool model and
+  Start gating reuse #9's multi-extruder status and its non-ready
+  `complete`/`cancelled`/`error` states (answers 9 and 12).
 - **CI** has no Moonraker and no container runtime assumption. CI runs the
   fake. Sim and U1 evidence lives in the verification doc.
 - **Platforms.** F0 declares only Linux x86_64 supported. Windows and macOS
@@ -1176,8 +1315,14 @@ Nothing in the shared foundation assumes parity.
 ## Coordination items (not product questions)
 
 The user answered every product question on 2026-09-25 (§Status). What
-remains is coordination with the harness branch:
+remains is coordination with other branches:
 
+- **#9:** its tool model (how multiple extruders appear in telemetry) and
+  whether the Start confirmation may acknowledge a `complete` or
+  `cancelled` state, or whether that stays a separate #9/P7 action (D9).
+  P6 asks, and does not decide.
+- **Harness:** a multi-extruder Klipper config variant, for answer 9's
+  sim coverage.
 - The harness's final names for the endpoint variable, the key variable,
   and any real-host recipe. P6 adopts them (§Global constraints). If the
   harness defines a real-host *write* opt-in, P6 does not use it against
