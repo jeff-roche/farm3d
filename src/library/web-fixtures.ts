@@ -81,13 +81,13 @@ function fixtureModels(at: (daysAgo: number) => string): FixtureModel[] {
         id: "msr-web-enclosure-1", sequence: 1, sha256: sha("e1"), sizeBytes: 48_213, origin: "import",
         sourceFileName: "enclosure-lid.3mf", capturedAt: at(2), hasThumbnail: true,
         summary: {
-          format: "3mf", objectCount: 2, plateCount: 2, triangleCount: 24,
+          format: "3mf", objectCount: 3, plateCount: 2, triangleCount: 36,
           boundsMm: { min: [0, 0, 0], max: [120, 80, 4] }, unsupportedCount: 1,
         },
       },
       inspection: {
-        format: "3mf", unit: "millimeter", producer: "PrusaSlicer-2.9.6", objectCount: 2, buildItemCount: 2,
-        triangleCount: 24, boundsMm: { min: [0, 0, 0], max: [120, 80, 4] },
+        format: "3mf", unit: "millimeter", producer: "PrusaSlicer-2.9.6", objectCount: 3, buildItemCount: 3,
+        triangleCount: 36, boundsMm: { min: [0, 0, 0], max: [120, 80, 4] },
         plates: [{ index: 1, name: "Lid", objectIds: [1] }, { index: 2, name: "Latch", objectIds: [2] }],
         requiredExtensions: [],
         unsupported: [{ part: "Metadata/Slic3r_PE.config", code: "SLICER_SETTINGS", detail: "PrusaSlicer print settings" }],

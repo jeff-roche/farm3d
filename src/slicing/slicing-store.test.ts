@@ -614,6 +614,6 @@ describe("web mode", () => {
     const { deletePreparation, createPreparation, slicing } = await startedStore();
     await deletePreparation(slicing.preparation("mdl-web-enclosure")!.id);
     const created = await createPreparation("mdl-web-enclosure");
-    expect(created.document.plates.flatMap((p) => p.instances.map((i) => i.objectKey))).toEqual([1]);
+    expect(created.document.plates.map((p) => p.instances.map((i) => i.objectKey))).toEqual([[1], [2]]);
   });
 });

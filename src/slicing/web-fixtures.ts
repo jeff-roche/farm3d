@@ -230,13 +230,15 @@ function fixtureGeometry(): Record<string, FixtureRevisionGeometry> {
       objects: [
         { objectKey: 1, name: "Lid", mesh: box(120, 80, 4) },
         { objectKey: 2, name: "Latch", mesh: box(20, 10, 4) },
+        { objectKey: 3, name: "Gasket", mesh: box(110, 70, 1) },
       ],
       geometry: {
         buildItems: [
           { objectKey: 1, transform: identity(), plateIndex: 1, printable: true },
-          // Marked non-printable in the source 3MF: the preparation shows it
-          // but never slices it.
-          { objectKey: 2, transform: identity([50, 35, 0]), plateIndex: 2, printable: false },
+          { objectKey: 2, transform: identity([50, 35, 0]), plateIndex: 2, printable: true },
+          // Marked non-printable in the source 3MF and on no plate: the
+          // Preparation never places it, so it is never sliced (D5).
+          { objectKey: 3, transform: identity([5, 5, 0]), printable: false },
         ],
       },
     },

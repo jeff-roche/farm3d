@@ -101,10 +101,20 @@ describe("buildWebSlicingFixture", () => {
     }
   });
 
-  it("gives the enclosure one unprintable build item and a plate for each item", () => {
+  it("gives the enclosure one unprintable build item, on no source plate and in no Preparation", () => {
     const geometry = fixture.geometry["msr-web-enclosure-1"];
-    expect(geometry.buildItems.filter((item) => !item.printable)).toHaveLength(1);
-    expect(geometry.buildItems.map((item) => item.plateIndex)).toEqual([1, 2]);
+    const unprintable = geometry.buildItems.filter((item) => !item.printable);
+    expect(unprintable).toHaveLength(1);
+    const [gasket] = unprintable;
+    expect(gasket.plateIndex).toBeUndefined();
+    const inspection = library.revisions["mdl-web-enclosure"][0].inspection;
+    const plates = inspection.format === "3mf" ? inspection.plates : [];
+    expect(plates.some((plate) => plate.objectIds.includes(gasket.objectKey))).toBe(false);
+
+    const placed = fixture.preparations.flatMap((p) => p.document.plates.flatMap((plate) => plate.instances));
+    expect(placed.length).toBeGreaterThan(0);
+    const printableKeys = new Set(geometry.buildItems.filter((item) => item.printable).map((item) => item.objectKey));
+    for (const instance of placed) expect(printableKeys.has(instance.objectKey), instance.instanceKey).toBe(true);
   });
 
   it("puts a box's lay-flat faces at its six sides, the largest first", () => {
