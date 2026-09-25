@@ -63,7 +63,11 @@ impl ModelDeletionBlocker for SliceRevisionsBlockModelDeletion {
             vec![LifecycleBlocker {
                 action: LifecycleAction::Delete,
                 code: LifecycleBlockerCode::SliceRevisionsExist,
-                message: format!("Delete this Model's {count} Slice Revisions first."),
+                message: if count == 1 {
+                    "Delete this Model's 1 Slice Revision first.".to_string()
+                } else {
+                    format!("Delete this Model's {count} Slice Revisions first.")
+                },
             }]
         })
     }

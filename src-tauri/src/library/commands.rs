@@ -910,6 +910,35 @@ mod tests {
         assert_eq!(counts(&storage), [0, 0, 0, 0, 1]);
     }
 
+    /// P5 D14: one Slice Revision is named in the singular.
+    #[test]
+    fn one_slice_revision_is_named_in_the_singular() {
+        use crate::slicing::repository::{fixtures, insert_farm3d_revision};
+
+        let (_temp, _lease, storage) = crate::test_storage();
+        storage
+            .write(|tx| {
+                fixtures::seed(tx);
+                Ok(())
+            })
+            .expect("seed");
+        storage
+            .write_repo(|tx| insert_farm3d_revision(tx, &fixtures::a_farm3d_revision("slr-a", 1)))
+            .expect("revision");
+
+        let error = storage
+            .write_repo(|tx| delete_model_in(tx, "mdl-stl", 1, blockers::blocker_sources()))
+            .err()
+            .expect("the Slice Revision must block the delete");
+        let RepositoryError::LifecycleBlocked(blockers) = &error else {
+            panic!("expected LifecycleBlocked, got {error:?}");
+        };
+        assert_eq!(
+            blockers[0].message,
+            "Delete this Model's 1 Slice Revision first."
+        );
+    }
+
     /// P5 D14: a Model with Slice Revisions can't be deleted until they
     /// are; the production registry reports how many there are.
     #[test]
