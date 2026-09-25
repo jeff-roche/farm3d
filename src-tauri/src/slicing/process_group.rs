@@ -11,8 +11,8 @@
 //! Other targets make no support claim (D24): they spawn plainly and stop
 //! with `Child::kill`.
 //!
-//! The version probe and the AppImage extraction use this now; Task 6's
-//! slice supervisor builds on it.
+//! The version probe, the AppImage extraction, and the slice supervisor
+//! (`process.rs`) use it.
 
 use std::io;
 use std::process::{Child, Command};
@@ -67,15 +67,70 @@ fn configure(_command: &mut Command) {}
 /// leader is reaped. Returns whether the leader exited by itself before the
 /// deadline.
 pub fn wait_or_stop(child: &mut Child, deadline: Instant, grace: Duration) -> bool {
-    let exited = wait_exit(child, deadline);
-    if !exited {
-        signal_group(child, Signal::Term);
-        if !wait_exit(child, Instant::now() + grace) {
-            signal_group(child, Signal::Kill);
+    match wait_until(child, deadline, &|| false) {
+        WaitEnd::Exited => {
+            clear_exited_group(child, grace);
+            true
+        }
+        WaitEnd::DeadlinePassed | WaitEnd::StopRequested => {
+            stop_group(child, grace);
+            false
         }
     }
-    reap_and_clear_group(child, grace);
-    exited
+}
+
+/// Why [`wait_until`] returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitEnd {
+    /// The leader exited. It is not reaped yet.
+    Exited,
+    DeadlinePassed,
+    /// `stop_requested` returned true.
+    StopRequested,
+}
+
+/// Waits for the group leader to exit, until `deadline` or until
+/// `stop_requested` returns true (polled every 10 ms). The leader is not
+/// reaped, so its pid (the group id) stays reserved; follow with
+/// [`clear_exited_group`] or [`stop_group`].
+pub fn wait_until(
+    child: &mut Child,
+    deadline: Instant,
+    stop_requested: &dyn Fn() -> bool,
+) -> WaitEnd {
+    loop {
+        if has_exited(child) {
+            return WaitEnd::Exited;
+        }
+        if stop_requested() {
+            return WaitEnd::StopRequested;
+        }
+        if Instant::now() >= deadline {
+            return WaitEnd::DeadlinePassed;
+        }
+        thread::sleep(POLL);
+    }
+}
+
+/// Stops a running group: SIGTERM, then SIGKILL if the leader outlives
+/// `grace`, then the straggler cleanup of [`clear_exited_group`]. Returns
+/// whether any SIGKILL was sent, since that can leave a stale AppImage
+/// mount.
+pub fn stop_group(child: &mut Child, grace: Duration) -> bool {
+    signal_group(child, Signal::Term);
+    let mut killed = false;
+    if !wait_exit(child, Instant::now() + grace) {
+        signal_group(child, Signal::Kill);
+        killed = true;
+    }
+    clear_exited_group(child, grace) || killed
+}
+
+/// The leader has exited: SIGTERM reaches any process still in its group,
+/// the leader is reaped, and a group still alive after `grace` gets
+/// SIGKILL. Returns whether that SIGKILL was sent.
+pub fn clear_exited_group(child: &mut Child, grace: Duration) -> bool {
+    reap_and_clear_group(child, grace)
 }
 
 #[derive(Clone, Copy)]
@@ -86,31 +141,24 @@ enum Signal {
 
 /// Waits until the leader has exited, without reaping it, so its pid (the
 /// group id) stays reserved while the group is signalled.
-#[cfg(unix)]
 fn wait_exit(child: &mut Child, deadline: Instant) -> bool {
+    wait_until(child, deadline, &|| false) == WaitEnd::Exited
+}
+
+/// Whether the leader has exited, without reaping it.
+#[cfg(unix)]
+fn has_exited(child: &mut Child) -> bool {
     use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
     let Some(pid) = Pid::from_raw(child.id() as i32) else {
         return true;
     };
     let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-    loop {
-        match waitid(WaitId::Pid(pid), options) {
-            Ok(Some(_)) | Err(_) => return true,
-            Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
-            Ok(None) => return false,
-        }
-    }
+    !matches!(waitid(WaitId::Pid(pid), options), Ok(None))
 }
 
 #[cfg(not(unix))]
-fn wait_exit(child: &mut Child, deadline: Instant) -> bool {
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return true,
-            Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
-            Ok(None) => return false,
-        }
-    }
+fn has_exited(child: &mut Child) -> bool {
+    !matches!(child.try_wait(), Ok(None))
 }
 
 #[cfg(unix)]
@@ -139,29 +187,32 @@ fn signal_group(child: &mut Child, signal: Signal) {
 
 /// The leader has exited (or been killed) but is not reaped yet. SIGTERM
 /// reaches any process still in the group; the leader is reaped; and a
-/// group still alive after `grace` gets SIGKILL. While a member lives, the
-/// group id can't be reused, so signalling it after the reap is safe.
+/// group still alive after `grace` gets SIGKILL, which is reported. While a
+/// member lives, the group id can't be reused, so signalling it after the
+/// reap is safe.
 #[cfg(unix)]
-fn reap_and_clear_group(child: &mut Child, grace: Duration) {
+fn reap_and_clear_group(child: &mut Child, grace: Duration) -> bool {
     use rustix::process::test_kill_process_group;
     signal_group(child, Signal::Term);
     let _ = child.wait();
     let Some(group) = group_id(child) else {
-        return;
+        return false;
     };
     let deadline = Instant::now() + grace;
     while test_kill_process_group(group).is_ok() {
         if Instant::now() >= deadline {
             signal_group(child, Signal::Kill);
-            return;
+            return true;
         }
         thread::sleep(POLL);
     }
+    false
 }
 
 #[cfg(not(unix))]
-fn reap_and_clear_group(child: &mut Child, _grace: Duration) {
+fn reap_and_clear_group(child: &mut Child, _grace: Duration) -> bool {
     let _ = child.wait();
+    false
 }
 
 #[cfg(all(test, unix))]
