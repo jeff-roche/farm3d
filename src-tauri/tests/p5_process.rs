@@ -644,15 +644,42 @@ fn gone_within(pid: i32, limit: Duration) -> bool {
 }
 
 /// SIGKILLs `pid` when dropped, so a failed test leaves no engine behind.
+/// [`Self::disarm`] it once the pid is confirmed gone: from then on the
+/// pid may be reaped and reused, and the drop would kill a stranger.
 #[cfg(target_os = "linux")]
-struct KillOnDrop(i32);
+struct KillOnDrop(Option<i32>);
+
+#[cfg(target_os = "linux")]
+impl KillOnDrop {
+    fn new(pid: i32) -> Self {
+        Self(Some(pid))
+    }
+
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
 
 #[cfg(target_os = "linux")]
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        if let Some(pid) = rustix::process::Pid::from_raw(self.0) {
+        if let Some(pid) = self.0.and_then(rustix::process::Pid::from_raw) {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
         }
+    }
+}
+
+/// Kills and reaps a child process when dropped, so a failed assertion
+/// never leaves it running. `std` never signals a child it has already
+/// reaped, so a test may kill and wait on it first.
+#[cfg(target_os = "linux")]
+struct ReapOnDrop(std::process::Child);
+
+#[cfg(target_os = "linux")]
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -701,7 +728,7 @@ fn pdeathsig_intermediate_parent() {
 fn the_engine_exits_when_its_parent_is_killed() {
     let temp = tempfile::tempdir().unwrap();
     let pid_file = temp.path().join("engine.pid");
-    let mut intermediate = std::process::Command::new(std::env::current_exe().unwrap())
+    let intermediate = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "pdeathsig_intermediate_parent",
             "--exact",
@@ -714,32 +741,33 @@ fn the_engine_exits_when_its_parent_is_killed() {
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let intermediate_pid = intermediate.id() as i32;
+    let mut intermediate = ReapOnDrop(intermediate);
+    let intermediate_pid = intermediate.0.id() as i32;
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let engine: i32 = loop {
         if let Ok(text) = fs::read_to_string(&pid_file) {
             break text.trim().parse().unwrap();
         }
-        if let Some(status) = intermediate.try_wait().unwrap() {
+        if let Some(status) = intermediate.0.try_wait().unwrap() {
             panic!("the intermediate exited before starting the engine: {status}");
         }
         if Instant::now() >= deadline {
-            let _ = intermediate.kill();
             panic!("the intermediate never started the engine");
         }
         thread::sleep(Duration::from_millis(5));
     };
-    let _cleanup = KillOnDrop(engine);
+    let cleanup = KillOnDrop::new(engine);
     assert!(alive(engine), "the engine is not running");
     assert_eq!(parent_of(engine), Some(intermediate_pid));
 
-    intermediate.kill().unwrap(); // SIGKILL
-    intermediate.wait().unwrap();
-    assert!(
-        gone_within(engine, Duration::from_secs(1)),
-        "the engine outlived its SIGKILLed parent by 1 s"
-    );
+    intermediate.0.kill().unwrap(); // SIGKILL
+    intermediate.0.wait().unwrap();
+    let gone = gone_within(engine, Duration::from_secs(1));
+    if gone {
+        cleanup.disarm();
+    }
+    assert!(gone, "the engine outlived its SIGKILLed parent by 1 s");
 }
 
 /// PDEATHSIG follows the *thread* that spawned the engine, not the
@@ -757,10 +785,14 @@ fn the_engine_exits_when_the_thread_that_spawned_it_exits() {
     .join()
     .unwrap();
     let engine = child.id() as i32;
-    let _cleanup = KillOnDrop(engine);
+    let cleanup = KillOnDrop::new(engine);
     assert_eq!(parent_of(engine), Some(std::process::id() as i32));
+    let gone = gone_within(engine, Duration::from_secs(1));
+    if gone {
+        cleanup.disarm();
+    }
     assert!(
-        gone_within(engine, Duration::from_secs(1)),
+        gone,
         "the engine outlived the thread that spawned it by 1 s"
     );
     // It was stopped by SIGTERM, the parent-death signal, and this process

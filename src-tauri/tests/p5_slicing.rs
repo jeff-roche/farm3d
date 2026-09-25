@@ -1951,21 +1951,7 @@ fn real_orca_slices_a_cube_through_the_commands() {
     let preparation = running.prepare(model["id"].as_str().unwrap());
     let plate = &plates(&preparation)[0];
     let id = ids(&running.start("op-real", &preparation, &[plate])).remove(0);
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let operation = loop {
-        let operation = running.operation(&id);
-        if operation["state"] != "queued" && operation["state"] != "running" {
-            break operation;
-        }
-        assert!(Instant::now() < deadline, "the slice took over 2 minutes");
-        std::thread::sleep(Duration::from_millis(200));
-    };
-    let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
-    assert_eq!(
-        operation["state"], "succeeded",
-        "{operation}\n{}",
-        log["text"]
-    );
+    let operation = wait_for_real_success(&running, &id);
     let revision = running.ok(
         "get_slice_revision",
         json!({ "sliceRevisionId": operation["sliceRevisionId"] }),
