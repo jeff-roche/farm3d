@@ -986,7 +986,7 @@ pub(crate) mod fixtures {
             name: name.map(str::to_string),
             instances: vec![InstanceDoc {
                 instance_key: format!("{key}-instance"),
-                object_key: "object-1".to_string(),
+                object_key: 1,
                 transform: InstanceTransform {
                     translate_mm: [128.0, 128.0],
                     rotate_deg: [0.0, 0.0, 90.0],

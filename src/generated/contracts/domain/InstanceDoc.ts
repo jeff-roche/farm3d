@@ -4,4 +4,8 @@ import type { InstanceTransform } from "./InstanceTransform";
 /**
  * D5: one placed copy of a source object.
  */
-export type InstanceDoc = { instanceKey: string, objectKey: string, transform: InstanceTransform, };
+export type InstanceDoc = { instanceKey: string,
+/**
+ * The source object: `GeometryObject.objectKey` (D6).
+ */
+objectKey: number, transform: InstanceTransform, };

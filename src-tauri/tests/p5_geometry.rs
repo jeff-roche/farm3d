@@ -401,7 +401,7 @@ fn transform_vectors_match_the_d5_composition() {
 fn instance(key: &str, translate: [f64; 2], rotate_z: f64, scale: f64) -> InstanceDoc {
     InstanceDoc {
         instance_key: key.to_string(),
-        object_key: "1".to_string(),
+        object_key: 1,
         transform: InstanceTransform {
             translate_mm: translate,
             rotate_deg: [0.0, 0.0, rotate_z],

@@ -819,7 +819,8 @@ impl CommandError {
     }
 
     /// P5 D7: the plate `plate_key` can't be written for OrcaSlicer.
-    /// `reason` is `empty`, `unknownObject`, or `invalidTransform`.
+    /// `reason` is `empty`, `unknownObject`, `emptyObject`, or
+    /// `invalidTransform`.
     pub fn preparation_invalid(plate_key: &str, reason: &str, message: &str) -> Self {
         Self::typed(ErrorCode::PreparationInvalid, message, vec![], false)
             .with_string_details(&[("plateKey", plate_key), ("reason", reason)])

@@ -55,6 +55,8 @@ pub enum PlateInvalidReason {
     Empty,
     /// An instance's `objectKey` isn't an object of the source revision.
     UnknownObject,
+    /// An instance's object has no vertices, so there is nothing to slice.
+    EmptyObject,
     /// An instance's transform is non-finite or its scale is out of range.
     InvalidTransform,
 }
@@ -64,6 +66,7 @@ impl PlateInvalidReason {
         match self {
             Self::Empty => "empty",
             Self::UnknownObject => "unknownObject",
+            Self::EmptyObject => "emptyObject",
             Self::InvalidTransform => "invalidTransform",
         }
     }
@@ -72,6 +75,7 @@ impl PlateInvalidReason {
         match self {
             Self::Empty => "The plate has no objects to slice.",
             Self::UnknownObject => "The plate has an object that isn't in the source revision.",
+            Self::EmptyObject => "An object on the plate has no geometry.",
             Self::InvalidTransform => {
                 "An object on the plate has an invalid position, rotation, or scale."
             }
@@ -113,7 +117,7 @@ impl From<std::io::Error> for PlateWriteError {
 }
 
 /// D7: writes `plate` as a core-only 3MF over the source revision's
-/// meshes. Instances name objects by their decimal `objectKey` (`"1"`).
+/// meshes, which instances name by `objectKey`.
 pub fn write_plate_3mf(
     plate: &PlateDoc,
     revision: &LoadedRevision,
@@ -130,11 +134,13 @@ pub fn write_plate_3mf(
     let mut meshes: BTreeMap<u32, &ObjectMesh> = BTreeMap::new();
     let mut placed: Vec<(u32, Transform3mf)> = Vec::with_capacity(plate.instances.len());
     for instance in &plate.instances {
-        let key = parse_object_key(&instance.object_key)
-            .ok_or_else(|| invalid(PlateInvalidReason::UnknownObject))?;
+        let key = instance.object_key;
         let mesh = revision
             .mesh(key)
             .ok_or_else(|| invalid(PlateInvalidReason::UnknownObject))?;
+        if mesh.positions.is_empty() {
+            return Err(invalid(PlateInvalidReason::EmptyObject));
+        }
         if !transform_is_valid(&instance.transform) {
             return Err(invalid(PlateInvalidReason::InvalidTransform));
         }
@@ -147,14 +153,38 @@ pub fn write_plate_3mf(
         .map(|(index, key)| (*key, index + 1))
         .collect();
 
-    // A generous upper bound on the model part's size decides ZIP64, which
-    // only a model over 4 GiB needs.
-    let estimated: usize = meshes
+    let items: Vec<String> = placed
+        .iter()
+        .map(|(key, transform)| {
+            let values: Vec<String> = transform.iter().map(|value| decimal(*value)).collect();
+            format!(
+                "  <item objectid=\"{}\" transform=\"{}\"/>\n",
+                object_ids[key],
+                values.join(" ")
+            )
+        })
+        .collect();
+
+    // An upper bound on the model part's size decides ZIP64, which only a
+    // model over 4 GiB needs. Each coordinate is written with at most
+    // `number_width` characters for the largest magnitude in its mesh.
+    let estimated: u64 = meshes
         .values()
-        .map(|mesh| mesh.positions.len() * 96 + mesh.triangles.len() * 80)
-        .sum::<usize>()
-        + placed.len() * 256
-        + 4096;
+        .map(|mesh| {
+            let largest = mesh
+                .positions
+                .iter()
+                .flatten()
+                .fold(0.0f64, |largest, value| largest.max(f64::from(value.abs())));
+            let vertex_line = 30 + 3 * number_width(largest);
+            let triangle_line = 35 + 3 * 10;
+            mesh.positions.len() as u64 * vertex_line
+                + mesh.triangles.len() as u64 * triangle_line
+                + 256
+        })
+        .sum::<u64>()
+        + items.iter().map(|item| item.len() as u64).sum::<u64>()
+        + 1024;
     let options = |large| {
         SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
@@ -168,7 +198,7 @@ pub fn write_plate_3mf(
     zip.write_all(CONTENT_TYPES.as_bytes())?;
     zip.start_file(ROOT_RELS_PART, options(false))?;
     zip.write_all(ROOT_RELS.as_bytes())?;
-    zip.start_file(MODEL_PART, options(estimated as u64 >= u64::from(u32::MAX)))?;
+    zip.start_file(MODEL_PART, options(estimated >= u64::from(u32::MAX)))?;
 
     let mut chunk = String::with_capacity(CHUNK_BYTES * 2);
     let mut flush = |chunk: &mut String, force: bool| -> std::io::Result<()> {
@@ -204,14 +234,8 @@ pub fn write_plate_3mf(
         chunk.push_str("    </triangles>\n   </mesh>\n  </object>\n");
     }
     chunk.push_str(" </resources>\n <build>\n");
-    for (key, transform) in &placed {
-        let values: Vec<String> = transform.iter().map(|value| decimal(*value)).collect();
-        let _ = writeln!(
-            chunk,
-            "  <item objectid=\"{}\" transform=\"{}\"/>",
-            object_ids[key],
-            values.join(" ")
-        );
+    for item in &items {
+        chunk.push_str(item);
         flush(&mut chunk, false)?;
     }
     chunk.push_str(" </build>\n</model>\n");
@@ -220,10 +244,11 @@ pub fn write_plate_3mf(
     Ok(zip.finish()?.into_inner())
 }
 
-/// A canonical decimal `objectKey` (`"1"`, not `"01"` or `"+1"`).
-fn parse_object_key(text: &str) -> Option<u32> {
-    let key: u32 = text.parse().ok()?;
-    (key.to_string() == text).then_some(key)
+/// At least the characters [`decimal`] writes for a value of at most
+/// `largest` in magnitude: a sign, the integer digits (plus one for a
+/// rounding carry), a point, and six decimals.
+fn number_width(largest: f64) -> u64 {
+    largest.max(1.0).log10().floor() as u64 + 2 + 8
 }
 
 /// Six decimal places, with a rounded negative zero written as zero.
@@ -272,10 +297,10 @@ mod tests {
         load_revision(Cursor::new(stl), ModelFormat::Stl, &CancelFlag::never()).unwrap()
     }
 
-    fn instance(key: &str, object_key: &str, translate: [f64; 2], rotate_z: f64) -> InstanceDoc {
+    fn instance(key: &str, object_key: u32, translate: [f64; 2], rotate_z: f64) -> InstanceDoc {
         InstanceDoc {
             instance_key: key.to_string(),
-            object_key: object_key.to_string(),
+            object_key,
             transform: InstanceTransform {
                 translate_mm: translate,
                 rotate_deg: [0.0, 0.0, rotate_z],
@@ -294,8 +319,8 @@ mod tests {
 
     fn two_cubes() -> PlateDoc {
         plate(vec![
-            instance("i-a", "1", [40.0, 40.0], 0.0),
-            instance("i-b", "1", [150.0, 120.0], 45.0),
+            instance("i-a", 1, [40.0, 40.0], 0.0),
+            instance("i-b", 1, [150.0, 120.0], 45.0),
         ])
     }
 
@@ -407,6 +432,24 @@ mod tests {
     }
 
     #[test]
+    fn number_width_bounds_the_written_text() {
+        for value in [
+            0.0f64,
+            9.999_999_9,
+            -9.999_999_9,
+            10.0,
+            99.5,
+            123_456.789,
+            -1e7,
+            3.4e38,
+            -3.4e38,
+        ] {
+            let width = number_width(value.abs()) as usize;
+            assert!(decimal(value).len() <= width, "{value}: {}", decimal(value));
+        }
+    }
+
+    #[test]
     fn distinct_keys_become_objects_numbered_in_key_order() {
         let mut source = cube_revision();
         let geometry = source.geometry().clone();
@@ -418,9 +461,9 @@ mod tests {
             ],
         );
         let plate = plate(vec![
-            instance("i-a", "7", [0.0; 2], 0.0),
-            instance("i-b", "3", [50.0, 0.0], 0.0),
-            instance("i-c", "7", [100.0, 0.0], 0.0),
+            instance("i-a", 7, [0.0; 2], 0.0),
+            instance("i-b", 3, [50.0, 0.0], 0.0),
+            instance("i-c", 7, [100.0, 0.0], 0.0),
         ]);
         let xml = model_xml(&write_plate_3mf(&plate, &source).unwrap());
         assert_eq!(xml.matches("<object ").count(), 2);
@@ -443,18 +486,43 @@ mod tests {
             other => panic!("expected an invalid plate, got {other:?}"),
         };
         assert_eq!(reason(plate(vec![])), PlateInvalidReason::Empty);
-        for key in ["2", "01", "+1", "one", ""] {
-            assert_eq!(
-                reason(plate(vec![instance("i", key, [0.0; 2], 0.0)])),
-                PlateInvalidReason::UnknownObject,
-                "{key:?}"
-            );
-        }
-        let mut scaled = instance("i", "1", [0.0; 2], 0.0);
+        assert_eq!(
+            reason(plate(vec![instance("i", 2, [0.0; 2], 0.0)])),
+            PlateInvalidReason::UnknownObject
+        );
+        let mut scaled = instance("i", 1, [0.0; 2], 0.0);
         scaled.transform.scale = [0.001, 1.0, 1.0];
         assert_eq!(
             reason(plate(vec![scaled])),
             PlateInvalidReason::InvalidTransform
+        );
+
+        // An object with no vertices is refused rather than written empty.
+        let hollow = LoadedRevision::from_parts(
+            revision.geometry().clone(),
+            [
+                (1, revision.mesh(1).unwrap().clone()),
+                (5, ObjectMesh::default()),
+            ],
+        );
+        let result = write_plate_3mf(
+            &plate(vec![
+                instance("i-a", 1, [0.0; 2], 0.0),
+                instance("i-b", 5, [50.0, 0.0], 0.0),
+            ]),
+            &hollow,
+        );
+        assert_eq!(
+            result,
+            Err(PlateWriteError::Invalid {
+                plate_key: "plate-a".to_string(),
+                reason: PlateInvalidReason::EmptyObject,
+            })
+        );
+        let error = CommandError::from(result.unwrap_err());
+        assert_eq!(
+            serde_json::to_value(&error).unwrap()["details"]["reason"],
+            "emptyObject"
         );
 
         let error = CommandError::from(PlateWriteError::Invalid {

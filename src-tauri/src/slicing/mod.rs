@@ -176,7 +176,8 @@ pub struct InstanceTransform {
 #[ts(rename_all = "camelCase", export_to = "domain/InstanceDoc.ts")]
 pub struct InstanceDoc {
     pub instance_key: String,
-    pub object_key: String,
+    /// The source object: `GeometryObject.objectKey` (D6).
+    pub object_key: u32,
     pub transform: InstanceTransform,
 }
 
