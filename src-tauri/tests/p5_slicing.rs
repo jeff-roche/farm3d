@@ -42,8 +42,7 @@ use common::{a_catalog, a_ref_json, invoke, FakeModelFileIo};
 const FAKE_ORCA: &str = env!("CARGO_BIN_EXE_fake-orca");
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// The 19 commands this task registers (`create_external_slice_revision`
-/// is Task 9's).
+/// The 20 P5 commands.
 const P5_COMMANDS: &[&str] = &[
     "get_slicer_runtime",
     "check_slicer_runtime",
@@ -63,6 +62,7 @@ const P5_COMMANDS: &[&str] = &[
     "get_slice_operation_log",
     "list_slice_revisions",
     "get_slice_revision",
+    "create_external_slice_revision",
     "delete_slice_revision",
 ];
 
@@ -160,6 +160,7 @@ impl Running {
                 farm3d_lib::slicing::commands::get_slice_operation_log,
                 farm3d_lib::slicing::commands::list_slice_revisions,
                 farm3d_lib::slicing::commands::get_slice_revision,
+                farm3d_lib::slicing::commands::create_external_slice_revision,
                 farm3d_lib::slicing::commands::delete_slice_revision,
             ],
             storage,
@@ -291,6 +292,18 @@ impl Running {
             json!({
                 "modelId": model_id,
                 "target": { "kind": "profile", "catalogRef": a_ref_json() },
+            }),
+        )
+    }
+
+    /// D16: `create_external_slice_revision`.
+    fn create_external(&self, operation_id: &str, source_revision_id: &str, facts: Value) -> Value {
+        self.ok(
+            "create_external_slice_revision",
+            json!({
+                "operationId": operation_id,
+                "sourceRevisionId": source_revision_id,
+                "facts": facts,
             }),
         )
     }
@@ -467,6 +480,31 @@ fn ids(operations: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// D16: `create_external_slice_revision`'s `facts` with every fact absent.
+fn absent_facts() -> Value {
+    json!({
+        "printerProfile": {"kind": "absent"},
+        "nozzleDiameterMm": {"kind": "absent"},
+        "materialFamily": {"kind": "absent"},
+        "filamentDiameterMm": {"kind": "absent"},
+    })
+}
+
+/// D16: `create_external_slice_revision`'s `facts` with every fact
+/// confirmed to a fixed, arbitrary value, regardless of what the source
+/// G-code itself claims.
+fn confirmed_facts() -> Value {
+    json!({
+        "printerProfile": {
+            "kind": "confirmed",
+            "value": { "kind": "profile", "catalogRef": a_ref_json() },
+        },
+        "nozzleDiameterMm": { "kind": "confirmed", "value": 0.4 },
+        "materialFamily": { "kind": "confirmed", "value": "PETG" },
+        "filamentDiameterMm": { "kind": "confirmed", "value": 1.75 },
+    })
+}
+
 #[test]
 fn every_p5_command_is_registered_with_a_contract() {
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
@@ -481,7 +519,6 @@ fn every_p5_command_is_registered_with_a_contract() {
             "{command} missing from COMMAND_CONTRACTS"
         );
     }
-    assert!(!farm3d_lib::COMMAND_NAMES.contains(&"create_external_slice_revision"));
 }
 
 #[test]
@@ -1435,6 +1472,293 @@ fn a_slice_that_cannot_be_stored_fails_with_its_log() {
             .contains("fake-orca scenario success"),
         "the log is kept: {log}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task 9: `create_external_slice_revision` (D16)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_source_blob() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let source_path = farm.source("orca-cube.gcode", "cube.gcode");
+    let source_bytes = fs::read(&source_path).unwrap();
+    let model = running.import(&source_path, "managed");
+    let model_id = model["id"].as_str().unwrap().to_string();
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+    let source_sha256 = model["currentRevision"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (blobs_after_import, _) = running.stored_counts();
+
+    let absent = running.create_external("ext-absent", &source_revision_id, absent_facts());
+    assert_eq!(absent["kind"], "external");
+    assert_eq!(absent["modelId"], model_id);
+    assert_eq!(absent["sourceRevisionId"], source_revision_id);
+    assert!(absent.get("plate").is_none(), "{absent}");
+    assert!(absent.get("runtime").is_none(), "{absent}");
+    assert!(absent.get("target").is_none(), "{absent}");
+    assert_eq!(absent["estimates"], Value::Null);
+    assert_eq!(absent["requiresManualPrinterSelection"], true, "{absent}");
+    assert_eq!(absent["blobs"], json!([]));
+    for fact in [
+        "printerProfile",
+        "nozzleDiameterMm",
+        "materialFamily",
+        "filamentDiameterMm",
+    ] {
+        assert_eq!(
+            absent["facts"][fact]["provenance"], "absent",
+            "{fact}: {absent}"
+        );
+    }
+
+    let confirmed =
+        running.create_external("ext-confirmed", &source_revision_id, confirmed_facts());
+    assert_eq!(
+        confirmed["requiresManualPrinterSelection"], false,
+        "{confirmed}"
+    );
+    for fact in [
+        "printerProfile",
+        "nozzleDiameterMm",
+        "materialFamily",
+        "filamentDiameterMm",
+    ] {
+        assert_eq!(
+            confirmed["facts"][fact]["provenance"], "operatorConfirmed",
+            "{fact}: {confirmed}"
+        );
+    }
+    assert_eq!(confirmed["facts"]["nozzleDiameterMm"]["value"], 0.4);
+    assert_eq!(confirmed["facts"]["materialFamily"]["value"], "PETG");
+    assert_eq!(confirmed["facts"]["filamentDiameterMm"]["value"], 1.75);
+    assert_eq!(
+        confirmed["facts"]["printerProfile"]["value"]["catalogRef"],
+        a_ref_json()
+    );
+    assert_eq!(confirmed["blobs"], json!([]));
+
+    // Both revisions share the source's own claims: the file's estimates
+    // reach `claimedEstimates`, marked untrusted, never `facts`.
+    for revision in [&absent, &confirmed] {
+        assert_eq!(revision["claimedEstimates"]["source"], "fileClaim");
+        assert_eq!(revision["claimedEstimates"]["trusted"], false);
+        assert_eq!(revision["producer"]["name"], "OrcaSlicer");
+    }
+
+    // No copy: creating two external revisions added zero content blobs.
+    let (blobs_after_external, revision_count) = running.stored_counts();
+    assert_eq!(blobs_after_external, blobs_after_import);
+    assert_eq!(revision_count, 2);
+    assert_eq!(running.blob(&source_sha256), source_bytes);
+
+    let events = running.events.lock().unwrap().clone();
+    for revision in [&absent, &confirmed] {
+        let id = revision["id"].as_str().unwrap();
+        assert!(
+            events.iter().any(|event| {
+                event["type"] == "slicing.revision.created" && event["subject"]["id"] == id
+            }),
+            "no slicing.revision.created for {id}"
+        );
+    }
+}
+
+#[test]
+fn external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture() {
+    let farm = Farm::new();
+    let running = farm.start();
+
+    let mut gcode_fixtures: Vec<PathBuf> = fs::read_dir(fixtures().join("library"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("gcode"))
+        .collect();
+    gcode_fixtures.sort();
+    assert!(!gcode_fixtures.is_empty());
+
+    for (fixture_index, source) in gcode_fixtures.iter().enumerate() {
+        let name = source.file_name().unwrap().to_str().unwrap();
+        let model = running.import(
+            &farm.source(name, &format!("prop-{fixture_index}.gcode")),
+            "managed",
+        );
+        let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+        for mask in 0u8..16 {
+            let bit = |n: u8| mask & (1 << n) != 0;
+            let confirmed_or_absent = |confirmed: bool, value: Value| {
+                if confirmed {
+                    json!({ "kind": "confirmed", "value": value })
+                } else {
+                    json!({ "kind": "absent" })
+                }
+            };
+            let facts = json!({
+                "printerProfile": confirmed_or_absent(
+                    bit(0),
+                    json!({ "kind": "profile", "catalogRef": a_ref_json() }),
+                ),
+                "nozzleDiameterMm": confirmed_or_absent(bit(1), json!(0.4)),
+                "materialFamily": confirmed_or_absent(bit(2), json!("PLA")),
+                "filamentDiameterMm": confirmed_or_absent(bit(3), json!(1.75)),
+            });
+            let operation_id = format!("prop-{fixture_index}-{mask}");
+            let revision = running.create_external(&operation_id, &source_revision_id, facts);
+
+            let expected_provenance = |confirmed: bool| {
+                if confirmed {
+                    "operatorConfirmed"
+                } else {
+                    "absent"
+                }
+            };
+            assert_eq!(
+                revision["facts"]["printerProfile"]["provenance"],
+                expected_provenance(bit(0)),
+                "{name} mask {mask:04b}: {revision}"
+            );
+            assert_eq!(
+                revision["facts"]["nozzleDiameterMm"]["provenance"],
+                expected_provenance(bit(1)),
+                "{name} mask {mask:04b}: {revision}"
+            );
+            assert_eq!(
+                revision["facts"]["materialFamily"]["provenance"],
+                expected_provenance(bit(2)),
+                "{name} mask {mask:04b}: {revision}"
+            );
+            assert_eq!(
+                revision["facts"]["filamentDiameterMm"]["provenance"],
+                expected_provenance(bit(3)),
+                "{name} mask {mask:04b}: {revision}"
+            );
+            if bit(0) {
+                assert_eq!(
+                    revision["facts"]["printerProfile"]["value"]["catalogRef"],
+                    a_ref_json()
+                );
+            }
+            if bit(1) {
+                assert_eq!(revision["facts"]["nozzleDiameterMm"]["value"], 0.4);
+            }
+            if bit(2) {
+                assert_eq!(revision["facts"]["materialFamily"]["value"], "PLA");
+            }
+            if bit(3) {
+                assert_eq!(revision["facts"]["filamentDiameterMm"]["value"], 1.75);
+            }
+            assert_eq!(
+                revision["requiresManualPrinterSelection"],
+                mask != 0b1111,
+                "{name} mask {mask:04b}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_non_gcode_source_is_rejected_and_the_operation_id_can_be_reused() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    let error = running.error(
+        "create_external_slice_revision",
+        json!({
+            "operationId": "ext-bad-source",
+            "sourceRevisionId": source_revision_id,
+            "facts": absent_facts(),
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "sourceRevisionId");
+    assert_eq!(running.slicing()["revisions"], json!([]));
+
+    // No dangling ledger claim: the same `operationId` works for a real
+    // (G-code) source afterward.
+    let gcode_model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let gcode_source_id = gcode_model["currentRevision"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let revision = running.create_external("ext-bad-source", &gcode_source_id, absent_facts());
+    assert_eq!(revision["kind"], "external");
+}
+
+#[test]
+fn an_idempotent_retry_returns_the_same_revision_and_creates_nothing_new() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let model_id = model["id"].as_str().unwrap().to_string();
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    let first = running.create_external("ext-retry", &source_revision_id, confirmed_facts());
+    let (_, revision_count_after_first) = running.stored_counts();
+
+    let second = running.create_external("ext-retry", &source_revision_id, confirmed_facts());
+    assert_eq!(first, second);
+    let (_, revision_count_after_second) = running.stored_counts();
+    assert_eq!(revision_count_after_first, revision_count_after_second);
+    assert_eq!(
+        running
+            .ok("list_slice_revisions", json!({ "modelId": model_id }))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The same id with a DIFFERENT request is refused, and burns nothing.
+    let error = running.error(
+        "create_external_slice_revision",
+        json!({
+            "operationId": "ext-retry",
+            "sourceRevisionId": source_revision_id,
+            "facts": absent_facts(),
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "operationId");
+    let (_, revision_count_after_conflict) = running.stored_counts();
+    assert_eq!(revision_count_after_conflict, revision_count_after_second);
+}
+
+#[test]
+fn an_external_revision_is_unchanged_after_a_restart() {
+    let farm = Farm::new();
+    let first = farm.start();
+    let model = first.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+    let revision_before =
+        first.create_external("ext-restart", &source_revision_id, confirmed_facts());
+    let revision_id = revision_before["id"].as_str().unwrap().to_string();
+    let gcode_sha256: String = first
+        .services
+        .storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT gcode_sha256 FROM slice_revisions WHERE id = ?1",
+                [&revision_id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    let gcode_before = first.blob(&gcode_sha256);
+    drop(first);
+
+    let second = farm.start();
+    let revision_after = second.ok(
+        "get_slice_revision",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+    assert_eq!(revision_before, revision_after);
+    assert_eq!(second.blob(&gcode_sha256), gcode_before);
 }
 
 /// The same IPC path against a real OrcaSlicer (spec D23): `FARM3D_ORCA`
