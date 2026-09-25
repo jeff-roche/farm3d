@@ -1,6 +1,6 @@
 # P6 Moonraker Command Spike
 
-**Status:** Draft — awaiting controller approval
+**Status:** Approved by the controller (owner-delegated), 2026-09-25, after task review and one fix round.
 
 Task 3 of `docs/superpowers/plans/2026-09-25-p6-connection-command-capabilities.md`.
 It ran on 2026-09-25 on the Linux x86_64 development host. Every write
