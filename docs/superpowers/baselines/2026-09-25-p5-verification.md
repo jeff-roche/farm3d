@@ -714,7 +714,10 @@ They make no runtime claim (D24), and CI stays on fake-orca.
   task) could start after the test's import and register the Model again.
   That dropped the polled watch and added it back natively, since the
   forced failure is one-shot, so `watchMode` read `watching`. The test now
-  waits for the startup pass first. Before the fix, it failed 5 times in
+  waits for the startup pass first. Since `a58631d`, the shared
+  `Host::start` does that wait for every p4_links test. Two other tests
+  had the same race: a late pass could record an edit before
+  `check_linked_sources`, or use up a one-shot injected store failure. Before the fix, it failed 5 times in
   1,000 runs under load (64 at once, next to a release build), with the
   same `watching` ≠ `polling` assertion. After the fix, it failed 0 times
   in 2,000 runs.
