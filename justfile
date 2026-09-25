@@ -48,6 +48,16 @@ moonraker-live mode="probe":
 moonraker-sim *args:
     scripts/moonraker-sim/sim.sh {{ args }}
 
+# Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
+test-octoprint-live:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_OCTOPRINT_HOST:-}" ]; then
+        echo "error: set FARM3D_OCTOPRINT_HOST (and FARM3D_OCTOPRINT_API_KEY unless access control is off), e.g. FARM3D_OCTOPRINT_HOST=octopi.local just test-octoprint-live" >&2
+        exit 1
+    fi
+    cargo test --manifest-path src-tauri/Cargo.toml --test a0_octoprint_live -- --ignored --nocapture --test-threads=1
+
 # Type-check the backend for Windows from Linux (no mingw needed; nothing is linked). `just check-windows clippy` lints instead
 check-windows mode="check":
     scripts/check-windows.sh {{mode}}
@@ -107,3 +117,45 @@ package-arch:
 # Run the frontend test suite
 test:
     npm test
+
+# Start the printer simulators (Klipper+Moonraker, OctoPrint, fault proxy) and wait until ready; see sim/README.md
+sim-up:
+    sim/simctl up
+
+# Stop the printer simulators and delete their state
+sim-down:
+    sim/simctl down
+
+# Show the printer simulators' containers and readiness
+sim-status:
+    sim/simctl status
+
+# Pass-through to sim/simctl, e.g. `just sim fault klipper-shutdown` or `just sim manifest`
+sim *args:
+    sim/simctl {{ args }}
+
+# Run the simulator-backed adapter tests; skips with a message if `just sim-up` has not run. Records a manifest and log under src-tauri/target/sim-runs/
+test-sim:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! sim/simctl status >/dev/null 2>&1; then
+        if [ "${FARM3D_SIM_REQUIRED:-}" = 1 ]; then
+            echo "error: FARM3D_SIM_REQUIRED=1 but the simulators are not ready; run 'just sim-up'" >&2
+            exit 1
+        fi
+        echo "test-sim: SKIPPED: the simulators are not running. Start them with 'just sim-up', then rerun 'just test-sim'." >&2
+        exit 0
+    fi
+    eval "$(sim/simctl env)"
+    out="src-tauri/target/sim-runs/$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p "$out"
+    # ADR-0012: every simulator run records exactly what it ran against.
+    sim/simctl manifest >"$out/manifest.json"
+    echo "test-sim: recording to $out"
+    cargo test --manifest-path src-tauri/Cargo.toml \
+        --test sim_moonraker --test sim_octoprint --test sim_elegoolink \
+        -- --include-ignored --test-threads=1 --nocapture 2>&1 | tee "$out/test.log"
+
+# Fail if a tracked or staged file names one of the owner's private hosts (listed in FARM3D_PRIVATE_HOSTS or an untracked .private-hosts file)
+check-hosts:
+    scripts/check-private-hosts.sh

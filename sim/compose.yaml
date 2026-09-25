@@ -1,0 +1,169 @@
+# farm3d printer simulators (ADR-0012).
+#
+# Drive this through `sim/simctl` (or `just sim-up` / `sim-down` /
+# `sim-status` / `test-sim`), not `compose up` directly: simctl builds the
+# local Klipper image first, picks docker or podman, and waits for real
+# readiness (Klipper "ready", OctoPrint "Operational").
+#
+# Every service uses host networking and binds 127.0.0.1 on fixed ports:
+#
+#   27125  Moonraker through the fault proxy          <- tests connect here
+#   27126  Moonraker direct                            <- harness control path
+#   27135  Moonraker, four toolheads, via the proxy   <- tests connect here
+#   27136  Moonraker, four toolheads, direct          <- harness control path
+#   25000  OctoPrint through the fault proxy          <- tests connect here
+#   25001  OctoPrint direct                            <- harness control path
+#   28474  Toxiproxy API                               <- fault injection
+#
+# Host networking is deliberate: rootless podman without a usable
+# /dev/net/tun cannot create bridge networks, and it avoids a port-mapping
+# layer that would sit between the fault proxy and the service. Linux only.
+#
+# Images are pinned by digest. The Klipper image is built locally from a
+# pinned prind commit and a pinned Klipper commit (see simctl), because
+# prind does not publish its simulavr target. Each simulavr process keeps
+# one CPU core busy; run `just sim-down` when you are done.
+name: farm3d-simulators
+
+x-klipper: &klipper
+  image: localhost/farm3d-simulavr:prind-80600f7-klipper-ce7002b
+  pull_policy: never
+  network_mode: host
+  user: "0:0"
+  entrypoint: ["/farm3d-sim/klipper-entrypoint.sh"]
+  init: true
+  stop_grace_period: 3s
+  healthcheck:
+    test: ["CMD", "test", "-S", "/opt/printer_data/run/klipper.sock"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+    start_period: 5s
+
+x-moonraker: &moonraker
+  image: docker.io/mkuf/moonraker:v0.11.0-1-g1cfb0c4@sha256:c398e6e95def8f4112128ddf51d6dab3a7766e6ea28691e7b42f3bb98622a26d
+  network_mode: host
+  init: true
+  stop_grace_period: 3s
+
+# Moonraker is healthy only once the Klipper behind it is "ready", not
+# merely when Moonraker answers. Each service adds its own `test`.
+x-moonraker-ready: &moonraker-ready
+  interval: 2s
+  timeout: 3s
+  retries: 60
+  start_period: 5s
+
+services:
+  # --- Moonraker: one extruder, heated bed (sim/moonraker/printer.cfg) ---
+  klipper:
+    <<: *klipper
+    volumes:
+      - ./moonraker:/farm3d-sim:ro
+      - klipper-run:/opt/printer_data/run
+      - gcodes:/opt/printer_data/gcodes
+      - klipper-logs:/opt/printer_data/logs
+
+  moonraker:
+    <<: *moonraker
+    command: ["-d", "/opt/printer_data", "-c", "/farm3d-sim/moonraker.conf"]
+    depends_on:
+      klipper:
+        condition: service_healthy
+    volumes:
+      - ./moonraker:/farm3d-sim:ro
+      - klipper-run:/opt/printer_data/run
+      - gcodes:/opt/printer_data/gcodes
+      - moonraker-database:/opt/printer_data/database
+      - moonraker-logs:/opt/printer_data/logs
+    healthcheck:
+      <<: *moonraker-ready
+      test:
+        - CMD
+        - /opt/venv/bin/python
+        - -c
+        - "import json,sys,urllib.request as u; r=json.load(u.urlopen('http://127.0.0.1:27126/server/info',timeout=2))['result']; sys.exit(r['klippy_state']!='ready')"
+
+  # --- Moonraker: four toolheads (sim/moonraker/printer-multi.cfg) ---
+  klipper-multi:
+    <<: *klipper
+    environment:
+      FARM3D_SIM_PRINTER_CFG: printer-multi.cfg
+    volumes:
+      - ./moonraker:/farm3d-sim:ro
+      - klipper-multi-run:/opt/printer_data/run
+      - gcodes-multi:/opt/printer_data/gcodes
+      - klipper-multi-logs:/opt/printer_data/logs
+
+  moonraker-multi:
+    <<: *moonraker
+    command: ["-d", "/opt/printer_data", "-c", "/farm3d-sim/moonraker-multi.conf"]
+    depends_on:
+      klipper-multi:
+        condition: service_healthy
+    volumes:
+      - ./moonraker:/farm3d-sim:ro
+      - klipper-multi-run:/opt/printer_data/run
+      - gcodes-multi:/opt/printer_data/gcodes
+      - moonraker-multi-database:/opt/printer_data/database
+      - moonraker-multi-logs:/opt/printer_data/logs
+    healthcheck:
+      <<: *moonraker-ready
+      test:
+        - CMD
+        - /opt/venv/bin/python
+        - -c
+        - "import json,sys,urllib.request as u; r=json.load(u.urlopen('http://127.0.0.1:27136/server/info',timeout=2))['result']; sys.exit(r['klippy_state']!='ready')"
+
+  # --- OctoPrint with its bundled Virtual Printer (sim/octoprint/) ---
+  octoprint:
+    image: docker.io/octoprint/octoprint:1.11.8@sha256:5ea0181e476597faa2800c991af4ce16903005f46b4c16666a4080ad606310bb
+    network_mode: host
+    entrypoint: ["/farm3d-sim/entrypoint.sh"]
+    init: true
+    stop_grace_period: 3s
+    environment:
+      FARM3D_SIM_OCTOPRINT_UPSTREAM_PORT: "25001"
+      # A published test fixture, not a secret (loopback only).
+      FARM3D_SIM_OCTOPRINT_API_KEY: farm3d-sim-octoprint-key-0123456789
+    volumes:
+      - ./octoprint:/farm3d-sim:ro
+      - octoprint-data:/octoprint
+    healthcheck:
+      # Healthy only once the Virtual Printer is attached ("Operational").
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,sys,urllib.request as u; q=u.Request('http://127.0.0.1:25001/api/connection',headers={'X-Api-Key':'farm3d-sim-octoprint-key-0123456789'}); sys.exit(json.load(u.urlopen(q,timeout=2))['current']['state']!='Operational')"
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+
+  # --- The fault proxy in front of every simulator (sim/toxiproxy/) ---
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e
+    network_mode: host
+    command: ["-host=127.0.0.1", "-port=28474", "-config=/farm3d-sim/toxiproxy.json"]
+    stop_grace_period: 3s
+    volumes:
+      - ./toxiproxy:/farm3d-sim:ro
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "-h", "127.0.0.1:28474", "list"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  klipper-run:
+  klipper-logs:
+  gcodes:
+  moonraker-database:
+  moonraker-logs:
+  klipper-multi-run:
+  klipper-multi-logs:
+  gcodes-multi:
+  moonraker-multi-database:
+  moonraker-multi-logs:
+  octoprint-data:

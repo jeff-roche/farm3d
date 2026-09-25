@@ -11,12 +11,13 @@ use tauri::{AppHandle, Emitter};
 use ts_rs::TS;
 
 use super::moonraker::MoonrakerConnection;
+use super::octoprint::OctoPrintConnection;
 use super::status_repository::{
     PrinterTelemetry, SnapshotWrite, StatusRepository, StoredTelemetrySnapshot,
 };
 use super::{
     ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND,
+    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND, OCTOPRINT_KIND,
 };
 use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::printers::operational::{evaluate_operational_status, HostActivity, OperationalInput};
@@ -491,7 +492,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         repository: Arc<StatusRepository>,
         clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static,
     ) -> Self {
-        Self::with_clock_and_factory(app, repository, clock, build)
+        Self::with_clock_and_factory(app, repository, clock, build_connection)
     }
 
     pub fn with_clock_and_factory(
@@ -957,16 +958,24 @@ fn apply_error_to<R: tauri::Runtime>(
     let _ = app.emit(STATUS_EVENT, event);
 }
 
-fn build(
+/// The production connection factory: the one place a `kind` becomes an
+/// adapter. Public so integration tests can drive the real adapters through
+/// a manager built with `with_clock_and_factory`.
+pub fn build_connection(
     config: &ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<Box<dyn PrinterConnection>> {
-    (config.kind == MOONRAKER_KIND).then(|| {
-        Box::new(MoonrakerConnection::with_zeroizing_secret(
+    match config.kind.as_str() {
+        MOONRAKER_KIND => Some(Box::new(MoonrakerConnection::with_zeroizing_secret(
             config.clone(),
             api_key,
-        )) as Box<dyn PrinterConnection>
-    })
+        ))),
+        OCTOPRINT_KIND => Some(Box::new(OctoPrintConnection::with_zeroizing_secret(
+            config.clone(),
+            api_key,
+        ))),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1098,7 +1107,7 @@ mod tests {
     async fn liveness_health_observation_is_emitted_without_telemetry() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
-        assert!(!crate::connections::moonraker::send_health(&tx, ConnectionState::Online).await);
+        assert!(!crate::connections::send_health(&tx, ConnectionState::Online).await);
 
         assert!(matches!(
             rx.recv().await,
@@ -1630,6 +1639,23 @@ mod tests {
             .statuses
             .iter()
             .all(|row| row.printer_id != "prn-1"));
+    }
+
+    #[test]
+    fn build_constructs_every_supported_kind_and_nothing_else() {
+        // Keeps `SUPPORTED_KINDS` (what the setup paths accept) and `build`
+        // (what the supervisor can actually construct) in step.
+        let config = |kind: &str| ConnectionConfig {
+            kind: kind.to_string(),
+            host: "printer.local".to_string(),
+            port: 80,
+            use_tls: false,
+            credential_ref: None,
+        };
+        for kind in crate::connections::SUPPORTED_KINDS {
+            assert!(build_connection(&config(kind), None).is_some(), "{kind}");
+        }
+        assert!(build_connection(&config("elegoolink"), None).is_none());
     }
 
     #[test]

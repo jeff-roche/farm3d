@@ -9,12 +9,16 @@ import type {
 } from "../printers/types";
 import styles from "./ConnectionFields.module.css";
 
-/** Only what this build can actually speak. Phase 3 appends OctoPrint and
- *  ElegooLink here as each adapter lands — listing them now as disabled
- *  entries would need a prop `Select` does not have (verified: `SelectProps`
- *  exposes no `optionDisabled`), and offering a kind that errors on save is
- *  worse than not offering it. */
-export const KINDS = [{ value: "moonraker", label: "Moonraker (Klipper)" }];
+/** Only what this build can actually speak — mirrors the backend's
+ *  `SUPPORTED_KINDS`. OctoPrint is status-only monitoring (no upload, job
+ *  control, or camera). ElegooLink appends here once its protocol spike
+ *  lands; listing it now as a disabled entry would need a prop `Select` does
+ *  not have (verified: `SelectProps` exposes no `optionDisabled`), and
+ *  offering a kind that errors on save is worse than not offering it. */
+export const KINDS = [
+  { value: "moonraker", label: "Moonraker (Klipper)" },
+  { value: "octoprint", label: "OctoPrint" },
+];
 
 /** Catalog `suggestedHostType`s name every host the source catalog knows
  *  (PrusaLink, OctoPrint, ...), not just the adapters this build ships; an
@@ -25,6 +29,14 @@ export function supportedKind(kind: string | null | undefined): string | undefin
 }
 
 const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
+
+/** "name — host software / firmware", skipping what the host does not
+ *  report: OctoPrint exposes no firmware version, and an unnamed host has
+ *  no name to lead with. */
+function probeSummary(result: ProbeResult): string {
+  const software = [result.hostSoftware, result.firmware].filter(Boolean).join(" / ");
+  return [result.reportedName, software].filter(Boolean).join(" — ");
+}
 
 /** Millimetre-scale float noise is not a disagreement worth a warning. */
 const TOLERANCE_MM = 1;
@@ -276,7 +288,7 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
           <div class={styles.probe}>
             <Chip>{result().state}</Chip>
             <p class={styles.note}>
-              {result().reportedName} — {result().hostSoftware} / {result().firmware}
+              {probeSummary(result())}
             </p>
             <Show when={result().stateMessage}>
               {(message) => <p class={styles.note}>{message()}</p>}

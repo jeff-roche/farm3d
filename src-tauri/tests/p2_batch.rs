@@ -506,7 +506,7 @@ fn connection_validation_errors_keep_the_row_but_drop_its_connection() {
             shared_block(json!({})), None,
             true,
             json!([
-                {"rowId": "r1", "name": "A", "connection": {"kind": "octoprint", "host": "ok.local", "port": 80, "credential": none()}},
+                {"rowId": "r1", "name": "A", "connection": {"kind": "elegoolink", "host": "ok.local", "port": 80, "credential": none()}},
                 {"rowId": "r2", "name": "B", "connection": connection("  ", 7125, none())},
                 {"rowId": "r3", "name": "C", "connection": connection("ok.local", 7125, shared())},
             ]),

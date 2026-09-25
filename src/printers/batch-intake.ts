@@ -49,9 +49,9 @@ export interface IntakeResult {
   warnings: IntakeIssue[];
 }
 
-/** Adapter kinds this build actually supports (mirrors
- *  `PrinterConnectionPanel`'s `KINDS` — only Moonraker today). */
-const SUPPORTED_PROTOCOLS = new Set(["moonraker"]);
+/** Adapter kinds this build actually supports (mirrors `ConnectionFields`'
+ *  `KINDS` and the backend's `SUPPORTED_KINDS`). */
+const SUPPORTED_PROTOCOLS = new Set(["moonraker", "octoprint"]);
 
 const KNOWN_COLUMNS = new Set(["name", "location", "host", "port", "protocol", "tls"]);
 

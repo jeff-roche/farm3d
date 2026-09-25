@@ -1,15 +1,17 @@
 //! Connection configuration, live status, and the adapter trait every
 //! protocol implements.
 //!
-//! Phase 2 ships exactly one adapter (Moonraker). Phase 3 adds OctoPrint and
-//! ElegooLink against this same trait — and is expected to reshape it, which
-//! is why the trait is deliberately two methods wide and why `ConnectionState`
-//! is farm3d's own small vocabulary rather than any one protocol's.
+//! Two adapters ship: Moonraker (push, over WebSocket) and OctoPrint
+//! (status-only, polled over REST). ElegooLink is still gated on its protocol
+//! spike. The trait is deliberately two methods wide and `ConnectionState` is
+//! farm3d's own small vocabulary rather than any one protocol's, so a push
+//! adapter and a polling adapter fit the same shape.
 
 pub mod commands;
 pub mod credentials;
 pub mod discovery;
 pub mod moonraker;
+pub mod octoprint;
 pub mod status_repository;
 pub mod supervisor;
 
@@ -24,6 +26,20 @@ use crate::printers::operational::{
 
 pub const MOONRAKER_KIND: &str = "moonraker";
 pub const DEFAULT_MOONRAKER_PORT: u16 = 7125;
+pub const OCTOPRINT_KIND: &str = "octoprint";
+/// OctoPrint's default when served directly (not behind a reverse proxy).
+/// Matches the frontend's `DEFAULT_PORTS` entry.
+pub const DEFAULT_OCTOPRINT_PORT: u16 = 80;
+
+/// Every Connection kind this build can construct, probe, and supervise.
+/// The one place the setup, batch, and connection-edit paths ask "can this
+/// build speak `kind`?" — `supervisor::build` is the matching constructor,
+/// and a test there keeps the two in step.
+pub const SUPPORTED_KINDS: &[&str] = &[MOONRAKER_KIND, OCTOPRINT_KIND];
+
+pub fn is_supported_kind(kind: &str) -> bool {
+    SUPPORTED_KINDS.contains(&kind)
+}
 
 /// No adapter speaks TLS yet: the WebSocket client is built without a TLS
 /// backend (A0.1, #9, decision B4). Every entry point that accepts a
@@ -47,7 +63,8 @@ pub fn reject_tls(use_tls: bool) -> Result<(), crate::contracts::command::Comman
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/ConnectionConfig.ts")]
 pub struct ConnectionConfig {
-    /// `"moonraker"` today; phase 3 adds `"octoprint"` and `"elegoolink"`.
+    /// `"moonraker"` or `"octoprint"` today; `"elegoolink"` is pending its
+    /// protocol spike.
     /// A free string rather than an enum so an unknown kind written by a
     /// newer farm3d round-trips through an older one instead of failing the
     /// whole `printers.json` load.
@@ -253,9 +270,54 @@ pub trait PrinterConnection: Send + Sync {
     ) -> Result<(), ConnectionError>;
 }
 
+/// Sends a liveness observation. Returns true when supervision has dropped
+/// the receiver, which is an adapter's cue to end `subscribe` cleanly.
+pub(crate) async fn send_health(
+    tx: &tokio::sync::mpsc::Sender<ConnectionObservation>,
+    state: ConnectionState,
+) -> bool {
+    tx.send(ConnectionObservation::Health {
+        state,
+        observed_at: chrono::Utc::now().to_rfc3339(),
+    })
+    .await
+    .is_err()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn octoprint_kind_and_default_port_are_defined() {
+        assert_eq!(OCTOPRINT_KIND, "octoprint");
+        assert_eq!(DEFAULT_OCTOPRINT_PORT, 80);
+    }
+
+    #[test]
+    fn supported_kinds_are_moonraker_and_octoprint_only() {
+        assert!(is_supported_kind("moonraker"));
+        assert!(is_supported_kind("octoprint"));
+        assert!(!is_supported_kind("elegoolink"));
+        assert!(!is_supported_kind("prusalink"));
+        assert!(!is_supported_kind(""));
+    }
+
+    #[test]
+    fn connection_config_round_trips_for_octoprint() {
+        let config = ConnectionConfig {
+            kind: OCTOPRINT_KIND.to_string(),
+            host: "octoprint.local".to_string(),
+            port: DEFAULT_OCTOPRINT_PORT,
+            use_tls: false,
+            credential_ref: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ConnectionConfig>(&json).unwrap(),
+            config
+        );
+    }
 
     #[test]
     fn connection_config_uses_camel_case_and_omits_absent_credential() {

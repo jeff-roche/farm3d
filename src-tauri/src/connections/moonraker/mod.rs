@@ -9,7 +9,7 @@
 //! cue to reconnect.
 
 use crate::connections::{
-    ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
+    send_health, ConnectionConfig, ConnectionError, ConnectionObservation, PrinterConnection,
     ProbeResult,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -328,23 +328,10 @@ fn liveness_interval(period: Duration) -> tokio::time::Interval {
     tokio::time::interval_at(tokio::time::Instant::now() + period, period)
 }
 
-/// Returns true when supervision has dropped the receiver.
-pub(crate) async fn send_health(
-    tx: &Sender<ConnectionObservation>,
-    state: ConnectionState,
-) -> bool {
-    tx.send(ConnectionObservation::Health {
-        state,
-        observed_at: chrono::Utc::now().to_rfc3339(),
-    })
-    .await
-    .is_err()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connections::{DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
+    use crate::connections::{ConnectionState, DEFAULT_MOONRAKER_PORT, MOONRAKER_KIND};
 
     fn config(use_tls: bool) -> ConnectionConfig {
         ConnectionConfig {
