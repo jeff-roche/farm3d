@@ -60,6 +60,16 @@ evidenced yet.
       supports TLS.
 
     P6 follows both (D5, D6, D9).
+13. **The bed-clear confirmation acknowledges a finished or cancelled
+    print.** Start is offered when the Printer is Ready, **or** when the
+    host reports `complete` or `cancelled`.
+    - In the `complete` or `cancelled` case the confirmation is mandatory
+      and names the prior state, for example "The previous print finished.
+      The bed is clear."
+    - After `error`, Start stays disabled until the error is cleared on the
+      printer and the host no longer reports `error`.
+    - Reason: Klipper stays `complete` until the next print, so a
+      Ready-only rule would block every print after the first (D9).
 
 P6 is planned and gated **per adapter**. This plan covers the shared
 foundation plus the **Moonraker** path only. OctoPrint and ElegooLink get
@@ -566,14 +576,35 @@ For a host that is gone for good.
   confirm the bed is clear, whatever the Printer's start-safety rule says.
   The confirm button stays disabled until the operator ticks "The bed is
   clear". P6 never starts unattended; the `Unattended` rule stays for P7.
-- **Start follows #9's readiness.** Start is offered only when the
-  Printer's readiness is Ready. When the host reports `complete`,
-  `cancelled`, or `error`, readiness is an explicit non-ready state (answer
-  12). Start is then disabled, with that state as the reason.
-  - P6 adds no way to clear those states; #9 and P7 own that.
-  - Whether the bed-clear confirmation should itself acknowledge
-    `complete` or `cancelled` is a coordination item for the spec. It is
-    not decided here.
+- **When Start is offered (decided, answer 13).** Readiness keeps #9's
+  meaning: `complete`, `cancelled`, and `error` are explicit non-ready
+  states, never Ready (answer 12). Start's rule is separate:
+
+  | Host / readiness | Start | Confirmation |
+  |---|---|---|
+  | Ready (standby) | Offered | "The bed is clear." |
+  | `complete` | Offered | Mandatory, and names the prior state: "The previous print finished. The bed is clear." |
+  | `cancelled` | Offered | Mandatory, and names the prior state: "The previous print was cancelled. The bed is clear." |
+  | `error` | **Disabled.** The reason tells the operator to clear the error on the printer. It becomes available only once the host no longer reports `error`. | — |
+  | Printing, paused, busy, offline, unknown, or stale telemetry | Disabled, with that state as the reason | — |
+
+  - The confirmation *is* the acknowledgement of the finished or cancelled
+    print. P6 adds no separate "clear" action, and it never sends a host
+    command (such as `SDCARD_RESET_FILE`) to reset the state.
+  - Klipper stays `complete` until the next print, so this rule is what
+    lets a second print start at all.
+- **The backend enforces the same rule.** `start_staged_artifact` takes
+  `bedClearAcknowledgement: { priorState: "ready" | "complete" | "cancelled" }`.
+  Inside the command, before the write-ahead commit, it re-reads fresh host
+  state and rejects the start (with no Host Operation row) when either:
+  - the host is in `error`, printing, paused, busy, or its telemetry is
+    stale → `START_NOT_ALLOWED`, carrying the observed state;
+  - the acknowledged `priorState` no longer matches the observed state →
+    `START_PRECONDITION_CHANGED`. Example: the operator confirmed "finished"
+    but the host now reports `error`, or another client started a print.
+
+  The UI then re-renders the dialog for the new state. A stale
+  confirmation is never reused.
 - **Multi-tool display.** The Job tab lists each tool's temperature and
   target from the host facts. It never shows a single "nozzle" value for a
   multi-extruder Printer (answer 9).
@@ -596,7 +627,9 @@ For a host that is gone for good.
   - one supported Moonraker Printer;
   - one two-extruder Moonraker Printer;
   - one `notVerified` OctoPrint Printer;
-  - one Printer in the `complete` non-ready state;
+  - one Printer in the `complete` non-ready state with a staged artifact
+    (Start is offered with the "previous print finished" confirmation);
+  - one Printer in `error` (Start disabled);
   - one Printer with an uncertain upload.
 - Tokens only, CSS Modules, Kobalte primitives, and the editor aesthetic
   (AGENTS.md).
@@ -690,10 +723,13 @@ explicit manual host actions, not Jobs.
 - **Sim safety precondition: every heater (answer 9).** Before any sim
   test that starts a print, the test reads every `extruder*` object and
   `heater_bed`. It refuses to run if **any** of them has a nonzero target,
-  or if a print is already in progress. A unit test feeds a two-extruder
-  status where only `extruder1` has a target and asserts the check
-  refuses. The sim tier also runs the executor and reconciler tests
-  against a multi-extruder config variant, if the harness offers one.
+  if a print is printing or paused, or if the host reports `error`. A
+  `complete` or `cancelled` host is an allowed starting state (answer 13):
+  the test passes the matching `priorState`, exactly as the UI would.
+  A unit test feeds a two-extruder status where only `extruder1` has a
+  target and asserts the check refuses. The sim tier also runs the
+  executor and reconciler tests against a multi-extruder config variant,
+  if the harness offers one.
 - **The U1 is a vendor build.** Snapmaker's firmware may run a modified
   Moonraker and Klipper. A difference between the sim and the U1 is
   recorded as a finding for that host. It is not averaged away, and it
@@ -730,7 +766,8 @@ Also modified:
 - `slicing/blockers.rs` (register the revision blocker);
 - `spools/operations.rs` (new `OperationKind`s);
 - `contracts/command.rs` (`CAPABILITY_UNSUPPORTED`, `CONNECTION_IN_USE`,
-  `HOST_OPERATION_UNRESOLVED`, `HOST_OPERATION_NOT_ABANDONABLE`);
+  `HOST_OPERATION_UNRESOLVED`, `HOST_OPERATION_NOT_ABANDONABLE`,
+  `START_NOT_ALLOWED`, `START_PRECONDITION_CHANGED`);
 - `lib.rs` (startup order), `contracts/inventory.rs`, `Cargo.toml`
   (`reqwest`).
 
@@ -1060,6 +1097,19 @@ against fake capability traits and wires to Moonraker after Task 7.
   | Host unreachable for the whole run | any | stays `uncertain`; abandon allowed; guards lift after abandon |
   | Host running a different file | start | stays `uncertain` with the busy note; never auto-starts |
 
+  Start precondition tests (answer 13). No Host Operation row is written
+  on any rejection:
+  - Accepted from standby with `priorState: "ready"`.
+  - Accepted from `complete` and from `cancelled` with the matching
+    `priorState`.
+  - Rejected with `START_NOT_ALLOWED` from `error`, printing, paused, and
+    stale telemetry.
+  - Rejected with `START_PRECONDITION_CHANGED` when the acknowledged
+    `priorState` differs from the freshly observed state.
+  - Accepted again after `error` clears to standby.
+  - Sim: start a second staged file after the first print reached
+    `complete`, with the "previous print finished" acknowledgement.
+
   Also: the seeded-secret scan over events, errors, rows, and logs;
   listen-before-backfill ordering; operation-id replay for every command.
 
@@ -1088,14 +1138,31 @@ against fake capability traits and wires to Moonraker after Task 7.
   - An unsupported control is never an enabled button.
   - A failed operation shows an alert with a recovery action.
   - Abandon cannot be confirmed without the acknowledgement.
-  - Start cannot be confirmed until "The bed is clear" is ticked, for
-    both start-safety rules.
+  - Start cannot be confirmed until the bed-clear box is ticked, for both
+    start-safety rules.
+  - Start follows D9's table: offered for Ready, `complete`, and
+    `cancelled`, and disabled for `error` and every other state, with the
+    reason shown.
+  - For `complete` and `cancelled`, the confirmation text names the prior
+    state (answer 13).
   - Everything is keyboard-operable.
   - Layout works at 1440 × 900 and 1024 × 700.
 - **Tests:** component tests with `@solidjs/testing-library`
   (`pointerDown`/`pointerUp` for Select and Menu). Each dialog's disabled
   and blocked states. The Stage dialog disables unsupported Printers and
-  Offline Printers with different reasons.
+  Offline Printers with different reasons. Start-specific tests:
+  - One test per row of the D9 Start table. Ready, `complete`, and
+    `cancelled` show Start. `error`, printing, paused, offline, and stale
+    telemetry do not offer it (disabled with the reason).
+  - The `complete` dialog's checkbox label is "The previous print
+    finished. The bed is clear." The `cancelled` label says the print was
+    cancelled. The Ready label names no prior state.
+  - The command is sent with the matching `priorState`.
+  - An `error` → standby transition on the status stream enables Start
+    without a reload.
+  - A `START_PRECONDITION_CHANGED` response closes the confirmation and
+    reopens it (or disables Start) for the newly reported state. The old
+    tick is never carried over.
 
 ### Task 11: Live-host tests (sim writes, U1 read-only) and failure injection
 
@@ -1317,10 +1384,12 @@ Nothing in the shared foundation assumes parity.
 The user answered every product question on 2026-09-25 (§Status). What
 remains is coordination with other branches:
 
-- **#9:** its tool model (how multiple extruders appear in telemetry) and
-  whether the Start confirmation may acknowledge a `complete` or
-  `cancelled` state, or whether that stays a separate #9/P7 action (D9).
-  P6 asks, and does not decide.
+- **#9:** its tool model (how multiple extruders appear in telemetry).
+  #9 also needs to know that P6's Start rule (answer 13) offers Start from
+  `complete` and `cancelled` while its readiness stays non-ready. #9's
+  readiness must therefore expose the raw prior state (`complete`,
+  `cancelled`, or `error`), not only "not ready", so the Start rule and the
+  confirmation text can tell them apart.
 - **Harness:** a multi-extruder Klipper config variant, for answer 9's
   sim coverage.
 - The harness's final names for the endpoint variable, the key variable,
