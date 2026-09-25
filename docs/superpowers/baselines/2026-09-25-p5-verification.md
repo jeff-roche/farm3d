@@ -608,6 +608,23 @@ redone.
   inspection was active and WebKit was tearing down. Two more SIGTERMs
   exited cleanly, so it wasn't reproduced. It is unconfirmed and could be in
   WebKitGTK or ATK rather than farm3d.
+  *Cleanup-round audit (Task C): nothing in farm3d is at fault.* farm3d
+  installs no SIGTERM handler: `SigCgt` in `/proc/<pid>/status` doesn't
+  include SIGTERM, and no dependency registers one (no `tokio` `signal`
+  feature; `signal-hook-registry` is only async-io's SIGCHLD). So SIGTERM
+  ends the farm3d process by the kernel's default action, and no farm3d
+  code (and no `free()`) runs in that process afterwards. The only unsafe
+  code built on Linux is the `pre_exec` closure in
+  `slicing/process_group.rs`. It makes one `prctl(PR_SET_PDEATHSIG)`
+  syscall through rustix, and its error path builds an `io::Error` from a
+  raw errno. Neither allocates or takes a lock, so it is sound after
+  `fork`. Twenty start-then-SIGTERM runs of the dev binary (on a display,
+  with scratch XDG directories) all exited with status 143 and printed
+  nothing. In the saved log of the failing run, the abort line comes
+  straight after a burst of ATK `impl_get_CharacterCount` assertion
+  failures from AT-SPI inspection. That points to GTK/ATK/WebKitGTK
+  teardown, or to a WebKit helper process that writes to the same
+  terminal.
 - **Empty logs from v2.4.2.** Real v2.4.2 writes **nothing** to stdout or
   stderr on a successful slice. Re-running the stored inputs by hand gave 0
   and 0 bytes with rc 0. So every successful revision's `log` blob is empty
@@ -662,7 +679,14 @@ They make no runtime claim (D24), and CI stays on fake-orca.
 
 - **Task 3:**
   - One full-suite `cargo test` failure could not be reproduced. It didn't
-    recur this run.
+    recur this run. *Cleanup round (Task C):* not reproduced in 20 more
+    full-suite runs (10 plain, 10 with `--test-threads=64` next to a
+    looping release build). Its name wasn't recorded. Likely candidates are
+    the later-fixed SIGTERM grace race and the two load races fixed in
+    `a94723b` (below) and `5a05fd4`. `5a05fd4` fixes
+    `p2_contract_path::first_time_set_printer_connection_never_probes`,
+    which counted a spawned supervision call in a 300 ms window. That race
+    didn't fire in 1,000 loaded runs, but a 400 ms delay reproduces it.
   - `insert_preparation` ignores the source format. D5's G-code rejection is
     enforced in `create_preparation`.
   - `library::model_content_hashes` reads slicing tables directly.
@@ -685,7 +709,15 @@ They make no runtime claim (D24), and CI stays on fake-orca.
   - The STL weld keeps −0.0 and 0.0 as distinct vertices.
   - The golden plate bytes depend on the zip crate version.
 - **Task 6:** `p4_links::a_failed_watch_falls_back_to_polling_with_a_warning`
-  flaked once under full-suite load. It didn't recur this run.
+  flaked once under full-suite load. It didn't recur this run. *Fixed
+  (`a94723b`):* the startup pass (`reconcile_all`, spawned on its own
+  task) could start after the test's import and register the Model again.
+  That dropped the polled watch and added it back natively, since the
+  forced failure is one-shot, so `watchMode` read `watching`. The test now
+  waits for the startup pass first. Before the fix, it failed 5 times in
+  1,000 runs under load (64 at once, next to a release build), with the
+  same `watching` ≠ `polling` assertion. After the fix, it failed 0 times
+  in 2,000 runs.
 - **Task 7:** an in-place unretract extends the printed bounds.
 - **Task 8:**
   - `run_job` treats a storage read error as "not queued".
