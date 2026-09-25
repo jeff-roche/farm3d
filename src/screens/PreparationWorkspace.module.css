@@ -1,0 +1,133 @@
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background-color: var(--f3d-color-surface);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-border);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  letter-spacing: var(--f3d-type-heading-tracking);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saveState {
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-border-strong);
+}
+
+.noticeText {
+  flex: 1;
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-size: var(--f3d-type-body-size);
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.centre {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.message {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--f3d-color-danger);
+  font-size: var(--f3d-type-body-size);
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.5rem;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 0 0 20rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 1024 × 700: the objects fold under the viewport, behind a toggle. */
+.narrow {
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.narrow .side {
+  flex: 0 0 auto;
+}
+
+.narrow .inspector {
+  overflow-y: visible;
+}
+
+.arrange {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.dock {
+  flex: 0 0 22rem;
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--f3d-color-border);
+  background-color: var(--f3d-color-surface-raised);
+}
+
+.status {
+  min-height: 1.25rem;
+  margin: 0;
+  padding: 0.125rem 0.75rem;
+  border-top: 1px solid var(--f3d-color-border);
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}

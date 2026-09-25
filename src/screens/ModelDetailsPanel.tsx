@@ -55,6 +55,9 @@ export interface ModelDetailsPanelProps {
   onConvertToManaged: (modelId: string) => void;
   /** **Delete…** (D18). The caller confirms first. */
   onDelete: (modelId: string) => void;
+  /** **Prepare…** (P5 D19), offered for STL and 3MF Models: opens the
+   *  Preparation workspace. */
+  onPrepare?: (modelId: string) => void;
   /** A new non-zero value moves focus to **Add to Project…**. */
   focusRequest?: number;
   /** Called once `focusRequest` has been acted on, so a remount doesn't
@@ -164,6 +167,9 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
         </Show>
       </section>
       <div class={styles.actions}>
+        <Show when={props.onPrepare && props.model.format !== "gcode"}>
+          <Button variant="primary" onClick={() => props.onPrepare?.(props.model.id)}>Prepare…</Button>
+        </Show>
         <Show when={props.model.link}>
           {(link) => (
             <>

@@ -41,6 +41,8 @@ const DeleteModelDialog = lazy(() => import("./DeleteModelDialog").then((m) => (
 const CreateProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.CreateProjectDialog })));
 const RenameProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.RenameProjectDialog })));
 const DeleteProjectDialog = lazy(() => import("./ProjectDialogs").then((m) => ({ default: m.DeleteProjectDialog })));
+// The Preparation workspace (viewport, tools) loads on first **Prepare…**.
+const PreparationMode = lazy(() => import("./PreparationMode").then((m) => ({ default: m.PreparationMode })));
 
 export interface LibraryWorkspaceProps {
   /** App's navigation, so a selection is checked against every available
@@ -138,6 +140,9 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
   const [checking, setChecking] = createSignal(false);
   const [checkedAt, setCheckedAt] = createSignal<number | null>(null);
   const [clock, setClock] = createSignal(Date.now());
+  // D19: the Model being prepared. Workspace state, not deep-linked; the
+  // navigation target stays the Model's.
+  const [preparingId, setPreparingId] = createSignal<string | null>(null);
   const now = () => new Date();
 
   // D15 trigger 3: check linked sources when the Library becomes visible
@@ -222,6 +227,15 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     if (model && !modelsFor(activeView(), [model], now()).length) setView(ALL_MODELS);
   }));
 
+  // Preparing ends when the selection moves to another Model (or none).
+  const preparing = createMemo(() => {
+    const model = selectedModel();
+    return model && model.id === preparingId() && model.format !== "gcode" ? model : undefined;
+  });
+  createEffect(on(() => selectedModel()?.id, (id) => {
+    if (id !== preparingId()) setPreparingId(null);
+  }, { defer: true }));
+
   const inView = createMemo(() => modelsFor(activeView(), library.models(), now()));
   const shown = createMemo(() => sortModels(searchModels(inView(), library.projects(), search()), sort()));
 
@@ -291,6 +305,10 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           onLocateSource={(modelId) => setDialog({ kind: "locate", modelId })}
           onConvertToManaged={(modelId) => setDialog({ kind: "convert", modelId })}
           onDelete={(modelId) => setDialog({ kind: "deleteModel", modelId })}
+          onPrepare={(modelId) => {
+            setDetailsOpen(false);
+            setPreparingId(modelId);
+          }}
           focusRequest={focusRequest()}
           onFocusHandled={() => setFocusRequest(0)}
         />
@@ -383,105 +401,121 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         >
           Check sources
         </Button>
-        <Show when={narrow()}>
+        <Show when={narrow() && !preparing()}>
           <Button variant="ghost" aria-expanded={detailsOpen()} onClick={() => setDetailsOpen((open) => !open)}>
             Details
           </Button>
         </Show>
       </div>
       <div class={styles.body}>
-        <LibrarySidebar
-          view={activeView()}
-          projects={library.projects()}
-          models={library.models()}
-          now={now()}
-          onSelectView={selectView}
-          onRenameProject={(projectId) => setDialog({ kind: "renameProject", projectId })}
-          onDeleteProject={(projectId) => setDialog({ kind: "deleteProject", projectId })}
-        />
-        <div class={styles.content}>
-          <Show
-            when={library.status() !== "loading" || library.models().length > 0}
-            fallback={<p class={styles.notice} role="status">Loading the Library…</p>}
-          >
-            <Show
-              when={library.models().length > 0}
-              fallback={
-                <div class={styles.empty}>
-                  <h2 class={styles.emptyTitle}>Import a Model</h2>
-                  <p class={styles.notice}>STL, 3MF, and pre-sliced G-code files are kept in the Library.</p>
-                  <FileDropSurface
-                    label="Import Models"
-                    hint="Drop files here, or choose them."
-                    active={props.dropActive ?? false}
-                    disabled={!desktopAvailable()}
-                    disabledReason={WEB_IMPORT_REASON}
-                    onChoose={() => props.onImport?.()}
-                  />
-                </div>
-              }
-            >
+        <Show
+          when={preparing()?.id}
+          keyed
+          fallback={
+            <>
+            <LibrarySidebar
+              view={activeView()}
+              projects={library.projects()}
+              models={library.models()}
+              now={now()}
+              onSelectView={selectView}
+              onRenameProject={(projectId) => setDialog({ kind: "renameProject", projectId })}
+              onDeleteProject={(projectId) => setDialog({ kind: "deleteProject", projectId })}
+            />
+            <div class={styles.content}>
               <Show
-                when={shown().length > 0}
-                fallback={
-                  <div class={styles.empty}>
-                    <p class={styles.notice}>
-                      {search().trim() && inView().length > 0
-                        ? `No Models in ${viewLabel(activeView(), library.projects())} match “${search().trim()}”`
-                        : `No Models in ${viewLabel(activeView(), library.projects())}`}
-                    </p>
-                    <Button variant="secondary" onClick={showAllModels}>Show all Models</Button>
-                  </div>
-                }
+                when={library.status() !== "loading" || library.models().length > 0}
+                fallback={<p class={styles.notice} role="status">Loading the Library…</p>}
               >
                 <Show
-                  when={mode() === "list"}
+                  when={library.models().length > 0}
                   fallback={
-                    <ModelGrid
-                      models={shown()}
-                      projects={library.projects()}
-                      view={activeView()}
-                      selectedId={selectedModel()?.id ?? null}
-                      onSelect={selectModel}
-                      onAddToProject={addToProject}
-                    />
+                    <div class={styles.empty}>
+                      <h2 class={styles.emptyTitle}>Import a Model</h2>
+                      <p class={styles.notice}>STL, 3MF, and pre-sliced G-code files are kept in the Library.</p>
+                      <FileDropSurface
+                        label="Import Models"
+                        hint="Drop files here, or choose them."
+                        active={props.dropActive ?? false}
+                        disabled={!desktopAvailable()}
+                        disabledReason={WEB_IMPORT_REASON}
+                        onChoose={() => props.onImport?.()}
+                      />
+                    </div>
                   }
                 >
-                  <ModelList
-                    models={shown()}
-                    projects={library.projects()}
-                    view={activeView()}
-                    selectedId={selectedModel()?.id ?? null}
-                    onSelect={selectModel}
-                    onAddToProject={addToProject}
-                  />
+                  <Show
+                    when={shown().length > 0}
+                    fallback={
+                      <div class={styles.empty}>
+                        <p class={styles.notice}>
+                          {search().trim() && inView().length > 0
+                            ? `No Models in ${viewLabel(activeView(), library.projects())} match “${search().trim()}”`
+                            : `No Models in ${viewLabel(activeView(), library.projects())}`}
+                        </p>
+                        <Button variant="secondary" onClick={showAllModels}>Show all Models</Button>
+                      </div>
+                    }
+                  >
+                    <Show
+                      when={mode() === "list"}
+                      fallback={
+                        <ModelGrid
+                          models={shown()}
+                          projects={library.projects()}
+                          view={activeView()}
+                          selectedId={selectedModel()?.id ?? null}
+                          onSelect={selectModel}
+                          onAddToProject={addToProject}
+                        />
+                      }
+                    >
+                      <ModelList
+                        models={shown()}
+                        projects={library.projects()}
+                        view={activeView()}
+                        selectedId={selectedModel()?.id ?? null}
+                        onSelect={selectModel}
+                        onAddToProject={addToProject}
+                      />
+                    </Show>
+                  </Show>
                 </Show>
               </Show>
+            </div>
+            <Show
+              when={narrow()}
+              fallback={<aside class={styles.details} aria-label="Model details">{details()}</aside>}
+            >
+              <KDialog open={detailsOpen()} onOpenChange={setDetailsOpen}>
+                <KDialog.Portal>
+                  <KDialog.Overlay class={styles.overlay} />
+                  <KDialog.Content
+                    class={styles.overlayContent}
+                    aria-label="Model details"
+                    onOpenAutoFocus={(event) => {
+                      // Add to Project… moves focus to its own picker instead.
+                      if (focusRequest()) event.preventDefault();
+                    }}
+                  >
+                    <div class={styles.overlayHeader}>
+                      <Button variant="ghost" size="sm" onClick={() => setDetailsOpen(false)}>Close details</Button>
+                    </div>
+                    {details()}
+                  </KDialog.Content>
+                </KDialog.Portal>
+              </KDialog>
             </Show>
-          </Show>
-        </div>
-        <Show
-          when={narrow()}
-          fallback={<aside class={styles.details} aria-label="Model details">{details()}</aside>}
+            </>
+          }
         >
-          <KDialog open={detailsOpen()} onOpenChange={setDetailsOpen}>
-            <KDialog.Portal>
-              <KDialog.Overlay class={styles.overlay} />
-              <KDialog.Content
-                class={styles.overlayContent}
-                aria-label="Model details"
-                onOpenAutoFocus={(event) => {
-                  // Add to Project… moves focus to its own picker instead.
-                  if (focusRequest()) event.preventDefault();
-                }}
-              >
-                <div class={styles.overlayHeader}>
-                  <Button variant="ghost" size="sm" onClick={() => setDetailsOpen(false)}>Close details</Button>
-                </div>
-                {details()}
-              </KDialog.Content>
-            </KDialog.Portal>
-          </KDialog>
+          {(_id) => (
+            <div class={styles.preparing}>
+              <Suspense fallback={<p class={styles.notice} role="status">Loading the Preparation workspace…</p>}>
+                <PreparationMode model={preparing()!} onBack={() => setPreparingId(null)} />
+              </Suspense>
+            </div>
+          )}
         </Show>
       </div>
       <Suspense>

@@ -54,6 +54,16 @@ async function pickOption(name: string) {
 }
 
 describe("ModelDetailsPanel", () => {
+  it("offers Prepare… for STL and 3MF Models, not G-code", async () => {
+    const onPrepare = vi.fn();
+    renderPanel(fixtureModel("mdl-web-enclosure"), { onPrepare });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare…" }));
+    expect(onPrepare).toHaveBeenCalledWith("mdl-web-enclosure");
+    cleanup();
+    renderPanel(fixtureModel("mdl-web-cube-gcode"), { onPrepare });
+    expect(screen.queryByRole("button", { name: "Prepare…" })).toBeNull();
+  });
+
   it("saves a name edit on blur", async () => {
     renderPanel(fixtureModel("mdl-web-bracket"));
     const name = screen.getByRole("textbox", { name: "Name" });

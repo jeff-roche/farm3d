@@ -89,9 +89,12 @@ export const slicingStoreMock = {
     vertexCount: 0, indexCount: 0, triangleCount: 0, positions: new Float32Array(), indices: new Uint32Array(),
   })),
   createPreparation: vi.fn(async (modelId: string, _target?: SliceTarget): Promise<PreparationRecord> => state.preparations[modelId]!),
+  /** Settles the saved record into the mock's state, as the store does. */
   updatePreparation: vi.fn(async (preparationId: string, document: PreparationDocument): Promise<PreparationRecord> => {
     const held = Object.values(state.preparations).find((p) => p?.id === preparationId)!;
-    return { ...held, document, revision: held.revision + 1 };
+    const saved = { ...held, document: JSON.parse(JSON.stringify(document)) as PreparationDocument, revision: held.revision + 1 };
+    setState("preparations", held.modelId, reconcile(saved));
+    return saved;
   }),
   reloadPreparation: vi.fn(async (preparationId: string): Promise<ReloadPreparationData> => ({
     preparation: Object.values(state.preparations).find((p) => p?.id === preparationId)!,

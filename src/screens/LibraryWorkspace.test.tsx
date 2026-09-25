@@ -220,6 +220,28 @@ describe("LibraryWorkspace", () => {
     expect(within(details).getByRole("textbox", { name: "Name" })).toHaveValue("Spare knob");
   });
 
+  it("Prepare… turns the Library into the Preparation workspace until Back to Library or another selection", async () => {
+    const { loadWebSlicingFixture } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    const details = screen.getByRole("complementary", { name: "Model details" });
+    fireEvent.click(within(details).getByRole("button", { name: "Prepare…" }));
+    expect(await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 })).toBeInTheDocument();
+    // The sidebar and the details panel make way; the target is unchanged.
+    expect(screen.queryByRole("navigation", { name: "Library" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Model details" })).toBeNull();
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-web-enclosure" });
+    fireEvent.click(screen.getByRole("button", { name: /Back to Library/ }));
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 });
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-knob" } });
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
+  });
+
   it("a card's Add to Project… selects the Model and focuses the details panel's picker", async () => {
     renderWorkspace();
     await fireEvent.pointerDown(screen.getByLabelText("Actions for Spare knob"), { pointerType: "mouse", button: 0 });

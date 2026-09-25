@@ -1,0 +1,27 @@
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-warning);
+}
+
+.message {
+  flex: 1 1 20rem;
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-size: var(--f3d-type-body-size);
+}
+
+.actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-size: var(--f3d-type-body-small-size);
+}
