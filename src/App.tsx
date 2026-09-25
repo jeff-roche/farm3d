@@ -17,6 +17,7 @@ import {
   startLibrary,
 } from "./library/library-store";
 import type { ImportSelectionSummary } from "./library/types";
+import { startSlicing } from "./slicing/slicing-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -164,6 +165,7 @@ function App() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let disposeLibrary: (() => void) | undefined;
+    let disposeSlicing: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -210,6 +212,15 @@ function App() {
           disposeLibrary = dispose;
           reconcileNavigation();
         });
+        // Slicing follows the Library (the spec's startup order), with
+        // the same retry and unmount handling.
+        void startSlicing().then((dispose) => {
+          if (disposed || generation !== startupGeneration) {
+            dispose();
+            return;
+          }
+          disposeSlicing = dispose;
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -236,6 +247,7 @@ function App() {
       retryStartup = undefined;
       unlisten?.();
       disposeLibrary?.();
+      disposeSlicing?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });

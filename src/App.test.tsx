@@ -141,6 +141,8 @@ vi.mock("./library/library-store", async () => {
   };
 });
 
+vi.mock("./slicing/slicing-store", async () => (await import("./slicing/slicing-store-mock")).slicingStoreMock);
+
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
 }));
@@ -220,8 +222,11 @@ const SETTINGS = {
   updatedAt: "",
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  // The mocked slicing store outlives `vi.resetModules`; start each test
+  // with its default spies.
+  vi.mocked(await import("./slicing/slicing-store")).startSlicing.mockReset();
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -365,6 +370,47 @@ describe("App", () => {
     expect(callOrder).toEqual(["loadPrinters", "startLibrary"]);
     unmount();
     expect(libraryStore.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("starts slicing right after the Library and disposes it on unmount", async () => {
+    const callOrder: string[] = [];
+    libraryStore.startLibrary.mockImplementation(async () => {
+      callOrder.push("startLibrary");
+      return libraryStore.dispose;
+    });
+    // The mocked store, as App sees it (mocks outlive `vi.resetModules`).
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    const disposeSlicing = vi.fn();
+    slicingStoreMock.startSlicing.mockImplementation(async () => {
+      callOrder.push("startSlicing");
+      return disposeSlicing;
+    });
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(slicingStoreMock.startSlicing).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["startLibrary", "startSlicing"]);
+    // Let the start settle, so unmount has its disposer.
+    await Promise.resolve();
+    unmount();
+    expect(disposeSlicing).toHaveBeenCalledOnce();
+  });
+
+  it("disposes a slicing start that finishes after unmount", async () => {
+    // The mocked store, as App sees it (mocks outlive `vi.resetModules`).
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    const disposeSlicing = vi.fn();
+    let finish: (() => void) | undefined;
+    slicingStoreMock.startSlicing.mockImplementation(() => new Promise((resolve) => {
+      finish = () => resolve(disposeSlicing);
+    }));
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(slicingStoreMock.startSlicing).toHaveBeenCalled());
+    unmount();
+    finish?.();
+    await waitFor(() => expect(disposeSlicing).toHaveBeenCalledOnce());
   });
 
   it("lists the Library as an available destination", async () => {
