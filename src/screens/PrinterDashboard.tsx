@@ -1,14 +1,16 @@
-import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Match, Show, Suspense, Switch, createSignal, lazy, onCleanup, onMount } from "solid-js";
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { MonitorToolbar } from "./MonitorToolbar";
-import { PrinterBatchDialog } from "./PrinterBatchDialog";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
 import { PrinterDetailDock, type DockFocusRequest } from "./PrinterDetailDock";
 import styles from "./PrinterDashboard.module.css";
+
+// The batch dialog loads on first use, keeping it out of the main chunk.
+const PrinterBatchDialog = lazy(() => import("./PrinterBatchDialog").then((m) => ({ default: m.PrinterBatchDialog })));
 
 export interface PrinterDashboardProps {
   store: MonitorStore;
@@ -30,6 +32,11 @@ export interface PrinterDashboardProps {
 export function PrinterDashboard(props: PrinterDashboardProps) {
   const [wizardOpen, setWizardOpen] = createSignal(false);
   const [batchDialogOpen, setBatchDialogOpen] = createSignal(false);
+  const [batchDialogRequested, setBatchDialogRequested] = createSignal(false);
+  const openBatchDialog = () => {
+    setBatchDialogRequested(true);
+    setBatchDialogOpen(true);
+  };
   const [dockFocus, setDockFocus] = createSignal<DockFocusRequest | undefined>();
   const sections = new Map<string, HTMLElement>();
   let workspace: HTMLDivElement | undefined;
@@ -82,7 +89,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
       <MonitorToolbar
         store={props.store}
         onAddPrinter={() => setWizardOpen(true)}
-        onAddPrinters={() => setBatchDialogOpen(true)}
+        onAddPrinters={openBatchDialog}
         onImport={props.onImport}
         onExport={props.onExport}
       />
@@ -102,7 +109,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
             <EmptyState
               message="Start your Farm by adding a Printer."
               onAdd={() => setWizardOpen(true)}
-              onAddBatch={() => setBatchDialogOpen(true)}
+              onAddBatch={openBatchDialog}
             />
           </Match>
           <Match when={props.store.isFilteredEmpty()}>
@@ -184,12 +191,18 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
         existingPrinters={props.existingPrinters ?? []}
         onCreated={props.onPrinterCreated}
       />
-      <PrinterBatchDialog
-        open={batchDialogOpen()}
-        onOpenChange={setBatchDialogOpen}
-        existingPrinters={props.existingPrinters ?? []}
-        onEquip={equipPrinter}
-      />
+      {/* Mounted on first open, then kept, so a batch in progress survives
+          closing the dialog. */}
+      <Show when={batchDialogRequested()}>
+        <Suspense>
+          <PrinterBatchDialog
+            open={batchDialogOpen()}
+            onOpenChange={setBatchDialogOpen}
+            existingPrinters={props.existingPrinters ?? []}
+            onEquip={equipPrinter}
+          />
+        </Suspense>
+      </Show>
     </div>
   );
 }

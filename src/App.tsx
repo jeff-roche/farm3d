@@ -1,11 +1,10 @@
 // src/App.tsx
-import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from "solid-js";
 import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./monitor/monitor-store";
 import { AppShell } from "./screens/AppShell";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { LibraryWorkspace } from "./screens/LibraryWorkspace";
-import { SpoolInventory } from "./screens/SpoolInventory";
 import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
 import { desktopAvailable } from "./ipc/client";
 import {
@@ -42,6 +41,10 @@ import {
   serializeNavigationTarget,
   type NavigationDestination,
 } from "./navigation/navigation-store";
+
+// The Spools screen and its dialogs load on first visit, keeping them out of
+// the main chunk.
+const SpoolInventory = lazy(() => import("./screens/SpoolInventory").then((m) => ({ default: m.SpoolInventory })));
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -329,7 +332,9 @@ function App() {
               />
             </Match>
             <Match when={active() === "spools"}>
-              <SpoolInventory />
+              <Suspense fallback={<p class={styles.loading} role="status">Loading Spools…</p>}>
+                <SpoolInventory />
+              </Suspense>
             </Match>
           </Switch>
         }

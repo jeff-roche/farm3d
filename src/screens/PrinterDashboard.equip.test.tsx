@@ -48,7 +48,7 @@ describe("PrinterDashboard — batch Equip", () => {
     render(() => <PrinterDashboard store={monitor} onSelectionChange={onSelectionChange} />);
 
     await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Equip stub" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Equip stub" }));
 
     expect(onSelectionChange).toHaveBeenCalledWith("prn-1");
     await waitFor(() => expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true"));
@@ -62,7 +62,7 @@ describe("PrinterDashboard — batch Equip", () => {
     });
     render(() => <PrinterDashboard store={monitor} />);
     await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Equip stub" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Equip stub" }));
     await waitFor(() => expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true"));
 
     await fireEvent.click(screen.getByRole("button", { name: "Close" }));
