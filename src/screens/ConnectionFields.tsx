@@ -37,6 +37,11 @@ const TOLERANCE_MM = 1;
  * Absence is never a mismatch: an unhomed or shut-down Klipper reports no
  * axis limits at all, and warning about that would train users to ignore
  * this box.
+ *
+ * Only a host that reports LESS than the catalog is a mismatch. Axis limits
+ * include parking and tool-change travel, so they routinely exceed the
+ * printable volume: a Snapmaker U1 reports 271 × 335 × 281 mm for a 270 mm
+ * cube (A0.1, #9, decision B3).
  */
 export function buildMismatches(
   profile: PrinterProfile,
@@ -45,7 +50,7 @@ export function buildMismatches(
   const mismatches: string[] = [];
   const check = (label: string, catalog: number | undefined, host: number | undefined) => {
     if (catalog === undefined || host === undefined) return;
-    if (Math.abs(catalog - host) <= TOLERANCE_MM) return;
+    if (host >= catalog - TOLERANCE_MM) return;
     mismatches.push(`${label}: catalog says ${catalog} mm, the printer reports ${host} mm`);
   };
 
