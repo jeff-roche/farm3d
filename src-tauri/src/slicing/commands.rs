@@ -478,7 +478,10 @@ pub async fn cancel_slice_operation<R: tauri::Runtime>(
 }
 
 /// D9/D13: the operation's stored log: its revision's `log` blob when it
-/// succeeded, else `slice_operations.log_sha256`. Empty while it has none.
+/// succeeded, else `slice_operations.log_sha256`. Empty while it has none
+/// (it never ran). A succeeded operation's log is its revision's, so it
+/// goes with a deleted revision: that is `NOT_FOUND`
+/// ([`CommandError::slice_log_deleted`]), not an empty log.
 #[tauri::command]
 pub async fn get_slice_operation_log<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -488,25 +491,29 @@ pub async fn get_slice_operation_log<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<SliceOperationLog>, CommandError> {
     let services = ready(&app, &bootstrap, contract_version)?;
     blocking(move || {
-        let (exists, sha256) = services
+        let (state, sha256) = services
             .storage
             .read(|connection| {
-                let exists: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM slice_operations WHERE id = ?1)",
-                    [&slice_operation_id],
-                    |row| row.get(0),
-                )?;
+                let state: Option<String> =
+                    rusqlite::OptionalExtension::optional(connection.query_row(
+                        "SELECT state FROM slice_operations WHERE id = ?1",
+                        [&slice_operation_id],
+                        |row| row.get(0),
+                    ))?;
                 let sha256 =
                     operations::log_sha256(connection, &slice_operation_id).map_err(|error| {
                         rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
                             error.to_string(),
                         )))
                     })?;
-                Ok((exists, sha256))
+                Ok((state, sha256))
             })
             .map_err(storage_error)?;
-        if !exists {
+        let Some(state) = state else {
             return Err(CommandError::not_found(slice_operation_id));
+        };
+        if sha256.is_none() && state == "succeeded" {
+            return Err(CommandError::slice_log_deleted(&slice_operation_id));
         }
         let Some(sha256) = sha256 else {
             return Ok(SliceOperationLog {
@@ -581,14 +588,29 @@ pub fn delete_slice_revision<R: tauri::Runtime>(
     slice_revision_id: String,
 ) -> Result<CommandSuccess<SlicingDeleted>, CommandError> {
     let services = ready(&app, &bootstrap, contract_version)?;
-    services
+    // The operations that made it lose their `sliceRevisionId` (and their
+    // log, which was the revision's) in the same commit.
+    let operations = services
         .storage
         .write_repo(|tx| {
+            let ids = {
+                let mut statement =
+                    tx.prepare("SELECT id FROM slice_operations WHERE slice_revision_id = ?1")?;
+                let ids = statement
+                    .query_map([&slice_revision_id], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                ids
+            };
             repository::delete_slice_revision(
                 tx,
                 &slice_revision_id,
                 slice_revision_blocker_sources(),
-            )
+            )?;
+            let mut operations = Vec::new();
+            for id in ids {
+                operations.extend(repository::load_operation(tx, &id)?);
+            }
+            Ok(operations)
         })
         .map_err(CommandError::from_repository)?;
     // Committed; a blob that can't be unlinked now is retried at startup.
@@ -596,8 +618,8 @@ pub fn delete_slice_revision<R: tauri::Runtime>(
         .library
         .content
         .release_unreferenced(&services.storage);
-    services
-        .slicing
-        .publish(vec![events::revision_removed(&slice_revision_id)]);
+    let mut published = vec![events::revision_removed(&slice_revision_id)];
+    published.extend(operations.iter().map(events::operation_changed));
+    services.slicing.publish(published);
     Ok(CommandSuccess::new(SlicingDeleted {}))
 }

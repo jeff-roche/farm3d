@@ -315,6 +315,9 @@ pub enum SliceFailureCode {
     /// database failed). Not in D11's table: without it such an operation
     /// would stay `running` until the next start interrupted it.
     StorageFailed,
+    /// farm3d itself failed while running the slice (its worker panicked).
+    /// Not in D11's table either.
+    InternalError,
 }
 
 /// D11: a failed operation's code and its user-facing text, stored as
@@ -703,6 +706,18 @@ impl<R: tauri::Runtime> SlicingServices<R> {
         Arc::clone(&lock(&self.file_io))
     }
 
+    /// Test seam: whether the scheduler has nothing queued or running.
+    #[doc(hidden)]
+    pub fn scheduler_idle(&self) -> bool {
+        self.scheduler.idle()
+    }
+
+    /// Test seam: see [`operations::SchedulerPoint`].
+    #[doc(hidden)]
+    pub fn set_scheduler_hook(&self, hook: Option<operations::SchedulerHook>) {
+        self.scheduler.set_hook(hook);
+    }
+
     /// Test seam: replaces the native pickers.
     pub fn set_file_io(&self, file_io: Arc<dyn SlicerRuntimeFileIo>) {
         *lock(&self.file_io) = file_io;
@@ -760,17 +775,18 @@ impl<R: tauri::Runtime> SlicingServices<R> {
         }
         let env = self.discovery_env();
         let runtime = resolve_runtime_with(&config, &env, &self.cache_dir, &self.caches);
-        let changed = {
-            let mut current = lock(&self.runtime);
-            let changed = current
-                .as_ref()
-                .is_none_or(|previous| previous.status != runtime.status);
-            *current = Some(runtime.clone());
-            changed
-        };
+        // Published under the `runtime` lock, so two resolves' events go
+        // out in the order their results were stored. Lock order: `runtime`,
+        // then the stream; never the reverse.
+        let mut current = lock(&self.runtime);
+        let changed = current
+            .as_ref()
+            .is_none_or(|previous| previous.status != runtime.status);
+        *current = Some(runtime.clone());
         if changed {
             self.publish(vec![events::runtime_changed(&runtime.status)]);
         }
+        drop(current);
         Ok(runtime)
     }
 
@@ -892,6 +908,11 @@ impl<R: tauri::Runtime> SlicingServices<R> {
         }
         let services = Arc::downgrade(self);
         app.listen(crate::connections::supervisor::STATUS_EVENT, move |event| {
+            // Every stream shares this event; only the Library's matter here,
+            // so skip the rest without parsing them.
+            if !event.payload().contains("\"library.") {
+                return;
+            }
             let Some(services) = services.upgrade() else {
                 return;
             };
@@ -917,6 +938,9 @@ impl<R: tauri::Runtime> SlicingServices<R> {
     /// reports it removed with the Model.
     fn follow_model(&self, model_id: &str, removed: bool) {
         if removed {
+            // Its Preparation and operations cascaded away: stop a job
+            // still working for them.
+            operations::abandon_deleted_jobs(self);
             if let Some(preparation_id) = self.forget_preparation_of(model_id) {
                 self.publish(vec![events::preparation_removed(&preparation_id)]);
             }

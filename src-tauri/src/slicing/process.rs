@@ -1022,6 +1022,22 @@ pub fn run_slice(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // A cancel that landed while the FIFO and command were set up: nothing
+    // is spawned.
+    if cancel.is_cancelled() {
+        finish_fifo();
+        push_line(
+            &ring,
+            "[farm3d: cancelled before OrcaSlicer started]\n".to_string(),
+        );
+        return SliceRun {
+            exit: RunExit::Cancelled,
+            result: None,
+            log: snapshot(&ring),
+            killed: false,
+            progress_piped: with_progress,
+        };
+    }
     let started = Instant::now();
     let mut group = match spawn_group(&mut process) {
         Ok(child) => StopOnDrop {

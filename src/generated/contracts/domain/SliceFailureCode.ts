@@ -4,4 +4,4 @@
  * D11: why a slice operation failed. Codes with a payload carry it
  * beside `kind`.
  */
-export type SliceFailureCode = { "kind": "objectsOutsidePlate" } | { "kind": "presetInvalid" } | { "kind": "inputMissing" } | { "kind": "inputInvalid" } | { "kind": "presetIncompatible" } | { "kind": "engineError", returnCode: number, } | { "kind": "outputMissing" } | { "kind": "outputInvalid", reason: string, } | { "kind": "timeout" } | { "kind": "engineCrashed", signal: number, } | { "kind": "spawnFailed" } | { "kind": "storageFailed" };
+export type SliceFailureCode = { "kind": "objectsOutsidePlate" } | { "kind": "presetInvalid" } | { "kind": "inputMissing" } | { "kind": "inputInvalid" } | { "kind": "presetIncompatible" } | { "kind": "engineError", returnCode: number, } | { "kind": "outputMissing" } | { "kind": "outputInvalid", reason: string, } | { "kind": "timeout" } | { "kind": "engineCrashed", signal: number, } | { "kind": "spawnFailed" } | { "kind": "storageFailed" } | { "kind": "internalError" };

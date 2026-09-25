@@ -99,20 +99,50 @@ pub struct Scheduler {
     settled: Condvar,
     worker: OnceLock<()>,
     /// `start_slice` calls run one at a time, so a replay check and the
-    /// claim that follows can't interleave with another start.
+    /// claim that follows can't interleave with another start. It is held
+    /// from the claim through the enqueue, so a cancel that finds nothing
+    /// scheduled takes it to wait out a start in between. Lock order:
+    /// `starting`, then `state`.
     starting: Mutex<()>,
+    hook: Mutex<Option<SchedulerHook>>,
+}
+
+/// Test seam: points in the scheduler a test can pause at.
+#[doc(hidden)]
+#[derive(Debug)]
+pub enum SchedulerPoint<'a> {
+    /// `start_slice` has committed these operations and not yet queued
+    /// them (it holds `starting`).
+    Committed(&'a [String]),
+    /// `cancel_slice_operation` found operation `id` neither queued nor
+    /// running and is about to wait for any start in progress.
+    CancelAwaitsStart(&'a str),
+    /// The worker is about to start OrcaSlicer for operation `id`.
+    Spawning(&'a str),
+}
+
+/// Test seam: called at each [`SchedulerPoint`].
+#[doc(hidden)]
+pub type SchedulerHook = Arc<dyn Fn(SchedulerPoint<'_>) + Send + Sync>;
+
+/// The running job's operation, its Preparation, and its cancel switch.
+struct Current {
+    operation_id: String,
+    preparation_id: String,
+    cancel: Arc<watch::Sender<bool>>,
 }
 
 #[derive(Default)]
 struct SchedulerState {
     queue: VecDeque<Job>,
-    /// The running job's id and its cancel switch.
-    current: Option<(String, Arc<watch::Sender<bool>>)>,
+    /// The running job.
+    current: Option<Current>,
 }
 
 /// One queued operation: its inputs are already in its work directory.
 struct Job {
     operation_id: String,
+    preparation_id: String,
     engine: PathBuf,
     preset_source: PathBuf,
     inputs: PublishInputs,
@@ -121,14 +151,23 @@ struct Job {
 }
 
 impl Scheduler {
-    /// Whether operation `id` is queued or running here.
-    fn knows(&self, id: &str) -> bool {
+    #[doc(hidden)]
+    pub fn set_hook(&self, hook: Option<SchedulerHook>) {
+        *lock(&self.hook) = hook;
+    }
+
+    /// Test seam: whether nothing is queued or running.
+    #[doc(hidden)]
+    pub fn idle(&self) -> bool {
         let state = lock(&self.state);
-        state.queue.iter().any(|job| job.operation_id == id)
-            || state
-                .current
-                .as_ref()
-                .is_some_and(|(current, _)| current == id)
+        state.queue.is_empty() && state.current.is_none()
+    }
+
+    fn reach(&self, point: SchedulerPoint<'_>) {
+        let hook = lock(&self.hook).clone();
+        if let Some(hook) = hook {
+            hook(point);
+        }
     }
 }
 
@@ -151,8 +190,11 @@ fn run_worker<R: tauri::Runtime>(services: Arc<SlicingServices<R>>) {
             let mut state = lock(&services.scheduler.state);
             loop {
                 if let Some(job) = state.queue.pop_front() {
-                    state.current =
-                        Some((job.operation_id.clone(), Arc::clone(&job.cancel_sender)));
+                    state.current = Some(Current {
+                        operation_id: job.operation_id.clone(),
+                        preparation_id: job.preparation_id.clone(),
+                        cancel: Arc::clone(&job.cancel_sender),
+                    });
                     break job;
                 }
                 state = services
@@ -237,7 +279,18 @@ impl<R: tauri::Runtime> SliceObserver for OperationObserver<'_, R> {
 
 fn run_job<R: tauri::Runtime>(services: &SlicingServices<R>, job: Job) {
     let work = WorkDir::for_operation(services.storage.paths().content_root(), &job.operation_id);
-    let events = if job.cancel.is_cancelled() {
+    let still_queued = matches!(
+        read_operation(&services.storage, &job.operation_id),
+        Ok(Some(SliceOperationRecord {
+            state: SliceOperationState::Queued,
+            ..
+        }))
+    );
+    let events = if !still_queued {
+        // Its row was ended (a cancel that raced the enqueue) or deleted
+        // with its Model: nothing runs and there is nothing to report.
+        Vec::new()
+    } else if job.cancel.is_cancelled() {
         // Cancelled between leaving the queue and starting: nothing runs.
         cancel_unstarted(services, &job.operation_id)
     } else {
@@ -247,6 +300,9 @@ fn run_job<R: tauri::Runtime>(services: &SlicingServices<R>, job: Job) {
             Some(job.preset_source.clone()),
         );
         command.environment.extend(services.engine_environment());
+        services
+            .scheduler
+            .reach(SchedulerPoint::Spawning(&job.operation_id));
         let mut observer = OperationObserver {
             services,
             operation_id: &job.operation_id,
@@ -264,14 +320,13 @@ fn run_job<R: tauri::Runtime>(services: &SlicingServices<R>, job: Job) {
             &run,
             &job.cancel,
         ) {
-            Ok(FinishedRun::Published(revision)) => {
-                let operation = read_operation(&services.storage, &job.operation_id)
-                    .ok()
-                    .flatten();
-                let mut published = vec![events::revision_created(&revision.summary)];
-                published.extend(operation.as_ref().map(events::operation_changed));
-                published
-            }
+            Ok(FinishedRun::Published {
+                revision,
+                operation,
+            }) => vec![
+                events::revision_created(&revision.summary),
+                events::operation_changed(&operation),
+            ],
             Ok(FinishedRun::Unpublished(operation)) => vec![events::operation_changed(&operation)],
             Err(error) => {
                 eprintln!(
@@ -299,9 +354,10 @@ pub fn storage_failure() -> SliceFailure {
     }
 }
 
+/// `internalError`: farm3d itself failed while running the slice.
 fn internal_failure() -> SliceFailure {
     SliceFailure {
-        code: SliceFailureCode::StorageFailed,
+        code: SliceFailureCode::InternalError,
         message: "farm3d stopped this slice after an internal error.".to_string(),
     }
 }
@@ -758,6 +814,7 @@ pub fn start_slice<R: tauri::Runtime>(
             let (sender, receiver) = watch::channel(false);
             Job {
                 operation_id: plate.operation_id.clone(),
+                preparation_id: preparation.id.clone(),
                 engine: prepared.engine.clone(),
                 preset_source: prepared.preset_source.clone(),
                 inputs: PublishInputs {
@@ -770,6 +827,8 @@ pub fn start_slice<R: tauri::Runtime>(
         })
         .collect();
     services.publish(records.iter().map(events::operation_changed).collect());
+    let ids: Vec<String> = records.iter().map(|record| record.id.clone()).collect();
+    services.scheduler.reach(SchedulerPoint::Committed(&ids));
     enqueue(services, jobs);
     Ok(records)
 }
@@ -815,11 +874,50 @@ pub fn cancel_slice_operation<R: tauri::Runtime>(
     services: &Arc<SlicingServices<R>>,
     id: &str,
 ) -> Result<SliceOperationRecord, CommandError> {
+    if let Some(cancelled) = cancel_scheduled(services, id, None) {
+        return cancelled;
+    }
+    // Not queued or running here. A `start_slice` may be between its
+    // commit and its enqueue; it holds `starting` throughout, so wait for
+    // it (lock order: `starting`, then `state`) and look again.
+    let scheduler = &services.scheduler;
+    scheduler.reach(SchedulerPoint::CancelAwaitsStart(id));
+    let starting = lock(&scheduler.starting);
+    if let Some(cancelled) = cancel_scheduled(services, id, Some(starting)) {
+        return cancelled;
+    }
+    let record =
+        read_operation(&services.storage, id)?.ok_or_else(|| CommandError::not_found(id))?;
+    match record.state {
+        SliceOperationState::Queued | SliceOperationState::Running => {
+            // No start is in progress and no job holds it, so it can't run
+            // any more: end it.
+            let events = cancel_unstarted(services, id);
+            services.publish(events);
+            read_operation(&services.storage, id)?.ok_or_else(|| CommandError::not_found(id))
+        }
+        state => Err(CommandError::operation_not_cancellable(
+            id,
+            &encode_enum(state),
+        )),
+    }
+}
+
+/// Cancels operation `id` if the scheduler holds it: a queued job leaves
+/// the queue and is `cancelled` without spawning; a running one is
+/// signalled and waited for. `None` when it holds neither. `starting` (if
+/// held) is released once the scheduler's state is locked.
+fn cancel_scheduled<R: tauri::Runtime>(
+    services: &Arc<SlicingServices<R>>,
+    id: &str,
+    starting: Option<std::sync::MutexGuard<'_, ()>>,
+) -> Option<Result<SliceOperationRecord, CommandError>> {
     let load = || -> Result<SliceOperationRecord, CommandError> {
         read_operation(&services.storage, id)?.ok_or_else(|| CommandError::not_found(id))
     };
     let scheduler = &services.scheduler;
     let mut state = lock(&scheduler.state);
+    drop(starting);
     if let Some(position) = state.queue.iter().position(|job| job.operation_id == id) {
         let job = state
             .queue
@@ -832,43 +930,79 @@ pub fn cancel_slice_operation<R: tauri::Runtime>(
                 .root(),
         );
         services.publish(events);
-        return load();
+        return Some(load());
     }
-    if let Some((_, cancel)) = state.current.as_ref().filter(|(current, _)| current == id) {
-        let _ = cancel.send(true);
-        let deadline = Instant::now() + CANCEL_SETTLE;
-        while state
+    let running = |state: &SchedulerState| {
+        state
             .current
             .as_ref()
-            .is_some_and(|(current, _)| current == id)
-        {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            state = scheduler
-                .settled
-                .wait_timeout(state, left)
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .0;
+            .is_some_and(|current| current.operation_id == id)
+    };
+    if !running(&state) {
+        return None;
+    }
+    if let Some(current) = state.current.as_ref() {
+        let _ = current.cancel.send(true);
+    }
+    let deadline = Instant::now() + CANCEL_SETTLE;
+    while running(&state) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
         }
-        drop(state);
-        return load();
+        state = scheduler
+            .settled
+            .wait_timeout(state, left)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0;
     }
     drop(state);
-    let record = load()?;
-    match record.state {
-        SliceOperationState::Queued | SliceOperationState::Running if !scheduler.knows(id) => {
-            // A row no scheduler holds (it can't run any more): end it.
-            let events = cancel_unstarted(services, id);
-            services.publish(events);
-            load()
-        }
-        SliceOperationState::Queued | SliceOperationState::Running => load(),
-        state => Err(CommandError::operation_not_cancellable(
+    Some(load())
+}
+
+/// After a Model was deleted (its Preparation and operations cascade):
+/// drops queued jobs whose rows are gone, and stops the running job if its
+/// row or its Preparation is gone. The worker then stores nothing for it.
+pub fn abandon_deleted_jobs<R: tauri::Runtime>(services: &SlicingServices<R>) {
+    let exists = |sql: &str, id: &str| -> bool {
+        services
+            .storage
+            .read(|connection| connection.query_row(sql, [id], |row| row.get::<_, bool>(0)))
+            // Unknown is kept: the pre-spawn check and the commit's own
+            // checks still stop a job whose rows are gone.
+            .unwrap_or(true)
+    };
+    let operation_exists = |id: &str| {
+        exists(
+            "SELECT EXISTS(SELECT 1 FROM slice_operations WHERE id = ?1)",
             id,
-            &encode_enum(state),
-        )),
+        )
+    };
+    let preparation_exists = |id: &str| {
+        exists(
+            "SELECT EXISTS(SELECT 1 FROM slice_preparations WHERE id = ?1)",
+            id,
+        )
+    };
+    let content_root = services.storage.paths().content_root().to_path_buf();
+    let mut state = lock(&services.scheduler.state);
+    let mut dropped = Vec::new();
+    state.queue.retain(|job| {
+        let keep = operation_exists(&job.operation_id);
+        if !keep {
+            dropped.push(job.operation_id.clone());
+        }
+        keep
+    });
+    if let Some(current) = state.current.as_ref() {
+        if !operation_exists(&current.operation_id) || !preparation_exists(&current.preparation_id)
+        {
+            let _ = current.cancel.send(true);
+        }
+    }
+    drop(state);
+    for id in dropped {
+        let _ = fs::remove_dir_all(WorkDir::for_operation(&content_root, &id).root());
     }
 }
 
@@ -958,6 +1092,14 @@ pub struct Recovery {
 /// OrcaSlicer: the same start time, and an executable named like the
 /// engine (the configured one's basename, or `orca-slicer`, the program
 /// inside every OrcaSlicer install and AppImage).
+///
+/// The name check can miss a real engine: a discovered (not configured)
+/// AppImage may be recorded as its `AppRun` or a shell wrapper, depending
+/// on how the AppImage launches, and neither is named `orca-slicer`. That
+/// direction is the safe one: a missed engine is left running, while a
+/// looser check could signal an unrelated process that reused the pid.
+/// PDEATHSIG, set on every spawn, is the primary guard (the engine dies
+/// with farm3d); this check is only the fallback for a survivor.
 fn still_running_engine(pid: u32, started_at: i64, engine_path: Option<&str>) -> bool {
     if process_start_time(pid) != Some(started_at) {
         return false;

@@ -447,6 +447,22 @@ impl CommandError {
         error
     }
 
+    /// A succeeded Slice Operation's log went with its deleted Slice
+    /// Revision (D13 stores it only there).
+    pub fn slice_log_deleted(operation_id: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::NotFound,
+            "This slice's log was deleted with its Slice Revision.",
+            vec![RecoveryCode::Reload],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "entityId".to_string(),
+            JsonValue::String(operation_id.to_string()),
+        )]));
+        error
+    }
+
     pub fn not_found(entity_id: impl Into<String>) -> Self {
         let mut error = Self::typed(
             ErrorCode::NotFound,

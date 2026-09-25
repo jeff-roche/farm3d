@@ -82,8 +82,9 @@ type CommandMap = {
     Contracts.ConvertModelToManagedRequest,
     Contracts.ConvertModelToManagedResult,
   ];
-  // P5. `get_revision_mesh` answers with raw bytes, not the JSON envelope,
-  // so it needs a binary invoke path rather than `command()` (Task 10).
+  // P5. `get_revision_mesh` is deliberately absent: it answers with raw
+  // bytes, not the JSON envelope, so `command()` can't carry it. It lives
+  // in `BinaryCommandMap` until Task 10 adds the binary invoke.
   get_slicer_runtime: [Contracts.GetSlicerRuntimeRequest, Contracts.GetSlicerRuntimeResult];
   check_slicer_runtime: [Contracts.CheckSlicerRuntimeRequest, Contracts.CheckSlicerRuntimeResult];
   pick_slicer_engine: [Contracts.PickSlicerEngineRequest, Contracts.PickSlicerEngineResult];
@@ -94,7 +95,6 @@ type CommandMap = {
     Contracts.GetRevisionGeometryRequest,
     Contracts.GetRevisionGeometryResult,
   ];
-  get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
   list_slicing: [Contracts.ListSlicingRequest, Contracts.ListSlicingResult];
   create_preparation: [Contracts.CreatePreparationRequest, Contracts.CreatePreparationResult];
   update_preparation: [Contracts.UpdatePreparationRequest, Contracts.UpdatePreparationResult];
@@ -115,6 +115,11 @@ type CommandMap = {
     Contracts.DeleteSliceRevisionRequest,
     Contracts.DeleteSliceRevisionResult,
   ];
+};
+
+/** Commands that answer with raw bytes rather than the JSON envelope. */
+export type BinaryCommandMap = {
+  get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;

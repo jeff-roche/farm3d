@@ -273,7 +273,7 @@ impl Fixture {
 fn a_fake_orca_success_publishes_a_revision_with_its_six_blobs_and_the_exact_gcode() {
     let fixture = Fixture::new();
 
-    let FinishedRun::Published(revision) = fixture.slice("success") else {
+    let FinishedRun::Published { revision, .. } = fixture.slice("success") else {
         panic!("expected a published revision");
     };
 
@@ -513,7 +513,7 @@ mod real {
         )
         .unwrap();
 
-        let FinishedRun::Published(revision) = finished else {
+        let FinishedRun::Published { revision, .. } = finished else {
             panic!(
                 "expected a published revision, got {finished:?}\nlog:\n{}",
                 run.log.text

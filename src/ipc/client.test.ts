@@ -18,6 +18,14 @@ describe("IPC client", () => {
     });
   });
 
+  it("keeps raw-byte commands out of the JSON command map", async () => {
+    const { command } = await import("./client");
+    // `tsc` (just build) fails if this ever type-checks again.
+    // @ts-expect-error get_revision_mesh answers with raw bytes (BinaryCommandMap).
+    const call = () => command("get_revision_mesh", { revisionId: "msr-1", objectKey: 1 });
+    expect(call).toBeTypeOf("function");
+  });
+
   it("recognizes a structured command rejection", async () => {
     const failure = {
       contractVersion: 1,

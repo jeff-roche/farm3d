@@ -142,7 +142,12 @@ pub enum Unpublished {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum FinishedRun {
-    Published(SliceRevisionRecord),
+    /// The revision, and the operation as the same commit left it
+    /// (`succeeded`), so its event never needs a second read.
+    Published {
+        revision: SliceRevisionRecord,
+        operation: SliceOperationRecord,
+    },
     /// The operation is `failed` or `cancelled`, with its log.
     Unpublished(SliceOperationRecord),
 }
@@ -428,7 +433,7 @@ pub fn publish(
     run: &SliceRun,
     output: ValidatedOutput,
     cancel: &CancelFlag,
-) -> Result<SliceRevisionRecord, ContentError> {
+) -> Result<(SliceRevisionRecord, SliceOperationRecord), ContentError> {
     let result = stage_and_commit(store, storage, inputs, work, run, &output, cancel);
     store.discard_staging(&inputs.operation_id);
     result
@@ -442,7 +447,7 @@ fn stage_and_commit(
     run: &SliceRun,
     output: &ValidatedOutput,
     cancel: &CancelFlag,
-) -> Result<SliceRevisionRecord, ContentError> {
+) -> Result<(SliceRevisionRecord, SliceOperationRecord), ContentError> {
     let key = inputs.operation_id.as_str();
     let stage =
         |path: &Path, index| store.stage_from_path(path, key, index, cancel, &mut |_, _| {});
@@ -515,14 +520,14 @@ fn stage_and_commit(
             blobs,
         };
         let record = insert_farm3d_revision(tx, &revision)?;
-        transition_operation(
+        let operation = transition_operation(
             tx,
             key,
             OperationTransition::Succeed {
                 slice_revision_id: revision.id,
             },
         )?;
-        Ok(record)
+        Ok((record, operation))
     })
 }
 
@@ -574,7 +579,12 @@ pub fn finish_run(
         SliceOutcome::OutputWritten => {
             match validate_output(store, &inputs.operation_id, work, &inputs.target, cancel) {
                 Ok(output) => match publish(store, storage, inputs, work, run, output, cancel) {
-                    Ok(revision) => return Ok(FinishedRun::Published(revision)),
+                    Ok((revision, operation)) => {
+                        return Ok(FinishedRun::Published {
+                            revision,
+                            operation,
+                        })
+                    }
                     Err(ContentError::Cancelled) => Unpublished::Cancelled,
                     Err(error) => return Err(error),
                 },
@@ -833,7 +843,8 @@ mod tests {
         let gcode_bytes = fs::read(fixture.work.gcode()).unwrap();
         let log = "OrcaSlicer-2.4.2: loading <work>/input/plate.3mf\n";
 
-        let FinishedRun::Published(revision) = fixture.finish(&a_run(0, log)).unwrap() else {
+        let FinishedRun::Published { revision, .. } = fixture.finish(&a_run(0, log)).unwrap()
+        else {
             panic!("expected a published revision");
         };
 
@@ -944,7 +955,7 @@ mod tests {
 
     fn published(fixture: &Fixture) -> SliceRevisionRecord {
         match fixture.finish(&a_run(0, "log")).unwrap() {
-            FinishedRun::Published(revision) => revision,
+            FinishedRun::Published { revision, .. } => revision,
             other => panic!("expected a published revision, got {other:?}"),
         }
     }
@@ -1291,7 +1302,10 @@ mod tests {
     #[test]
     fn publishing_an_operation_that_is_not_running_is_illegal_and_writes_nothing() {
         let fixture = Fixture::new();
-        let FinishedRun::Published(first) = fixture.finish(&a_run(0, "log")).unwrap() else {
+        let FinishedRun::Published {
+            revision: first, ..
+        } = fixture.finish(&a_run(0, "log")).unwrap()
+        else {
             panic!("expected a published revision");
         };
         let output = validate_output(
