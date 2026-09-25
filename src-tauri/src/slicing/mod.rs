@@ -315,11 +315,10 @@ pub enum SliceFailureCode {
     },
     SpawnFailed,
     /// farm3d couldn't store the finished slice (the content store or the
-    /// database failed). Not in D11's table: without it such an operation
-    /// would stay `running` until the next start interrupted it.
+    /// database failed). Without it such an operation would stay `running`
+    /// until the next start interrupted it.
     StorageFailed,
     /// farm3d itself failed while running the slice (its worker panicked).
-    /// Not in D11's table either.
     InternalError,
 }
 

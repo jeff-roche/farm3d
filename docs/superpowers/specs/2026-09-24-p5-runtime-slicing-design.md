@@ -245,19 +245,30 @@ These terms are added to or refined in `CONTEXT.md`:
     deleted at startup.
   - If the directory contains only `<Vendor>.opc` files (a cache-only
     build, spike "Open decision"), the source is `presetsUnreadable`.
-- **Runtime state** (`SlicerRuntimeStatus`) has four parts:
+- **Runtime state** (`SlicerRuntimeStatus`) has these parts:
   - `engine`: one of `available { version, channel, source: "configured" |
     "path" | "wellKnown", executableName }`, `notFound`,
     `unsupportedVersion { version }`, or `probeFailed { reason }`.
   - `presetSource`: one of `available { version, channel, origin: "engine"
     | "configured", vendorCount }`, `notConfigured`, `presetsUnreadable`,
-    or `unavailable { reason }`.
+    or `unavailable { reason, origin }`. `origin` says whether the
+    unavailable source was the engine or a configured one, so **Use the
+    engine's presets** is offered only for a configured source (Task 15
+    ruling).
   - `canSlice`: true when both parts are `available`.
   - `versionsDiffer`: true when the engine and preset-source versions
     differ.
+  - `revision`: the `slicer_runtime_config` revision that the pickers and
+    reset expect.
+  - `engineCandidates`: every engine discovery probed, in order, with its
+    source, executable name, full path, and result (chosen, or why it was
+    passed over).
 
   Only basenames cross to the UI, following P4's path rule, except in the
-  Settings section, which shows full paths to help the user.
+  Settings section, which shows full paths to help the user. So
+  `SlicerRuntimeStatus` carries full paths, on `get_slicer_runtime`,
+  `list_slicing`, and `slicing.runtime.changed` alike; logs and operation
+  and revision payloads carry basenames only (Task 8 ruling).
 
   When the engine has no readable presets and no preset source is
   configured, the state is `presetSource: presetsUnreadable`. The Settings
@@ -354,8 +365,9 @@ It never happens silently.
 | Support overhang angle | Support | `support_threshold_angle` | 0–90° |
 | Adhesion | Support | `brim_type`, `brim_width`, `skirt_loops` | brim `no_brim`, `outer_only`, or `auto_brim`; width 0–20 mm; skirt 0–10 |
 
-- **Unset controls** take the chosen process preset's value, and the
-  panel shows which value that is.
+- **Unset controls** take the chosen process preset's value. The panel
+  shows "Preset" for them, not the value, because process-preset values
+  are not on the wire (Task 13 ruling).
 - **Key check.** Before every run, each mapped key that the run actually
   writes must be *known* to the preset source. Keys the run doesn't write
   are not checked (Task 4 ruling). A key is known when it appears in at least one preset of
@@ -413,7 +425,10 @@ It never happens silently.
     don't fit are left in place and flagged by validation.
   - **3MF without plates:** one plate holding every build item, laid out
     the same way.
-  - Build items that the 3MF marks unprintable are skipped and listed.
+  - Build items that the 3MF marks unprintable are skipped. The
+    preparation panel lists them from `get_revision_geometry`'s
+    `buildItems[].printable`; there is no backend field for them (Task 8
+    ruling).
 - **Staleness is derived**, never stored. A Preparation is stale when its
   `source_revision_id` is not the Model's current revision.
   - `reload_preparation` re-bases it onto the current revision. Instances
@@ -539,10 +554,13 @@ and `XDG_DATA_DIRS`. farm3d's own AppImage leaks these (Gate J).
 non-blocking. OrcaSlicer's writer gives up after about 1 s without a
 reader, and then slices without progress (Gate E).
 
-**Spawn** uses `tokio::process::Command` (the tokio `process` feature is
-added). Its Unix `pre_exec`:
+**Spawn** uses `std::process::Command` with `process_group`, on a
+blocking thread that supervises the run (Task 6 ruling: the process-group
+semantics are the same as `tokio::process`, and the tokio `process`
+feature is not added). On Unix:
 
-- `setsid()`, so the process gets its own process group;
+- `process_group(0)`, so the process leads its own process group (in
+  place of `setsid()`);
 - `prctl(PR_SET_PDEATHSIG, SIGTERM)` on Linux, so a crashed farm3d never
   leaves OrcaSlicer running (Gate E).
 
@@ -567,7 +585,8 @@ plate_count, plate_percent, total_percent, warning? }`:
   rewritten to `<work>`, the engine directory to `<engine>`, and `$HOME` to
   `~`.
 - **Known noise** (`Error: unable to open display`) is kept but tagged, so
-  the UI can dim it.
+  the UI can dim it: the log commands return its 1-based line numbers as
+  `noiseLines`.
 
 **Cancel** (`cancel_slice_operation`):
 
@@ -577,8 +596,10 @@ plate_count, plate_percent, total_percent, warning? }`:
   SIGKILL is only the fallback, because it can leave a stale AppImage FUSE
   mount (Gate E).
 - After a SIGKILL, farm3d checks `/proc/self/mountinfo` for a
-  `.mount_*` whose AppImage matches the engine. If one is found, it runs
-  `fusermount -u`, then `-uz`, and logs the result.
+  `.mount_*` whose AppImage matches the engine and that appeared during
+  the run, so a user's own open OrcaSlicer is never unmounted (Task 6
+  ruling). If one is found, it runs `fusermount -u`, then `-uz`, and logs
+  the result.
 
 **Timeout.** Each plate has a wall-clock limit of **30 min**, which gives
 `failed { code: "timeout" }` through the same SIGTERM escalation.
@@ -613,9 +634,13 @@ queued ──start──> running ──ok──> succeeded
   1. Every `queued` or `running` row becomes `interrupted`, with
      `finished_at = now`.
   2. For each such `running` row whose `pid` is alive with the same start
-     time and whose executable matches the engine basename: SIGTERM to its
-     process group, 5 s, then SIGKILL, followed by the stale-mount check.
-     This normally never happens, thanks to PDEATHSIG.
+     time and whose executable is `orca-slicer` or the configured engine's
+     basename: SIGTERM to its process group, 5 s, then SIGKILL. This
+     normally never happens, thanks to PDEATHSIG. Recovery runs no
+     stale-mount check: after a crash farm3d can't tell its own mounts
+     from a user's open OrcaSlicer (Task 8 ruling). A v2.4.2 AppImage runs
+     as a `/bin/sh` wrapper for a moment before it execs `orca-slicer`,
+     and a survivor caught then is not recognised and is left running.
   3. `<content_root>/slicing-work/*` is removed entirely.
   4. Published revisions and their blobs are never touched. The sweep only
      removes work directories.
@@ -638,7 +663,8 @@ because the exit code is `return_code` mod 256 (Gate F). A signal exit is
 4. The P4 G-code inspector accepts it with `producer.name ==
    "OrcaSlicer"` and `commandCount > 0`.
 5. The **printed bounds** lie within the target printable area and height,
-   with 2 mm of XY tolerance and 0.05 mm of Z tolerance. Printed bounds
+   with 2 mm of XY tolerance and 0.05 mm of Z tolerance. A polygon bed is
+   checked against its bounding box (Task 7 ruling). Printed bounds
    cover only extruding moves (positive E delta, honoring G90/G91,
    M82/M83, and G92) inside the slicer's print body, so machine start/end
    G-code (off-bed purge lines, wipe and park moves) and travel Z-hops are
@@ -665,6 +691,8 @@ because the exit code is `return_code` mod 256 (Gate F). A signal exit is
 | `timeout` | D9 | "Slicing took longer than 30 minutes." |
 | `engineCrashed { signal }` | unexpected signal | "OrcaSlicer stopped unexpectedly." |
 | `spawnFailed` | exec error | "farm3d couldn't start OrcaSlicer." |
+| `storageFailed` | the run finished, but the content store or the database failed while storing it | "farm3d couldn't store the slice result." |
+| `internalError` | farm3d's slicing worker panicked | "farm3d stopped this slice after an internal error." |
 
 A failed operation keeps its log blob and publishes nothing else. Its log
 expands automatically in the UI.
@@ -905,7 +933,7 @@ types, all emitted after commit:
 | `slicing.preparation.changed` | `preparation/<id>` | `PreparationRecord` |
 | `slicing.preparation.removed` | `preparation/<id>` | `{}` |
 | `slicing.operation.changed` | `sliceOperation/<id>` | `SliceOperationRecord` |
-| `slicing.operation.progress` | `sliceOperation/<id>` | `SliceProgress { totalPercent?, platePercent?, message, warning? }` (ephemeral, throttled, no sequence gap handling needed) |
+| `slicing.operation.progress` | `sliceOperation/<id>` | `SliceProgress { totalPercent?, platePercent?, message, warning? }` (ephemeral and throttled, never in a snapshot, but sequenced like every other event, so it counts toward gap detection) |
 | `slicing.revision.created` | `sliceRevision/<id>` | `SliceRevisionSummary` |
 | `slicing.revision.removed` | `sliceRevision/<id>` | `{}` |
 
@@ -981,7 +1009,7 @@ This follows open question 3 (answered).
 
   | Tool | Keyboard | Numeric |
   |---|---|---|
-  | Select next / previous | Tab in the object list; `[` / `]` in the viewport | list selection |
+  | Select next / previous | arrow keys in the object list (a `DataTable` grid); `[` / `]` in the viewport | list selection |
   | Move | arrows ±1 mm, Shift ±10 mm | X, Y (mm) |
   | Rotate Z | `R` / Shift+`R` ±15° | X, Y, Z (°) |
   | Scale | `+` / `-` ±5 % uniform | X, Y, Z (%) + Uniform checkbox |
@@ -990,7 +1018,7 @@ This follows open question 3 (answered).
   | Measure | `M` toggles; pointer picks two surface points | "Distance between selected objects" (centre-to-centre and gap) as the keyboard alternative |
   | Move to plate | `Shift+1`…`9` | plate `Select` |
   | Duplicate / Delete instance | `Ctrl+D` / `Delete` | buttons |
-  | Views | `1` Top, `2` Front, `3` Left, `4` Right, `5` Iso, `0` Reset | view `SegmentedControl` |
+  | Views | `1` Top, `2` Front, `3` Left, `4` Right, `5` Iso, `0` Reset | view buttons |
 
 - **Where the logic lives.** Pure modules hold all of it, fully unit-tested:
   `transforms.ts` (composition, Z drop, bounds), `layflat.ts`,
@@ -1007,16 +1035,19 @@ This follows open question 3 (answered).
 ### D20. Preparation panel, validation, and slicing UI
 
 - **Sections:**
-  - **Target:** a `Select` of Printers and catalog profiles, grouped, with
-    the matching count (D15).
+  - **Target:** a `Select` of the current profile and the active Printers'
+    profiles, grouped, with the matching count (D15), plus **Other printer
+    profile…**, which opens the catalog picker for any catalog profile
+    (Task 13 ruling).
   - **Material:** a filament `Select`, with the family shown.
   - **Quality:** a process `Select`, plus layer height.
   - **Strength** and **Support**, compact, with the D4 controls.
 
-  Each control shows the preset's value as a placeholder when unset.
+  Each unset control shows "Preset" as its placeholder (D4).
 - **Validation** runs continuously on the frontend and again
   authoritatively in `start_slice`, which returns `PREPARATION_INVALID
-  { issues }`. It reports these issues:
+  { issues }`. It reports these issues (`nozzleMismatch` and
+  `unsupportedSetting` are exceptions, see below):
   - `emptyPlate`;
   - `outOfBounds { instanceKey }`;
   - `inExcludeArea { instanceKey }`;
@@ -1029,6 +1060,20 @@ This follows open question 3 (answered).
   - `unsupportedSetting { key }`.
 
   Each issue is a list row that moves focus to its object or field.
+
+  `nozzleMismatch` and `unsupportedSetting` are not computed continuously
+  on the frontend, because the wire carries no data for them (Task 12
+  ruling). The backend is authoritative, and the user learns of them at
+  **Slice**: `start_slice` fails with `UNSUPPORTED_SETTING_FOR_RUNTIME` for
+  an unknown key. There is no separate nozzle check, because the machine
+  preset is the target's own variant and a nozzle override is written into
+  it (D4); presets made for another machine preset are refused as
+  `FILAMENT_INCOMPATIBLE` (filament) or `VALIDATION` on `processPreset`.
+
+  Frontend placement checks cover only each instance's footprint. A brim
+  or skirt that reaches more than 2 mm past a part placed flush with the
+  bed edge passes the frontend checks and then fails D11 check 5 after the
+  slice (Task 12 note).
 - **Actions:** **Slice plate** (the current tab) and **Slice all plates**.
   Both are disabled with a visible reason while issues exist.
 - **`SliceOperationPanel`**, one row per plate operation:
@@ -1070,7 +1115,12 @@ This follows open question 3 (answered).
 
 ### D22. Settings: Slicer section
 
-A new section in the existing Settings surface shows:
+farm3d has no Settings screen, so this section is the Slicer settings
+dialog (`SlicerSettingsDialog`), opened by **Slicer...** in the Settings
+menu (ruling R7). Closing it returns focus, through the design-system
+`Dialog`'s `returnFocus`, to the control that opened it, or to the Settings
+menu's button when that control has gone. Elsewhere in this spec, "the
+Settings section" means this dialog. It shows:
 
 - **Engine:** state, version and channel, executable name and full path,
   source. Actions: **Choose engine…** and **Use automatic discovery**.
@@ -1104,11 +1154,15 @@ A new section in the existing Settings surface shows:
 - **Deterministic invocation fixtures.** `just gen-slicing-fixtures` writes
   `src-tauri/tests/fixtures/slicing/` for the `TestVendor` profile fixture,
   extended with process and filament presets:
-  - the expected flat presets;
-  - the plate 3MF bytes for a two-plate cube Preparation;
-  - the argument vectors, with `<work>` placeholders.
+  - the expected flat presets (`flat-presets.json`: the Test Printer's
+    default machine, process, and filament presets);
+  - the plate 3MF bytes for one plate holding two cubes
+    (`two-cube-plate.3mf`);
+  - the argument vectors, with `<engine>` and `<work>` placeholders, with
+    and without Linux's `--pipe` (`argument-vectors.json`).
 
-  A test regenerates them in memory and compares.
+  A test regenerates them in memory and compares, and the tracer checks
+  that each revision's manifest records the committed argument vector.
 - **Real-OrcaSlicer tests** are `#[ignore]` and gated by `FARM3D_ORCA`
   (the engine) and `FARM3D_ORCA_PRESETS` (optional). They run through
   `just test-orca` and cover:
@@ -1129,8 +1183,8 @@ A new section in the existing Settings surface shows:
     with `materialFamily` absent;
   - generated mesh fixtures.
 
-  In web mode, Slice, Cancel, Create external, and the pickers throw
-  `needsDesktop`. Preparation edits are local.
+  In web mode, Slice, Cancel, Create external, the pickers, and the runtime
+  reset throw `needsDesktop`. Preparation edits are local.
 
 ### D24. Platform scope
 
@@ -1179,9 +1233,8 @@ slicing blocker (D14).
 
 ### Crates
 
-- `tokio` gains the `process` feature.
 - `rustix` is already a direct dependency (1.x, feature `fs`). It gains
-  the `process` feature for `setsid`, PDEATHSIG, and `kill_process_group`,
+  the `process` feature for PDEATHSIG and `kill_process_group`,
   and uses `fs` for `mkfifo`.
 - `windows-sys` Job Object features, only under `cfg(windows)`.
 - `zip` already exists. Its `deflate` writer feature is enabled for D7.
@@ -1208,17 +1261,19 @@ carry an `expectedRevision` or an `operationId`.
 | `create_preparation` | `{ modelId, target? }` | `PreparationRecord` (returns the existing one if present) |
 | `update_preparation` | `{ preparationId, expectedRevision, document }` | `PreparationRecord` |
 | `reload_preparation` | `{ preparationId, expectedRevision }` | `{ preparation, removedObjectKeys[], addedObjectKeys[] }` |
-| `delete_preparation` | `{ preparationId, expectedRevision }` | `{}` |
+| `delete_preparation` | `{ preparationId, expectedRevision }` | `{}`, or `CONFLICT` while one of its operations is queued or running: the user cancels first |
 | `start_slice` | `{ operationId, preparationId, expectedRevision, plateKeys[], continueWithSourceRevision? }` | `{ operations: SliceOperationRecord[] }` |
 | `cancel_slice_operation` | `{ sliceOperationId }` | `SliceOperationRecord` |
-| `get_slice_operation_log` | `{ sliceOperationId }` | `{ text, truncated }` |
+| `get_slice_operation_log` | `{ sliceOperationId }` | `{ text, truncated, noiseLines }` |
 | `list_slice_revisions` | `{ modelId }` | `SliceRevisionSummary[]` |
 | `get_slice_revision` | `{ sliceRevisionId }` | `SliceRevisionRecord` |
+| `get_slice_revision_log` | `{ sliceRevisionId }` | `{ log: { text, truncated, noiseLines } \| null }` (`null` for an external revision; the D21 read-only log, readable after its operation leaves the recent list) |
 | `create_external_slice_revision` | `{ operationId, sourceRevisionId, facts }` | `SliceRevisionRecord` |
 | `delete_slice_revision` | `{ sliceRevisionId }` | `{}` or `LIFECYCLE_BLOCKED` |
 
-That is 20 commands. The count assertions are updated by adding 20 to
-`main`'s total at rebase.
+That is 21 commands. `get_slice_revision_log` was added by Task 14 (D21),
+and `create_external_slice_revision` is registered with Task 9. The count
+assertions are updated by adding 21 to `main`'s total at rebase.
 
 ### Error codes
 
@@ -1310,11 +1365,12 @@ adds one only if two screens need the same thing.
 - `SliceRevisionReview.tsx`, `SliceRevisionList.tsx`.
 - `GcodeFactsDialog.tsx`.
 - `DeleteSliceRevisionDialog.tsx`.
-- `SlicerSettingsSection.tsx`: the D22 Settings section.
+- `SlicerSettingsDialog.tsx`: the D22 Slicer settings dialog.
 
 Modified: `ModelDetailsPanel.tsx`, `LibraryWorkspace.tsx`, `App.tsx`
-(`startSlicing()` in the startup order, after `startLibrary`), and the
-Settings surface. `BuildPlate.tsx` and its CSS are deleted.
+(`startSlicing()` in the startup order, after `startLibrary`), and
+`SettingsMenu.tsx` (the **Slicer...** item). `BuildPlate.tsx` and its CSS
+are deleted.
 
 ## Errors and recovery
 
