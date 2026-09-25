@@ -597,6 +597,180 @@ fn a_process_that_ignores_sigterm_is_killed_after_the_grace() {
 }
 
 // ---------------------------------------------------------------------------
+// PDEATHSIG (spec D9, AC7): an engine started through the production
+// `spawn_group` dies with the thread that started it.
+// ---------------------------------------------------------------------------
+
+/// Set on the re-executed test binary that plays farm3d in
+/// [`the_engine_exits_when_its_parent_is_killed`]: the file it writes the
+/// engine's pid to.
+#[cfg(target_os = "linux")]
+const INTERMEDIATE_PID_FILE: &str = "FARM3D_TEST_PDEATHSIG_PID_FILE";
+
+/// A `hang` fake-orca command: one progress line, then it sleeps until a
+/// signal ends it. SIGTERM keeps its default action.
+#[cfg(target_os = "linux")]
+fn hanging_engine(temp: &Path) -> std::process::Command {
+    let input = temp.join("input.3mf");
+    fs::copy(fixtures().join("slicing/two-cube-plate.3mf"), &input).unwrap();
+    let mut command = std::process::Command::new(FAKE_ORCA);
+    command
+        .arg("--slice")
+        .arg("1")
+        .arg("--outputdir")
+        .arg(temp)
+        .arg(&input)
+        .current_dir(temp)
+        .env("FAKE_ORCA_SCENARIO", "hang")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
+}
+
+/// Polls until `pid` has exited (a zombie has), or `limit` passes.
+#[cfg(target_os = "linux")]
+fn gone_within(pid: i32, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    loop {
+        if !alive(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// SIGKILLs `pid` when dropped, so a failed test leaves no engine behind.
+#[cfg(target_os = "linux")]
+struct KillOnDrop(i32);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = rustix::process::Pid::from_raw(self.0) {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+/// The parent's pid, field 4 of `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+fn parent_of(pid: i32) -> Option<i32> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+/// Not a test on its own: [`the_engine_exits_when_its_parent_is_killed`]
+/// re-executes this test binary to run it as the engine's parent. It starts
+/// a hanging fake-orca through the production `spawn_group`, publishes its
+/// pid, and then blocks on this same thread until it is killed. Without
+/// the variable it returns at once.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "helper process for the_engine_exits_when_its_parent_is_killed"]
+fn pdeathsig_intermediate_parent() {
+    let Some(pid_file) = std::env::var_os(INTERMEDIATE_PID_FILE).map(PathBuf::from) else {
+        return;
+    };
+    let temp = pid_file.parent().unwrap().join("engine");
+    fs::create_dir_all(&temp).unwrap();
+    let child = farm3d_lib::slicing::process_group::spawn_group(&mut hanging_engine(&temp))
+        .expect("spawn the engine");
+    // Written whole, then renamed, so the test never reads half a pid.
+    let partial = pid_file.with_extension("partial");
+    fs::write(&partial, child.id().to_string()).unwrap();
+    fs::rename(&partial, &pid_file).unwrap();
+    // Park this thread, the engine's parent for PDEATHSIG, until SIGKILL.
+    loop {
+        thread::park();
+    }
+}
+
+/// AC7: when farm3d dies without any chance to clean up (SIGKILL), its
+/// engine exits too, through `PR_SET_PDEATHSIG(SIGTERM)`.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_engine_exits_when_its_parent_is_killed() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("engine.pid");
+    let mut intermediate = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "pdeathsig_intermediate_parent",
+            "--exact",
+            "--ignored",
+            "--test-threads=1",
+            "--quiet",
+        ])
+        .env(INTERMEDIATE_PID_FILE, &pid_file)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let intermediate_pid = intermediate.id() as i32;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let engine: i32 = loop {
+        if let Ok(text) = fs::read_to_string(&pid_file) {
+            break text.trim().parse().unwrap();
+        }
+        if let Some(status) = intermediate.try_wait().unwrap() {
+            panic!("the intermediate exited before starting the engine: {status}");
+        }
+        if Instant::now() >= deadline {
+            let _ = intermediate.kill();
+            panic!("the intermediate never started the engine");
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    let _cleanup = KillOnDrop(engine);
+    assert!(alive(engine), "the engine is not running");
+    assert_eq!(parent_of(engine), Some(intermediate_pid));
+
+    intermediate.kill().unwrap(); // SIGKILL
+    intermediate.wait().unwrap();
+    assert!(
+        gone_within(engine, Duration::from_secs(1)),
+        "the engine outlived its SIGKILLed parent by 1 s"
+    );
+}
+
+/// PDEATHSIG follows the *thread* that spawned the engine, not the
+/// process: when that thread exits, the engine gets SIGTERM although
+/// farm3d is still running. This is why the slicing scheduler spawns from
+/// its own long-lived thread (`operations.rs`).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_engine_exits_when_the_thread_that_spawned_it_exits() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut command = hanging_engine(temp.path());
+    let mut child = thread::spawn(move || {
+        farm3d_lib::slicing::process_group::spawn_group(&mut command).expect("spawn the engine")
+    })
+    .join()
+    .unwrap();
+    let engine = child.id() as i32;
+    let _cleanup = KillOnDrop(engine);
+    assert_eq!(parent_of(engine), Some(std::process::id() as i32));
+    assert!(
+        gone_within(engine, Duration::from_secs(1)),
+        "the engine outlived the thread that spawned it by 1 s"
+    );
+    // It was stopped by SIGTERM, the parent-death signal, and this process
+    // is still its parent, so it can be reaped here.
+    use std::os::unix::process::ExitStatusExt;
+    let status = child.wait().unwrap();
+    assert_eq!(status.signal(), Some(15), "{status:?}");
+}
+
+// ---------------------------------------------------------------------------
 // Real OrcaSlicer (spec D23): `FARM3D_ORCA=<engine>`, optional
 // `FARM3D_ORCA_PRESETS=<preset source>`; run with `just test-orca`.
 // ---------------------------------------------------------------------------
