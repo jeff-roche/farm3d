@@ -38,6 +38,7 @@ beforeEach(() => {
   // Defaults answer from the web fixture, as the real store does in web mode.
   slicingStoreMock.listSliceOptions.mockImplementation(async () => fixture.sliceOptions);
   onBack = vi.fn<() => void>();
+  setWindowWidth(1440);
   // Kobalte's menus scroll on open; jsdom has no scrolling.
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
@@ -45,6 +46,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+function setWindowWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+  window.dispatchEvent(new Event("resize"));
+}
 
 async function open(model: ModelRecord = enclosure()) {
   render(() => <PreparationMode model={model} onBack={onBack} />);
@@ -84,6 +90,17 @@ describe("PreparationWorkspace", () => {
     expect(renderer.buildVolume?.bed).toEqual({ kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 });
     fireEvent.click(screen.getByRole("button", { name: /Back to Library/ }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  it("at 1024 wide, folds the objects under the viewport behind a toggle", async () => {
+    setWindowWidth(1024);
+    await open();
+    expect(screen.queryByRole("grid", { name: "Objects on this plate" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Show objects" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("grid", { name: "Objects on this plate" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide objects" })).toHaveAttribute("aria-expanded", "true");
   });
 
   describe("plate tabs", () => {
@@ -390,7 +407,7 @@ describe("PreparationWorkspace", () => {
       fireEvent.click(within(panel).getByRole("button", { name: "Clear points" }));
       const trigger = within(panel).getAllByRole("button").find((button) => button.textContent?.includes("Choose an object"))!;
       await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
-      await fireEvent.pointerUp(await screen.findByRole("option", { name: "Lid" }), { pointerType: "mouse", button: 0 });
+      await fireEvent.pointerUp(await screen.findByRole("option", { name: "Lid 1" }), { pointerType: "mouse", button: 0 });
       // Two 120 mm lids arranged 5 mm apart: centres 125 mm apart.
       expect(await within(panel).findByText(/Centre to centre/)).toHaveTextContent("Centre to centre: 125.0 mm. Gap: 5.0 mm.");
       expect(renderer.overlays.measure).toBeDefined();

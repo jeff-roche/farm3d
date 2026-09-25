@@ -178,7 +178,8 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   let inspector: HTMLDivElement | undefined;
 
   const [narrow, setNarrow] = createSignal(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
-  const [objectsOpen, setObjectsOpen] = createSignal(true);
+  // Folded by default when narrow, so the viewport keeps its room.
+  const [objectsOpen, setObjectsOpen] = createSignal(!narrow());
   onMount(() => {
     const onResize = () => setNarrow(window.innerWidth < INLINE_OBJECTS_MIN_WIDTH);
     window.addEventListener("resize", onResize);
@@ -208,7 +209,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
   };
   const others = () => (plate()?.instances ?? [])
     .filter((instance) => instance.instanceKey !== session.selectedInstanceKey())
-    .map((instance) => ({ key: instance.instanceKey, name: session.objectName(instance.objectKey) }));
+    .map((instance) => ({ key: instance.instanceKey, name: session.instanceName(instance.instanceKey) }));
   const between = createMemo(() => {
     const from = selected();
     const to = plate()?.instances.find((instance) => instance.instanceKey === otherKey());
@@ -270,7 +271,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
     return {
       instanceKey: instance.instanceKey,
       objectKey: instance.objectKey,
-      name: session.objectName(instance.objectKey),
+      name: session.instanceName(instance.instanceKey),
       transform: instance.transform,
       outOfBounds: !!check && (check.outOfBounds || check.inExcludeArea || check.tooTall),
     };
@@ -409,7 +410,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
                         <MeasurePanel
                           points={points()}
                           onClear={() => setPoints([])}
-                          selectedName={selected() ? session.objectName(selected()!.objectKey) : undefined}
+                          selectedName={selected() ? session.instanceName(selected()!.instanceKey) : undefined}
                           others={others()}
                           otherKey={otherKey()}
                           onOtherChange={setOtherKey}
@@ -418,7 +419,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
                       </Show>
                       <PreparationObjectList
                         instances={plate()?.instances ?? []}
-                        objectName={session.objectName}
+                        instanceName={session.instanceName}
                         placement={placement}
                         selectedInstanceKey={session.selectedInstanceKey()}
                         onSelect={session.select}
@@ -430,7 +431,7 @@ export function PreparationWorkspace(props: PreparationWorkspaceProps) {
                           <InstanceInspector
                             instance={instance()}
                             object={session.object(instance().objectKey)}
-                            name={session.objectName(instance().objectKey)}
+                            name={session.instanceName(instance().instanceKey)}
                             plates={plates()}
                             plateKey={session.plateKey()!}
                             actions={actions}

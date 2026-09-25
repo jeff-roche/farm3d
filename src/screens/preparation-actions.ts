@@ -99,7 +99,7 @@ export function createPreparationActions(session: PreparationSession): Preparati
     session.editor.edit((document) => setTransform(document, instance.instanceKey, placed));
   };
 
-  const name = (instance: InstanceDoc) => session.objectName(instance.objectKey);
+  const name = (instance: InstanceDoc) => session.instanceName(instance.instanceKey);
 
   const layFlatOn = (faceIndex: number) => {
     const instance = selected();

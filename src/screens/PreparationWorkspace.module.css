@@ -105,6 +105,12 @@
   flex: 0 0 auto;
 }
 
+/* The viewport keeps a usable height while the objects scroll under it. */
+.narrow > :first-child {
+  flex: 0 0 auto;
+  min-height: 22rem;
+}
+
 .narrow .inspector {
   overflow-y: visible;
 }

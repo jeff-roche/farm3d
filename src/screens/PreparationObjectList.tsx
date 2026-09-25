@@ -10,7 +10,7 @@ export const LARGE_PLATE_TRIANGLES = 2_000_000;
 
 export interface PreparationObjectListProps {
   instances: InstanceDoc[];
-  objectName: (objectKey: number) => string;
+  instanceName: (instanceKey: string) => string;
   placement: (instanceKey: string) => PlacementCheck | undefined;
   selectedInstanceKey: string | null;
   onSelect: (instanceKey: string) => void;
@@ -43,7 +43,7 @@ export function PreparationObjectList(props: PreparationObjectListProps) {
   // a focused row isn't rebuilt under the keyboard.
   const instance = (key: string) => props.instances.find((candidate) => candidate.instanceKey === key);
   const columns: DataTableColumn<string>[] = [
-    { id: "name", header: "Object", cell: (key) => props.objectName(instance(key)?.objectKey ?? 0) },
+    { id: "name", header: "Object", cell: (key) => props.instanceName(key) },
     {
       id: "position",
       header: "Position (mm)",

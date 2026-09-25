@@ -50,6 +50,9 @@ export interface PreparationSession {
   validation: () => PreparationValidation;
   object: (objectKey: number) => GeometryObject | undefined;
   objectName: (objectKey: number) => string;
+  /** An instance's name: its object's, numbered when the object is placed
+   *  more than once ("Lid 2"). */
+  instanceName: (instanceKey: string) => string;
   /** The plate tab shown; the first plate when the chosen one is gone. */
   plateKey: () => string | undefined;
   selectPlate: (plateKey: string) => void;
@@ -168,6 +171,21 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
   });
 
   const object = (objectKey: number) => geometry()?.objects.find((candidate) => candidate.objectKey === objectKey);
+  const objectName = (objectKey: number) => object(objectKey)?.name ?? `Object ${objectKey}`;
+  const instanceNames = createMemo(() => {
+    const instances = (document()?.plates ?? []).flatMap((plate) => plate.instances);
+    const counts = new Map<number, number>();
+    for (const instance of instances) counts.set(instance.objectKey, (counts.get(instance.objectKey) ?? 0) + 1);
+    const seen = new Map<number, number>();
+    const names = new Map<string, string>();
+    for (const instance of instances) {
+      const n = (seen.get(instance.objectKey) ?? 0) + 1;
+      seen.set(instance.objectKey, n);
+      const base = objectName(instance.objectKey);
+      names.set(instance.instanceKey, (counts.get(instance.objectKey) ?? 0) > 1 ? `${base} ${n}` : base);
+    }
+    return names;
+  });
 
   const [chosenPlate, setChosenPlate] = createSignal<string | undefined>();
   const plateKey = createMemo(() => {
@@ -202,7 +220,8 @@ export function createPreparationSession(model: () => ModelRecord): PreparationS
     footprint,
     validation,
     object,
-    objectName: (objectKey) => object(objectKey)?.name ?? `Object ${objectKey}`,
+    objectName,
+    instanceName: (instanceKey) => instanceNames().get(instanceKey) ?? "",
     plateKey,
     selectPlate: (key) => batch(() => {
       setChosenPlate(key);
