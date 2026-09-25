@@ -3,9 +3,9 @@
  *  with the given spacing between them, largest area first and then by
  *  `instanceKey`, into the largest axis-aligned rectangle of the bed that
  *  keeps clear of every exclude area, and centres the packed group in it.
- *  What doesn't fit is not placed: it stays where it was and is reported,
- *  never overlapped. Pure. */
-import { EPSILON_MM, polygonsOverlap, polygonWithin, type Point2 } from "./bounds";
+ *  What doesn't fit, or has an extent that isn't a finite number, is not
+ *  placed: it stays where it was and is reported, never overlapped. Pure. */
+import { EPSILON_MM, pointInPolygon, polygonsOverlap, type Point2 } from "./bounds";
 import { bedExtent, bedOutline } from "./viewport/build-volume";
 import type { BuildVolume } from "./viewport/renderer";
 
@@ -36,17 +36,109 @@ export interface ArrangeResult {
   region: Rect | null;
 }
 
-/** Lines across the bed where a free rectangle may start or end: the bed's
- *  own corners, every exclude area's corners, and an even grid of this many
- *  steps. Exact for rectangular beds and exclude areas; within one step for
- *  other shapes. */
+/** Lines across the bed where a free rectangle may start or end: an even
+ *  grid of this many steps, plus the corners of the bed and of each
+ *  exclude area drawn with few enough points to be a real corner (see
+ *  {@link MAX_CORNER_POINTS}). Exact for rectangular beds and exclude
+ *  areas; within one step for other shapes. */
 const GRID_STEPS = 48;
+
+/** A shape with more points than this is a curve drawn in segments (a
+ *  round bed), not corners: only its extent adds lines, since a line per
+ *  point would make the search slow and gain less than a grid step. */
+const MAX_CORNER_POINTS = 16;
+
+const cornerPoints = (shape: Point2[]): Point2[] => {
+  if (shape.length <= MAX_CORNER_POINTS) return shape;
+  const xs = shape.map(([x]) => x);
+  const ys = shape.map(([, y]) => y);
+  return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
+};
 
 function gridLines(values: number[], low: number, high: number): number[] {
   const lines = [...values.filter((v) => v >= low && v <= high)];
   for (let i = 0; i <= GRID_STEPS; i += 1) lines.push(low + ((high - low) * i) / GRID_STEPS);
   lines.sort((a, b) => a - b);
   return lines.filter((v, i) => i === 0 || v - lines[i - 1] > EPSILON_MM);
+}
+
+/** Whether a segment passes through the open rectangle (touching its
+ *  sides doesn't count), by Liang–Barsky clipping against the rectangle
+ *  shrunk by the tolerance. */
+function crossesInterior(a: Point2, b: Point2, minX: number, minY: number, maxX: number, maxY: number): boolean {
+  const x0 = minX + EPSILON_MM, y0 = minY + EPSILON_MM, x1 = maxX - EPSILON_MM, y1 = maxY - EPSILON_MM;
+  if (x0 >= x1 || y0 >= y1) return false;
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  let low = 0;
+  let high = 1;
+  for (const [p, q] of [[-dx, a[0] - x0], [dx, x1 - a[0]], [-dy, a[1] - y0], [dy, y1 - a[1]]]) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) low = Math.max(low, t);
+    else high = Math.min(high, t);
+    if (low > high) return false;
+  }
+  return true;
+}
+
+/** The index of the last line at or below `value`. */
+function lineBelow(lines: number[], value: number): number {
+  let low = 0;
+  let high = lines.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (lines[middle] <= value) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+/** Which grid cells lie wholly inside the bed and clear of every exclude
+ *  area. A cell is inside when its corners and centre are, and no bed edge
+ *  passes through it: each grid point is tested once, and each bed edge
+ *  only against the cells its extent covers, so a finely drawn round bed
+ *  stays cheap. */
+function freeCells(xs: number[], ys: number[], bed: Point2[], excluded: Point2[][]): boolean[][] {
+  const columns = xs.length - 1;
+  const rows = ys.length - 1;
+  const cornerInside = ys.map((y) => xs.map((x) => pointInPolygon([x, y], bed) !== "outside"));
+  const crossed = Array.from({ length: rows }, () => new Array<boolean>(columns).fill(false));
+  for (let i = 0; i < bed.length; i += 1) {
+    const a = bed[i];
+    const b = bed[(i + 1) % bed.length];
+    const fromColumn = Math.min(lineBelow(xs, Math.min(a[0], b[0])), columns - 1);
+    const toColumn = Math.min(lineBelow(xs, Math.max(a[0], b[0])), columns - 1);
+    const fromRow = Math.min(lineBelow(ys, Math.min(a[1], b[1])), rows - 1);
+    const toRow = Math.min(lineBelow(ys, Math.max(a[1], b[1])), rows - 1);
+    for (let row = fromRow; row <= toRow; row += 1) {
+      for (let column = fromColumn; column <= toColumn; column += 1) {
+        if (!crossed[row][column] && crossesInterior(a, b, xs[column], ys[row], xs[column + 1], ys[row + 1])) {
+          crossed[row][column] = true;
+        }
+      }
+    }
+  }
+  const free: boolean[][] = [];
+  for (let row = 0; row < rows; row += 1) {
+    free.push([]);
+    for (let column = 0; column < columns; column += 1) {
+      const inside = !crossed[row][column]
+        && cornerInside[row][column] && cornerInside[row][column + 1]
+        && cornerInside[row + 1][column] && cornerInside[row + 1][column + 1]
+        && pointInPolygon([(xs[column] + xs[column + 1]) / 2, (ys[row] + ys[row + 1]) / 2], bed) === "inside";
+      if (!inside) {
+        free[row].push(false);
+        continue;
+      }
+      const cell: Point2[] = [[xs[column], ys[row]], [xs[column + 1], ys[row]], [xs[column + 1], ys[row + 1]], [xs[column], ys[row + 1]]];
+      free[row].push(!excluded.some((area) => polygonsOverlap(cell, area)));
+    }
+  }
+  return free;
 }
 
 /** The largest-area axis-aligned rectangle inside the bed outline that
@@ -56,21 +148,14 @@ export function largestFreeRectangle(volume: BuildVolume): Rect | null {
   if (!extent) return null;
   const bed = bedOutline(volume.bed).map((p): Point2 => [p.xMm, p.yMm]);
   const excluded = volume.excludeAreas.filter((area) => area.length >= 3).map((area) => area.map((p): Point2 => [p.xMm, p.yMm]));
-  const xs = gridLines([...bed, ...excluded.flat()].map(([x]) => x), extent.min[0], extent.max[0]);
-  const ys = gridLines([...bed, ...excluded.flat()].map(([, y]) => y), extent.min[1], extent.max[1]);
+  const corners = [bed, ...excluded].flatMap(cornerPoints);
+  const xs = gridLines(corners.map(([x]) => x), extent.min[0], extent.max[0]);
+  const ys = gridLines(corners.map(([, y]) => y), extent.min[1], extent.max[1]);
   const columns = xs.length - 1;
   const rows = ys.length - 1;
   if (columns < 1 || rows < 1) return null;
 
-  const free: boolean[][] = [];
-  for (let row = 0; row < rows; row += 1) {
-    free.push([]);
-    for (let column = 0; column < columns; column += 1) {
-      const cell: Point2[] = [[xs[column], ys[row]], [xs[column + 1], ys[row]], [xs[column + 1], ys[row + 1]], [xs[column], ys[row + 1]]];
-      free[row].push(polygonWithin(cell, bed) && !excluded.some((area) => polygonsOverlap(cell, area)));
-    }
-  }
-
+  const free = freeCells(xs, ys, bed, excluded);
   let best: Rect | null = null;
   let bestArea = 0;
   for (let top = 0; top < rows; top += 1) {
@@ -158,14 +243,16 @@ export function arrange(items: readonly ArrangeItem[], volume: BuildVolume, spac
   const spacing = Number.isFinite(spacingMm) && spacingMm > 0 ? spacingMm : 0;
   const region = largestFreeRectangle(volume);
   const size = (item: ArrangeItem) => [item.max[0] - item.min[0], item.max[1] - item.min[1]];
-  const ordered = [...items].sort((a, b) => {
+  // An extent that isn't a number can't be packed; it is reported instead.
+  const finite = (item: ArrangeItem) => [item.min[0], item.min[1], item.max[0], item.max[1]].every(Number.isFinite);
+  const ordered = items.filter(finite).sort((a, b) => {
     const [aw, ad] = size(a);
     const [bw, bd] = size(b);
     return bw * bd - aw * ad || byKey(a.key, b.key);
   });
   const placed = new Map<string, [number, number]>();
-  const unplaced: string[] = [];
-  if (!region) return { placed, unplaced: ordered.map((item) => item.key).sort(byKey), region };
+  const unplaced: string[] = items.filter((item) => !finite(item)).map((item) => item.key);
+  if (!region) return { placed, unplaced: items.map((item) => item.key).sort(byKey), region };
 
   // Each box grows by the spacing, and so does the container, so boxes end
   // up `spacing` apart and may sit flush with the region's edge.

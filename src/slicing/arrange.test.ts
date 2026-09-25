@@ -119,6 +119,17 @@ describe("arrange", () => {
     expectPacked(result, parts, bed, 5);
   });
 
+  it("reports items with a non-finite extent as unplaced, and places the rest", () => {
+    const parts = [
+      ...items([["small", 20, 20]]),
+      { key: "broken", min: [0, 0], max: [Number.NaN, 10] },
+      { key: "endless", min: [-Infinity, 0], max: [10, 10] },
+    ];
+    const result = arrange(parts, bed, 5);
+    expect(result.unplaced).toEqual(["broken", "endless"]);
+    expect([...result.placed.keys()]).toEqual(["small"]);
+  });
+
   it("uses the spacing it is given", () => {
     const parts = items(PARTS);
     expectPacked(arrange(parts, bed, 12), parts, bed, 12);
@@ -138,6 +149,27 @@ describe("largest free rectangle", () => {
     const rect = largestFreeRectangle(volume)!;
     const area = (rect.maxX - rect.minX) * (rect.maxY - rect.minY);
     expect(area).toBeCloseTo(Math.max(256 * 226, 216 * 256), 6);
+  });
+
+  it("stays quick on a finely drawn round bed", () => {
+    const round: BuildVolume = {
+      bed: {
+        kind: "polygon",
+        points: Array.from({ length: 360 }, (_, i) => ({
+          xMm: 128 + 128 * Math.cos((2 * Math.PI * i) / 360),
+          yMm: 128 + 128 * Math.sin((2 * Math.PI * i) / 360),
+        })),
+      },
+      heightMm: 200,
+      excludeAreas: [],
+    };
+    const started = performance.now();
+    const rect = largestFreeRectangle(round)!;
+    const elapsed = performance.now() - started;
+    // A sanity bound, far above the expected tens of milliseconds.
+    expect(elapsed).toBeLessThan(200);
+    // Near the inscribed square's area (2r²), within the grid's step.
+    expect((rect.maxX - rect.minX) * (rect.maxY - rect.minY)).toBeGreaterThan(2 * 128 * 128 * 0.85);
   });
 
   it("is null for a bed with no area", () => {

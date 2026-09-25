@@ -55,40 +55,53 @@ export function convexHull(points: readonly Point2[]): Point2[] {
 
 /** Akl–Toussaint: the points that can still be on the hull once the
  *  extremes in eight directions are known. Keeps a million-vertex mesh's
- *  hull from sorting every vertex. */
+ *  hull from sorting every vertex. Works on the flat array and allocates a
+ *  point only for the vertices it keeps. */
 function hullCandidates(xy: Float64Array): Point2[] {
   const count = xy.length / 2;
-  const directions: Point2[] = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-  const best = directions.map(() => -Infinity);
-  const extreme: Point2[] = directions.map(() => [0, 0]);
+  // The eight directions, unrolled: x, x+y, y, y-x, -x, -x-y, -y, x-y.
+  const best = new Float64Array(8).fill(-Infinity);
+  const at = new Int32Array(8);
   for (let i = 0; i < count; i += 1) {
     const x = xy[i * 2];
     const y = xy[i * 2 + 1];
-    for (let d = 0; d < directions.length; d += 1) {
-      const reach = x * directions[d][0] + y * directions[d][1];
-      if (reach > best[d]) {
-        best[d] = reach;
-        extreme[d] = [x, y];
-      }
-    }
+    const reach0 = x, reach1 = x + y, reach2 = y, reach3 = y - x;
+    if (reach0 > best[0]) { best[0] = reach0; at[0] = i; }
+    if (reach1 > best[1]) { best[1] = reach1; at[1] = i; }
+    if (reach2 > best[2]) { best[2] = reach2; at[2] = i; }
+    if (reach3 > best[3]) { best[3] = reach3; at[3] = i; }
+    if (-reach0 > best[4]) { best[4] = -reach0; at[4] = i; }
+    if (-reach1 > best[5]) { best[5] = -reach1; at[5] = i; }
+    if (-reach2 > best[6]) { best[6] = -reach2; at[6] = i; }
+    if (-reach3 > best[7]) { best[7] = -reach3; at[7] = i; }
   }
-  const octagon = convexHull(extreme);
+  const octagon = convexHull([...at].map((i): Point2 => [xy[i * 2], xy[i * 2 + 1]]));
   if (octagon.length < 3) {
     const all: Point2[] = [];
     for (let i = 0; i < count; i += 1) all.push([xy[i * 2], xy[i * 2 + 1]]);
     return all;
   }
+  // Each octagon edge as a line: a point is strictly inside the (CCW)
+  // octagon when every a*x + b*y + c is above the tolerance.
+  const edges = octagon.length;
+  const ea = new Float64Array(edges);
+  const eb = new Float64Array(edges);
+  const ec = new Float64Array(edges);
+  for (let e = 0; e < edges; e += 1) {
+    const [ox, oy] = octagon[e];
+    const [px, py] = octagon[(e + 1) % edges];
+    // cross(o, p, q) = (px-ox)(qy-oy) - (py-oy)(qx-ox)
+    ea[e] = -(py - oy);
+    eb[e] = px - ox;
+    ec[e] = (py - oy) * ox - (px - ox) * oy;
+  }
   const kept: Point2[] = [...octagon];
   for (let i = 0; i < count; i += 1) {
-    const point: Point2 = [xy[i * 2], xy[i * 2 + 1]];
-    let strictlyInside = true;
-    for (let e = 0; e < octagon.length; e += 1) {
-      if (cross(octagon[e], octagon[(e + 1) % octagon.length], point) <= EPSILON_MM) {
-        strictlyInside = false;
-        break;
-      }
-    }
-    if (!strictlyInside) kept.push(point);
+    const x = xy[i * 2];
+    const y = xy[i * 2 + 1];
+    let e = 0;
+    while (e < edges && ea[e] * x + eb[e] * y + ec[e] > EPSILON_MM) e += 1;
+    if (e < edges) kept.push([x, y]);
   }
   return kept;
 }
