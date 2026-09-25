@@ -57,7 +57,10 @@ export interface ViewportTheme {
   grid: string;
   volume: string;
   object: string;
+  /** The selected object's fill. */
   selected: string;
+  /** The selected object's edge outline. */
+  outline: string;
   outOfBounds: string;
   excludeArea: string;
   measure: string;

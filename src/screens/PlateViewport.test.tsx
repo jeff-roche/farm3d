@@ -226,6 +226,7 @@ describe("PlateViewport", () => {
       background: darkTheme.color.bg,
       object: darkTheme.color.textMuted,
       selected: darkTheme.color.accent,
+      outline: darkTheme.color.text,
       outOfBounds: darkTheme.color.danger,
       excludeArea: darkTheme.color.warning,
     });

@@ -9,6 +9,7 @@ export const VIEWPORT_THEME_TOKENS: Record<keyof ViewportTheme, string> = {
   volume: "--f3d-color-border-strong",
   object: "--f3d-color-text-muted",
   selected: "--f3d-color-accent",
+  outline: "--f3d-color-text",
   outOfBounds: "--f3d-color-danger",
   excludeArea: "--f3d-color-warning",
   measure: "--f3d-color-text",

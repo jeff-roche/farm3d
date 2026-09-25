@@ -142,6 +142,10 @@ export class ThreeViewportRenderer implements ViewportRenderer {
       flatShading: true, roughness: 0.85, metalness: 0, side: DoubleSide,
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     }),
+    selected: new MeshStandardMaterial({
+      flatShading: true, roughness: 0.85, metalness: 0, side: DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+    }),
     outline: new LineBasicMaterial(),
     grid: new LineBasicMaterial({ transparent: true, opacity: 0.6 }),
     gridMajor: new LineBasicMaterial(),
@@ -255,7 +259,10 @@ export class ThreeViewportRenderer implements ViewportRenderer {
     this.scene.background = color(theme.background);
     this.materials.object.color = color(theme.object);
     this.materials.outOfBounds.color = color(theme.outOfBounds);
-    this.materials.outline.color = color(theme.selected);
+    // The selection is tinted as well as outlined, so it reads against
+    // any object colour; out of bounds still wins.
+    this.materials.selected.color = color(theme.selected);
+    this.materials.outline.color = color(theme.outline);
     this.materials.grid.color = color(theme.grid);
     this.materials.gridMajor.color = color(theme.volume);
     this.materials.volume.color = color(theme.volume);
@@ -319,7 +326,9 @@ export class ThreeViewportRenderer implements ViewportRenderer {
       const held = this.geometries.get(instance.objectKey);
       if (!held) continue;
       const matrix = toMatrix4(instance.matrix);
-      const material = instance.outOfBounds ? this.materials.outOfBounds : this.materials.object;
+      const material = instance.outOfBounds
+        ? this.materials.outOfBounds
+        : instance.selected ? this.materials.selected : this.materials.object;
       const mesh = new Mesh(held.geometry, material);
       mesh.matrixAutoUpdate = false;
       mesh.matrix.copy(matrix);
@@ -430,8 +439,8 @@ export class ThreeViewportRenderer implements ViewportRenderer {
     const fromPosition = this.camera.position.clone();
     const fromTarget = controls ? controls.target.clone() : target.clone();
     const start = performance.now();
-    const step = (now: number) => {
-      const t = Math.min(1, (now - start) / CAMERA_TWEEN_MS);
+    const step = () => {
+      const t = Math.min(1, Math.max(0, (performance.now() - start) / CAMERA_TWEEN_MS));
       const eased = 1 - (1 - t) ** 3;
       apply(fromPosition.clone().lerp(position, eased), fromTarget.clone().lerp(target, eased));
       this.tween = t < 1 ? requestAnimationFrame(step) : 0;
