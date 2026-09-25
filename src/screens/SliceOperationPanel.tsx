@@ -199,6 +199,9 @@ function SliceOperationRow(props: { id: string; onOpenRevision?: (id: string) =>
             {operation().failure ? failureText(operation().failure!) : "The slice failed."}
           </p>
         </Match>
+        <Match when={operation().state === "succeeded" && !operation().sliceRevisionId}>
+          <p class={styles.note}>Its Slice Revision was deleted.</p>
+        </Match>
         <Match when={operation().state === "succeeded"}>
           <p class={styles.note}>Saved as a Slice Revision.</p>
           <Show when={props.onOpenRevision && operation().sliceRevisionId}>

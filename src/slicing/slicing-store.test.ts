@@ -392,6 +392,27 @@ describe("settling", () => {
     expect(slicing.revision("slr-1")).toBeUndefined();
   });
 
+  it("a removed revision is unlinked from the operation that made it, whether the event or the delete result says so", async () => {
+    responders.list_slicing = () => slicingSnapshot(0, {
+      revisions: [sliceRevision({ id: "slr-1" }), sliceRevision({ id: "slr-2" })],
+      activeAndRecentOperations: [
+        operation({ id: "sop-1", state: "succeeded", sliceRevisionId: "slr-1", finishedAt: "2026-09-24T00:00:02Z" }),
+        operation({ id: "sop-2", state: "succeeded", sliceRevisionId: "slr-2", finishedAt: "2026-09-24T00:00:03Z" }),
+      ],
+    });
+    responders.delete_slice_revision = () => ({});
+    const { deleteSliceRevision, slicing } = await startedStore();
+    expect(slicing.operation("sop-1")?.sliceRevisionId).toBe("slr-1");
+
+    emit(envelope(1, "slicing.revision.removed", {}, "slr-1"));
+    expect(slicing.operation("sop-1")).toMatchObject({ state: "succeeded" });
+    expect(slicing.operation("sop-1")?.sliceRevisionId).toBeUndefined();
+    expect(slicing.operation("sop-2")?.sliceRevisionId).toBe("slr-2");
+
+    await deleteSliceRevision("slr-2");
+    expect(slicing.operation("sop-2")?.sliceRevisionId).toBeUndefined();
+  });
+
   it("orders revisions that share a createdAt by id, descending, as the backend does", async () => {
     const at = "2026-09-24T00:00:00Z";
     responders.list_slicing = () => slicingSnapshot(0, {

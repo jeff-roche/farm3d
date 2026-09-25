@@ -707,6 +707,18 @@ describe("PreparationPanel", () => {
       expect(document.activeElement).not.toBe(log);
     });
 
+    it("says so when a succeeded operation's Slice Revision was deleted", async () => {
+      await open();
+      setSlicingState({
+        operations: fixture.operations.map((operation) =>
+          operation.sliceRevisionId ? { ...operation, sliceRevisionId: undefined } : operation),
+      });
+      const succeeded = rowFor("Plate 1: Lid");
+      await waitFor(() => expect(succeeded).toHaveTextContent("Its Slice Revision was deleted."));
+      expect(succeeded).not.toHaveTextContent("Saved as a Slice Revision.");
+      expect(within(succeeded).queryByRole("button", { name: "Open the Slice Revision" })).toBeNull();
+    });
+
     it("dims the backend's noise lines without hiding them", async () => {
       await open();
       const log = within(rowFor("Plate 2: Latch")).getByLabelText("Log for Plate 2: Latch");

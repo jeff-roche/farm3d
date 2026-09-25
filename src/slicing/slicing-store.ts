@@ -219,9 +219,12 @@ function settleRevision(summary: SliceRevisionSummary): void {
   setState("revisionsByModel", summary.modelId, [...list, summary].sort(byNewestRevision));
 }
 
+/** Also unlinks it from the operation that made it, as the backend's
+ *  `ON DELETE SET NULL` does, so that operation no longer leads to it. */
 function dropRevision(id: string): void {
   removedRevisions.add(id);
   revisionRecords.delete(id);
+  setState("operations", (o) => o.sliceRevisionId === id, "sliceRevisionId", undefined);
   const held = findRevision(id);
   if (!held) return;
   setState("revisionsByModel", held.modelId, (list) => (list ?? []).filter((r) => r.id !== id));
