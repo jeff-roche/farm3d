@@ -637,8 +637,14 @@ because the exit code is `return_code` mod 256 (Gate F). A signal exit is
 3. The file is regular, not a symlink, and at most 1 GiB.
 4. The P4 G-code inspector accepts it with `producer.name ==
    "OrcaSlicer"` and `commandCount > 0`.
-5. `observedBoundsMm`, if present, lies within the target printable area
-   and height, with 2 mm of XY tolerance.
+5. The **printed bounds** lie within the target printable area and height,
+   with 2 mm of XY tolerance and 0.05 mm of Z tolerance. Printed bounds
+   cover only extruding moves (positive E delta, honoring G90/G91,
+   M82/M83, and G92) inside the slicer's print body, so machine start/end
+   G-code (off-bed purge lines, wipe and park moves) and travel Z-hops are
+   excluded. When positioning can't be tracked, the check is skipped and
+   the manifest says so. P4's `observedBoundsMm` is unchanged and is not
+   used for this check.
 6. The G-code's own `printer_settings_id` and `filament_settings_id`
    claims, which are P4 allowlisted keys, equal the flat preset names that
    were passed in, after stripping surrounding quotes. The G-code writes
