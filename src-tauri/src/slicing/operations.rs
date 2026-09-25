@@ -53,7 +53,7 @@ use super::facts::Farm3dFacts;
 use super::invocation::{EngineIdentity, PresetSourceIdentity, WorkDir, WORK_ROOT_DIR};
 use super::mapping::{apply_overrides_and_controls, SlicePresetDocuments, SliceSettingsInput};
 use super::plate3mf::write_plate_3mf;
-use super::presets::{material_family_for, resolve_target};
+use super::presets::{material_family_for, resolve_target, PresetKind};
 use super::process::{run_slice, SliceCommand, SliceLog, SliceObserver, SliceProgress, STOP_GRACE};
 use super::process_group::{process_executable, process_start_time, stop_recorded_group};
 use super::publish::{finish_run, record_unpublished, FinishedRun, PublishInputs, Unpublished};
@@ -588,14 +588,51 @@ fn first_number(preset: &Value, key: &str) -> Option<f64> {
 fn facts_for(
     snapshot: super::ProfileSnapshot,
     nozzle_fallback: f64,
+    filament_preset: &str,
     presets: &SlicePresetDocuments,
-) -> Farm3dFacts {
+) -> Result<Farm3dFacts, CommandError> {
     let nozzle = first_number(&presets.machine, "nozzle_diameter").unwrap_or(nozzle_fallback);
-    let (family, other) = first_text(&presets.filament, "filament_type")
-        .map(|filament_type| material_family_for(&filament_type))
-        .unwrap_or((crate::spools::MaterialFamily::Other, None));
-    let filament_diameter = first_number(&presets.filament, "filament_diameter").unwrap_or(1.75);
-    Farm3dFacts::new(snapshot, nozzle, family, other, filament_diameter)
+    let filament = FilamentFacts::of(filament_preset, &presets.filament)?;
+    Ok(Farm3dFacts::new(
+        snapshot,
+        nozzle,
+        filament.family,
+        filament.other,
+        filament.diameter_mm,
+    ))
+}
+
+/// What a flat filament preset says about the filament it slices.
+#[derive(Debug, PartialEq)]
+struct FilamentFacts {
+    family: crate::spools::MaterialFamily,
+    other: Option<String>,
+    diameter_mm: f64,
+}
+
+impl FilamentFacts {
+    /// A filament preset without a `filament_type` or a usable
+    /// `filament_diameter` is `PRESET_INVALID`: farm3d refuses the slice
+    /// rather than record a fact that doesn't describe what was sliced.
+    fn of(filament_preset: &str, preset: &Value) -> Result<Self, CommandError> {
+        let missing = |key: &str| {
+            CommandError::preset_invalid(
+                PresetKind::Filament.label(),
+                filament_preset,
+                &format!("it has no {key}."),
+            )
+        };
+        let (family, other) = first_text(preset, "filament_type")
+            .map(|filament_type| material_family_for(&filament_type))
+            .ok_or_else(|| missing("filament_type"))?;
+        let diameter_mm = first_number(preset, "filament_diameter")
+            .ok_or_else(|| missing("filament_diameter"))?;
+        Ok(Self {
+            family,
+            other,
+            diameter_mm,
+        })
+    }
 }
 
 /// One plate, ready to queue.
@@ -658,8 +695,9 @@ fn prepare<R: tauri::Runtime>(
     let facts = facts_for(
         snapshot.clone(),
         target.profile.nozzle_diameter_mm[0],
+        &filament_preset,
         &presets,
-    );
+    )?;
     let engine_identity =
         EngineIdentity::of(&engine.path, &engine.version, &services.caches.hashes).map_err(
             |_| CommandError::slicer_unavailable("farm3d couldn't read the OrcaSlicer program."),
@@ -1202,6 +1240,51 @@ mod tests {
         assert_eq!(first_number(&preset, "filament_diameter"), Some(2.85));
         assert_eq!(first_text(&preset, "empty"), None);
         assert_eq!(first_text(&preset, "missing"), None);
+    }
+
+    #[test]
+    fn a_filament_preset_without_its_type_or_diameter_is_preset_invalid() {
+        let complete = serde_json::json!({
+            "filament_type": ["PETG"],
+            "filament_diameter": ["2.85"],
+        });
+        assert_eq!(
+            FilamentFacts::of("Test PETG", &complete).unwrap(),
+            FilamentFacts {
+                family: crate::spools::MaterialFamily::Petg,
+                other: None,
+                diameter_mm: 2.85,
+            }
+        );
+        for (preset, key) in [
+            (
+                serde_json::json!({ "filament_diameter": ["1.75"] }),
+                "filament_type",
+            ),
+            (
+                serde_json::json!({ "filament_type": [""], "filament_diameter": ["1.75"] }),
+                "filament_type",
+            ),
+            (
+                serde_json::json!({ "filament_type": ["PLA"] }),
+                "filament_diameter",
+            ),
+            (
+                serde_json::json!({ "filament_type": ["PLA"], "filament_diameter": ["0"] }),
+                "filament_diameter",
+            ),
+        ] {
+            let error = FilamentFacts::of("Odd PLA", &preset).unwrap_err();
+            let wire = serde_json::to_value(&error).unwrap();
+            assert_eq!(wire["code"], "PRESET_INVALID", "{wire}");
+            assert_eq!(wire["details"]["kind"], "filament", "{wire}");
+            assert_eq!(wire["details"]["preset"], "Odd PLA", "{wire}");
+            assert_eq!(
+                wire["details"]["reason"],
+                format!("it has no {key}."),
+                "{wire}"
+            );
+        }
     }
 
     #[test]

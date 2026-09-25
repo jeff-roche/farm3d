@@ -461,6 +461,46 @@ fn a_slice_without_a_chosen_preset_names_the_preset_field() {
     assert_eq!(running.slicing()["activeAndRecentOperations"], json!([]));
 }
 
+/// D15: a farm3d revision's filament facts come from the filament preset
+/// it sliced with. A preset chain with no `filament_diameter` is refused as
+/// `PRESET_INVALID` before anything is queued, rather than recorded as
+/// 1.75 mm.
+#[test]
+fn a_filament_preset_without_a_diameter_refuses_the_slice() {
+    let farm = Farm::new();
+    let common = farm
+        .orca
+        .path()
+        .join("resources/profiles/OrcaFilamentLibrary/filament/fdm_filament_common.json");
+    let mut preset: Value = serde_json::from_slice(&fs::read(&common).unwrap()).unwrap();
+    preset.as_object_mut().unwrap().remove("filament_diameter");
+    fs::write(&common, serde_json::to_vec_pretty(&preset).unwrap()).unwrap();
+
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let filament = preparation["document"]["filamentPreset"].clone();
+    assert!(filament.is_string(), "{preparation}");
+    let plate = &plates(&preparation)[0];
+    let error = running.error(
+        "start_slice",
+        json!({
+            "operationId": "op-no-diameter",
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+            "plateKeys": [plate["plateKey"]],
+        }),
+    );
+    assert_eq!(error["code"], "PRESET_INVALID", "{error}");
+    assert_eq!(error["details"]["kind"], "filament", "{error}");
+    assert_eq!(error["details"]["preset"], filament, "{error}");
+    assert_eq!(
+        error["details"]["reason"], "it has no filament_diameter.",
+        "{error}"
+    );
+    assert_eq!(running.slicing()["activeAndRecentOperations"], json!([]));
+}
+
 #[test]
 fn start_slice_replays_by_operation_id_and_refuses_a_reused_id() {
     let farm = Farm::new();
