@@ -4,6 +4,7 @@ import {
   candidateLines,
   clampControl,
   failureText,
+  formatFaceArea,
   layerHeightMax,
   logSegments,
   runtimeProblems,
@@ -36,6 +37,21 @@ describe("controls", () => {
     expect(clampControl("topShellLayers", 51)).toBe(50);
     expect(clampControl("layerHeightMm", 0.5, 0.32)).toBe(0.32);
     expect(clampControl("layerHeightMm", 0.01, 0.32)).toBe(0.05);
+  });
+});
+
+describe("formatFaceArea", () => {
+  it("keeps two significant figures below 10 mm², so small faces don't read as 0", () => {
+    expect(formatFaceArea(0.0421)).toBe("0.042");
+    expect(formatFaceArea(0.3)).toBe("0.3");
+    expect(formatFaceArea(3.14159)).toBe("3.1");
+    expect(formatFaceArea(9.94)).toBe("9.9");
+  });
+
+  it("rounds larger faces to whole square millimetres, grouped", () => {
+    expect(formatFaceArea(10.4)).toBe("10");
+    expect(formatFaceArea(400)).toBe("400");
+    expect(formatFaceArea(12345.6)).toBe((12346).toLocaleString());
   });
 });
 

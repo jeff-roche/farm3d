@@ -1,6 +1,7 @@
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 import { Button, Checkbox, Select } from "../design-system";
 import { plateLabel } from "../slicing/preparation-edits";
+import { formatFaceArea } from "../slicing/slice-presentation";
 import { MAX_SCALE, MIN_SCALE } from "../slicing/transforms";
 import type { GeometryObject, InstanceDoc, PlateDoc } from "../slicing/types";
 import { CommitNumberField } from "./CommitNumberField";
@@ -95,7 +96,7 @@ export function InstanceInspector(props: InstanceInspectorProps) {
               {(face, index) => (
                 <li>
                   <Button variant="ghost" size="sm" onClick={() => props.actions.layFlatOn(index())}>
-                    Face {index() + 1} · {Math.round(face.areaMm2).toLocaleString()} mm²
+                    Face {index() + 1} · {formatFaceArea(face.areaMm2)} mm²
                   </Button>
                 </li>
               )}

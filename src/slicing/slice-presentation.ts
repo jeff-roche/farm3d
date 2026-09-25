@@ -47,6 +47,14 @@ export const CONTROL_LIMITS: Record<NumericControl, ControlLimits> = {
   skirtLoops: { min: 0, max: 10, step: 1, integer: true },
 };
 
+/** A lay-flat face's area: two significant figures below 10 mm² (a
+ *  sphere's facets are fractions of one), whole square millimetres above. */
+export function formatFaceArea(areaMm2: number): string {
+  return areaMm2 < 10
+    ? areaMm2.toLocaleString(undefined, { maximumSignificantDigits: 2 })
+    : Math.round(areaMm2).toLocaleString();
+}
+
 /** D4: the layer height is at most 80% of the nozzle diameter. Rounded
  *  down to a thousandth, so it never exceeds the backend's limit. */
 export function layerHeightMax(nozzleDiameterMm: number): number {
