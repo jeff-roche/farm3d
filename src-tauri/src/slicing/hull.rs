@@ -355,11 +355,16 @@ impl<'p> Hull<'p> {
 
     fn expand(&mut self) {
         let mut pending: Vec<usize> = (0..self.faces.len()).collect();
-        let mut visible_mark: Vec<bool> = vec![false; self.faces.len()];
-        let mut seen: Vec<usize> = vec![usize::MAX; self.faces.len()];
+        // `visited[face] == step`: the face is visible from this step's eye.
+        let mut visited: Vec<usize> = vec![usize::MAX; self.faces.len()];
+        // `vertex_stamp[point] == step`: the point starts a horizon edge.
+        let mut vertex_stamp: Vec<usize> = vec![usize::MAX; self.points.len()];
         let mut visible: Vec<usize> = Vec::new();
-        // Each horizon edge: (from, to, the face beyond it).
+        // The horizon as a counter-clockwise loop of edges (from, to, the
+        // face beyond it), each edge's `to` the next edge's `from`.
         let mut horizon: Vec<(usize, usize, usize)> = Vec::new();
+        // The DFS: (face, the edge index it was entered by, edges done).
+        let mut stack: Vec<(usize, Option<usize>, usize)> = Vec::new();
         let mut step = 0usize;
         while let Some(start) = pending.pop() {
             if !self.faces[start].alive || self.faces[start].outside.is_empty() {
@@ -378,85 +383,84 @@ impl<'p> Hull<'p> {
                 .expect("the outside set is not empty");
             let eye_point = self.points[eye];
 
-            // The faces the eye sees, connected to `start`.
+            // The standard quickhull horizon walk: a DFS over the faces the
+            // eye sees, crossing each face's edges in counter-clockwise order
+            // from the one it was entered by, so the edges to faces the eye
+            // doesn't see come out as an ordered loop.
             visible.clear();
+            horizon.clear();
+            visited[start] = step;
             visible.push(start);
-            seen[start] = step;
-            visible_mark[start] = true;
-            let mut cursor = 0;
-            while cursor < visible.len() {
-                let face = visible[cursor];
-                cursor += 1;
-                for neighbor in self.faces[face].neighbors {
-                    if seen[neighbor] == step {
-                        continue;
-                    }
-                    seen[neighbor] = step;
-                    if self.faces[neighbor].distance(eye_point) > self.eps {
-                        visible_mark[neighbor] = true;
-                        visible.push(neighbor);
-                    }
+            stack.push((start, None, 0));
+            while let Some((face, entered_by, done)) = stack.pop() {
+                let edge_count = if entered_by.is_some() { 2 } else { 3 };
+                if done == edge_count {
+                    continue;
+                }
+                stack.push((face, entered_by, done + 1));
+                let edge = match entered_by {
+                    Some(entry) => (entry + 1 + done) % 3,
+                    None => done,
+                };
+                let neighbor = self.faces[face].neighbors[edge];
+                if visited[neighbor] == step {
+                    continue;
+                }
+                let vertices = self.faces[face].vertices;
+                let (from, to) = (vertices[edge], vertices[(edge + 1) % 3]);
+                if self.faces[neighbor].distance(eye_point) > self.eps {
+                    visited[neighbor] = step;
+                    visible.push(neighbor);
+                    let back = self.faces[neighbor]
+                        .edge(to, from)
+                        .expect("neighbours share the edge");
+                    stack.push((neighbor, Some(back), 0));
+                } else {
+                    horizon.push((from, to, neighbor));
                 }
             }
 
-            // Horizon edges: from a visible face to one that isn't. The
-            // horizon is short, so its loop is checked by linear search.
-            horizon.clear();
-            for &face in &visible {
-                for i in 0..3 {
-                    let neighbor = self.faces[face].neighbors[i];
-                    if !visible_mark[neighbor] {
-                        let vertices = self.faces[face].vertices;
-                        horizon.push((vertices[i], vertices[(i + 1) % 3], neighbor));
-                    }
-                }
-            }
-            let starting_at = |vertex: usize| horizon.iter().position(|edge| edge.0 == vertex);
-            let ending_at = |vertex: usize| horizon.iter().position(|edge| edge.1 == vertex);
-            // A simple loop: each vertex starts exactly one edge and ends
-            // exactly one.
-            let simple = horizon.iter().enumerate().all(|(index, &(from, to, _))| {
-                starting_at(from) == Some(index)
-                    && ending_at(to) == Some(index)
-                    && ending_at(from).is_some()
+            // A simple loop, checked in O(h): consecutive edges join, and no
+            // vertex starts two edges.
+            let joined = horizon
+                .iter()
+                .zip(horizon.iter().cycle().skip(1))
+                .all(|(edge, next)| edge.1 == next.0);
+            let distinct = horizon.iter().all(|&(from, _, _)| {
+                let fresh = vertex_stamp[from] != step;
+                vertex_stamp[from] = step;
+                fresh
             });
-            if !simple || horizon.is_empty() {
+            if horizon.len() < 3 || !joined || !distinct {
                 // A numerical corner case: treat the eye as on the hull.
-                for &face in &visible {
-                    visible_mark[face] = false;
-                }
                 self.faces[start].outside.retain(|&point| point != eye);
                 pending.push(start);
                 continue;
             }
 
-            // Cone the horizon to the eye.
+            // Cone the horizon to the eye. New face k borders the horizon
+            // face on edge 0, face k + 1 on edge 1, and face k - 1 on edge 2.
             let first_new = self.faces.len();
-            for &(from, to, outer) in &horizon {
+            let count = horizon.len();
+            for (offset, &(from, to, outer)) in horizon.iter().enumerate() {
                 let mut face = self.new_face([from, to, eye]);
-                face.neighbors[0] = outer;
-                let index = self.faces.len();
+                face.neighbors = [
+                    outer,
+                    first_new + (offset + 1) % count,
+                    first_new + (offset + count - 1) % count,
+                ];
                 let back = self.faces[outer]
                     .edge(to, from)
                     .expect("the horizon face shares the edge");
-                self.faces[outer].neighbors[back] = index;
+                self.faces[outer].neighbors[back] = first_new + offset;
                 self.faces.push(face);
             }
-            for (offset, &(from, to, _)) in horizon.iter().enumerate() {
-                let index = first_new + offset;
-                let next = starting_at(to).expect("the horizon is a loop");
-                let previous = ending_at(from).expect("the horizon is a loop");
-                self.faces[index].neighbors[1] = first_new + next;
-                self.faces[index].neighbors[2] = first_new + previous;
-            }
-            visible_mark.resize(self.faces.len(), false);
-            seen.resize(self.faces.len(), usize::MAX);
+            visited.resize(self.faces.len(), usize::MAX);
 
             // Hand the visible faces' points to the new faces.
             let new_faces = first_new..self.faces.len();
             for &face in &visible {
                 self.faces[face].alive = false;
-                visible_mark[face] = false;
                 let orphans = std::mem::take(&mut self.faces[face].outside);
                 for point in orphans {
                     if point != eye {
@@ -724,10 +728,10 @@ pub(crate) mod tests {
         assert!(length(net) < 1e-6 * total, "{net:?}");
     }
 
-    /// `cargo test --release hull_of_a_million -- --ignored --nocapture`
+    /// `cargo test --release large_hulls_are_fast -- --ignored --nocapture`
     #[test]
     #[ignore = "timing check for large meshes; run in release"]
-    fn hull_of_a_million_points_is_fast() {
+    fn large_hulls_are_fast() {
         let mut random = Random::new(3);
         let points: Vec<[f64; 3]> = (0..1_000_000)
             .map(|_| {
@@ -748,6 +752,30 @@ pub(crate) mod tests {
             "1M points on a sphere: {} faces in {elapsed:?}",
             faces.len()
         );
+        assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+
+        // A cylinder's rims make long horizons.
+        let segments = 20_000;
+        let cylinder: Vec<[f64; 3]> = (0..segments)
+            .flat_map(|index| {
+                let angle = std::f64::consts::TAU * f64::from(index) / f64::from(segments);
+                let (y, x) = angle.sin_cos();
+                [[50.0 * x, 50.0 * y, 0.0], [50.0 * x, 50.0 * y, 80.0]]
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let faces = hull_faces(cylinder);
+        let elapsed = started.elapsed();
+        eprintln!(
+            "{segments}-segment cylinder: {} faces in {elapsed:?}",
+            faces.len()
+        );
+        let cap = faces
+            .iter()
+            .find(|face| face.normal[2] > 0.999_999)
+            .expect("the top cap is one face");
+        let area = std::f64::consts::PI * 2500.0;
+        assert!((cap.area - area).abs() < area * 1e-6, "{}", cap.area);
         assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
     }
 }
