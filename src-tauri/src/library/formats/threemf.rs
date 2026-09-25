@@ -108,8 +108,22 @@ impl ZipLimits {
     };
 }
 
-/// Plates, per-object setting keys, and object names by id.
-type SettingsModel = (Vec<Plate>, BTreeSet<String>, HashMap<u32, String>);
+/// Plates, per-object setting keys, and (collecting only) object names by
+/// id and the plates' model instances.
+type SettingsModel = (
+    Vec<Plate>,
+    BTreeSet<String>,
+    HashMap<u32, String>,
+    Vec<PlateInstance>,
+);
+
+/// One `model_instance` of a plate in `model_settings.config`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlateInstance {
+    plate: u32,
+    object_id: u32,
+    instance_id: Option<u32>,
+}
 
 type Inspected = (
     ThreeMfInspection,
@@ -157,9 +171,11 @@ pub(crate) fn read_mesh_with<R: Read + Seek>(
     cancel: &CancelFlag,
     limits: &ZipLimits,
 ) -> Result<MeshModel, InspectError> {
-    let ((inspection, _, _), collected) = read_package(reader, cancel, limits, true)?;
+    // A full inspection on purpose: geometry is refused exactly when
+    // inspection would refuse the file.
+    let (_, collected) = read_package(reader, cancel, limits, true)?;
     let collected = collected.expect("a collecting read keeps its parts");
-    mesh_model(&collected, &inspection.plates, cancel, limits)
+    mesh_model(&collected, cancel, limits)
 }
 
 /// What a collecting read keeps for [`read_mesh`].
@@ -168,6 +184,8 @@ struct Collected {
     parts: HashMap<String, ModelPart>,
     /// Object names from `model_settings.config`, by start-part object id.
     settings_names: HashMap<u32, String>,
+    /// Each plate's model instances from `model_settings.config`.
+    plate_instances: Vec<PlateInstance>,
 }
 
 fn read_package<R: Read + Seek>(
@@ -246,10 +264,11 @@ fn read_package<R: Read + Seek>(
         _ => return Err(InspectError::invalid(NO_OBJECTS)),
     };
 
-    let (plates, per_object_keys, settings_names) = if package.has(MODEL_SETTINGS) {
+    let (plates, per_object_keys, settings_names, plate_instances) = if package.has(MODEL_SETTINGS)
+    {
         package.model_settings(collect)?
     } else {
-        (Vec::new(), BTreeSet::new(), HashMap::new())
+        (Vec::new(), BTreeSet::new(), HashMap::new(), Vec::new())
     };
     let unsupported = unsupported_entries(&entry_names, &parts, &per_object_keys);
     let (thumbnails, thumbnail, warnings) = package.thumbnails(root.thumbnail_middle.as_deref())?;
@@ -291,6 +310,7 @@ fn read_package<R: Read + Seek>(
         start_part,
         parts,
         settings_names,
+        plate_instances,
     });
     Ok(((inspection, thumbnail, warnings), collected))
 }
@@ -894,11 +914,13 @@ impl<R: Read + Seek> Package<'_, R> {
         Ok(parser.part)
     }
 
-    /// Plates, per-object setting keys, and (when `collect_names`) object
-    /// names from `model_settings.config`. Names are kept for at most
-    /// `max_listed` objects.
-    fn model_settings(&mut self, collect_names: bool) -> Result<SettingsModel, InspectError> {
+    /// Plates, per-object setting keys, and (when `collect`) object names
+    /// and each kept plate's model instances from `model_settings.config`.
+    /// Those two aren't listings, so they are bounded by the object and
+    /// placement safety limits rather than `max_listed`.
+    fn model_settings(&mut self, collect: bool) -> Result<SettingsModel, InspectError> {
         let max_listed = self.limits.max_listed;
+        let (max_names, max_instances) = (self.limits.max_objects, self.limits.max_placements);
         let mut plates = Vec::new();
         let mut per_object_keys = BTreeSet::new();
         let mut names: HashMap<u32, String> = HashMap::new();
@@ -908,6 +930,11 @@ impl<R: Read + Seek> Package<'_, R> {
         let mut plate: Option<Plate> = None;
         let mut plate_id: Option<u32> = None;
         let mut in_instance = false;
+        let mut instances: Vec<PlateInstance> = Vec::new();
+        // The kept plate's instances until its index is known, and the
+        // instance being read: (object_id, instance_id).
+        let mut plate_instances: Vec<(u32, Option<u32>)> = Vec::new();
+        let mut instance: Option<(Option<u32>, Option<u32>)> = None;
         self.parse(MODEL_SETTINGS, |event| {
             let (element, is_start) = match &event {
                 Event::Start(element) => (element, true),
@@ -916,10 +943,24 @@ impl<R: Read + Seek> Package<'_, R> {
                     match element.local_name().as_ref() {
                         "object" => object_depth = object_depth.saturating_sub(1),
                         "part" => in_part = false,
-                        "model_instance" => in_instance = false,
+                        "model_instance" => {
+                            in_instance = false;
+                            if let Some((Some(object_id), instance_id)) = instance.take() {
+                                if instances.len() + plate_instances.len() < max_instances {
+                                    plate_instances.push((object_id, instance_id));
+                                }
+                            }
+                        }
                         "plate" => {
                             if let Some(mut finished) = plate.take() {
                                 finished.index = plate_id.unwrap_or(plates.len() as u32 + 1);
+                                instances.extend(plate_instances.drain(..).map(
+                                    |(object_id, instance_id)| PlateInstance {
+                                        plate: finished.index,
+                                        object_id,
+                                        instance_id,
+                                    },
+                                ));
                                 plates.push(finished);
                             }
                         }
@@ -931,7 +972,7 @@ impl<R: Read + Seek> Package<'_, R> {
             };
             match element.local_name().as_ref() {
                 "object" if is_start => {
-                    if object_depth == 0 && collect_names {
+                    if object_depth == 0 && collect {
                         object_id = attribute(element, "id", MODEL_SETTINGS)?
                             .and_then(|id| id.trim().parse().ok());
                     }
@@ -946,8 +987,12 @@ impl<R: Read + Seek> Package<'_, R> {
                         object_ids: Vec::new(),
                     });
                     plate_id = None;
+                    plate_instances.clear();
                 }
-                "model_instance" if is_start => in_instance = true,
+                "model_instance" if is_start => {
+                    in_instance = true;
+                    instance = (collect && plate.is_some()).then_some((None, None));
+                }
                 "metadata" => {
                     let key = attribute(element, "key", MODEL_SETTINGS)?.unwrap_or_default();
                     let value = attribute(element, "value", MODEL_SETTINGS)?.unwrap_or_default();
@@ -956,7 +1001,7 @@ impl<R: Read + Seek> Package<'_, R> {
                         if let (Some(id), "name", false, 1) =
                             (object_id, key.as_str(), in_part, object_depth)
                         {
-                            if !value.is_empty() && names.len() < max_listed {
+                            if !value.is_empty() && names.len() < max_names {
                                 names.entry(id).or_insert_with(|| value.to_string());
                             }
                         }
@@ -964,6 +1009,14 @@ impl<R: Read + Seek> Package<'_, R> {
                             per_object_keys.insert(key);
                         }
                     } else if let Some(plate) = &mut plate {
+                        if let (true, Some((object_id, instance_id))) = (in_instance, &mut instance)
+                        {
+                            match key.as_str() {
+                                "object_id" => *object_id = value.parse().ok(),
+                                "instance_id" => *instance_id = value.parse().ok(),
+                                _ => {}
+                            }
+                        }
                         match (in_instance, key.as_str()) {
                             (true, "object_id") if plate.object_ids.len() < max_listed => {
                                 if let Ok(id) = value.parse() {
@@ -982,7 +1035,7 @@ impl<R: Read + Seek> Package<'_, R> {
             }
             Ok(())
         })?;
-        Ok((plates, per_object_keys, names))
+        Ok((plates, per_object_keys, names, instances))
     }
 
     /// D12: `Thumbnail_Middle`, then `Metadata/thumbnail.png`, then
@@ -1668,20 +1721,33 @@ fn compose(first: &Transform, then: &Transform) -> Transform {
 /// would be ambiguous.
 fn mesh_model(
     collected: &Collected,
-    plates: &[Plate],
     cancel: &CancelFlag,
     limits: &ZipLimits,
 ) -> Result<MeshModel, InspectError> {
     let root = &collected.parts[&collected.start_part];
     let scale = unit_scale(&root.unit)?;
 
-    // The k-th build item for an object takes the k-th plate listing it.
-    let mut plate_slots: HashMap<u32, VecDeque<u32>> = HashMap::new();
-    for plate in plates {
-        for id in &plate.object_ids {
-            plate_slots.entry(*id).or_default().push_back(plate.index);
+    // The k-th build item (from 0) for object X is on the plate whose model
+    // instance has object_id X and instance_id k. Only when X's instances
+    // carry no instance_id does it take the k-th plate listing X.
+    let mut by_instance: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut by_order: HashMap<u32, VecDeque<u32>> = HashMap::new();
+    let mut identified: HashSet<u32> = HashSet::new();
+    for instance in &collected.plate_instances {
+        match instance.instance_id {
+            Some(instance_id) => {
+                identified.insert(instance.object_id);
+                by_instance
+                    .entry((instance.object_id, instance_id))
+                    .or_insert(instance.plate);
+            }
+            None => by_order
+                .entry(instance.object_id)
+                .or_default()
+                .push_back(instance.plate),
         }
     }
+    let mut ordinals: HashMap<u32, u32> = HashMap::new();
 
     let mut owners: HashMap<u32, &str> = HashMap::new();
     let mut order = Vec::new();
@@ -1707,9 +1773,18 @@ fn mesh_model(
         build_items.push(MeshBuildItem {
             object_id: item.object_id,
             transform,
-            plate_index: plate_slots
-                .get_mut(&item.object_id)
-                .and_then(VecDeque::pop_front),
+            plate_index: {
+                let ordinal = ordinals.entry(item.object_id).or_insert(0);
+                let plate = if identified.contains(&item.object_id) {
+                    by_instance.get(&(item.object_id, *ordinal)).copied()
+                } else {
+                    by_order
+                        .get_mut(&item.object_id)
+                        .and_then(VecDeque::pop_front)
+                };
+                *ordinal += 1;
+                plate
+            },
             printable: item.printable,
         });
     }
@@ -3080,6 +3155,89 @@ mod tests {
             .collect();
         assert_eq!(plates, [(2, Some(1), true), (4, Some(2), true)]);
         assert_eq!(mesh.build_items[0].transform[9..], [100.0, 100.0, 0.0]);
+    }
+
+    /// `bytes` with `from` replaced by `to` in the entry `part`.
+    fn replaced(bytes: Vec<u8>, part: &str, from: &str, to: &str) -> Vec<u8> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if entry.name() == part {
+                let text = String::from_utf8(data).unwrap();
+                assert!(text.contains(from), "{part} lacks {from}");
+                data = text.replace(from, to).into_bytes();
+            }
+            entries.push((entry.name().to_string(), data));
+        }
+        let entries: Vec<(&str, Vec<u8>)> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.clone()))
+            .collect();
+        package(&entries)
+    }
+
+    /// Object 2 gets a second build item. Plate 1 holds its instance 1 and
+    /// plate 2 its instance 0, the reverse of the build order.
+    fn orca_swapped_instances(instance_ids: bool) -> Vec<u8> {
+        let bytes = replaced(
+            orca_layout(),
+            "3D/3dmodel.model",
+            "<item objectid=\"4\"",
+            "<item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 10 10 0\"/><item objectid=\"4\"",
+        );
+        let instance = |object: u32, id: u32| {
+            let id = if instance_ids {
+                format!("<metadata key=\"instance_id\" value=\"{id}\"/>")
+            } else {
+                String::new()
+            };
+            format!("<model_instance><metadata key=\"object_id\" value=\"{object}\"/>{id}</model_instance>")
+        };
+        let bytes = replaced(
+            bytes,
+            "Metadata/model_settings.config",
+            "<model_instance><metadata key=\"object_id\" value=\"2\"/><metadata key=\"instance_id\" value=\"0\"/></model_instance>",
+            &instance(2, 1),
+        );
+        replaced(
+            bytes,
+            "Metadata/model_settings.config",
+            "<model_instance><metadata key=\"object_id\" value=\"4\"/><metadata key=\"instance_id\" value=\"0\"/></model_instance>",
+            &format!("{}{}", instance(2, 0), instance(4, 0)),
+        )
+    }
+
+    #[test]
+    fn build_items_find_their_plate_by_instance_id() {
+        let plates = |bytes: Vec<u8>| -> Vec<(u32, Option<u32>)> {
+            mesh_bytes(bytes)
+                .unwrap()
+                .build_items
+                .iter()
+                .map(|item| (item.object_id, item.plate_index))
+                .collect()
+        };
+        // Build order: object 2 (instance 0), object 2 (instance 1), object 4.
+        assert_eq!(
+            plates(orca_swapped_instances(true)),
+            [(2, Some(2)), (2, Some(1)), (4, Some(2))]
+        );
+        // Without instance ids, the k-th item takes the k-th plate listing it.
+        assert_eq!(
+            plates(orca_swapped_instances(false)),
+            [(2, Some(1)), (2, Some(2)), (4, Some(2))]
+        );
+        // P4's plate listing is unchanged by the instance ids.
+        let (inspection, _, _) = inspect_bytes(orca_swapped_instances(true)).unwrap();
+        let listed: Vec<(u32, Vec<u32>)> = inspection
+            .plates
+            .iter()
+            .map(|plate| (plate.index, plate.object_ids.clone()))
+            .collect();
+        assert_eq!(listed, [(1, vec![2]), (2, vec![2, 4])]);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::hull::hull_faces;
+use super::hull::{hull_faces, HullFace};
 use super::InstanceTransform;
 use crate::library::content::CancelFlag;
 use crate::library::formats::{self, BoundsMm, InspectError, ObjectMesh};
@@ -26,6 +26,9 @@ use crate::library::ModelFormat;
 
 /// D6: at most this many lay-flat faces per object, largest first.
 pub const MAX_LAY_FLAT_FACES: usize = 8;
+/// Lay-flat faces smaller than this fraction of the object's largest
+/// hull face are left out.
+pub const MIN_LAY_FLAT_FRACTION: f64 = 0.01;
 /// D6: revisions kept in memory, least recently used evicted first.
 pub const GEOMETRY_CACHE_CAPACITY: usize = 4;
 /// D6: the mesh buffer's magic bytes and format version.
@@ -57,6 +60,11 @@ pub struct RevisionGeometry {
 #[ts(rename_all = "camelCase", export_to = "domain/GeometryObject.ts")]
 pub struct GeometryObject {
     pub object_key: u32,
+    /// The 3MF object's `name` attribute, else its name in Orca's
+    /// `model_settings.config`. Settings names aren't held to P4's listing
+    /// cap (64 entries); they are kept for up to the 3MF object safety
+    /// limit (1,000,000), so every object in an accepted file keeps its
+    /// name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
@@ -165,14 +173,7 @@ pub fn load_revision<R: Read + Seek>(
                 min: [0.0; 3],
                 max: [0.0; 3],
             });
-        let lay_flat_faces = hull_faces(points())
-            .into_iter()
-            .take(MAX_LAY_FLAT_FACES)
-            .map(|face| LayFlatFace {
-                normal: face.normal,
-                area_mm2: face.area,
-            })
-            .collect();
+        let lay_flat_faces = lay_flat_faces(hull_faces(points()));
         objects.push(GeometryObject {
             object_key: object.id,
             name: object.name,
@@ -199,6 +200,22 @@ pub fn load_revision<R: Read + Seek>(
         },
         meshes,
     })
+}
+
+/// Up to [`MAX_LAY_FLAT_FACES`] of `faces` (largest first), leaving out
+/// any below [`MIN_LAY_FLAT_FRACTION`] of the largest, such as `f32`
+/// slivers.
+fn lay_flat_faces(faces: Vec<HullFace>) -> Vec<LayFlatFace> {
+    let largest = faces.first().map_or(0.0, |face| face.area);
+    faces
+        .into_iter()
+        .filter(|face| face.area >= largest * MIN_LAY_FLAT_FRACTION)
+        .take(MAX_LAY_FLAT_FACES)
+        .map(|face| LayFlatFace {
+            normal: face.normal,
+            area_mm2: face.area,
+        })
+        .collect()
 }
 
 /// D6: `F3DM`, `u32` version 1, `u32` vertex count, `u32` index count, then
@@ -597,6 +614,26 @@ mod tests {
         assert_eq!(failed.unwrap_err(), InspectError::Cancelled);
         assert_eq!(cache.keys(), ["c", "e", "a", "d"]);
         assert_eq!(loads, 4);
+    }
+
+    #[test]
+    fn lay_flat_faces_leave_out_slivers_and_keep_the_largest_eight() {
+        let face = |area: f64| HullFace {
+            normal: [0.0, 0.0, -1.0],
+            area,
+        };
+        let mut faces: Vec<HullFace> = (0..10).map(|i| face(100.0 - f64::from(i))).collect();
+        faces.insert(3, face(1.0));
+        faces.sort_by(|a, b| b.area.total_cmp(&a.area));
+        faces.push(face(0.999));
+        let kept = lay_flat_faces(faces);
+        assert_eq!(kept.len(), 8);
+        assert_eq!(kept[0].area_mm2, 100.0);
+        assert_eq!(kept[7].area_mm2, 93.0);
+        let kept = lay_flat_faces(vec![face(100.0), face(1.0), face(0.5)]);
+        let areas: Vec<f64> = kept.iter().map(|face| face.area_mm2).collect();
+        assert_eq!(areas, [100.0, 1.0]);
+        assert!(lay_flat_faces(Vec::new()).is_empty());
     }
 
     #[test]

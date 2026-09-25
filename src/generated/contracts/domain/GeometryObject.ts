@@ -6,7 +6,15 @@ import type { LayFlatFace } from "./LayFlatFace";
  * D6: one object, in its own frame. An STL is object 1; a 3MF object is
  * keyed by its id, with components flattened into it.
  */
-export type GeometryObject = { objectKey: number, name?: string, triangleCount: number,
+export type GeometryObject = { objectKey: number,
+/**
+ * The 3MF object's `name` attribute, else its name in Orca's
+ * `model_settings.config`. Settings names aren't held to P4's listing
+ * cap (64 entries); they are kept for up to the 3MF object safety
+ * limit (1,000,000), so every object in an accepted file keeps its
+ * name.
+ */
+name?: string, triangleCount: number,
 /**
  * Over every vertex. An object with no vertices has a zero box.
  */
