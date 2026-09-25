@@ -642,6 +642,17 @@ describe("web mode", () => {
     expect(slicing.preparation("mdl-web-bracket")).toBeUndefined();
   });
 
+  it("concurrent local creates for one Model make a single Preparation", async () => {
+    const { createPreparation, slicing } = await startedStore();
+    const [first, second] = await Promise.all([
+      createPreparation("mdl-web-bracket"),
+      createPreparation("mdl-web-bracket"),
+    ]);
+    expect(second.id).toBe(first.id);
+    expect(slicing.preparations().filter((p) => p.modelId === "mdl-web-bracket").map((p) => p.id)).toEqual([first.id]);
+    expect(slicing.preparation("mdl-web-bracket")?.id).toBe(first.id);
+  });
+
   it("a local Preparation for a 3MF leaves unprintable build items out", async () => {
     const { deletePreparation, createPreparation, slicing } = await startedStore();
     await deletePreparation(slicing.preparation("mdl-web-enclosure")!.id);

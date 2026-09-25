@@ -640,12 +640,26 @@ function validateDocument(document: PreparationDocument): void {
   });
 }
 
+/** Web-mode creates in flight, per Model: a second call joins the first. */
+const pendingWebCreates = new Map<string, Promise<PreparationRecord>>();
+
 /** A simplified D5 seed: one plate per source plate (or one plate), each
  *  printable build item once at the bed's centre, and the default
- *  presets. */
-async function webCreatePreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
+ *  presets. Single-flight per Model, like the backend's "return the
+ *  existing one". */
+function webCreatePreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
+  const pending = pendingWebCreates.get(modelId);
+  if (pending) return pending;
+  const create = seedWebPreparation(modelId, target).finally(() => pendingWebCreates.delete(modelId));
+  pendingWebCreates.set(modelId, create);
+  return create;
+}
+
+async function seedWebPreparation(modelId: string, target?: SliceTarget): Promise<PreparationRecord> {
   const fixture = await requireWebFixture();
   const { buildWebLibraryFixture } = await import("../library/web-fixtures");
+  // Checked after the awaits, so a Preparation made meanwhile (by an
+  // event or an earlier create) is returned, not replaced.
   const existing = state.preparations[modelId];
   if (existing) return existing;
   const model = buildWebLibraryFixture().models.find((m) => m.id === modelId);
