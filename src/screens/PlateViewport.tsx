@@ -24,6 +24,13 @@ import { createViewportRenderer } from "../slicing/viewport/renderer-factory";
 import { readViewportTheme } from "../slicing/viewport/theme";
 import styles from "./PlateViewport.module.css";
 
+interface Placement {
+  mesh: MeshBuffer;
+  rotateDeg: number[];
+  scale: number[];
+  matrix: readonly number[];
+}
+
 /** A toolbar command with a keyboard shortcut (D19). Task-specific tools
  *  (move, rotate, …) are passed in; the viewport always has the views. */
 export interface ViewportTool {
@@ -76,6 +83,12 @@ const VIEWS: { view: CameraView; label: string; key: string }[] = [
   { view: "reset", label: "Reset", key: "0" },
 ];
 
+export const WEBGL_UNAVAILABLE = "3D view unavailable (WebGL is not available)";
+export const VIEWER_FAILED = "3D view unavailable (the viewer failed to load)";
+export const CONTEXT_LOST = "3D view unavailable (the graphics context was lost)";
+
+const sameNumbers = (a: readonly number[], b: readonly number[]) => a.every((value, i) => value === b[i]);
+
 const plainKey = (event: KeyboardEvent) => !event.ctrlKey && !event.metaKey && !event.altKey;
 
 /** D18/D19: the canvas, a toolbar with shortcut hints, and a live text
@@ -88,7 +101,8 @@ export function PlateViewport(props: PlateViewportProps) {
   let toolbar: HTMLDivElement | undefined;
   const descriptionId = createUniqueId();
   const [renderer, setRenderer] = createSignal<ViewportRenderer | undefined>();
-  const [unavailable, setUnavailable] = createSignal(false);
+  // Why there is no 3D view, as shown in its place; `undefined` while it works.
+  const [unavailable, setUnavailable] = createSignal<string | undefined>();
 
   onMount(() => {
     let disposed = false;
@@ -102,32 +116,68 @@ export function PlateViewport(props: PlateViewportProps) {
         created.mount(canvas!);
       } catch {
         created.dispose();
-        setUnavailable(true);
+        setUnavailable(WEBGL_UNAVAILABLE);
         return;
       }
       created.setTheme(readViewportTheme(root!));
       mounted = created;
       setRenderer(created);
-    }, () => setUnavailable(true));
+    }, (error: unknown) => {
+      console.error("The 3D viewer failed to load:", error);
+      if (!disposed) setUnavailable(VIEWER_FAILED);
+    });
+    // A lost context (a GPU reset, or the driver reclaiming it) would
+    // otherwise leave a blank canvas.
+    const onContextLost = () => {
+      if (!disposed) setUnavailable(CONTEXT_LOST);
+    };
+    canvas!.addEventListener("webglcontextlost", onContextLost);
     const stopTheme = onThemeChange(() => mounted?.setTheme(readViewportTheme(root!)));
     onCleanup(() => {
       disposed = true;
+      canvas!.removeEventListener("webglcontextlost", onContextLost);
       stopTheme();
       mounted?.dispose();
     });
   });
 
-  const rendered = createMemo((): RenderedInstance[] => props.instances.flatMap((instance) => {
-    const mesh = props.meshes.get(instance.objectKey);
-    if (!mesh) return [];
-    return [{
-      instanceKey: instance.instanceKey,
-      objectKey: instance.objectKey,
-      matrix: composeTransform(instance.transform, mesh.positions),
-      selected: instance.instanceKey === props.selectedInstanceKey,
-      outOfBounds: instance.outOfBounds ?? false,
-    }];
-  }));
+  // Composed matrices per instance. The Z drop scans every vertex, so it is
+  // redone only when the mesh, rotation, or scale changes: a selection
+  // change reuses the matrix, and a move only replaces its XY.
+  const placed = new Map<string, Placement>();
+  const matrixOf = (instance: ViewportInstance, mesh: MeshBuffer): readonly number[] => {
+    const { translateMm, rotateDeg, scale } = instance.transform;
+    const held = placed.get(instance.instanceKey);
+    if (held && held.mesh === mesh && sameNumbers(held.rotateDeg, rotateDeg) && sameNumbers(held.scale, scale)) {
+      if (held.matrix[9] !== translateMm[0] || held.matrix[10] !== translateMm[1]) {
+        const matrix = [...held.matrix];
+        matrix[9] = translateMm[0];
+        matrix[10] = translateMm[1];
+        held.matrix = matrix;
+      }
+      return held.matrix;
+    }
+    const matrix = composeTransform(instance.transform, mesh.positions);
+    placed.set(instance.instanceKey, { mesh, rotateDeg: [...rotateDeg], scale: [...scale], matrix });
+    return matrix;
+  };
+  const rendered = createMemo((): RenderedInstance[] => {
+    const next = props.instances.flatMap((instance) => {
+      const mesh = props.meshes.get(instance.objectKey);
+      if (!mesh) return [];
+      return [{
+        instanceKey: instance.instanceKey,
+        objectKey: instance.objectKey,
+        matrix: matrixOf(instance, mesh),
+        selected: instance.instanceKey === props.selectedInstanceKey,
+        outOfBounds: instance.outOfBounds ?? false,
+      }];
+    });
+    const keys = new Set(next.map((instance) => instance.instanceKey));
+    for (const key of placed.keys()) if (!keys.has(key)) placed.delete(key);
+    return next;
+  });
+  const hasObjects = createMemo(() => rendered().length > 0);
 
   createEffect(() => renderer()?.setBuildVolume(props.buildVolume));
   createEffect(() => renderer()?.setMeshes(props.meshes));
@@ -135,7 +185,7 @@ export function PlateViewport(props: PlateViewportProps) {
   createEffect(() => renderer()?.setOverlays(props.overlays ?? {}));
   // Refit when the plate changes, or once its objects first show.
   createEffect(on(
-    () => [renderer(), props.plateKey, rendered().length > 0] as const,
+    [renderer, () => props.plateKey, hasObjects],
     ([current]) => current?.setCamera("reset"),
   ));
 
@@ -174,14 +224,15 @@ export function PlateViewport(props: PlateViewportProps) {
 
   let down: { x: number; y: number } | undefined;
   const onPointerDown = (event: PointerEvent) => {
-    down = event.button === 0 ? { x: event.offsetX, y: event.offsetY } : undefined;
+    down = event.button === 0 ? { x: event.clientX, y: event.clientY } : undefined;
   };
   const onPointerUp = (event: PointerEvent) => {
     const start = down;
     down = undefined;
     if (!start || !props.onSelect) return;
-    if (Math.hypot(event.offsetX - start.x, event.offsetY - start.y) > CLICK_SLOP_PX) return;
-    props.onSelect(renderer()?.pick(event.offsetX, event.offsetY)?.instanceKey ?? null);
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP_PX) return;
+    const box = canvas!.getBoundingClientRect();
+    props.onSelect(renderer()?.pick(event.clientX - box.left, event.clientY - box.top)?.instanceKey ?? null);
   };
 
   // The live region repeats the description only once it settles.
@@ -199,14 +250,14 @@ export function PlateViewport(props: PlateViewportProps) {
 
   return (
     <div ref={root} class={styles.viewport} classList={{ [styles.compact]: props.compact }}>
-      <div ref={toolbar} class={styles.toolbar} role="toolbar" aria-label="Viewport">
+      <div ref={toolbar} class={styles.toolbar} role="group" aria-label="Viewport">
         <For each={VIEWS}>
           {(entry) => (
             <Button
               variant="ghost"
               size="sm"
               aria-keyshortcuts={entry.key}
-              disabled={unavailable()}
+              disabled={unavailable() !== undefined}
               onClick={() => showView(entry.view)}
             >
               {entry.label}
@@ -245,7 +296,7 @@ export function PlateViewport(props: PlateViewportProps) {
         <canvas
           ref={canvas}
           class={styles.canvas}
-          classList={{ [styles.hidden]: unavailable() }}
+          classList={{ [styles.hidden]: unavailable() !== undefined }}
           role="img"
           aria-label={props.label}
           aria-describedby={descriptionId}
@@ -255,7 +306,7 @@ export function PlateViewport(props: PlateViewportProps) {
           onPointerUp={onPointerUp}
         />
         <Show when={unavailable()}>
-          <p class={styles.unavailable} role="note">3D view unavailable (WebGL is not available)</p>
+          {(reason) => <p class={styles.unavailable} role="note">{reason()}</p>}
         </Show>
       </div>
       <p id={descriptionId} class={styles.description} aria-live="polite">{announced()}</p>

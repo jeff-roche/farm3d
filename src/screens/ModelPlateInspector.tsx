@@ -78,7 +78,7 @@ export function ModelPlateInspector(props: ModelPlateInspectorProps) {
                 <IconButton aria-label="Previous plate" onClick={() => step(-1)}>
                   <IconChevronLeft size={14} aria-hidden="true" />
                 </IconButton>
-                <span class={styles.plateName} aria-live="polite">
+                <span class={styles.plateName}>
                   Plate {plateAt() + 1} of {plates().length}: {current().name}
                 </span>
                 <IconButton aria-label="Next plate" onClick={() => step(1)}>

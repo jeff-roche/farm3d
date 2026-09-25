@@ -5,6 +5,7 @@ import { darkTheme, lightTheme, registerTheme, setThemeMode } from "../design-sy
 import { encodeMeshBuffer, decodeMeshBuffer } from "../slicing/mesh-buffer";
 import { composeTransform } from "../slicing/transforms";
 import {
+  failNextFakeLoad,
   failNextFakeMount,
   lastFakeRenderer,
   type FakeViewportRenderer,
@@ -99,7 +100,7 @@ describe("PlateViewport", () => {
 
   it("shows each view from its toolbar button, with its shortcut hint", async () => {
     const renderer = await mountViewport();
-    const toolbar = screen.getByRole("toolbar", { name: "Viewport" });
+    const toolbar = screen.getByRole("group", { name: "Viewport" });
     for (const [name, key, view] of [
       ["Top", "1", "top"], ["Front", "2", "front"], ["Left", "3", "left"],
       ["Right", "4", "right"], ["Iso", "5", "iso"], ["Reset", "0", "reset"],
@@ -156,20 +157,88 @@ describe("PlateViewport", () => {
     expect(screen.queryByRole("button", { name: /Next object/ })).toBeNull();
   });
 
-  it("picks the object under a click, but not at the end of an orbit drag", async () => {
+  it("picks the object under a click within 4 px, but not at the end of an orbit drag", async () => {
     const onSelect = vi.fn();
     const renderer = await mountViewport({ onSelect });
     renderer.pickResult = { instanceKey: "b", pointMm: [1, 2, 3] };
 
-    fireEvent.pointerDown(canvas(), { button: 0 });
-    fireEvent.pointerUp(canvas(), { button: 0 });
-    expect(onSelect).toHaveBeenCalledWith("b");
-    expect(renderer.picks).toHaveLength(1);
+    // A drag of 5 px orbits: no pick, no selection.
+    fireEvent.pointerDown(canvas(), { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(canvas(), { button: 0, clientX: 103, clientY: 104 });
+    expect(renderer.picks).toEqual([]);
+    expect(onSelect).not.toHaveBeenCalled();
 
+    // A 4 px wobble is still a click, picked where the pointer came up.
+    fireEvent.pointerDown(canvas(), { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(canvas(), { button: 0, clientX: 104, clientY: 100 });
+    expect(renderer.picks).toEqual([[104, 100]]);
+    expect(onSelect).toHaveBeenCalledWith("b");
+
+    // A click on empty space clears the selection.
     renderer.pickResult = null;
-    fireEvent.pointerDown(canvas(), { button: 0 });
-    fireEvent.pointerUp(canvas(), { button: 0 });
+    fireEvent.pointerDown(canvas(), { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(canvas(), { button: 0, clientX: 10, clientY: 10 });
     expect(onSelect).toHaveBeenLastCalledWith(null);
+
+    // Only the primary button picks.
+    onSelect.mockClear();
+    fireEvent.pointerDown(canvas(), { button: 2, clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(canvas(), { button: 2, clientX: 10, clientY: 10 });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("refits the camera only when the plate changes, not on selection or instance changes", async () => {
+    const [selected, setSelected] = createSignal<string | null>(null);
+    const [shown, setShown] = createSignal(instances);
+    const [plateKey, setPlateKey] = createSignal("p1");
+    render(() => (
+      <PlateViewport
+        label="3D view of Enclosure" plateKey={plateKey()} plateName="Lid"
+        meshes={new Map([[1, cube]])} instances={shown()} buildVolume={volume}
+        selectedInstanceKey={selected()} onSelect={setSelected}
+      />
+    ));
+    await waitFor(() => expect(lastFakeRenderer()?.canvas).toBe(canvas()));
+    const renderer = lastFakeRenderer()!;
+    expect(renderer.cameras).toEqual(["reset"]);
+
+    setSelected("a");
+    setShown([{ ...instances[0], transform: { ...instances[0].transform, translateMm: [25, 30] } }, instances[1]]);
+    setShown([instances[0]]);
+    expect(renderer.cameras).toEqual(["reset"]);
+
+    setPlateKey("p2");
+    expect(renderer.cameras).toEqual(["reset", "reset"]);
+  });
+
+  it("reuses a composed matrix across selection changes and replaces only XY on a move", async () => {
+    const [selected, setSelected] = createSignal<string | null>(null);
+    const [shown, setShown] = createSignal(instances);
+    render(() => (
+      <PlateViewport
+        label="3D view of Enclosure" plateKey="p1" plateName="Lid"
+        meshes={new Map([[1, cube]])} instances={shown()} buildVolume={volume}
+        selectedInstanceKey={selected()} onSelect={setSelected}
+      />
+    ));
+    await waitFor(() => expect(lastFakeRenderer()?.canvas).toBe(canvas()));
+    const renderer = lastFakeRenderer()!;
+    const before = renderer.instances[0].matrix;
+
+    setSelected("a");
+    expect(renderer.instances[0].selected).toBe(true);
+    expect(renderer.instances[0].matrix).toBe(before);
+
+    const moved = { ...instances[0].transform, translateMm: [25, 35] as [number, number] };
+    setShown([{ ...instances[0], transform: moved }, instances[1]]);
+    expect(renderer.instances[0].matrix).toEqual(composeTransform(moved, cube.positions));
+
+    const turned = { ...moved, rotateDeg: [90, 0, 0] as [number, number, number] };
+    setShown([{ ...instances[0], transform: turned }, instances[1]]);
+    expect(renderer.instances[0].matrix).toEqual(composeTransform(turned, cube.positions));
+    // The Z drop was redone: on its side, the cube's lowest vertex is at 0.
+    expect(before[11]).toBe(5);
+    expect(renderer.instances[0].matrix[11]).toBeCloseTo(0);
   });
 
   it("runs a tool from its button and its key", async () => {
@@ -242,6 +311,28 @@ describe("PlateViewport", () => {
     expect(renderer.disposed).toBe(true);
     setThemeMode("farm3d-dark");
     expect(renderer.themes).toHaveLength(themes);
+  });
+
+  it("shows the unavailable panel when the WebGL context is lost", async () => {
+    await mountViewport();
+    fireEvent(canvas(), new Event("webglcontextlost"));
+    expect(await screen.findByText("3D view unavailable (the graphics context was lost)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Top" })).toBeDisabled();
+  });
+
+  it("says the viewer failed to load when its chunk can't load, and logs why", async () => {
+    const failure = new Error("chunk fetch failed");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    failNextFakeLoad(failure);
+    render(() => (
+      <PlateViewport
+        label="3D view of Enclosure" plateKey="p1" plateName="Lid"
+        meshes={new Map([[1, cube]])} instances={instances} buildVolume={null}
+      />
+    ));
+    expect(await screen.findByText("3D view unavailable (the viewer failed to load)")).toBeInTheDocument();
+    expect(log).toHaveBeenCalledWith("The 3D viewer failed to load:", failure);
+    log.mockRestore();
   });
 
   it("says so in text when WebGL is unavailable, and keeps the description", async () => {

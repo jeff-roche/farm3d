@@ -74,6 +74,12 @@ const VIEW_DIRECTIONS: Record<Exclude<CameraView, "reset">, Vec3> = {
   iso: [-0.9, -1.2, 1],
 };
 
+interface DrawnInstance {
+  mesh: Mesh;
+  /** Only while selected. */
+  outline?: LineSegments;
+}
+
 interface ObjectGeometry {
   source: MeshBuffer;
   geometry: BufferGeometry;
@@ -112,10 +118,10 @@ function outlineSegments(points: PointMm[]): Segment2[] {
   });
 }
 
-function disposeTree(root: Object3D, keepGeometry: (geometry: BufferGeometry) => boolean = () => false) {
+function disposeTree(root: Object3D) {
   root.traverse((node) => {
     const drawable = node as Partial<Mesh>;
-    if (drawable.geometry && !keepGeometry(drawable.geometry)) drawable.geometry.dispose();
+    drawable.geometry?.dispose();
   });
 }
 
@@ -156,6 +162,7 @@ export class ThreeViewportRenderer implements ViewportRenderer {
   };
 
   private readonly geometries = new Map<ObjectKey, ObjectGeometry>();
+  private readonly drawn = new Map<string, DrawnInstance>();
   private instances: RenderedInstance[] = [];
   private volume: BuildVolume | null = null;
   private themed = false;
@@ -211,12 +218,12 @@ export class ThreeViewportRenderer implements ViewportRenderer {
       geometry.computeBoundingSphere();
       this.geometries.set(key, { source, geometry });
     }
-    this.rebuildInstances();
+    this.syncInstances();
   }
 
   setInstances(instances: RenderedInstance[]): void {
     this.instances = instances.map((instance) => ({ ...instance, matrix: [...instance.matrix] }));
-    this.rebuildInstances();
+    this.syncInstances();
   }
 
   setCamera(view: CameraView | CameraPose): void {
@@ -284,7 +291,11 @@ export class ThreeViewportRenderer implements ViewportRenderer {
       held.edges?.dispose();
     }
     this.geometries.clear();
+    this.drawn.clear();
     for (const material of Object.values(this.materials) as Material[]) material.dispose();
+    // Release the context now rather than whenever the canvas is
+    // collected: browsers cap how many WebGL contexts may be live.
+    this.renderer?.forceContextLoss();
     this.renderer?.dispose();
     this.renderer = undefined;
   }
@@ -312,39 +323,57 @@ export class ThreeViewportRenderer implements ViewportRenderer {
     this.requestRender();
   }
 
-  private isOwnGeometry = (geometry: BufferGeometry): boolean => {
-    for (const held of this.geometries.values()) {
-      if (held.geometry === geometry || held.edges === geometry) return true;
-    }
-    return false;
-  };
-
-  private rebuildInstances(): void {
-    disposeTree(this.instanceGroup, this.isOwnGeometry);
-    this.instanceGroup.clear();
+  /** Brings the drawn meshes in line with `this.instances`, updating the
+   *  ones that already exist in place (matrix, material, outline) rather
+   *  than rebuilding them, so a move or a selection change is cheap. */
+  private syncInstances(): void {
+    const seen = new Set<string>();
     for (const instance of this.instances) {
       const held = this.geometries.get(instance.objectKey);
       if (!held) continue;
+      seen.add(instance.instanceKey);
+      let drawn = this.drawn.get(instance.instanceKey);
+      if (drawn && drawn.mesh.geometry !== held.geometry) {
+        this.removeDrawn(instance.instanceKey, drawn);
+        drawn = undefined;
+      }
+      if (!drawn) {
+        const mesh = new Mesh(held.geometry, this.materials.object);
+        mesh.matrixAutoUpdate = false;
+        mesh.userData.instanceKey = instance.instanceKey;
+        this.instanceGroup.add(mesh);
+        drawn = { mesh };
+        this.drawn.set(instance.instanceKey, drawn);
+      }
       const matrix = toMatrix4(instance.matrix);
-      const material = instance.outOfBounds
+      drawn.mesh.material = instance.outOfBounds
         ? this.materials.outOfBounds
         : instance.selected ? this.materials.selected : this.materials.object;
-      const mesh = new Mesh(held.geometry, material);
-      mesh.matrixAutoUpdate = false;
-      mesh.matrix.copy(matrix);
-      mesh.userData.instanceKey = instance.instanceKey;
-      this.instanceGroup.add(mesh);
+      drawn.mesh.matrix.copy(matrix);
       if (instance.selected) {
         held.edges ??= new EdgesGeometry(held.geometry, OUTLINE_ANGLE_DEG);
-        const outline = new LineSegments(held.edges, this.materials.outline);
-        outline.matrixAutoUpdate = false;
-        outline.matrix.copy(matrix);
-        this.instanceGroup.add(outline);
+        if (!drawn.outline) {
+          drawn.outline = new LineSegments(held.edges, this.materials.outline);
+          drawn.outline.matrixAutoUpdate = false;
+          this.instanceGroup.add(drawn.outline);
+        }
+        drawn.outline.matrix.copy(matrix);
+      } else if (drawn.outline) {
+        this.instanceGroup.remove(drawn.outline);
+        drawn.outline = undefined;
       }
     }
+    for (const [key, drawn] of this.drawn) if (!seen.has(key)) this.removeDrawn(key, drawn);
     this.instanceGroup.updateMatrixWorld(true);
     if (!this.volume) this.rebuildVolume();
     this.requestRender();
+  }
+
+  /** The geometry belongs to `this.geometries`, so only the objects go. */
+  private removeDrawn(key: string, drawn: DrawnInstance): void {
+    this.instanceGroup.remove(drawn.mesh);
+    if (drawn.outline) this.instanceGroup.remove(drawn.outline);
+    this.drawn.delete(key);
   }
 
   /** The build volume, or with none a floor grid under the objects. */
@@ -381,7 +410,7 @@ export class ThreeViewportRenderer implements ViewportRenderer {
     const { minor, major } = gridLines(floor);
     this.volumeGroup.add(
       new LineSegments(segmentsGeometry(minor, 0), this.materials.grid),
-      new LineSegments(segmentsGeometry(major, 0), this.materials.grid),
+      new LineSegments(segmentsGeometry(major, 0), this.materials.gridMajor),
     );
   }
 

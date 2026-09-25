@@ -63,9 +63,15 @@ export class FakeViewportRenderer implements ViewportRenderer {
 
 const created: FakeViewportRenderer[] = [];
 let failNextMount = false;
+let failNextLoad: Error | undefined;
 
 /** The stand-in for `createViewportRenderer`. */
 export async function createFakeViewportRenderer(): Promise<FakeViewportRenderer> {
+  if (failNextLoad) {
+    const error = failNextLoad;
+    failNextLoad = undefined;
+    throw error;
+  }
   const renderer = new FakeViewportRenderer();
   renderer.failMount = failNextMount;
   failNextMount = false;
@@ -80,4 +86,10 @@ export function lastFakeRenderer(): FakeViewportRenderer | undefined {
 /** The next renderer created fails to mount, as without WebGL. */
 export function failNextFakeMount(): void {
   failNextMount = true;
+}
+
+/** The next renderer fails to load at all, as when its chunk can't be
+ *  fetched. */
+export function failNextFakeLoad(error: Error): void {
+  failNextLoad = error;
 }
