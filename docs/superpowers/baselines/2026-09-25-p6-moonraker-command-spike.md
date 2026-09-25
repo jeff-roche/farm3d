@@ -51,6 +51,32 @@ same images, pins and reported versions, and all 25 simulator tests passed.
 The probes are scratch scripts, so that manifest records the environment,
 not the probes themselves.
 
+## Real-host calls made
+
+This is every call made to the owner's Snapmaker U1. All were reads, with no
+key and no request body. No file was downloaded, and nothing was posted.
+
+| Transport | Call | Count | On the allowed list? |
+|---|---|---|---|
+| HTTP GET | `/server/info` | 6 (1 capture, 5 `Date`-header clock samples) | yes (`server.info`) |
+| HTTP GET | `/printer/objects/list` | 1 | yes |
+| HTTP GET | `/printer/objects/query?print_stats&virtual_sdcard&webhooks&pause_resume&idle_timeout&extruder&extruder1&extruder2&extruder3&heater_bed&toolhead` | 1 | yes |
+| HTTP GET | `/server/files/list?root=gcodes` | 1 | yes |
+| HTTP GET | `/server/files/metadata?filename=<existing file>` | 1 | yes |
+| HTTP GET | `/server/history/list?limit=5` | 1 | yes |
+| HTTP GET | `/server/webcams/list` | 1 | yes |
+| HTTP GET | `/printer/info` | 1 | **no**, read-only |
+| HTTP GET | `/access/info` | 1 | **no**, read-only |
+| HTTP GET | `/server/files/roots` | 1 | **no**, read-only |
+| HTTP GET | `/server/files/directory?path=gcodes&extended=true` | 1 | **no**, read-only (returns the same metadata as `server.files.metadata`, for every file) |
+| WebSocket | `server.info` | 2 | yes |
+| WebSocket | `printer.objects.query` (`print_stats` state and filename; `toolhead.extruder` and `configfile.settings`) | 2 | yes |
+| WebSocket | `printer.objects.list` | 1 | yes |
+| WebSocket | `server.webcams.list` | 1 | yes |
+| WebSocket | `server.history.list` (`limit: 1`) | 1 | yes |
+
+Fix round 1 made no real-host calls.
+
 ## Gate A: HTTP auth
 
 **Simulator (`sim/simctl variant moonraker apikey`):**
@@ -144,7 +170,10 @@ The response-lost case used the same toxic as the harness's
 `Toxiproxy::cut_after(Moonraker, 0)`: `limit_data`, downstream, 0 bytes.
 The mid-body case used a scratch `limit_data` toxic on the **upstream**
 stream at half the body size, added through the Toxiproxy HTTP API. Each
-size ran once.
+size ran once. The toxic was removed as soon as the client saw the error,
+and `host_path` was checked **once, 1.0 s later**. That single check does
+not show whether a file could still appear later. The client-timeout runs
+below test that.
 
 | Case | Body | Client saw | At `host_path` afterwards |
 |---|---|---|---|
@@ -163,6 +192,24 @@ size ran once.
 - **The client cannot tell the two cases apart.** A 4 KB upload whose
   response was lost and a 4 KB upload cut mid-body both raised
   `RemoteDisconnected`. The first was applied and the second was not.
+
+**Uploads the client abandons on a timeout** (fix round 1). The client
+used a 3 s timeout and then closed its socket. `host_path` was then polled
+through the direct port every 0.25 s for 45 s, and again after the toxic
+was removed. Each case ran twice with the same result:
+
+| Toxic | Body | Client | `host_path` over time (from dispatch) |
+|---|---|---|---|
+| Downstream latency 10 s (the response is delayed) | 20 MB | `TimeoutError` at 3.06 s | Already present at 3.06 s, full size, until 48.5 s |
+| Upstream bandwidth 1 MB/s (the body is still in flight) | 20 MB | `TimeoutError` at 3.01 s | Absent from 3.01 s to 48.5 s. A 5.5 MB orphan `.mru` was left each time. |
+| Upstream latency 10 s (the proxy holds the whole body) | 2 MB | `TimeoutError` at 3.00 s | **Absent at 3.01 s, then present at 10.29 s**, full size, until 48.5 s |
+
+The last row is the important one. **The file appeared 7.3 s after the
+client had given up**, while it was absent at the client's first check.
+The proxy had buffered the whole body and delivered it after the client
+closed. A real network path with buffering (a proxy, or kernel socket
+buffers on a slow link) can do the same. So "absent" right after a timeout
+does not prove the upload was not applied.
 
 ## Gate E: Control
 
@@ -207,6 +254,23 @@ Moonraker's status batch, **no history job was recorded and `print_stats`
 went from `cancelled` to `cancelled`**. In a second run with no client
 timeout, the same queued start answered `ok` after 15.8 s. While it waited,
 `idle_timeout.state` was `Printing` and `print_stats` stayed `cancelled`.
+
+The same run shows that **pause, resume and cancel are queued the same
+way**. The cancel sent 30 s after dispatch waited behind the queued start,
+and only took effect after it.
+
+**Queued start, then a Klipper restart** (fix round 1). This ran twice.
+Each time a `G4 P20000` dwell was sent, then `start LONG` 0.3 s later with
+a 120 s client timeout. The Klipper container was restarted 3.76 s after
+dispatch, while `idle_timeout.state` was `Printing` and `print_stats` was
+`standby`. Both waiting requests (the dwell and the start) answered **503
+`Klippy Disconnected`** at 3.81–3.82 s. For 60 s after the restart,
+`print_stats` stayed `standby` with an empty filename, and no history job
+appeared. The `server.gcode_store` shows the `SDCARD_PRINT_FILE` command
+with no response after it. So in this test **the queued start was dropped,
+not run late**. This is one Klipper and Moonraker version, and it does not
+show that a start which already ran briefly before the restart leaves any
+trace.
 
 The classification is in the decisions below.
 
@@ -342,12 +406,17 @@ Each item is a recommendation with its evidence. Task 4 decides.
    | Operation | Definitive success | Definitive failure (not applied) | Indeterminate (`uncertain`) |
    |---|---|---|---|
    | upload | 201 | 401, 403 (file loaded), 422 (checksum), 400 (form) | no response, reset, timeout, 5xx |
-   | start | 200 `ok` | 400 (`SD busy`, `Unable to open file`, shutdown, startup), 503 (`Klippy Host not connected`), 401 | no response, reset, timeout |
-   | pause / resume / cancel | **none by response alone.** 200 `ok` also comes back when nothing happened. It becomes success only when the observed state matches. | 400, 503, 401 | no response, reset, timeout, or `ok` without the expected state |
+   | start | 200 `ok` | 400 (`SD busy`, `Unable to open file`, shutdown, startup), 503 `Klippy Host not connected`, 401 | no response, reset, timeout, and 503 `Klippy Disconnected` (Klipper went away while the start waited; see item 4) |
+   | pause / resume / cancel | **none by response alone.** 200 `ok` also comes back when nothing happened. It becomes success only when the observed state matches. | 400, 503 `Klippy Host not connected`, 401 | no response, reset, timeout, 503 `Klippy Disconnected`, or `ok` without the expected state |
 
-   - Classify by status code. Over HTTP, a Klipper error with a multi-line
-     message arrives as `"message": "Unknown"`, while WebSocket JSON-RPC
-     carries the full text. Prefer the WebSocket for control if the spec
+   - Classify by status code, and for 503 also by message. `Klippy Host
+     not connected` means Moonraker never forwarded the command. `Klippy
+     Disconnected` means Klipper went away while the command was queued.
+     That was seen only for a queued start (Gate E), and it only proves the
+     command is no longer pending.
+   - Over HTTP, a Klipper error with a multi-line message arrives as
+     `"message": "Unknown"`, while WebSocket JSON-RPC carries the full
+     text. Prefer the WebSocket for control if the spec
      wants the message.
    - Never surface raw error bodies. They carry tracebacks with host file
      paths.
@@ -356,18 +425,37 @@ Each item is a recommendation with its evidence. Task 4 decides.
    Klipper and run later**. It ran 36.5 s after dispatch here. It can then
    leave no history job and no visible `print_stats` change. So
    "host standby with no such history job" does not prove the start was not
-   applied. Recommended rule: a start with an indeterminate response is
-   proved not applied **only** when Klipper restarted after dispatch, since
-   queued G-code dies with it. Evidence of that is a `klippy_disconnect` or
-   `klippy_shutdown` job, or `print_stats` reset to `standby` with an empty
-   filename after a non-ready `klippy_state`. Otherwise the start stays
-   `uncertain` until it is proved applied, or until the operator abandons
-   it.
+   applied. Recommended rule for a start with an indeterminate response:
+   - **Proved applied:** a history job for `host_path` that passes item 5,
+     or `print_stats` `printing`/`paused` with `filename == host_path`.
+     A job for `host_path` above the mark whose status is
+     `klippy_disconnect`, `klippy_shutdown` or `server_exit` also proves the
+     start ran. Record it as **applied (interrupted)**, not as not applied.
+   - **No longer pending:** a Klipper restart after dispatch. Evidence is a
+     503 `Klippy Disconnected` answer to the start itself, a non-ready
+     `klippy_state` observed after dispatch, or `print_stats` reset to
+     `standby` with an empty filename. In the Gate E test, a queued start
+     was dropped by the restart, not run. A restart only ends the waiting,
+     though. A short start could already have run before the restart
+     without leaving a job or a `print_stats` trace (Gate F case 1). So a
+     restart does **not** prove the start was not applied.
+   - **Otherwise the outcome stays unknown.** The row stays `uncertain`
+     until one of the "proved applied" signals is seen, or the operator
+     abandons it (D8). There is no "proved not applied" path for an
+     indeterminate start, apart from a definitive error response (item 3).
    - Treating `idle_timeout.state == "Idle"` as "nothing queued" was
      considered and **rejected**. `Idle` depends on toolhead activity. After
      a restart with no motion, the state was `Idle` immediately.
    - Also give the start request a long client timeout. The queued start
      answered `ok` after 15.8 s.
+4a. **The same late-apply hazard applies to pause, resume and cancel.** A
+   cancel was seen queued behind a start and taking effect later (Gate E).
+   For a pause, resume or cancel with an indeterminate response, "no effect
+   observed" is **not** proof it was not applied while G-code may still be
+   queued. It is proved applied when the observed state matches the verb.
+   The exits are the same as for start: a Klipper restart means it is no
+   longer pending (the outcome can still be unknown), and the operator can
+   abandon it.
 5. **Skew tolerance.** The measured offset is 0 on the simulator and within
    −0.08…+0.01 s on the real host. Moonraker stamps `start_time` about
    0.05 s after the transition (up to one status batch). Recommendation:
@@ -394,8 +482,22 @@ Each item is a recommendation with its evidence. Task 4 decides.
    - An interrupted upload never leaves a partial file at `host_path`. It
      leaves either the complete file (response lost) or nothing (body
      cut).
-   - "Absent at `host_path`" proves the upload was not applied, once no
-     retry is in flight.
+   - "Absent at `host_path`" right after the client gave up does **not**
+     prove the upload was not applied. In the client-timeout runs (Gate D)
+     a file absent at the first check appeared 7.3 s after the client gave
+     up, because a buffering hop delivered the body late. Recommended rule:
+     absent proves not applied only when either of these holds:
+     - the server has provably finished with the request, for example
+       because Moonraker restarted after dispatch. A restart mid-upload left
+       nothing at `host_path` (Gate G). How to detect that restart is for
+       the spec.
+     - `host_path` is still absent after a **settle period of at least 60 s
+       after the client gave up**. The latest arrival seen was 7.3 s after
+       the client gave up, with an injected 10 s delay, and nothing arrived
+       between 10.3 s and 48.5 s after dispatch in any run. 60 s is a margin
+       picked on that evidence, not a proven bound. A host behind a slower
+       buffering hop could exceed it.
+     Until then the row stays `uncertain`.
    - A file at `host_path` whose size or hash differs is not ours. Classify
      it as not applied, and never delete or overwrite it automatically.
    - Orphaned `.mru` temp files build up in Moonraker's temp directory, and
@@ -426,3 +528,5 @@ Each item is a recommendation with its evidence. Task 4 decides.
   Gate F ran 2 and 6 times.
 - The `print_stats` sequence in Gate F was sampled every 50 ms through the
   direct port. States shorter than that were not seen.
+- Gate E has no row for the `print_stats` `error` state. Reaching it needs a
+  failing print, and none was run.
