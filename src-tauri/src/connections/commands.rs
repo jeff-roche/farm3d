@@ -720,8 +720,18 @@ fn retry_pending_credential_cleanup_locked(
         })
         .map_err(|error| error.to_string())?;
     for reference in pending {
+        // P6 D7: a credential is kept while any Printer references it, and
+        // also while the Printer it was queued for has an unresolved Host
+        // Operation (the pending write may have been dispatched with it).
+        // It is retried once that row is terminal.
         let reachable = storage.read(|connection| connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM printers WHERE json_extract(connection_json, '$.credentialRef') = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM printers WHERE json_extract(connection_json, '$.credentialRef') = ?1)
+                 OR EXISTS(
+                     SELECT 1 FROM pending_credential_cleanup cleanup
+                     JOIN host_operations operation ON operation.printer_id = cleanup.printer_id
+                     WHERE cleanup.credential_ref = ?1
+                       AND operation.state IN ('dispatching','uncertain','reconciling')
+                 )",
             [&reference], |row| row.get::<_, bool>(0)
         )).map_err(|error| error.to_string())?;
         if reachable {

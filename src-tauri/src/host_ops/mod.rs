@@ -4,8 +4,9 @@
 //!
 //! This module holds the ts-rs domain types the wire shares with the
 //! frontend (`HostOperation` and friends); the executor, reconciler, and
-//! guards a later task adds build on top of [`repository`]'s functions.
+//! guards ([`guards`], D7) build on top of [`repository`]'s functions.
 
+pub mod guards;
 pub mod repository;
 pub mod state;
 

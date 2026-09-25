@@ -146,6 +146,20 @@ pub enum RepositoryError {
     HostOperationAlreadySent {
         host_operation_id: String,
     },
+    /// P6 D7: the Connection change would change the endpoint, or clear the
+    /// Connection or its credential, while `printer_id` has the unresolved
+    /// Host Operation `host_operation_id`. Nothing was written.
+    /// `CONNECTION_IN_USE`.
+    ConnectionInUse {
+        printer_id: String,
+        host_operation_id: String,
+    },
+    /// P6 D7: a Printers import while these Printers have these unresolved
+    /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`.
+    HostOperationsPending {
+        printer_ids: Vec<String>,
+        host_operation_ids: Vec<String>,
+    },
     Storage(StorageError),
 }
 

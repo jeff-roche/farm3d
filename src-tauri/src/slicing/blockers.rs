@@ -1,8 +1,10 @@
 //! D14 deletion guards.
 //!
 //! - [`SliceRevisionDeletionBlocker`]: what may block deleting a Slice
-//!   Revision. The registry is empty in P5, because nothing can reference a
-//!   revision before P7, which registers Queue Entries and Jobs here.
+//!   Revision. P6 registers
+//!   `host_ops::guards::UnresolvedHostOperationBlocksRevisionDeletion`
+//!   (an unresolved upload or start uses it); P7 registers Queue Entries
+//!   and Jobs here.
 //! - [`SliceRevisionsBlockModelDeletion`]: the P4 `ModelDeletionBlocker`
 //!   P5 registers, because a Model's Slice Revisions `RESTRICT` its
 //!   deletion.
@@ -24,10 +26,9 @@ pub trait SliceRevisionDeletionBlocker: Send + Sync {
     ) -> Result<Vec<LifecycleBlocker>, StorageError>;
 }
 
-/// Every registered source, in the order their blockers are reported. Empty
-/// in P5.
+/// Every registered source, in the order their blockers are reported.
 pub fn slice_revision_blocker_sources() -> &'static [&'static dyn SliceRevisionDeletionBlocker] {
-    &[]
+    &[&crate::host_ops::guards::UnresolvedHostOperationBlocksRevisionDeletion]
 }
 
 /// Every blocker `sources` report for deleting `slice_revision_id`.

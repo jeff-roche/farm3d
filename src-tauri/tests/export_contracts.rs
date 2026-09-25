@@ -766,6 +766,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::PreparationInvalid,
         ErrorCode::PreparationStale,
         ErrorCode::OperationNotCancellable,
+        ErrorCode::HostOperationPending,
+        ErrorCode::ConnectionInUse,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -780,6 +782,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::OpenSlicerSettings,
         RecoveryCode::ReloadPreparation,
         RecoveryCode::EditPreparation,
+        RecoveryCode::OpenPrinterJob,
     ];
 
     assert_eq!(
@@ -795,13 +798,14 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
                 "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
                 "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
-                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE"
+                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE",
+                "HOST_OPERATION_PENDING", "CONNECTION_IN_USE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
                 "CHOOSE_SUPPORTED_ADAPTER", "CHECK_CONNECTION", "CHECK_CREDENTIALS",
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
-                "RELOAD_PREPARATION", "EDIT_PREPARATION"
+                "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB"
             ]
         })
     );

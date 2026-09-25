@@ -329,6 +329,12 @@ pub enum ErrorCode {
     PreparationStale,
     /// P5 D10: the slice operation has already finished.
     OperationNotCancellable,
+    /// P6 D7/D9: the Printer has an unresolved Host Operation (a write
+    /// command, or `import_printers`).
+    HostOperationPending,
+    /// P6 D7: the Connection change would orphan an unresolved Host
+    /// Operation.
+    ConnectionInUse,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -354,6 +360,8 @@ pub enum RecoveryCode {
     ReloadPreparation,
     /// P5: change the Preparation (presets, controls, or plates).
     EditPreparation,
+    /// P6: open the Printer's Job tab (its pending Host Operation).
+    OpenPrinterJob,
 }
 
 /// The versioned success envelope returned by every command.
@@ -659,6 +667,42 @@ impl CommandError {
     }
 
     /// D3: another active Printer already owns this host identity.
+    /// P6 D7 `CONNECTION_IN_USE`: `set_printer_connection` or
+    /// `clear_printer_connection` would change the endpoint, or clear the
+    /// Connection or its credential, while `host_operation_id` is
+    /// unresolved.
+    pub fn connection_in_use(printer_id: &str, host_operation_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::ConnectionInUse,
+            "Finish or abandon the pending printer operation before changing this Connection.",
+            vec![RecoveryCode::OpenPrinterJob],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("hostOperationId", host_operation_id),
+        ])
+    }
+
+    /// P6 D7/D9 `HOST_OPERATION_PENDING`: these Printers have these
+    /// unresolved Host Operations.
+    pub fn host_operation_pending(printer_ids: &[String], host_operation_ids: &[String]) -> Self {
+        let strings = |values: &[String]| {
+            JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
+        };
+        let mut error = Self::typed(
+            ErrorCode::HostOperationPending,
+            "This printer has a pending operation. Finish or abandon it first.",
+            vec![RecoveryCode::OpenPrinterJob],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("printerIds".to_string(), strings(printer_ids)),
+            ("hostOperationIds".to_string(), strings(host_operation_ids)),
+        ]));
+        error
+    }
+
     pub fn duplicate_host(conflicting_printer_id: &str) -> Self {
         let mut error = Self::typed(
             ErrorCode::DuplicateHost,
@@ -1074,6 +1118,14 @@ impl CommandError {
             // Likewise: `mark_sent` runs exactly once per row; a second
             // call is an executor bug, not something a user triggers.
             RepositoryError::HostOperationAlreadySent { .. } => Self::internal(),
+            RepositoryError::ConnectionInUse {
+                printer_id,
+                host_operation_id,
+            } => Self::connection_in_use(&printer_id, &host_operation_id),
+            RepositoryError::HostOperationsPending {
+                printer_ids,
+                host_operation_ids,
+            } => Self::host_operation_pending(&printer_ids, &host_operation_ids),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
@@ -1199,6 +1251,44 @@ mod tests {
         assert_eq!(
             backstop.details.unwrap().get("conflictingPrinterId"),
             Some(&JsonValue::String("printer-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn p6_guard_errors_carry_their_code_message_recovery_and_details() {
+        let in_use = CommandError::from_repository(RepositoryError::ConnectionInUse {
+            printer_id: "prn-a".to_string(),
+            host_operation_id: "hop-a".to_string(),
+        });
+        assert_eq!(in_use.code, ErrorCode::ConnectionInUse);
+        assert_eq!(
+            in_use.message,
+            "Finish or abandon the pending printer operation before changing this Connection."
+        );
+        assert_eq!(in_use.recovery, vec![RecoveryCode::OpenPrinterJob]);
+        assert!(!in_use.retryable);
+        assert_eq!(
+            serde_json::to_value(&in_use.details).unwrap(),
+            serde_json::json!({"printerId": "prn-a", "hostOperationId": "hop-a"})
+        );
+
+        let pending = CommandError::from_repository(RepositoryError::HostOperationsPending {
+            printer_ids: vec!["prn-a".to_string(), "prn-b".to_string()],
+            host_operation_ids: vec!["hop-a".to_string(), "hop-b".to_string()],
+        });
+        assert_eq!(pending.code, ErrorCode::HostOperationPending);
+        assert_eq!(
+            pending.message,
+            "This printer has a pending operation. Finish or abandon it first."
+        );
+        assert_eq!(pending.recovery, vec![RecoveryCode::OpenPrinterJob]);
+        assert!(!pending.retryable);
+        assert_eq!(
+            serde_json::to_value(&pending.details).unwrap(),
+            serde_json::json!({
+                "printerIds": ["prn-a", "prn-b"],
+                "hostOperationIds": ["hop-a", "hop-b"],
+            })
         );
     }
 

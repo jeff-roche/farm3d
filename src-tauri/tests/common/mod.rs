@@ -278,6 +278,41 @@ pub fn runtime_with_file_io(
     )
 }
 
+/// What the mock-runtime builders return: the app, its main webview, the
+/// `ConnectionManager`, and the managed `RuntimeServices`.
+pub type MockHarness = (
+    tauri::App<MockRuntime>,
+    tauri::WebviewWindow<MockRuntime>,
+    Arc<ConnectionManager<MockRuntime>>,
+    Arc<RuntimeServices<MockRuntime>>,
+);
+
+/// [`runtime`], with the Printers/Settings document dialogs replaced by
+/// `documents` (for `import_printers`/`export_printers`).
+pub fn runtime_with_documents(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    documents: Arc<dyn DocumentIo>,
+) -> MockHarness {
+    runtime_customized(
+        handler,
+        storage,
+        catalog,
+        credentials_dir,
+        factory,
+        move |services| services.documents = documents,
+    )
+}
+
 fn runtime_customized(
     handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
     storage: Arc<Storage>,

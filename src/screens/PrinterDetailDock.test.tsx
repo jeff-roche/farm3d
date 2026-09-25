@@ -397,6 +397,26 @@ describe("PrinterDetailDock", () => {
     expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
   });
 
+  it("explains a pending printer operation and keeps Archive disabled, even with loaded Spools (P6 D7)", async () => {
+    lifecycleEligibility.mockReset().mockResolvedValue({
+      ...ACTIVE_ELIGIBILITY,
+      canArchive: false,
+      blockers: [
+        ...ACTIVE_ELIGIBILITY.blockers,
+        { action: "archive", code: "SPOOLS_LOADED", message: "Unload every Spool before archiving this Printer." },
+        { action: "archive", code: "HOST_OPERATION_UNRESOLVED", message: "Finish or abandon the pending printer operation before archiving." },
+        { action: "delete", code: "HOST_OPERATION_UNRESOLVED", message: "Finish or abandon the pending printer operation before deleting." },
+      ],
+      loadedSpools: [{ id: "spl-7", spoolNumber: 7 }],
+    });
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    expect(await screen.findByText("Finish or abandon the pending printer operation before archiving.")).toBeInTheDocument();
+    expect(screen.getByText("Finish or abandon the pending printer operation before deleting.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  });
+
   it("routes a failed plain archive to the store banner", async () => {
     const failure = { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "read-only", recovery: [], retryable: true };
     archivePrinter.mockRejectedValueOnce(failure);

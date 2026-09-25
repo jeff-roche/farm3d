@@ -2013,7 +2013,6 @@ mod tests {
     #[test]
     fn deleting_a_farm3d_revision_releases_only_its_unreferenced_blobs() {
         let (_temp, _lease, storage) = seeded();
-        assert!(crate::slicing::blockers::slice_revision_blocker_sources().is_empty());
         with_preparation(&storage);
         queue(&storage, "sop-a");
         storage
