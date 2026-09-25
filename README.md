@@ -16,6 +16,20 @@ just install
 just dev   # launches the app with hot reload
 ```
 
+## Slicing
+
+farm3d slices with an OrcaSlicer you install yourself; it doesn't bundle
+one. Any OrcaSlicer 2.x works, releases and nightly or dev builds alike.
+farm3d looks for `orca-slicer` on your `PATH`, and on Linux for an
+`*OrcaSlicer*.AppImage` in `~/Applications`, `~/.local/bin` or
+`~/Downloads`. To point it at another install, open the **Settings** menu,
+choose **Slicer...**, then **Choose engine…**.
+
+Current nightly builds store their printer presets in a format farm3d can't
+read. With a nightly, also choose an OrcaSlicer 2.4 AppImage (**Choose
+preset source file…**) or install folder (**Choose preset source folder…**)
+as the preset source, in the same dialog.
+
 ## Commands
 
 Run `just` with no argument to list recipes. Each wraps the equivalent npm script (shown for reference):
@@ -27,12 +41,14 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just dev` | `npm run tauri dev` | Run the full desktop app (Rust + frontend) with hot reload |
 | `just web` | `npm run dev` | Run just the frontend in a browser at `localhost:1420` (no Tauri/Rust) |
 | `just build` | `npm run build` | Type-check and build the frontend for production |
-| `just package` | `NO_STRIP=1 npm run tauri build` (Linux) | Build clean distributable bundles, then reject any bundle that contains the developer-only catalog generator; Linux disables linuxdeploy's legacy strip step because it cannot parse modern `.relr.dyn` sections |
+| `just package` | `NO_STRIP=1 npm run tauri build` (Linux) | Build clean distributable bundles, then reject any bundle that contains the developer-only catalog generator or the `fake-orca` test double; Linux disables linuxdeploy's legacy strip step because it cannot parse modern `.relr.dyn` sections |
 | `just package-arch` | — | Repackage the `.deb` from `just package` into an Arch Linux `.pkg.tar.zst` (Tauri's bundler has no pacman target); requires `just package` to have run first — see [`packaging/arch/PKGBUILD`](./packaging/arch/PKGBUILD) |
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
-| `just test-rust` | — | Run the Tauri backend's Rust test suite |
+| `just test-rust` | — | Run the Tauri backend's Rust test suite; builds with `--features test-support`, which adds the `fake-orca` OrcaSlicer test double |
+| `just test-orca` | — | Run the ignored `real_orca*` tests against a real OrcaSlicer; set `FARM3D_ORCA` to the engine (for example the v2.4.2 AppImage), and optionally `FARM3D_ORCA_PRESETS` to a preset source |
 | `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
 | `just gen-contracts` | — | Regenerate committed TypeScript contracts from Rust wire types |
+| `just gen-slicing-fixtures` | — | Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF, argument vectors, flat presets) |
 
 ## Packaging
 
