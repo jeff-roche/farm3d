@@ -202,12 +202,12 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 | 5 | Deterministic invocation fixtures | **met** | `the_deterministic_invocation_fixtures_match_the_committed_ones` (plate 3MF, argument vectors, flat presets). Regenerating gives no diff. |
 | 6 | Two-plate identity | **met** | `a_two_plate_preparation_slices_into_two_revisions_of_one_source` (fake-orca), `real_orca_places_a_written_plate_exactly`, and both tracers. Native: two revisions with distinct plate keys and one source, in dev, the packaged .deb binary, and the AppImage. |
 | 7 | Cancellation and restart | **met** (final fix round) | `cancel_mid_run_stops_the_grandchild_within_six_seconds`, `cancelling_a_running_slice_stops_it_and_a_queued_one_never_starts`, `real::real_orca_cancel_stops_the_group_quickly`, `a_restart_mid_slice_interrupts_it_and_keeps_earlier_revisions`, and the tracer's step 6. Native: cancel in 0.26 s, and an interrupted slice after a crash. PDEATHSIG: `the_engine_exits_when_its_parent_is_killed` and `the_engine_exits_when_the_thread_that_spawned_it_exits` (`tests/p5_process.rs`, final fix round). This pass had found no automated PDEATHSIG test. The manual run also showed it: the engine exited within 0.2 s of the app's SIGKILL. |
-| 8 | Failure | **met** | `every_gate_f_return_code_maps_to_its_d11_failure`, `missing_and_unreadable_inputs_fail_like_orca`, `an_unexpected_signal_is_an_engine_crash`, `an_engine_that_cannot_start_is_spawn_failed_without_its_path`, `a_hung_slice_times_out_through_the_stop_escalation`, `a_slice_that_cannot_be_stored_fails_with_its_log`, `a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues`, `success_without_gcode_is_output_missing`, and the redaction tests. Native: `engineCrashed` with the real engine. |
+| 8 | Failure | **met** | `every_gate_f_return_code_maps_to_its_d11_failure`, `missing_and_unreadable_inputs_fail_like_orca`, `an_unexpected_signal_is_an_engine_crash`, `an_engine_that_cannot_start_is_spawn_failed_without_its_path`, `a_hung_slice_times_out_through_the_stop_escalation`, `a_slice_that_cannot_be_stored_fails_with_its_log`, `a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues`, `a_worker_panic_after_the_engine_ran_keeps_its_log` (cleanup round), `success_without_gcode_is_output_missing`, and the redaction tests. Native: `engineCrashed` with the real engine. |
 | 9 | Stale source | **met (automated only)** | `a_stale_source_is_refused_then_continued_and_reload_keeps_transforms`. Not exercised by hand. |
 | 10 | Immutable artifacts | **met** | `revisions_are_immutable_and_deleting_a_model_cascades_everything`, `revisions_and_their_blobs_reject_updates_but_allow_a_guarded_delete`, `a_model_with_slice_revisions_is_blocked_by_the_registered_source`, `a_model_with_an_external_revision_blocks_delete_model`, and the tracer's `open_verified` hashes. Native: byte-identical across two restarts (an idle SIGKILL, and a SIGKILL mid-slice). |
 | 11 | External provenance and missing facts | **met** | `external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture`, `an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_source_blob`, `claimed_estimates_parse_from_the_orca_cube_claims_but_are_never_trusted`, and the `GcodeFactsDialog` tests. Native: the dialog started empty; the facts, the manual-selection flag, and blob reuse were checked in the DB. |
 | 12 | Events | **met** | `slicing::events` tests, `events_are_ordered_and_the_backfill_covers_what_came_before`, "ignores every event on the shared channel that is not slicing.*" (`slicing-store.test.ts`), and "4. ignores every event on the shared channel that is not library.*" (`library-store.test.ts`). |
-| 13 | Frontend tests | **met** | 1142 tests pass (1154 after Task 16c, 1156 after the final fix round). Store: `slicing-store.test.ts` (85). Pure modules: transforms (13), layflat (5), arrange (13), bounds (16), validation (7), fact-parsing (8). `PlateViewport.test.tsx` (20). `PreparationWorkspace.test.tsx` (29). `PreparationPanel.test.tsx` (42; it also covers the operation panel's progress, cancel, and log expand-on-failure; there is no separate `SliceOperationPanel.test.tsx`). `SliceRevisionReview.test.tsx` (13). `GcodeFactsDialog.test.tsx` (14). `SlicerSettingsDialog.test.tsx` (25). |
+| 13 | Frontend tests | **met** | 1142 tests pass (1154 after Task 16c, 1156 after the final fix round, 1160 after the cleanup round). Per-file counts, recounted from the vitest JSON reporter after the cleanup round: store: `slicing-store.test.ts` (44). Pure modules: transforms (27), layflat (10), arrange (13), bounds (16), validation (7), fact-parsing (8). `PlateViewport.test.tsx` (20). `PreparationWorkspace.test.tsx` (29). `PreparationPanel.test.tsx` (45; it also covers the operation panel's progress, cancel, log expand-on-failure, and empty-log note; there is no separate `SliceOperationPanel.test.tsx`). `SliceRevisionReview.test.tsx` (13). `GcodeFactsDialog.test.tsx` (13). `SlicerSettingsDialog.test.tsx` (25). |
 | 14 | Accessible viewport and keyboard verification | **partially met** | Native, keyboard-only, at 1440 × 900 and 1024 × 700, with reduced motion checked; screenshots `docs/screenshots/p5-*.png`. Reasons for partial: the keyboard ran through a nested Xwayland (see "How the native app was driven"), and the native pass predates the Task 16c fixes. **D1** (the matching-Printers popover broke the panel's Tab order) is fixed in Task 16c, with automated and `just web` evidence only; the native re-check was not redone. |
 | 15 | Packaged OrcaSlicer execution | **met, via the AppImage/unpacked path** | See "Packaged app". The installed-`.deb` variant needs root and is left as a user action with the commands above. |
 | 16 | The tracer | **met** | `tracer_runs_against_fake_orca` and `real_orca_tracer_runs_against_a_real_orcaslicer`. |
@@ -381,6 +381,8 @@ Fixes for the known issues left after the final fix round, on branch
 | `f5c4962` | Keeps the run's log when the worker panics after the engine ran |
 | `41463e9` | Disarms the PDEATHSIG tests' process guards, and dedupes a wait loop |
 | `05e4bb8` | Adds the real-Orca header test for the Printer Profile override keys |
+| `32353ba` | Counts only operations that have a log toward the 5 |
+| `cebd45b` | Makes the tie-break test real and tests a log hash two operations share |
 
 ### Operation-log retention
 
@@ -403,7 +405,9 @@ panel's empty-log note now reads "No log is kept for this attempt." for
 both.
 
 Tests: `a_sixth_unpublished_log_drops_the_oldest_and_marks_its_blob`,
-`a_tie_in_ending_time_prunes_the_lower_id_first`, and
+`a_tie_in_ending_time_prunes_the_lower_id_first`,
+`an_operation_without_a_log_never_evicts_one`,
+`a_log_a_kept_operation_shares_is_not_released`, and
 `pruning_leaves_succeeded_active_and_revision_logs_alone`
 (`slicing::repository`); `a_sixth_failure_prunes_the_oldest_log_and_releases_its_blob`
 and `startup_recovery_prunes_a_database_seeded_with_more_than_five_logs`
@@ -462,13 +466,16 @@ The test takes about 12 s for 8 slices.
 
 ### Gates (cleanup round)
 
-Run at `05e4bb8`, with `source "$HOME/.cargo/env"`.
+Final counts, run at `cebd45b` (after the import-dialog focus fix,
+`70e1724`), with `source "$HOME/.cargo/env"`. `just test-orca` was last
+run at `05e4bb8`. Later commits change only the retention query, unit
+tests, the import dialog's focus, and docs.
 
 | Command | Exit | Result |
 |---|---|---|
 | `just build` | 0 | `tsc` and the Vite build pass. |
-| `just test` | 0 | 89 files, 1157 tests passed. |
-| `cd src-tauri && cargo test --features test-support` | 0 | 971 passed, 0 failed, 16 ignored, across 39 test binaries. |
+| `just test` | 0 | 89 files, 1160 tests passed. |
+| `cd src-tauri && cargo test --features test-support` | 0 | 973 passed, 0 failed, 16 ignored, across 39 test binaries. |
 | `cargo clippy --all-targets --features test-support` | 0 | No new warnings in the files this round changed. |
 | `cargo fmt --check` | 0 | Clean. |
 | `just gen-contracts`, then `git status` | 0 | No diff. |
