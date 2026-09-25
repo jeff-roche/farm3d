@@ -889,6 +889,7 @@ fn a_cancel_racing_the_enqueue_waits_for_it_and_nothing_spawns() {
                     .unwrap();
             }
             SchedulerPoint::Spawning(id) => spawning.lock().unwrap().push(id.to_string()),
+            SchedulerPoint::Exited(_) => {}
         })));
     let slicing = Arc::clone(&running.services.slicing);
     let request = farm3d_lib::slicing::operations::StartSliceRequest {

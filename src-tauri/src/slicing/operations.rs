@@ -119,6 +119,10 @@ pub enum SchedulerPoint<'a> {
     CancelAwaitsStart(&'a str),
     /// The worker is about to start OrcaSlicer for operation `id`.
     Spawning(&'a str),
+    /// OrcaSlicer for operation `id` has exited, and the worker is about to
+    /// store the outcome and remove the work directory. Holding the worker
+    /// here stands in for a farm3d that died mid-run.
+    Exited(&'a str),
 }
 
 /// Test seam: called at each [`SchedulerPoint`].
@@ -310,6 +314,9 @@ fn run_job<R: tauri::Runtime>(services: &SlicingServices<R>, job: Job) {
             cancel: Arc::clone(&job.cancel_sender),
         };
         let run = run_slice(&command, &job.cancel, &mut observer);
+        services
+            .scheduler
+            .reach(SchedulerPoint::Exited(&job.operation_id));
         let last = observer.throttle.finish();
         observer.emit(last);
         match finish_run(

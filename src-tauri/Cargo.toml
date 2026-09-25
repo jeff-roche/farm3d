@@ -49,6 +49,11 @@ name = "p5_slicing"
 path = "tests/p5_slicing.rs"
 required-features = ["test-support"]
 
+[[test]]
+name = "p5_tracer"
+path = "tests/p5_tracer.rs"
+required-features = ["test-support"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
