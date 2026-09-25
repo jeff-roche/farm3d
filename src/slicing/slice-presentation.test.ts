@@ -127,6 +127,14 @@ describe("sliceErrorView", () => {
       .toMatchObject({ field: "quality" });
     expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "controls.wallLoops" } })))
       .toMatchObject({ field: "wallLoops" });
+    // start_slice's "choose a preset first" paths.
+    expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "processPreset" } })).field)
+      .toBe("quality");
+    expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "filamentPreset" } })).field)
+      .toBe("material");
+    // A filament preset with no filament_type or filament_diameter.
+    expect(sliceErrorView(commandError({ code: "PRESET_INVALID", details: { kind: "filament" } })).field)
+      .toBe("material");
     // A path the panel has no field for links nowhere.
     expect(sliceErrorView(commandError({ code: "VALIDATION", details: { fieldPath: "controls.ironing" } })).field)
       .toBeUndefined();

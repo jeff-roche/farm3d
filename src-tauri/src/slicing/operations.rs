@@ -622,10 +622,10 @@ fn prepare<R: tauri::Runtime>(
 ) -> Result<PreparedStart, CommandError> {
     let document = &preparation.document;
     let process_preset = document.process_preset.clone().ok_or_else(|| {
-        CommandError::validation_at("document.processPreset", "Choose a quality preset first.")
+        CommandError::validation_at("processPreset", "Choose a quality preset first.")
     })?;
     let filament_preset = document.filament_preset.clone().ok_or_else(|| {
-        CommandError::validation_at("document.filamentPreset", "Choose a filament preset first.")
+        CommandError::validation_at("filamentPreset", "Choose a filament preset first.")
     })?;
     let (engine, source) = services.usable_runtime()?;
     let index = services.preset_index(&source)?;

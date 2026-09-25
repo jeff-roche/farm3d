@@ -412,6 +412,55 @@ fn cancelling_a_running_slice_stops_it_and_a_queued_one_never_starts() {
     assert_eq!(error["code"], "OPERATION_NOT_CANCELLABLE", "{error}");
 }
 
+/// `start_slice` refuses a Preparation with no chosen preset as
+/// `VALIDATION` at the document field the panel links: `processPreset` or
+/// `filamentPreset`, as the other preset errors name them.
+#[test]
+fn a_slice_without_a_chosen_preset_names_the_preset_field() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let mut preparation = running.prepare(model["id"].as_str().unwrap());
+    for field in ["processPreset", "filamentPreset"] {
+        let mut document = preparation["document"].clone();
+        let chosen = document[field].take();
+        document.as_object_mut().unwrap().remove(field);
+        preparation = running.ok(
+            "update_preparation",
+            json!({
+                "preparationId": preparation["id"],
+                "expectedRevision": preparation["revision"],
+                "document": document,
+            }),
+        );
+        let plate = &plates(&preparation)[0];
+        let error = running.error(
+            "start_slice",
+            json!({
+                "operationId": format!("op-no-{field}"),
+                "preparationId": preparation["id"],
+                "expectedRevision": preparation["revision"],
+                "plateKeys": [plate["plateKey"]],
+            }),
+        );
+        assert_eq!(error["code"], "VALIDATION", "{error}");
+        assert_eq!(error["details"]["fieldPath"], field, "{error}");
+
+        // Put it back for the next field.
+        let mut document = preparation["document"].clone();
+        document[field] = chosen;
+        preparation = running.ok(
+            "update_preparation",
+            json!({
+                "preparationId": preparation["id"],
+                "expectedRevision": preparation["revision"],
+                "document": document,
+            }),
+        );
+    }
+    assert_eq!(running.slicing()["activeAndRecentOperations"], json!([]));
+}
+
 #[test]
 fn start_slice_replays_by_operation_id_and_refuses_a_reused_id() {
     let farm = Farm::new();
