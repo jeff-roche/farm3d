@@ -1,5 +1,5 @@
 import { createStore } from "solid-js/store";
-import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
 import { buildWebLibraryFixture, type WebLibraryFixture } from "./web-fixtures";
 import type { CommandError } from "../generated/contracts/command/CommandError";
@@ -91,9 +91,7 @@ function commandError(code: ErrorCode, message: string, details?: Record<string,
 
 /** Web mode has no files and no content store, so anything that reads real
  *  files is refused rather than faked. */
-function needsDesktop(action: string): CommandError {
-  return commandError("PERSISTENCE_UNAVAILABLE", `${action} needs the desktop app.`);
-}
+const needsDesktop = needsDesktopError;
 
 function notFound(kind: "Project" | "Model", id: string): CommandError {
   return commandError("NOT_FOUND", `This ${kind} no longer exists.`, { entityId: id });

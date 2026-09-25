@@ -239,6 +239,19 @@ export function desktopAvailable(): boolean {
   return isTauri();
 }
 
+/** Web mode (`just web`) has no backend, so a store refuses anything that
+ *  needs real files, a slicer, or the desktop's pickers with this, rather
+ *  than faking it. */
+export function needsDesktopError(action: string): CommandError {
+  return {
+    contractVersion: 1,
+    code: "PERSISTENCE_UNAVAILABLE",
+    message: `${action} needs the desktop app.`,
+    recovery: [],
+    retryable: false,
+  };
+}
+
 /**
  * D8's demo aid: seeds a reservation on a Spool so the `reserved` facet can
  * be checked by hand. The command exists only in debug desktop builds and is

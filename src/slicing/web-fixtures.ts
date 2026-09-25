@@ -1,4 +1,5 @@
 import { encodeMeshBuffer } from "./mesh-buffer";
+import { revisionSummaryOf } from "./types";
 import type {
   CatalogRef,
   GeometryObject,
@@ -396,18 +397,13 @@ function externalRevision(at: (minutesAgo: number) => string): SliceRevisionReco
   };
 }
 
-function summaryOf(record: SliceRevisionRecord): SliceRevisionSummary {
-  const { target: _target, claimedEstimates: _claimed, producer: _producer, blobs: _blobs, ...summary } = record;
-  return summary;
-}
-
 export function buildWebSlicingFixture(now: Date = new Date()): WebSlicingFixture {
   const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * MINUTE_MS).toISOString();
   const records = [farm3dRevision(at), externalRevision(at)];
   const revisionRecords: Record<string, SliceRevisionRecord> = {};
   for (const record of records) revisionRecords[record.id] = record;
   const revisions = records
-    .map(summaryOf)
+    .map(revisionSummaryOf)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   const geometry: Record<string, RevisionGeometry> = {};

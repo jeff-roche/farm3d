@@ -2,6 +2,8 @@
  *  source of truth), plus the shared-channel filter. */
 import type { SlicingEvent } from "../generated/contracts/domain/SlicingEvent";
 import type { SliceOperationState } from "../generated/contracts/domain/SliceOperationState";
+import type { SliceRevisionRecord } from "../generated/contracts/domain/SliceRevisionRecord";
+import type { SliceRevisionSummary } from "../generated/contracts/domain/SliceRevisionSummary";
 
 export type { ConfirmedFactRequest } from "../generated/contracts/command/ConfirmedFactRequest";
 export type { CreateExternalSliceRevisionFacts } from "../generated/contracts/command/CreateExternalSliceRevisionFacts";
@@ -50,8 +52,6 @@ export type { SliceProgress } from "../generated/contracts/domain/SliceProgress"
 export type { SliceRevisionBlob } from "../generated/contracts/domain/SliceRevisionBlob";
 export type { SliceRevisionBlobRole } from "../generated/contracts/domain/SliceRevisionBlobRole";
 export type { SliceRevisionKind } from "../generated/contracts/domain/SliceRevisionKind";
-export type { SliceRevisionRecord } from "../generated/contracts/domain/SliceRevisionRecord";
-export type { SliceRevisionSummary } from "../generated/contracts/domain/SliceRevisionSummary";
 export type { SliceRevisionTarget } from "../generated/contracts/domain/SliceRevisionTarget";
 export type { SliceRuntimeInfo } from "../generated/contracts/domain/SliceRuntimeInfo";
 export type { SliceTarget } from "../generated/contracts/domain/SliceTarget";
@@ -60,11 +60,18 @@ export type { SlicingEventPayload } from "../generated/contracts/domain/SlicingE
 export type { SlicingEventType } from "../generated/contracts/domain/SlicingEventType";
 export type { SlicingSnapshot } from "../generated/contracts/domain/SlicingSnapshot";
 export type { SupportMode } from "../generated/contracts/domain/SupportMode";
-export type { SliceOperationState, SlicingEvent };
+export type { SliceOperationState, SliceRevisionRecord, SliceRevisionSummary, SlicingEvent };
 
 /** D10: the states an operation never leaves. */
 export function isTerminalOperationState(state: SliceOperationState): boolean {
   return state === "succeeded" || state === "failed" || state === "cancelled" || state === "interrupted";
+}
+
+/** A record without the fields only the full record has: what lists and
+ *  `slicing.revision.created` carry. */
+export function revisionSummaryOf(record: SliceRevisionRecord): SliceRevisionSummary {
+  const { target: _target, claimedEstimates: _claimed, producer: _producer, blobs: _blobs, ...summary } = record;
+  return summary;
 }
 
 /** D17: `farm3d-event-v1` also carries the Library, Printer status and
