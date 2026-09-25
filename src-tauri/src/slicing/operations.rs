@@ -470,7 +470,8 @@ pub fn derived_operation_id(operation_id: &str, plate_key: &str) -> String {
 }
 
 /// The ledger's record for `operation_id`: its kind and request digest.
-fn recorded_claim(
+/// `pub(crate)` so [`super::external`]'s own replay check can reuse it.
+pub(crate) fn recorded_claim(
     connection: &Connection,
     operation_id: &str,
 ) -> rusqlite::Result<Option<(String, String)>> {

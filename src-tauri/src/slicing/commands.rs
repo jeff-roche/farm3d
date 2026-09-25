@@ -1,5 +1,4 @@
-//! P5's Tauri commands (spec §Commands), every one but
-//! `create_external_slice_revision` (Task 9). Each validates the contract
+//! P5's Tauri commands (spec §Commands). Each validates the contract
 //! version and waits for bootstrap before any side effect. None accepts a
 //! filesystem path: the engine and preset source arrive only through the
 //! Rust-owned pickers (D2). Work that probes OrcaSlicer, reads geometry, or
@@ -24,6 +23,7 @@ use crate::RuntimeServices;
 
 use super::blockers::slice_revision_blocker_sources;
 use super::events;
+use super::external::{self, CreateExternalSliceRevisionFacts};
 use super::operations::{self, StartSliceRequest, RECENT_OPERATIONS};
 use super::preparation::{self, ReloadPreparationData};
 use super::presets::list_slice_options as build_slice_options;
@@ -576,6 +576,32 @@ pub fn get_slice_revision<R: tauri::Runtime>(
         .map_err(storage_error)?
         .map(CommandSuccess::new)
         .ok_or_else(|| CommandError::not_found(slice_revision_id))
+}
+
+/// D16: creates an external Slice Revision over a G-code Model Source
+/// Revision, from the operator's confirmed facts. The revision reuses the
+/// source's content as its G-code; a non-G-code source is `VALIDATION` on
+/// `sourceRevisionId`. Idempotent by `operationId`.
+#[tauri::command]
+pub async fn create_external_slice_revision<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    source_revision_id: String,
+    facts: CreateExternalSliceRevisionFacts,
+) -> Result<CommandSuccess<SliceRevisionRecord>, CommandError> {
+    let services = ready(&app, &bootstrap, contract_version)?;
+    blocking(move || {
+        external::create_external_slice_revision(
+            &services.slicing,
+            &operation_id,
+            &source_revision_id,
+            &facts,
+        )
+    })
+    .await
+    .map(CommandSuccess::new)
 }
 
 /// D14: deletes a Slice Revision unless something references it

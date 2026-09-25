@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 77] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 78] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -325,13 +325,18 @@ contracts![
         "GetSliceRevisionResult"
     ),
     (
+        "create_external_slice_revision",
+        "CreateExternalSliceRevisionRequest",
+        "CreateExternalSliceRevisionResult"
+    ),
+    (
         "delete_slice_revision",
         "DeleteSliceRevisionRequest",
         "DeleteSliceRevisionResult"
     ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 77] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 78] {
     &COMMAND_CONTRACTS
 }
 
@@ -506,6 +511,8 @@ export type ListSliceRevisionsRequest = ContractRequest & { modelId: string };
 export type ListSliceRevisionsResult = CommandSuccess<SliceRevisionSummary[]>;
 export type GetSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
 export type GetSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
+export type CreateExternalSliceRevisionRequest = ContractRequest & { operationId: string; sourceRevisionId: string; facts: CreateExternalSliceRevisionFacts };
+export type CreateExternalSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
 export type DeleteSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
 export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_string()
     }
@@ -593,6 +600,7 @@ export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_str
         visitor.visit::<crate::slicing::commands::SliceOperationLog>();
         visitor.visit::<crate::slicing::SliceRevisionSummary>();
         visitor.visit::<crate::slicing::SliceRevisionRecord>();
+        visitor.visit::<crate::slicing::external::CreateExternalSliceRevisionFacts>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

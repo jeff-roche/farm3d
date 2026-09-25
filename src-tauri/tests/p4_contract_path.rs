@@ -30,7 +30,7 @@ use common::{a_catalog, invoke, FakeModelFileIo};
 const PRE_P4: usize = 41;
 
 /// Commands P5 added after P4 (`tests/p5_slicing.rs` lists them).
-const P5_COMMAND_COUNT: usize = 19;
+const P5_COMMAND_COUNT: usize = 20;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

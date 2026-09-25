@@ -49,9 +49,9 @@ use super::repository::{
     OperationTransition,
 };
 use super::{
-    new_slice_revision_id, SliceEstimateSource, SliceEstimates, SliceFailure, SliceFailureCode,
-    SliceOperationRecord, SlicePlateRef, SliceRevisionBlobRole, SliceRevisionRecord,
-    SliceRevisionTarget,
+    new_slice_revision_id, ClaimedEstimateSource, ClaimedEstimates, SliceEstimateSource,
+    SliceEstimates, SliceFailure, SliceFailureCode, SliceOperationRecord, SlicePlateRef,
+    SliceRevisionBlobRole, SliceRevisionRecord, SliceRevisionTarget,
 };
 
 /// D11 check 3: the largest G-code farm3d publishes.
@@ -381,6 +381,23 @@ pub fn estimates_from_claims(claims: &[GcodeClaim]) -> SliceEstimates {
         layer_count: claim(claims, "total layer number").and_then(|text| text.parse().ok()),
         max_z_mm: claim(claims, "max_z_height").and_then(parse_amount),
         source: SliceEstimateSource::Farm3dSlice,
+    }
+}
+
+/// D12/D16: the same claims, read for an external revision's own estimates
+/// display ("What the file says (not verified)"). Never trusted, and never
+/// folded into [`SliceFacts`](super::SliceFacts) — an external revision's
+/// facts come only from the operator (D15).
+pub fn claimed_estimates_from_claims(claims: &[GcodeClaim]) -> ClaimedEstimates {
+    ClaimedEstimates {
+        print_seconds: claim(claims, "estimated printing time (normal mode)")
+            .and_then(parse_duration),
+        filament_grams: claim(claims, "filament used [g]").and_then(parse_total),
+        filament_mm: claim(claims, "filament used [mm]").and_then(parse_total),
+        layer_count: claim(claims, "total layer number").and_then(|text| text.parse().ok()),
+        max_z_mm: claim(claims, "max_z_height").and_then(parse_amount),
+        source: ClaimedEstimateSource::FileClaim,
+        trusted: false,
     }
 }
 
@@ -806,6 +823,26 @@ mod tests {
                 layer_count: Some(50),
                 max_z_mm: Some(10.0),
                 source: SliceEstimateSource::Farm3dSlice,
+            }
+        );
+    }
+
+    #[test]
+    fn claimed_estimates_parse_from_the_orca_cube_claims_but_are_never_trusted() {
+        let fixture = Fixture::new();
+        let (inspection, _, _) = gcode::inspect(&fixture.work.gcode(), &CancelFlag::never())
+            .expect("orca-cube inspects");
+
+        assert_eq!(
+            claimed_estimates_from_claims(&inspection.claims),
+            ClaimedEstimates {
+                print_seconds: Some(3 * 60 + 42),
+                filament_grams: Some(0.73),
+                filament_mm: Some(245.37),
+                layer_count: Some(50),
+                max_z_mm: Some(10.0),
+                source: ClaimedEstimateSource::FileClaim,
+                trusted: false,
             }
         );
     }

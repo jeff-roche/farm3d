@@ -111,6 +111,10 @@ type CommandMap = {
   ];
   list_slice_revisions: [Contracts.ListSliceRevisionsRequest, Contracts.ListSliceRevisionsResult];
   get_slice_revision: [Contracts.GetSliceRevisionRequest, Contracts.GetSliceRevisionResult];
+  create_external_slice_revision: [
+    Contracts.CreateExternalSliceRevisionRequest,
+    Contracts.CreateExternalSliceRevisionResult,
+  ];
   delete_slice_revision: [
     Contracts.DeleteSliceRevisionRequest,
     Contracts.DeleteSliceRevisionResult,

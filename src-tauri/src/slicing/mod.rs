@@ -15,12 +15,15 @@
 //! [`preparation`] seeds, validates, and reloads Preparation documents
 //! (D5), [`operations`] queues and runs slice operations and recovers them
 //! at startup (D10), [`events`] is the `slicing` stream (D17), and
-//! [`commands`] the Tauri commands. [`SlicingServices`] holds the runtime
-//! state they share.
+//! [`commands`] the Tauri commands. [`external`] creates an external Slice
+//! Revision over an already-imported G-code Model Source Revision, from
+//! the operator's confirmed facts (D16). [`SlicingServices`] holds the
+//! runtime state they share.
 
 pub mod blockers;
 pub mod commands;
 pub mod events;
+pub mod external;
 pub mod facts;
 pub mod geometry;
 pub mod hull;
@@ -645,6 +648,10 @@ pub struct SlicingServices<R: tauri::Runtime> {
     verified: Mutex<HashSet<String>>,
     /// D10: the FIFO queue and the one running operation.
     pub(crate) scheduler: operations::Scheduler,
+    /// D16: `create_external_slice_revision` calls run one at a time, so
+    /// its replay check and the claim that follows can't interleave with
+    /// another create (mirrors `scheduler.starting`).
+    pub(crate) external_lock: Mutex<()>,
     /// Model id → Preparation id, so a Model deletion can report the
     /// Preparation that cascaded with it.
     preparations_by_model: Mutex<HashMap<String, String>>,
@@ -683,6 +690,7 @@ impl<R: tauri::Runtime> SlicingServices<R> {
             geometry: GeometryCache::default(),
             verified: Mutex::new(HashSet::new()),
             scheduler: operations::Scheduler::default(),
+            external_lock: Mutex::new(()),
             preparations_by_model: Mutex::new(HashMap::new()),
             engine_environment: Mutex::new(Vec::new()),
             app: OnceLock::new(),

@@ -973,6 +973,29 @@ pub(crate) fn list_revision_records(
     Ok(records)
 }
 
+/// P5 D16: source revision `id`'s stored [`Inspection`] (the G-code
+/// inspector's claims and producer, for an external Slice Revision's
+/// `claimedEstimates`). `None` for an unknown revision id.
+pub(crate) fn load_source_revision_inspection(
+    connection: &Connection,
+    id: &str,
+) -> Result<Option<Inspection>, StorageError> {
+    let inspection_json: Option<String> = connection
+        .query_row(
+            "SELECT inspection_json FROM model_source_revisions WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(inspection_json) = inspection_json else {
+        return Ok(None);
+    };
+    let stored: StoredInspection = serde_json::from_str(&inspection_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+    })?;
+    Ok(Some(stored.inspection))
+}
+
 /// A revision's stored thumbnail row (D12).
 pub(crate) struct ThumbnailRow {
     pub media_type: String,

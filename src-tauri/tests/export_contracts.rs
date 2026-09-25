@@ -84,6 +84,7 @@ use farm3d_lib::slicing::commands::{
 use farm3d_lib::slicing::events::{
     SliceProgressPayload, SlicingEvent, SlicingEventPayload, SlicingEventType,
 };
+use farm3d_lib::slicing::external::{ConfirmedFactRequest, CreateExternalSliceRevisionFacts};
 use farm3d_lib::slicing::preparation::ReloadPreparationData;
 use farm3d_lib::slicing::{
     BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineCandidate, EngineCandidateResult,
@@ -493,6 +494,8 @@ fn export_registry() -> Vec<Export> {
         export::<SliceOperationLog>(),
         export::<SlicingDeleted>(),
         export::<ReloadPreparationData>(),
+        export::<ConfirmedFactRequest<f64>>(),
+        export::<CreateExternalSliceRevisionFacts>(),
     ]
 }
 
