@@ -131,17 +131,57 @@ A short-lived, Rust-held set of files the user picked or dropped. It is not
 persisted.
 
 **Slice**:
-The act of converting a Model into printable G-code for a specific Printer
-Profile, performed by farm3d's wrapped OrcaSlicer engine (ADR-0003). Not yet
-implemented — OrcaSlicer is currently only invoked at build time to generate
-the printer catalog, not at runtime to slice a Model.
+The act of converting one Plate of a Model's Preparation into printable
+G-code for a target Printer Profile. A user-installed OrcaSlicer does it,
+run as a separate process (ADR-0003, ADR-0009). Each Plate is sliced by its
+own operation, which can be cancelled.
 _Avoid_: Export
 
 **Slice Revision**:
-An immutable slicing result for a particular Model or build plate, Printer
-Profile, material profile, and set of slicing choices. A Job dispatches one
-Slice Revision without changing it.
+An immutable result: the G-code bytes plus the facts needed to judge where
+they may be printed. A **farm3d Slice Revision** comes from one Plate of one
+Model Source Revision and records the Printer Profile, presets, slicing
+choices, and slicer runtime it was made with. An External Slice Revision
+wraps an imported G-code Model instead. A Job dispatches one Slice Revision
+without changing it.
 _Avoid_: G-code version, export
+
+**External Slice Revision**:
+A Slice Revision that wraps an imported G-code Model Source Revision. farm3d
+did not slice it, so it has no Plate and no slicer runtime, and each of its
+compatibility facts is either a Confirmed fact or absent. A G-code file's own
+claims are shown, but never become facts. When any fact is absent, the
+revision needs a Printer chosen by hand when it is queued.
+
+**Confirmed fact**:
+A compatibility fact on an External Slice Revision (Printer Profile, nozzle
+diameter, material, or filament diameter) that the operator entered or
+explicitly accepted from the file. Its opposite is an **absent fact**: one
+the operator left empty.
+_Avoid_: Inferred fact, detected value
+
+**Preparation**:
+A Model's editable, persisted draft for slicing. It holds the Plates, where
+each object sits on them, the target Printer Profile, and the slicing
+choices, and it is pinned to one Model Source Revision. A Model has at most
+one. It is not a Slice Revision.
+_Avoid_: Project (that means a Library grouping), job setup
+
+**Plate**:
+One build plate within a Preparation, with a stable identity, a name, and
+an order. Each farm3d Slice Revision records the Plate it came from.
+_Avoid_: Bed (the physical surface), tray
+
+**Slicer runtime**:
+The OrcaSlicer engine farm3d runs, plus the Preset source it takes presets
+from. The user installs OrcaSlicer; farm3d finds it or is pointed at it,
+and never bundles one (ADR-0009).
+_Avoid_: Slicer install, engine config
+
+**Preset source**:
+An OrcaSlicer installation whose `resources/profiles` holds JSON presets.
+It defaults to the engine itself. A build that ships only binary preset
+caches needs another installation as its Preset source.
 
 **Model Source Revision**:
 An immutable snapshot of a Model's source content at import or linked-source
