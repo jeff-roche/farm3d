@@ -7,6 +7,7 @@
 //! farm3d's own small vocabulary rather than any one protocol's, so a push
 //! adapter and a polling adapter fit the same shape.
 
+pub mod adapters;
 pub mod commands;
 pub mod credentials;
 pub mod discovery;
@@ -38,7 +39,7 @@ pub const DEFAULT_OCTOPRINT_PORT: u16 = 80;
 pub const SUPPORTED_KINDS: &[&str] = &[MOONRAKER_KIND, OCTOPRINT_KIND];
 
 pub fn is_supported_kind(kind: &str) -> bool {
-    SUPPORTED_KINDS.contains(&kind)
+    adapters::descriptor(kind).is_some()
 }
 
 /// No adapter speaks TLS yet: the WebSocket client is built without a TLS

@@ -10,14 +10,13 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use ts_rs::TS;
 
-use super::moonraker::MoonrakerConnection;
-use super::octoprint::OctoPrintConnection;
+use super::adapters;
 use super::status_repository::{
     PrinterTelemetry, SnapshotWrite, StatusRepository, StoredTelemetrySnapshot,
 };
 use super::{
     ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND, OCTOPRINT_KIND,
+    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND,
 };
 use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::printers::operational::{evaluate_operational_status, HostActivity, OperationalInput};
@@ -959,23 +958,14 @@ fn apply_error_to<R: tauri::Runtime>(
 }
 
 /// The production connection factory: the one place a `kind` becomes an
-/// adapter. Public so integration tests can drive the real adapters through
-/// a manager built with `with_clock_and_factory`.
+/// adapter, by way of the adapter registry. Public so integration tests can
+/// drive the real adapters through a manager built with
+/// `with_clock_and_factory`.
 pub fn build_connection(
     config: &ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<Box<dyn PrinterConnection>> {
-    match config.kind.as_str() {
-        MOONRAKER_KIND => Some(Box::new(MoonrakerConnection::with_zeroizing_secret(
-            config.clone(),
-            api_key,
-        ))),
-        OCTOPRINT_KIND => Some(Box::new(OctoPrintConnection::with_zeroizing_secret(
-            config.clone(),
-            api_key,
-        ))),
-        _ => None,
-    }
+    adapters::descriptor(&config.kind).map(|d| (d.observe)(config, api_key))
 }
 
 #[cfg(test)]
@@ -1642,9 +1632,10 @@ mod tests {
     }
 
     #[test]
-    fn build_constructs_every_supported_kind_and_nothing_else() {
-        // Keeps `SUPPORTED_KINDS` (what the setup paths accept) and `build`
-        // (what the supervisor can actually construct) in step.
+    fn build_connection_delegates_to_the_registry() {
+        // Keeps `SUPPORTED_KINDS` (what the setup paths accept) and
+        // `build_connection` (what the supervisor can actually construct)
+        // in step with the adapter registry.
         let config = |kind: &str| ConnectionConfig {
             kind: kind.to_string(),
             host: "printer.local".to_string(),
