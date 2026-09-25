@@ -360,7 +360,6 @@ fn cancel_mid_run_stops_the_grandchild_within_six_seconds() {
                 assert!(Instant::now() < deadline, "no grandchild started");
                 thread::sleep(Duration::from_millis(10));
             }
-            thread::sleep(Duration::from_millis(100));
             let _ = cancelled_at.send(Instant::now());
             sender.send(true).unwrap();
         })
@@ -535,25 +534,37 @@ fn a_process_that_ignores_sigterm_is_killed_after_the_grace() {
     command.grace = Duration::from_millis(300);
     let (sender, receiver) = tokio::sync::watch::channel(false);
 
-    /// Cancels 300 ms after the spawn, once the shell has taken over.
-    struct CancelSoon {
+    /// Cancels once the shell has set its trap: it creates `term-ignored`
+    /// in the work directory only after SIGTERM is ignored.
+    struct CancelWhenTermIgnored {
         pid: Option<u32>,
+        ready: PathBuf,
         sender: tokio::sync::watch::Sender<bool>,
     }
-    impl SliceObserver for CancelSoon {
+    impl SliceObserver for CancelWhenTermIgnored {
         fn spawned(&mut self, pid: u32) {
             self.pid = Some(pid);
             let sender = self.sender.clone();
+            let ready = self.ready.clone();
             thread::spawn(move || {
-                thread::sleep(Duration::from_millis(300));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !ready.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(5));
+                }
                 let _ = sender.send(true);
             });
         }
         fn progress(&mut self, _update: SliceProgress) {}
     }
-    let mut observer = CancelSoon { pid: None, sender };
+    let ready = work.root().join("term-ignored");
+    let mut observer = CancelWhenTermIgnored {
+        pid: None,
+        ready: ready.clone(),
+        sender,
+    };
     let started = Instant::now();
     let run = run_slice(&command, &CancelFlag::new(receiver), &mut observer);
+    assert!(ready.exists(), "the shell never set its SIGTERM trap");
     assert_eq!(run.exit, RunExit::Cancelled);
     assert!(run.killed, "SIGTERM alone should not have stopped it");
     assert!(

@@ -28,7 +28,7 @@
 //! | `malformedOutput` | return code 0 and a `plate_1.gcode` that is not G-code |
 //! | `oversizedOutput` | return code 0 and a sparse `plate_1.gcode` of `FAKE_ORCA_OUTPUT_BYTES` (default 1 GiB + 1) |
 //! | `crash` | aborts (SIGABRT), a signal farm3d did not send |
-//! | `hangIgnoringTerm` | one progress line, then becomes a shell that ignores SIGTERM (as does its `sleep`), so only SIGKILL stops it |
+//! | `hangIgnoringTerm` | one progress line, then becomes a shell that ignores SIGTERM (as does its `sleep`), so only SIGKILL stops it; the shell creates `term-ignored` in the working directory once SIGTERM is ignored |
 //!
 //! `FAKE_ORCA_STEP_MS` (default 20) is the pause between progress lines,
 //! and a non-empty `FAKE_ORCA_NO_RESULT` skips `result.json`, leaving only
@@ -141,13 +141,15 @@ fn finish(out: &Path, code: i32) -> ! {
 }
 
 /// Replaces this process (same pid, same group) with a shell that ignores
-/// SIGTERM. The ignored disposition is inherited by its `sleep`s.
+/// SIGTERM. The ignored disposition is inherited by its `sleep`s. Once the
+/// trap is set, the shell creates `term-ignored` in the working directory,
+/// so a test knows SIGTERM can no longer stop it.
 #[cfg(unix)]
 fn ignore_term_forever() -> ! {
     use std::os::unix::process::CommandExt;
     let error = Command::new("/bin/sh")
         .arg("-c")
-        .arg("trap '' TERM; while :; do sleep 0.05; done")
+        .arg("trap '' TERM; : > term-ignored; while :; do sleep 0.05; done")
         .exec();
     panic!("exec /bin/sh: {error}");
 }
