@@ -1,0 +1,96 @@
+name: Simulator Tests
+
+# Runs the simulator-backed adapter tests (ADR-0012): the production
+# adapters against real Klipper+Moonraker and real OctoPrint in containers.
+#
+# Non-blocking by design (continue-on-error, and not a required check):
+# - The first step builds the Klipper+simulavr image from source (prind +
+#   a pinned Klipper commit), about 10-20 minutes and ~5.5 GB per run,
+#   because prind does not publish its simulavr target.
+# - The stack depends on Docker Hub, ghcr.io, Debian mirrors, GitHub, and
+#   savannah.nongnu.org being reachable, and its timing on a shared runner.
+# A red run here is a signal to look at, not a merge gate. Make it required
+# once the image is cached or published and the run has proven stable.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "sim/**"
+      - "src-tauri/src/connections/**"
+      - "src-tauri/tests/sim/**"
+      - "src-tauri/tests/sim_*.rs"
+      - "src-tauri/Cargo.lock"
+      - "justfile"
+      - ".github/workflows/simulators.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: simulators-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulators:
+    name: Simulators (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 75
+    env:
+      FARM3D_SIM_ENGINE: docker
+      # A simulator that fails to come up must fail the run, not skip it.
+      FARM3D_SIM_REQUIRED: "1"
+    steps:
+      - name: Free disk space for the simulator image
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            pkg-config
+      - name: Select stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Install just
+        run: cargo install just --locked --version 1.58.0
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: src-tauri
+      - name: Build the simulator tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test sim_moonraker --test sim_octoprint --test sim_elegoolink --no-run
+      - name: Start the simulators
+        run: just sim-up
+      - name: Run the simulator tests
+        run: just test-sim
+      - name: Show simulator state
+        if: always()
+        run: |
+          sim/simctl status || true
+          for service in klipper moonraker octoprint toxiproxy; do
+            echo "::group::$service logs"
+            sim/simctl logs "$service" 2>&1 | tail -n 200 || true
+            echo "::endgroup::"
+          done
+      - name: Upload the run record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sim-runs
+          path: src-tauri/target/sim-runs/
+          if-no-files-found: ignore
+      - name: Stop the simulators
+        if: always()
+        run: just sim-down
