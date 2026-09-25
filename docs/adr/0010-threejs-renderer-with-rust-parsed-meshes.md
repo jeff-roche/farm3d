@@ -1,7 +1,7 @@
 # three.js renderer with Rust-parsed meshes
 
-**Status:** Accepted. The user chose three.js on 2026-09-24, when approving
-the P5 design.
+**Status:** Approved. The approval comes from the P5 design and runtime
+spike, which the user approved on 2026-09-24.
 
 ## Context
 

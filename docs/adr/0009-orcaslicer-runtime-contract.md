@@ -1,7 +1,7 @@
 # OrcaSlicer runtime contract
 
-**Status:** Accepted. The user approved the P5 runtime spike and the P5
-design on 2026-09-24.
+**Status:** Approved. The approval comes from the P5 design and runtime
+spike, which the user approved on 2026-09-24.
 
 ## Context
 
@@ -29,14 +29,15 @@ and D24. This ADR records the parts that are hard to reverse.
 
 ## Decision
 
-**The user installs OrcaSlicer; farm3d never bundles it.** farm3d finds an
-engine in this order and stops at the first that probes successfully:
+**The user installs OrcaSlicer; farm3d never bundles it.** farm3d looks
+for an engine in this order and stops at the first step that finds a
+supported one:
 
 1. the configured `engine_path`;
 2. `orca-slicer` on `PATH`;
 3. on Linux, `*OrcaSlicer*.AppImage` in `~/Applications`, `~/.local/bin`,
-   and `~/Downloads`, newest parsed version first, a release before a
-   prerelease of the same version.
+   and `~/Downloads`. Every match is probed, and the newest probed version
+   wins, a release before a prerelease of the same version.
 
 Discovery never scans the disk. Paths reach the backend only through
 Rust-owned native pickers, never from the frontend.
@@ -83,8 +84,10 @@ in every revision's invocation manifest.
 
 **Supervision.** The process runs in its own process group, with
 `PR_SET_PDEATHSIG(SIGTERM)` on Linux so it dies with farm3d. Cancel and the
-30-minute timeout send SIGTERM to the group, then SIGKILL after 5 s, and
-only after a SIGKILL look for a stale FUSE mount of the engine's AppImage.
+30-minute timeout send SIGTERM to the group, then SIGKILL after 5 s. Only
+after a SIGKILL does farm3d look for a stale FUSE mount of the engine's
+AppImage, and it unmounts only a mount that appeared during the run, so a
+user's own open OrcaSlicer is never touched.
 At most one OrcaSlicer runs at a time. On restart, queued and running
 operations become `interrupted` and their work directories are removed;
 published revisions are never touched.

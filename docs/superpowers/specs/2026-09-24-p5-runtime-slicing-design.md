@@ -200,8 +200,8 @@ These terms are added to or refined in `CONTEXT.md`:
   2. `orca-slicer` on `PATH`.
   3. On Linux, every `~/Applications/*OrcaSlicer*.AppImage`,
      `~/.local/bin/*OrcaSlicer*.AppImage`, and
-     `~/Downloads/*OrcaSlicer*.AppImage`. When several match, the newest
-     parsed version wins, and a release beats a prerelease of the same
+     `~/Downloads/*OrcaSlicer*.AppImage`. Every match is probed, and the
+     newest probed version wins, and a release beats a prerelease of the same
      version. Native-package install paths (AUR, `.deb`) are added only
      when there is evidence of them. Until then, those users rely on
      `PATH` or **Choose engine…**.
@@ -247,10 +247,11 @@ These terms are added to or refined in `CONTEXT.md`:
     build, spike "Open decision"), the source is `presetsUnreadable`.
 - **Runtime state** (`SlicerRuntimeStatus`) has these parts:
   - `engine`: one of `available { version, channel, source: "configured" |
-    "path" | "wellKnown", executableName }`, `notFound`,
-    `unsupportedVersion { version }`, or `probeFailed { reason }`.
+    "path" | "wellKnown", executableName, path, extractAndRun }`,
+    `notFound`, `unsupportedVersion { version, executableName }`, or
+    `probeFailed { reason, executableName }`.
   - `presetSource`: one of `available { version, channel, origin: "engine"
-    | "configured", vendorCount }`, `notConfigured`, `presetsUnreadable`,
+    | "configured", vendorCount, path }`, `notConfigured`, `presetsUnreadable`,
     or `unavailable { reason, origin }`. `origin` says whether the
     unavailable source was the engine or a configured one, so **Use the
     engine's presets** is offered only for a configured source (Task 15
@@ -1137,7 +1138,7 @@ Settings section" means this dialog. It shows:
 ### D23. Test infrastructure and fixtures
 
 - **`fake-orca`** is a test-only binary target (`src-tauri/src/bin/
-  fake-orca.rs`, built only under `cfg(test)` or feature `test-support`,
+  fake-orca.rs`, a `[[bin]]` with `required-features = ["test-support"]`,
   and excluded from packages by `assert-package-contents.sh`). It
   reproduces the spike's observed contract:
   - `--help` prints `OrcaSlicer-<FAKE_ORCA_VERSION>:` to stdout and
@@ -1194,7 +1195,8 @@ farm3d package (or its AppImage, see spike Gate J) slicing the tracer with
 the installed v2.4.2 AppImage.
 
 Windows and macOS builds must compile the process layer: a Job Object on
-Windows, and on macOS a `setsid` process group with no PDEATHSIG, relying
+Windows, and on macOS a process group (`process_group(0)`) with no
+PDEATHSIG, relying
 on startup recovery. They make no runtime claim. The Linux-only FIFO path
 is behind `cfg(target_os = "linux")`, and the other platforms report
 indeterminate progress.
@@ -1461,9 +1463,12 @@ are deleted.
      work directory.
    - A PDEATHSIG test shows OrcaSlicer exits when its parent is killed.
    - Every prior revision is byte-identical.
-8. **Failure.** Each D11 row is produced by fake-orca and mapped. The log
-   is stored and redacted, with no absolute work, engine, or home path.
-   Success-without-output fails.
+8. **Failure.** Each engine-produced D11 row is produced by fake-orca and
+   mapped. `storageFailed` is covered by
+   `a_slice_that_cannot_be_stored_fails_with_its_log` and `internalError`
+   by `a_worker_panic_fails_the_slice_with_internal_error_and_the_queue_continues`.
+   The log is stored and redacted, with no absolute work, engine, or home
+   path. Success-without-output fails.
 9. **Stale source.** A linked-source change marks the Preparation stale.
    `start_slice` refuses without `continueWithSourceRevision`, and succeeds
    with it. Reload keeps the transforms of surviving objects.
