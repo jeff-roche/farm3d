@@ -6,7 +6,15 @@
 //! which goes through the fault proxy. The harness drives and resets the
 //! simulator on `..._CONTROL`, which does not, so a fault never blocks the
 //! reset that clears it.
+//!
+//! [`Variant::Single`] also has a switchable [`Mode`] (`sim/simctl variant
+//! moonraker default|no-bed|apikey`): a no-bed printer, or a Moonraker that
+//! no longer trusts loopback, so a request needs an API key. [`reset`]
+//! always restores [`Mode::Default`].
+//!
+//! [`reset`]: MoonrakerSim::reset
 
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use farm3d_lib::connections::moonraker::MoonrakerConnection;
@@ -15,7 +23,7 @@ use serde_json::{json, Value};
 
 use super::http::{self, Url};
 use super::toxiproxy::{Proxy, Toxiproxy};
-use super::{sim_url, simctl, wait_until, Skip};
+use super::{sim_url, simctl, simctl_capture, wait_until, Skip};
 
 /// Klipper's first "ready" after a container restart takes a few seconds on
 /// simulavr; allow for a slow CI runner.
@@ -55,12 +63,40 @@ impl Variant {
     }
 }
 
+/// The single-extruder simulator's mode (`sim/simctl variant moonraker
+/// ...`). Only [`Variant::Single`] supports switching; the four-toolhead
+/// sim always stays [`Mode::Default`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// The full printer, loopback trusted.
+    Default,
+    /// `[heater_bed]` dropped from `printer.cfg`: Moonraker reports it as a
+    /// missing object, not a zeroed one.
+    NoBed,
+    /// Loopback no longer trusted; every request needs the API key.
+    ApiKey,
+}
+
+impl Mode {
+    fn simctl_name(self) -> &'static str {
+        match self {
+            Mode::Default => "default",
+            Mode::NoBed => "no-bed",
+            Mode::ApiKey => "apikey",
+        }
+    }
+}
+
 pub struct MoonrakerSim {
     pub variant: Variant,
     /// What the adapter connects to (through the fault proxy).
     pub target: Url,
     control: Url,
     pub faults: Toxiproxy,
+    mode: Cell<Mode>,
+    /// Set once [`Mode::ApiKey`] is selected; Moonraker's key never changes
+    /// across restarts, so it stays cached rather than re-read every call.
+    api_key: RefCell<Option<String>>,
 }
 
 impl MoonrakerSim {
@@ -88,6 +124,8 @@ impl MoonrakerSim {
             target,
             control,
             faults,
+            mode: Cell::new(Mode::Default),
+            api_key: RefCell::new(None),
         })
     }
 
@@ -102,17 +140,61 @@ impl MoonrakerSim {
         }
     }
 
-    /// The production adapter, aimed at the simulator. The sim trusts
-    /// loopback clients, so there is no API key.
+    /// The production adapter, aimed at the simulator. Carries the API key
+    /// in [`Mode::ApiKey`]; the sim trusts loopback clients otherwise, so
+    /// there is none.
     pub fn connection(&self) -> MoonrakerConnection {
-        MoonrakerConnection::new(self.config(), None)
+        MoonrakerConnection::new(self.config(), self.api_key.borrow().clone())
     }
 
-    /// Returns the simulator to its baseline: no faults, Klipper ready, every
-    /// heater target at 0. Klipper's FIRMWARE_RESTART cannot reset
-    /// simulavr's emulated MCU, so a Klipper that is not ready is recovered
-    /// by restarting its container.
+    /// Switches [`Variant::Single`] to `mode` (`sim/simctl variant
+    /// moonraker ...`) and waits for Moonraker to report Klipper ready
+    /// again. Only the single-extruder simulator supports this.
+    pub fn set_mode(&self, mode: Mode) {
+        assert_eq!(
+            self.variant,
+            Variant::Single,
+            "only the single-extruder simulator has switchable modes"
+        );
+        simctl(&["variant", "moonraker", mode.simctl_name()])
+            .unwrap_or_else(|error| panic!("{error}"));
+        if mode == Mode::ApiKey {
+            let env =
+                simctl_capture(&["env"]).unwrap_or_else(|error| panic!("simctl env: {error}"));
+            let key = env
+                .lines()
+                .find_map(|line| line.strip_prefix("export FARM3D_SIM_MOONRAKER_API_KEY="))
+                .unwrap_or_else(|| {
+                    panic!("simctl env did not export FARM3D_SIM_MOONRAKER_API_KEY in apikey mode")
+                })
+                .to_string();
+            *self.api_key.borrow_mut() = Some(key);
+        } else {
+            *self.api_key.borrow_mut() = None;
+        }
+        // Set before checking readiness: klippy_state() needs the key once
+        // mode is ApiKey, and needs to stop sending one once mode is
+        // anything else.
+        self.mode.set(mode);
+        // `simctl variant` is idempotent: it skips the restart when the
+        // simulator is already in `mode`. That means it does *not* recover
+        // Klipper from an unrelated non-ready state (e.g. a prior test's
+        // emergency_stop left it "shutdown"), so do that here too, the same
+        // way `reset` does.
+        if self.klippy_state().as_deref() != Some("ready") {
+            self.restart_klipper();
+        }
+        self.wait_ready();
+    }
+
+    /// Returns the simulator to its baseline: default mode, no faults,
+    /// Klipper ready, every heater target at 0. Klipper's FIRMWARE_RESTART
+    /// cannot reset simulavr's emulated MCU, so a Klipper that is not ready
+    /// is recovered by restarting its container.
     pub fn reset(&self) {
+        if self.variant == Variant::Single {
+            self.set_mode(Mode::Default);
+        }
         self.faults.reset();
         if self.klippy_state().as_deref() != Some("ready") {
             self.restart_klipper();
@@ -135,7 +217,12 @@ impl MoonrakerSim {
     }
 
     pub fn klippy_state(&self) -> Option<String> {
-        http::get_json(&self.control, "/server/info", &[])
+        let key = self.api_key.borrow();
+        let headers: Vec<(&str, &str)> = match (self.mode.get(), key.as_deref()) {
+            (Mode::ApiKey, Some(key)) => vec![("X-Api-Key", key)],
+            _ => Vec::new(),
+        };
+        http::get_json(&self.control, "/server/info", &headers)
             .ok()
             .and_then(|info| info["result"]["klippy_state"].as_str().map(str::to_string))
     }

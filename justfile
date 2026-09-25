@@ -44,9 +44,6 @@ moonraker-live mode="probe":
     cargo test --manifest-path src-tauri/Cargo.toml --test a0_moonraker_live "$test" \
         -- --ignored --exact --nocapture
 
-# Manage the local Klipper + Moonraker simulator (build, up [trusted|apikey], down, status, restart klipper, ...)
-moonraker-sim *args:
-    scripts/moonraker-sim/sim.sh {{ args }}
 
 # Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
 test-octoprint-live:

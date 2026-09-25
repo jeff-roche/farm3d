@@ -66,7 +66,7 @@ services:
 
   moonraker:
     <<: *moonraker
-    command: ["-d", "/opt/printer_data", "-c", "/farm3d-sim/moonraker.conf"]
+    entrypoint: ["/farm3d-sim/moonraker-entrypoint.sh"]
     depends_on:
       klipper:
         condition: service_healthy
@@ -97,7 +97,9 @@ services:
 
   moonraker-multi:
     <<: *moonraker
-    command: ["-d", "/opt/printer_data", "-c", "/farm3d-sim/moonraker-multi.conf"]
+    entrypoint: ["/farm3d-sim/moonraker-entrypoint.sh"]
+    environment:
+      FARM3D_SIM_MOONRAKER_CONF: moonraker-multi.conf
     depends_on:
       klipper-multi:
         condition: service_healthy

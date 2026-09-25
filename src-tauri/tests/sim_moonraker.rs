@@ -19,10 +19,11 @@ mod sim;
 
 use std::time::Duration;
 
+use farm3d_lib::connections::moonraker::MoonrakerConnection;
 use farm3d_lib::connections::{
     ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection, MOONRAKER_KIND,
 };
-use sim::moonraker::{MoonrakerSim, Variant};
+use sim::moonraker::{Mode, MoonrakerSim, Variant};
 use sim::toxiproxy::Proxy;
 use tokio::sync::mpsc;
 
@@ -303,6 +304,66 @@ async fn a_response_cut_mid_stream_fails_the_probe_without_hanging() {
         "{:?}",
         started.elapsed()
     );
+
+    sim.reset();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+async fn a_no_bed_printer_reports_the_bed_as_absent_not_zero() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    sim.set_mode(Mode::NoBed);
+
+    let objects = sim.objects();
+    assert!(
+        !objects.iter().any(|o| o == "heater_bed"),
+        "heater_bed should be gone from {objects:?}"
+    );
+
+    let mut stream = Stream::open(&sim);
+    let observation = stream
+        .wait_for(
+            "telemetry from the no-bed printer",
+            Duration::from_secs(15),
+            |o| matches!(o, ConnectionObservation::Telemetry(_)),
+        )
+        .await;
+    let ConnectionObservation::Telemetry(telemetry) = observation else {
+        unreachable!()
+    };
+    // Absent, not a zeroed reading: a real bed at 0 deg C would also show
+    // `Some(0.0)`, so only `None` proves Moonraker never reported the object.
+    assert_eq!(telemetry.bed_temp_c, None, "{telemetry:?}");
+    assert_eq!(telemetry.bed_target_c, None, "{telemetry:?}");
+    assert!(telemetry.nozzle_temp_c.is_some(), "{telemetry:?}");
+
+    stream.task.abort();
+    sim.reset();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+async fn apikey_mode_refuses_no_key_and_accepts_the_right_one() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    sim.set_mode(Mode::ApiKey);
+
+    let no_key = MoonrakerConnection::new(sim.config(), None);
+    let probe = no_key.probe().await;
+    assert!(
+        matches!(probe, Err(ConnectionError::Auth(_))),
+        "probe with no key in apikey mode: {probe:?}"
+    );
+
+    let probe = sim
+        .connection()
+        .probe()
+        .await
+        .expect("probe with the simulator's own API key");
+    assert_eq!(probe.state, "ready");
 
     sim.reset();
 }

@@ -32,6 +32,19 @@ done
 
 # FARM3D_SIM_PRINTER_CFG picks the simulated printer (a file in this
 # directory), so one image serves every Moonraker variant.
+base="/farm3d-sim/${FARM3D_SIM_PRINTER_CFG:-printer.cfg}"
+
+# `sim/simctl variant moonraker no-bed` writes this marker into the
+# writable `run` volume (never a tracked file); "no-bed" strips
+# [heater_bed] so Moonraker reports it as a missing object, not a zeroed
+# one. Same awk rule the retired scripts/moonraker-sim/sim.sh used.
+mode="$(cat "$data/run/variant" 2>/dev/null || true)"
+rendered="$data/run/printer.rendered.cfg"
+if [ "$mode" = no-bed ]; then
+    awk '/^\[heater_bed\]/ { skip = 1; next } /^\[/ { skip = 0 } !skip' "$base" >"$rendered"
+else
+    cp "$base" "$rendered"
+fi
+
 exec /opt/venv/bin/python /opt/klipper/klippy/klippy.py \
-    -I "$data/run/klipper.tty" -a "$data/run/klipper.sock" \
-    "/farm3d-sim/${FARM3D_SIM_PRINTER_CFG:-printer.cfg}"
+    -I "$data/run/klipper.tty" -a "$data/run/klipper.sock" "$rendered"

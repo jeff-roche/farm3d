@@ -7,6 +7,21 @@ supervisor, `farm3d-event-v1` status events, and status backfill. Upload,
 print control, artifact identity, and cameras belong to P6 and were not
 exercised.
 
+**Note (P6):** this record is historical; its steps below still say
+`scripts/moonraker-sim/` and `just moonraker-sim`, which P6 retired into
+the shared `sim/` harness. `just moonraker-sim build|up|down|status|restart
+klipper` is now `just sim-up` / `sim-down` / `sim-status` / `just sim fault
+klipper-restart moonraker`; `up apikey` and `up trusted no-bed` are now
+`sim/simctl variant moonraker apikey` and `... no-bed`; `up trusted
+multi-tool` is the always-running `moonraker-multi` simulator;
+`moonraker-sim api-key` is `sim/simctl env` (which exports
+`FARM3D_SIM_MOONRAKER_API_KEY` in `apikey` mode); and
+`FARM3D_MOONRAKER_RESTART_CMD="scripts/moonraker-sim/sim.sh restart
+klipper"` is now `FARM3D_MOONRAKER_RESTART_CMD="sim/simctl fault
+klipper-restart moonraker"`. `netfault.py`'s `drop`, `freeze`, and `pass`
+map to Toxiproxy's `fault host-down` (disables the proxy), `fault hang`,
+and `fault clear` (removes the hang toxic and re-enables the proxy).
+
 The repo owner ruled that a containerised Klipper and Moonraker with a
 simulated board counts as live evidence for this issue. Every evidence item
 below names the target that produced it.
