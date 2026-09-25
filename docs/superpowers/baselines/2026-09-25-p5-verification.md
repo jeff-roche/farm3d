@@ -383,7 +383,7 @@ Fixes for the known issues left after the final fix round, on branch
 ### Operation-log retention
 
 For each Preparation, only the 5 most recent failed or cancelled
-operations (by end time, then id) keep their logs
+operations that have a log (by end time, then id) keep it
 (`KEPT_UNPUBLISHED_LOGS` in `slicing/repository.rs`). Older ones keep
 their rows, with `log_sha256` set to NULL. Their blobs are marked through
 `mark_unreferenced_blobs` and unlinked after commit by
@@ -393,8 +393,9 @@ recovery runs it once over every Preparation, and startup then releases
 the freed blobs. Succeeded, queued, running, and interrupted operations
 are never touched, and neither are Slice Revision logs.
 
-A log-less failed or cancelled operation (for example, one cancelled
-before it spawned) counts toward the 5, as the ruling reads. The schema
+A failed or cancelled operation with no log (for example, one cancelled
+before it spawned) doesn't count toward the 5, so it never evicts a real
+log (`an_operation_without_a_log_never_evicts_one`). The schema
 can't tell a pruned log from one that was never written, so the operation
 panel's empty-log note now reads "No log is kept for this attempt." for
 both.

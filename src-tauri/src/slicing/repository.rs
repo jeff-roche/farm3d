@@ -563,13 +563,14 @@ pub fn transition_operation(
     load_operation(tx, id)?.ok_or_else(|| not_found(id))
 }
 
-/// How many of a Preparation's failed or cancelled operations keep their
-/// logs: the most recent ones, by end time and then id.
+/// How many logs a Preparation's failed or cancelled operations keep: those
+/// of the most recent operations that have one, by end time and then id.
+/// An operation with no log never takes a place.
 pub const KEPT_UNPUBLISHED_LOGS: u32 = 5;
 
 /// Drops the logs of every failed or cancelled operation of Preparation
 /// `preparation_id` (of every Preparation, when `None`) beyond the
-/// [`KEPT_UNPUBLISHED_LOGS`] most recent. The rows stay, with no log, and
+/// [`KEPT_UNPUBLISHED_LOGS`] most recent that have a log. The rows stay, with no log, and
 /// each dropped blob is marked for cleanup when nothing else refers to it;
 /// after commit, [`ContentStore::release_unreferenced`] unlinks it.
 /// Succeeded, queued, running, and interrupted operations, and Slice
@@ -589,9 +590,10 @@ pub fn prune_unpublished_logs(
                         ) AS recency
                  FROM slice_operations
                  WHERE state IN ('failed', 'cancelled')
+                   AND log_sha256 IS NOT NULL
                    AND (?1 IS NULL OR preparation_id = ?1)
              )
-             WHERE recency > ?2 AND log_sha256 IS NOT NULL",
+             WHERE recency > ?2",
         )?;
         let rows = statement
             .query_map(params![preparation_id, KEPT_UNPUBLISHED_LOGS], |row| {
@@ -2256,6 +2258,31 @@ mod tests {
             log_of(&storage, "sop-other"),
             Some(log_hash(90)),
             "another Preparation's log is untouched"
+        );
+    }
+
+    #[test]
+    fn an_operation_without_a_log_never_evicts_one() {
+        let (_temp, _lease, storage) = seeded();
+        with_preparation(&storage);
+        for n in 1..=5 {
+            fail_with_log(&storage, "prp-a", &format!("sop-{n}"), n);
+        }
+        queue(&storage, "sop-cancel");
+
+        transition(
+            &storage,
+            "sop-cancel",
+            OperationTransition::Cancel { log_sha256: None },
+        )
+        .expect("cancel");
+
+        for n in 1..=5 {
+            assert_eq!(log_of(&storage, &format!("sop-{n}")), Some(log_hash(n)));
+        }
+        assert_eq!(
+            count(&storage, "SELECT COUNT(*) FROM pending_blob_cleanup"),
+            0
         );
     }
 
