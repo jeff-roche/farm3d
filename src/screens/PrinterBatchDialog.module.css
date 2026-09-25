@@ -75,11 +75,6 @@
   gap: 0.5rem;
 }
 
-.checkboxField {
-  flex: 0 0 auto;
-  align-self: center;
-}
-
 .fileInput {
   display: none;
 }

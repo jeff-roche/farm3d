@@ -470,6 +470,33 @@ fn a_row_duplicating_an_active_printers_host_is_created_without_a_connection() {
 // --- Connection validation --------------------------------------------------
 
 #[test]
+fn a_tls_row_keeps_the_printer_but_drops_its_connection() {
+    // A0.1 (#9), decision B4: no adapter supports TLS yet.
+    let fixture = fixture();
+    let result = run_batch(
+        &fixture,
+        batch_body(
+            &batch_id(),
+            shared_block(json!({})),
+            None,
+            true,
+            json!([{"rowId": "r1", "name": "A", "connection":
+                {"kind": "moonraker", "host": "ok.local", "port": 7125, "useTls": true, "credential": none()}}]),
+        ),
+    )
+    .unwrap();
+
+    let r1 = row(&result, "r1");
+    assert_eq!(r1["outcome"], "createdSetupIncomplete");
+    assert_eq!(error_codes(r1), ["VALIDATION"]);
+    assert_eq!(r1["errors"][0]["fieldPath"], "rows[0].connection.useTls");
+    assert_eq!(
+        r1["errors"][0]["message"],
+        "TLS connections are not supported yet."
+    );
+}
+
+#[test]
 fn connection_validation_errors_keep_the_row_but_drop_its_connection() {
     let fixture = fixture();
     let result = run_batch(

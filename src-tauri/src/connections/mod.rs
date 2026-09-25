@@ -25,6 +25,24 @@ use crate::printers::operational::{
 pub const MOONRAKER_KIND: &str = "moonraker";
 pub const DEFAULT_MOONRAKER_PORT: u16 = 7125;
 
+/// No adapter speaks TLS yet: the WebSocket client is built without a TLS
+/// backend (A0.1, #9, decision B4). Every entry point that accepts a
+/// Connection rejects `useTls` with this message, so a user sees why rather
+/// than a Connection that can only ever be "unreachable".
+pub const TLS_UNSUPPORTED_MESSAGE: &str = "TLS connections are not supported yet.";
+
+/// Rejects a TLS Connection as a validation error at `useTls`.
+pub fn reject_tls(use_tls: bool) -> Result<(), crate::contracts::command::CommandError> {
+    if use_tls {
+        Err(crate::contracts::command::CommandError::validation_at(
+            "useTls",
+            TLS_UNSUPPORTED_MESSAGE,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/ConnectionConfig.ts")]

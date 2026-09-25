@@ -43,7 +43,7 @@ const CREDENTIAL_LABELS = { none: "None", shared: "Shared", row: "Per row" } as 
 
 const HEADERS: Record<BatchRowsTableProps["mode"], string[]> = {
   edit: ["Name", "Location", "Receives", ""],
-  connect: ["Name", "Location", "Protocol", "Host", "Port", "TLS", "Credential", "Receives"],
+  connect: ["Name", "Location", "Protocol", "Host", "Port", "Credential", "Receives"],
   results: ["Name", "Location", "Host", "Port", "Outcome", "Details"],
 };
 
@@ -285,9 +285,6 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
                       <Show when={!locked()} fallback={<span class={styles.text}>{row.port ?? ""}</span>}>
                         {portInput(row, index())}
                       </Show>
-                    </div>
-                    <div role="cell" class={styles.cell}>
-                      <span class={styles.text}>{row.useTls ? "On" : "Off"}</span>
                     </div>
                     <div role="cell" class={styles.cell}>
                       <span class={styles.text}>{CREDENTIAL_LABELS[row.credential.source]}</span>

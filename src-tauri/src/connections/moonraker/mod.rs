@@ -101,6 +101,13 @@ async fn connect(
     config: &ConnectionConfig,
     api_key: Option<&str>,
 ) -> Result<Socket, ConnectionError> {
+    // Validation rejects new TLS Connections; this refuses one stored before
+    // that, with the reason instead of a TLS-less handshake failure.
+    if config.use_tls {
+        return Err(ConnectionError::Protocol(
+            crate::connections::TLS_UNSUPPORTED_MESSAGE.to_string(),
+        ));
+    }
     let request = upgrade_request(config, api_key)?;
     let connecting = tokio_tungstenite::connect_async(request);
     match tokio::time::timeout(CONNECT_TIMEOUT, connecting).await {
@@ -354,6 +361,18 @@ mod tests {
             websocket_url(&config(true)),
             "wss://voron.local:7125/websocket"
         );
+    }
+
+    #[tokio::test]
+    async fn a_stored_tls_connection_is_refused_with_a_clear_reason_before_connecting() {
+        // A0.1 (#9), decision B4. New TLS submissions are rejected at
+        // validation; this covers a Connection stored before that.
+        let connection = MoonrakerConnection::new(config(true), None);
+        let expected =
+            ConnectionError::Protocol(crate::connections::TLS_UNSUPPORTED_MESSAGE.to_string());
+        assert_eq!(connection.probe().await, Err(expected.clone()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        assert_eq!(connection.subscribe(tx).await, Err(expected));
     }
 
     #[test]

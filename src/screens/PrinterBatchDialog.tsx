@@ -2,7 +2,6 @@ import { createEffect, createMemo, createResource, createSignal, For, Match, on,
 import { createStore } from "solid-js/store";
 import {
   Button,
-  Checkbox,
   Dialog,
   RadioGroup,
   Select,
@@ -168,7 +167,6 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   const [sharedCredential, setSharedCredential] = createSignal("");
   const [applyKind, setApplyKind] = createSignal(KINDS[0].value);
   const [applyPort, setApplyPort] = createSignal("");
-  const [applyTls, setApplyTls] = createSignal(false);
   const [applyCredential, setApplyCredential] = createSignal<CredentialSource>("none");
   const [candidates, setCandidates] = createSignal<DiscoveredPrinter[]>([]);
   const [discovery, setDiscovery] = createSignal<"idle" | "scanning" | "done" | "failed">("idle");
@@ -214,7 +212,6 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setSharedCredential("");
     setApplyKind(KINDS[0].value);
     setApplyPort("");
-    setApplyTls(false);
     setApplyCredential("none");
     setCandidates([]);
     setDiscovery("idle");
@@ -336,7 +333,6 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
       (row) => ({
         protocol: applyKind(),
         port,
-        useTls: applyTls(),
         credential:
           source === "row"
             ? { source: "row" as const, value: row.credential.source === "row" ? row.credential.value : "" }
@@ -771,9 +767,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                     value={CREDENTIAL_SOURCES.find((option) => option.value === applyCredential())}
                     onChange={(option: (typeof CREDENTIAL_SOURCES)[number]) => setApplyCredential(option.value)}
                   />
-                  <Checkbox checked={applyTls()} onChange={setApplyTls} class={styles.checkboxField}>
-                    Use TLS
-                  </Checkbox>
+                  {/* No "Use TLS" option: no adapter supports TLS yet (A0.1, #9, decision B4). */}
                 </div>
                 <div>
                   <Button

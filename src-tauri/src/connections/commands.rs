@@ -297,6 +297,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
             "The port must be positive.",
         ));
     }
+    crate::connections::reject_tls(submission.use_tls)?;
     if submission.kind != MOONRAKER_KIND {
         return Err(CommandError::unsupported_adapter(submission.kind));
     }
@@ -538,6 +539,7 @@ pub async fn test_printer_connection<R: tauri::Runtime>(
             "The port must be positive.",
         ));
     }
+    crate::connections::reject_tls(submission.use_tls)?;
     let services = bootstrap.ready()?;
     let existing = PrinterRepository::new(Arc::clone(&services.storage))
         .get(&id)
