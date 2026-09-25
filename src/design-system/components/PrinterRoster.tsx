@@ -6,6 +6,8 @@ import styles from "./PrinterRoster.module.css";
 export interface PrinterRosterEntry {
   id: string;
   name: string;
+  /** A secondary fact shown after the name, e.g. where the Printer is. */
+  detail?: string;
   stateLabel: string;
 }
 
@@ -103,7 +105,12 @@ export function PrinterRoster(props: PrinterRosterProps) {
               <For each={props.printers.slice(0, ROSTER_LIMIT)}>
                 {(printer) => (
                   <li class={styles.row}>
-                    <span class={styles.name}>{printer.name}</span>
+                    <span class={styles.name}>
+                      {printer.name}
+                      <Show when={printer.detail}>
+                        {(detail) => <span class={styles.detail}> · {detail()}</span>}
+                      </Show>
+                    </span>
                     <span class={styles.state}>{printer.stateLabel}</span>
                   </li>
                 )}

@@ -46,6 +46,7 @@ export function Showcase() {
   const [projects, setProjects] = createSignal(["Brackets"]);
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
+  const [groupedTarget, setGroupedTarget] = createSignal<string | null>(null);
   const [dropActive, setDropActive] = createSignal(false);
   const [viewMode, setViewMode] = createSignal<"grid" | "list">("grid");
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
@@ -162,7 +163,8 @@ export function Showcase() {
           <Select
             label="Grouped"
             placeholder="Choose a target"
-            value={null}
+            value={groupedTarget()}
+            onChange={setGroupedTarget}
             groups={[
               { label: "Printers", options: ["CC Left", "CC Right"] },
               { label: "Printer profiles", options: ["Elegoo Centauri Carbon 0.4 nozzle"] },
@@ -323,7 +325,7 @@ export function Showcase() {
             label="offline Printers"
             count={3}
             printers={[
-              { id: "1", name: "Atlas", stateLabel: "Offline" },
+              { id: "1", name: "Atlas", detail: "Bench 1", stateLabel: "Offline" },
               { id: "2", name: "Forge", stateLabel: "Offline" },
               { id: "3", name: "Nova", stateLabel: "Offline" },
             ]}

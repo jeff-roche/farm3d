@@ -185,7 +185,7 @@ describe("Select groups and an empty controlled value", () => {
     await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Printers")).toBeInTheDocument();
     expect(screen.getByText("Printer profiles")).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("option", { name: "Centauri Carbon 0.4" }));
+    await fireEvent.pointerUp(screen.getByRole("option", { name: "Centauri Carbon 0.4" }), { pointerType: "mouse", button: 0 });
     expect(onChange).toHaveBeenCalledWith("Centauri Carbon 0.4");
   });
 
@@ -509,6 +509,19 @@ const rosterPrinters = Array.from({ length: 10 }, (_, index) => ({
 }));
 
 describe("PrinterRoster", () => {
+  it("shows each Printer's detail beside its state", async () => {
+    render(() => (
+      <PrinterRoster
+        label="matching Printers"
+        count={1}
+        printers={[{ id: "a", name: "CC 1", detail: "Bench 1", stateLabel: "Ready" }]}
+      />
+    ));
+    screen.getByLabelText("1 matching Printers").focus();
+    expect(await screen.findByText("· Bench 1")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
   it("opens on keyboard focus and returns focus after Escape", async () => {
     render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
 
