@@ -5,7 +5,7 @@ use super::credentials::{
     credential_ref_for, CredentialBackend, CredentialStore, CredentialStoreKind,
 };
 use super::discovery::{discover, DiscoveredPrinter};
-use super::{ConnectionConfig, ProbeResult, MOONRAKER_KIND};
+use super::{ConnectionConfig, ProbeResult};
 use crate::catalog::resolve::resolve_printer;
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
 use crate::persistence::Storage;
@@ -297,7 +297,7 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
             "The port must be positive.",
         ));
     }
-    if submission.kind != MOONRAKER_KIND {
+    if !super::is_supported_kind(&submission.kind) {
         return Err(CommandError::unsupported_adapter(submission.kind));
     }
     let services = bootstrap.ready()?;
@@ -711,6 +711,7 @@ fn retry_pending_credential_cleanup_locked(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connections::MOONRAKER_KIND;
     use crate::contracts::command::ErrorCode;
     use std::cell::Cell;
     use std::path::Path;

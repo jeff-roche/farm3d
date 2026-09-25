@@ -9,8 +9,8 @@
 //! cue to reconnect.
 
 use crate::connections::{
-    ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    ProbeResult,
+    send_health, ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState,
+    PrinterConnection, ProbeResult,
 };
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
@@ -274,19 +274,6 @@ fn liveness_interval() -> tokio::time::Interval {
         tokio::time::Instant::now() + LIVENESS_INTERVAL,
         LIVENESS_INTERVAL,
     )
-}
-
-/// Returns true when supervision has dropped the receiver.
-pub(crate) async fn send_health(
-    tx: &Sender<ConnectionObservation>,
-    state: ConnectionState,
-) -> bool {
-    tx.send(ConnectionObservation::Health {
-        state,
-        observed_at: chrono::Utc::now().to_rfc3339(),
-    })
-    .await
-    .is_err()
 }
 
 #[cfg(test)]

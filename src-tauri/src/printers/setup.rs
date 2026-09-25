@@ -10,7 +10,6 @@ use crate::catalog::resolve::{resolve_catalog_ref, CatalogStatus};
 use crate::catalog::Catalog;
 use crate::connections::credentials::CredentialBackend;
 use crate::connections::supervisor::{ConnectionManager, PrinterSetupFacts};
-use crate::connections::MOONRAKER_KIND;
 
 use super::repository::PrinterRepository;
 use super::StoredPrinter;
@@ -45,7 +44,7 @@ pub fn derive_setup_facts(
             gaps.push(SetupGap::MissingConnection);
             false
         }
-        Some(connection) if connection.kind != MOONRAKER_KIND => {
+        Some(connection) if !crate::connections::is_supported_kind(&connection.kind) => {
             gaps.push(SetupGap::UnsupportedAdapter);
             false
         }
@@ -154,7 +153,7 @@ mod tests {
     use crate::catalog::{BedShape, CatalogModel, CatalogVariant};
     use crate::connections::credentials::CredentialStore;
     use crate::connections::status_repository::StatusRepository;
-    use crate::connections::ConnectionConfig;
+    use crate::connections::{ConnectionConfig, MOONRAKER_KIND};
     use crate::printers::operational::OperationalState;
     use crate::printers::CatalogRef;
     use chrono::{TimeZone, Utc};
@@ -243,7 +242,8 @@ mod tests {
         let catalog = a_catalog();
         let mut printer = a_printer();
         printer.connection = Some(ConnectionConfig {
-            kind: "octoprint".to_string(),
+            // ElegooLink is still gated on its protocol spike.
+            kind: "elegoolink".to_string(),
             host: "printer.local".to_string(),
             port: 80,
             use_tls: false,
@@ -254,6 +254,24 @@ mod tests {
 
         assert!(!facts.has_usable_connection);
         assert_eq!(gaps, vec![SetupGap::UnsupportedAdapter]);
+    }
+
+    #[test]
+    fn an_octoprint_connection_is_usable() {
+        let catalog = a_catalog();
+        let mut printer = a_printer();
+        printer.connection = Some(ConnectionConfig {
+            kind: crate::connections::OCTOPRINT_KIND.to_string(),
+            host: "octopi.local".to_string(),
+            port: crate::connections::DEFAULT_OCTOPRINT_PORT,
+            use_tls: false,
+            credential_ref: None,
+        });
+
+        let (facts, gaps) = derive_setup_facts(&printer, &catalog);
+
+        assert!(facts.has_usable_connection);
+        assert_eq!(gaps, Vec::<SetupGap>::new());
     }
 
     #[test]
