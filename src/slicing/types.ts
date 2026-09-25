@@ -30,6 +30,7 @@ export type { InstanceDoc } from "../generated/contracts/domain/InstanceDoc";
 export type { InstanceTransform } from "../generated/contracts/domain/InstanceTransform";
 export type { LayFlatFace } from "../generated/contracts/domain/LayFlatFace";
 export type { MaterialFamily } from "../generated/contracts/domain/MaterialFamily";
+export type { PointMm } from "../generated/contracts/domain/PointMm";
 export type { PlateDoc } from "../generated/contracts/domain/PlateDoc";
 export type { PreparationDocument } from "../generated/contracts/domain/PreparationDocument";
 export type { PreparationRecord } from "../generated/contracts/domain/PreparationRecord";

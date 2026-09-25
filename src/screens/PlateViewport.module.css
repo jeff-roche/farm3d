@@ -1,0 +1,90 @@
+.viewport {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface);
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.125rem 0.25rem;
+  border-bottom: 1px solid var(--f3d-color-border);
+}
+
+.kbd {
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-label-size);
+  line-height: var(--f3d-type-label-line-height);
+}
+
+.divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 0.25rem 0.25rem;
+  background-color: var(--f3d-color-border);
+}
+
+.stage {
+  position: relative;
+  height: 20rem;
+  background-color: var(--f3d-color-bg);
+}
+
+.compact .stage {
+  height: 11rem;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+}
+
+.canvas:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.hidden {
+  display: none;
+}
+
+.unavailable {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+  text-align: center;
+}
+
+/* Read by assistive technology only (the Accessibility section). */
+.description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
