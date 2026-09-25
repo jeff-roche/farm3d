@@ -188,8 +188,10 @@ No simulator runs there.
 
 ## Design reference
 
-Tasks restate what they need from here. This section is the single place
-the design is argued.
+Tasks restate what they need from here. This section is where the design
+was argued. **The final decisions are in the Task 4 spec,
+`docs/superpowers/specs/2026-09-25-p6-connection-command-capabilities-design.md`, and where it differs from this section the spec wins.** Task 4 updated
+D2, D4, D5, D6, and D9 below, and Tasks 5–13, to match it.
 
 ### D1. Composable capability interfaces (the issue's decision gate)
 
@@ -217,17 +219,21 @@ The `host_operations` table (migration `0007_p6_host_operations.sql`):
 | Column | Meaning |
 |---|---|
 | `id` | `hop-<uuid>` |
+| `operation_id` | The client `operationId` that created the row (unique) |
 | `printer_id` | FK `ON DELETE RESTRICT` |
 | `kind` | `upload`, `start`, `pause`, `resume`, `cancel` |
 | `slice_revision_id` | FK `ON DELETE SET NULL` |
-| `gcode_sha256`, `gcode_size` | Copied from the revision |
-| `host_path` | `farm3d/<slr-id>.gcode` |
+| `source_host_operation_id` | Start only: the succeeded upload it starts |
+| `gcode_sha256`, `gcode_size` | Copied from the revision (upload, start) |
+| `host_path` | `farm3d/<slr-id>.gcode`; for pause/resume/cancel, the file the host was printing |
+| `history_mark` | Start only: newest history `job_id` before dispatch (`0` if empty) |
 | `endpoint_json` | `kind`, `host`, `port`, never a credential or `credentialRef` |
 | `state` | See D3 |
 | `failure_json`, `resolution_json` | Credential-free evidence |
-| `attempts`, `last_attempt_at`, `last_attempt_error` | Reconciliation bookkeeping |
+| `attempts`, `last_attempt_at`, `last_attempt_reason` | Reconciliation bookkeeping |
+| `no_longer_pending` | Klipper restarted after dispatch (informational) |
 | `abandoned_at`, `abandon_note` | D8 |
-| `created_at`, `dispatched_at`, `resolved_at` | Timestamps |
+| `created_at`, `dispatched_at`, `uncertain_since`, `resolved_at` | Timestamps. `dispatched_at` is committed just before connecting. |
 
 - **Write-ahead:** the row is committed as `dispatching` before any byte
   goes to the host.
@@ -242,11 +248,14 @@ The `host_operations` table (migration `0007_p6_host_operations.sql`):
 ```text
 dispatching ─ host confirms ─────────────> succeeded
 dispatching ─ definitive rejection ──────> failed
-dispatching ─ timeout / lost / restart ──> uncertain
+dispatching ─ timeout / lost ────────────> uncertain
+dispatching ─ startup, never sent ───────> failed{neverSent}
+dispatching ─ startup, sent ─────────────> uncertain
 uncertain ─ reconcile begins ────────────> reconciling
 reconciling ─ proved applied ────────────> succeeded
-reconciling ─ proved not applied ────────> failed{notApplied}
+reconciling ─ proved not applied (upload) > failed{notApplied | hostFileDiffers}
 reconciling ─ unreachable / inconclusive ─> uncertain
+reconciling ─ startup ───────────────────> uncertain
 uncertain ─ operator, risk-confirmed ────> abandoned
 ```
 
@@ -257,43 +266,53 @@ An unsupported capability never creates a row
 
 - The host path is `farm3d/<slr-id>.gcode` in the `gcodes` root.
 - Bytes are streamed from `open_verified(gcode_sha256)`.
-- The upload sends `checksum=<sha256>` if the host accepts it (spike Gate
-  B).
+- The upload always sends `checksum=<sha256>` (spike Gate B), but a 201
+  never proves the upload by itself: the executor then runs `locate`.
 - The request builder has **no way** to set Moonraker's `print` field.
-- `locate`: present at `host_path` with size == `gcode_size`. If the host
-  gives no hash, a download-and-hash must equal `gcode_sha256`. Size alone
-  is never proof.
-- A re-upload happens only as a new operator-initiated operation.
+- `locate` is `GET /server/files/gcodes/<host_path>`: 404 is absent; the
+  byte count must equal `gcode_size` **and** a streamed SHA-256 must equal
+  `gcode_sha256` (no Moonraker endpoint gives a hash). Size alone is never
+  proof; a download failure is inconclusive, never absent.
+- A re-upload happens only as a new operator-initiated operation. farm3d
+  never deletes or overwrites a host file by itself.
 
 ### D5. Reconciliation
 
 It runs at startup (after `restore_persisted_connections`), when the
 supervisor reports Online, and on **Check again**.
 
+Final rules (spec D5; the spike showed commands can apply late and
+uploads can arrive after the client gave up):
+
 | Kind | Proved applied | Proved not applied |
 |---|---|---|
-| upload | `locate` matches | absent at `host_path` |
-| start | `print_stats.filename == host_path` and the state is printing, paused, or complete, **or** a history job for `host_path` started after `dispatched_at` (the spike sets the skew tolerance) | host standby with no such history job |
-| pause/resume/cancel | observed state matches | observed state proves no effect |
+| upload | `locate` matches (size and SHA-256) | absent, or a different file, **and** at least 60 s (the settle period) since `uncertain_since` |
+| start | `print_stats` `printing`/`paused` with `filename == host_path`, **or** a history job for `host_path` with `job_id` (parsed hex) above the pre-dispatch `history_mark` **and** `start_time ≥ dispatched_at − 30 s` (parsed times). An interrupted job (`klippy_*`, `server_exit`) is applied (interrupted). | **never** by reconciliation; only a definitive response at dispatch |
+| pause | `paused` on the same file | never |
+| resume | `printing` or `complete` on the same file | never |
+| cancel | `cancelled` on the same file | never |
 
 Anything else stays `uncertain`. A host printing a *different* file stays
-`uncertain`. A start is never retried automatically. The raw
-`print_stats` `complete` is evidence that a start ran; it does not make
-the Printer Ready (answer 12).
+`uncertain`. A start is never retried automatically. `print_stats`
+`complete` with our filename is **not** proof on its own, since a previous
+print of the same file leaves the same state (answer 12); it needs the
+history rule. A Klipper restart after dispatch only means "no longer
+pending", never "not applied".
 
 ### D6. Capability matrix
 
 ```ts
 type CapabilityKey = "upload" | "start" | "pause" | "resume" | "cancel"
   | "hostState" | "artifactIdentity" | "camera";
+type CapabilityEvidence = { source: string; tier: "sim" | "readOnlyHardware"; verifiedHostVersions: string[] };
 type CapabilityState =
-  | { status: "supported" }
+  | { status: "supported"; evidence: CapabilityEvidence }   // per capability (spec D6)
   | { status: "unsupported"; reason: "adapter" | "notVerified" | "host"; detail: string };
 type PrinterCapabilities = {
   printerId: string;
   adapterKind: string | null;
-  evidence: { source: string; tier: "sim" | "readOnlyHardware"; verifiedHostVersions: string[] } | null;
   capabilities: Record<CapabilityKey, CapabilityState>;
+  hostFacts: HostFacts | null;
   observedAt: string | null;
 };
 ```
@@ -353,6 +372,11 @@ transaction.
     not in the offered set;
   - `START_PRECONDITION_CHANGED` when `priorState` no longer matches.
 - P6 sends no reset command (no `SDCARD_RESET_FILE`).
+- Before the write-ahead the start command also re-reads the host
+  (refusing `printing`/`paused` or a non-ready Klipper), reads the history
+  high-water mark, and re-verifies the staged bytes with `locate`
+  (`STAGED_ARTIFACT_INVALID`). Pause, resume, and cancel have a matching
+  control rule (`CONTROL_NOT_ALLOWED`). See spec D9.
 
 ## Global Constraints
 
@@ -479,8 +503,8 @@ implementer.
 **Docs:**
 
 - `docs/adr/0011-composable-connection-capabilities.md`;
-- the spec `docs/superpowers/specs/2026-09-2x-p6-connection-command-capabilities-design.md`;
-- the spike `docs/superpowers/baselines/2026-09-2x-p6-moonraker-command-spike.md`;
+- the spec `docs/superpowers/specs/2026-09-25-p6-connection-command-capabilities-design.md`;
+- the spike `docs/superpowers/baselines/2026-09-25-p6-moonraker-command-spike.md`;
 - `docs/verification/2026-09-2x-p6-moonraker-commands.md`;
 - `CONTEXT.md`.
 
@@ -707,7 +731,7 @@ just check-hosts
 
 **Files:**
 
-- `docs/superpowers/specs/2026-09-2x-p6-connection-command-capabilities-design.md`,
+- `docs/superpowers/specs/2026-09-25-p6-connection-command-capabilities-design.md`,
   in the P5 spec's shape: status, goal, scope and non-goals, vocabulary,
   decisions, backend model, wire types, commands and events, frontend,
   errors, accessibility, acceptance criteria, and delivery.
@@ -753,18 +777,31 @@ just check-hosts
     `PrintControl { start, pause, resume, cancel }`,
     `HostStateQuery { host_job_state, job_history }`, and
     `CameraDiscovery { cameras }`, all `async_trait` and `Send + Sync`;
-  - `CommandFailure { Definitive(String), Indeterminate(String) }`;
-  - `StagedArtifact { host_path, sha256, size }`;
-  - `HostJobState`, holding `print_stats` state and filename, and **every
-    tool** as `Vec<ToolTemperature>` plus the bed. Reuse #29's
-    `ToolTemperature`, and never keep a single "nozzle" field;
-  - the ts-rs types `CapabilityKey`, `CapabilityState`,
-    `PrinterCapabilities`, and `CapabilityEvidence { source, tier:
-    Sim | ReadOnlyHardware, verified_host_versions }`.
+  - the exact trait signatures and supporting types in spec D1:
+    `StagedArtifact { host_path, sha256, size }`, `LocateOutcome { Absent,
+    Matches, Differs { Size { actual } | Hash } }`, `CommandFailure {
+    Definitive(HostOperationFailureCode), Indeterminate { reason:
+    InconclusiveReason, no_longer_pending } }`, `HostJobState {
+    klippy_state, print: Option<PrintSnapshot>, tools, bed }`,
+    `PrintSnapshot`, `HistoryQuery`, `HistoryJob { job_id: u64, filename,
+    status, start_time_epoch_s }`, `HostFacts`, and `CameraInfo` (no
+    URLs). `HostOperationFailureCode` and `InconclusiveReason` are the
+    spec D11 enums (ts-rs, camelCase). Reads return the existing
+    `ConnectionError`;
+  - `HostJobState` holds **every tool** as `Vec<ToolTemperature>` plus the
+    bed. Reuse #29's `ToolTemperature`, and never keep a single "nozzle"
+    field;
+  - the ts-rs types `CapabilityKey`, `CapabilityState` (a `supported`
+    state carries its own `evidence`), `PrinterCapabilities { printerId,
+    adapterKind, capabilities, hostFacts, observedAt }`,
+    `AdapterCapabilityRow { adapterKind, capabilities }`, `HostFacts`, and
+    `CapabilityEvidence { source, tier: Sim | ReadOnlyHardware,
+    verified_host_versions }`.
 - `adapters.rs`: `AdapterDescriptor` gains `staging`, `control`,
   `host_state`, and `camera` (each an `Option` of a builder fn), plus
-  `evidence`. Moonraker and OctoPrint have all four as `None` for now,
-  and every write capability is `notVerified`.
+  `evidence: &'static [(CapabilityKey, CapabilityEvidence)]` (per
+  capability, spec D6). Moonraker and OctoPrint have all four as `None`
+  for now and no evidence rows, so every capability is `notVerified`.
 - `capabilities_for(printer, host_facts) -> PrinterCapabilities`:
   - no Connection gives all `unsupported`, with an "adapter" detail of
     "No Connection";
@@ -774,12 +811,18 @@ just check-hosts
     detail "TLS connections are not supported yet." (reuse
     `TLS_UNSUPPORTED_MESSAGE`);
   - host facts saying `virtual_sdcard` is missing give `upload` and
-    `start` as `host`; missing `pause_resume` gives `pause` and `resume`
-    as `host`; no webcams gives `camera` as `host`;
+    `start` as `host`; a missing `history` component gives `start` as
+    `host`; missing `pause_resume` gives `pause` and `resume` as `host`;
+    no webcams gives `camera` as `host` (details: spec D6);
+  - `start` also needs the `host_state` builder; `upload` and
+    `artifactIdentity` need `staging`;
   - a `ReadOnlyHardware` tier can never produce `supported` for upload,
-    start, pause, resume, or cancel.
-- Host-fact derivation (pure) from a Moonraker `printer.objects.list` and
-  `server.webcams.list` response. It collects every `extruder*` object.
+    start, pause, resume, or cancel;
+  - `host_facts: None` applies no host rule.
+- Host-fact derivation (pure) from Moonraker's `server.info`,
+  `printer.objects.list`, and `server.webcams.list` responses. Tools are
+  the objects matching `^extruder\d*$` exactly: the real host also has
+  `extruder_offset_calibration`, which is not a tool.
 - Commands `printer_capabilities(printerId)` and
   `adapter_capability_matrix()`, registered per Global Constraint 7.
 
@@ -793,7 +836,8 @@ just check-hosts
 
 - One `capabilities_for` test per rule above.
 - Host-fact derivation for one extruder, and for four extruders reported
-  out of order (`extruder2`, `extruder`, `extruder3`, `extruder1`).
+  out of order (`extruder2`, `extruder`, `extruder3`, `extruder1`), plus
+  `extruder_offset_calibration` (still four tools).
 - Serde round-trip snapshots.
 - The two commands through the `tauri::test` IPC path (copy the pattern
   in `tests/p2_contract_path.rs`).
@@ -814,19 +858,23 @@ just check-hosts
 **Files:**
 
 - `src-tauri/migrations/0007_p6_host_operations.sql`: a STRICT table with
-  these columns:
-  - `id` (CHECK `GLOB 'hop-*'`);
+  the columns and CHECKs in spec D2:
+  - `id` (CHECK `GLOB 'hop-*'`), `operation_id` (NOT NULL UNIQUE);
   - `printer_id` (FK `printers(id)` `ON DELETE RESTRICT`);
   - `kind` (CHECK in `upload`, `start`, `pause`, `resume`, `cancel`);
-  - `slice_revision_id` (FK `ON DELETE SET NULL`), `gcode_sha256`,
-    `gcode_size`, `host_path`;
+  - `slice_revision_id` (FK `ON DELETE SET NULL`),
+    `source_host_operation_id` (FK `host_operations(id)` `ON DELETE SET
+    NULL`, start only), `gcode_sha256` and `gcode_size` (NOT NULL exactly
+    for upload and start), `host_path` (NOT NULL);
+  - `history_mark` (INTEGER, NOT NULL exactly for start);
   - `endpoint_json` (valid JSON);
   - `state` (CHECK in `dispatching`, `uncertain`, `reconciling`,
     `succeeded`, `failed`, `abandoned`);
-  - `failure_json`, `resolution_json`;
-  - `attempts`, `last_attempt_at`, `last_attempt_error`;
+  - `failure_json`, `resolution_json` (valid JSON when present);
+  - `attempts`, `last_attempt_at`, `last_attempt_reason`,
+    `no_longer_pending` (0/1);
   - `abandoned_at`, `abandon_note`;
-  - `created_at`, `dispatched_at`, `resolved_at`.
+  - `created_at`, `dispatched_at`, `uncertain_since`, `resolved_at`.
 
   It also adds:
   - a partial unique index on `printer_id WHERE state IN
@@ -845,17 +893,31 @@ just check-hosts
   - `uncertain` goes to `reconciling` or `abandoned`;
   - `reconciling` goes to `succeeded`, `failed`, or `uncertain`;
   - every other pair is illegal.
-- `host_ops/repository.rs`: `insert_dispatching`, `transition` (uses
-  `state.rs`), `load`, `list_for_printer`, `list_unresolved`,
-  `mark_dispatching_uncertain` (the startup step),
+- `host_ops/repository.rs`: `insert_dispatching` (with the ledger claim,
+  one transaction), `mark_sent` (commits `dispatched_at`), `transition`
+  (uses `state.rs`), `record_attempt` (reconciling → uncertain, `attempts
+  += 1`, reason), `set_no_longer_pending`, `load`, `load_by_operation_id`,
+  `list_for_printer`, `list_unresolved`, `snapshot` (spec "Commands":
+  unresolved rows, newest succeeded upload per `host_path`, newest 20
+  other terminal rows per Printer), `recover_after_restart(now)`,
   `delete_terminal_for_printer`, and `has_unresolved(printer_id)`.
+  `recover_after_restart` is the startup step, and replaces the plan's
+  `mark_dispatching_uncertain`:
+  - `dispatching` with `dispatched_at IS NULL` → `failed { neverSent }`;
+  - `dispatching` with `dispatched_at` set → `uncertain`,
+    `uncertain_since = now`, reason `interruptedByRestart`;
+  - `reconciling` → `uncertain`, `attempts` unchanged.
 - `host_ops/mod.rs`: the module and the domain types, ts-rs exported
-  (`HostOperation`, `HostOperationState`, `HostOperationKind`).
+  (`HostOperation`, `HostOperationState`, `HostOperationKind`,
+  `PriorState`, `HostOperationFailure`, `HostOperationResolution`,
+  `HostOperationsSnapshot`), with the wire shapes in spec "Wire types".
 
 **Acceptance criteria:**
 
 - Every legal transition persists, and every illegal one is rejected
   before SQL.
+- `recover_after_restart` produces `neverSent`, `interruptedByRestart`, and
+  returns `reconciling` rows to `uncertain`.
 - The trigger stops an update to a terminal row.
 - A second unresolved row for the same Printer violates the index.
 - An operation-ledger replay returns the same `hop-*`.
@@ -902,15 +964,27 @@ just check-hosts
   - replacing the credential reference with a new one, endpoint
     unchanged, is **allowed**;
   - `replace_all` (import) rejects the whole import if any unresolved row
-    exists;
+    exists, with the new `RepositoryError::HostOperationsPending {
+    printer_ids, host_operation_ids }`;
   - `delete` calls `delete_terminal_for_printer` in the same transaction,
     after the blocker check.
-- `contracts/command.rs`: `ErrorCode::ConnectionInUse`, mapped from
-  `RepositoryError::ConnectionInUse` in `CommandError::from_repository`.
+- `contracts/command.rs` (spec "Error codes"):
+  - `ErrorCode::ConnectionInUse` (`CONNECTION_IN_USE`), mapped from
+    `RepositoryError::ConnectionInUse { printer_id, host_operation_id }`,
+    details `{ printerId, hostOperationId }`, recovery
+    `[OPEN_PRINTER_JOB]`, message "Finish or abandon the pending printer
+    operation before changing this Connection.";
+  - `ErrorCode::HostOperationPending` (`HOST_OPERATION_PENDING`), mapped
+    from `RepositoryError::HostOperationsPending`, details `{ printerIds,
+    hostOperationIds }`, recovery `[OPEN_PRINTER_JOB]`, message "This
+    printer has a pending operation. Finish or abandon it first.";
+  - `RecoveryCode::OpenPrinterJob` (`OPEN_PRINTER_JOB`).
 - `slicing/blockers.rs`: register
   `UnresolvedHostOperationBlocksRevisionDeletion` in
   `slice_revision_blocker_sources()`. A revision with an unresolved
-  upload or start cannot be deleted.
+  upload or start cannot be deleted: `LifecycleBlocker { action: Delete,
+  code: HostOperationUnresolved, message: "A printer operation using this
+  Slice Revision is still pending. Finish or abandon it first." }`.
 - The frontend needs no new component. The existing eligibility UI shows
   the new blocker message.
 
@@ -961,34 +1035,61 @@ report's recorded shapes for fixtures. Scrub any real-host capture
   `reqwest` dependency. Keep `default-features = false`, with no TLS
   feature.
 - New `connections/moonraker/files.rs`, pure with no I/O:
-  - the upload form parts (`file`, `root=gcodes`, `path=farm3d`, and
-    `checksum` if the spec kept it). There is **no API to add a `print`
-    field**;
-  - metadata, `files.list`, `history.list`, and `print_stats` parsers;
-  - `HostJobState` with every `extruder*` tool as `ToolTemperature` in
-    index order, plus the bed;
+  - the upload form parts, in order: `root=gcodes`, `path=farm3d`,
+    `checksum=<lower-case gcode_sha256>` (always sent), then `file`
+    (`<slr-id>.gcode`, `application/octet-stream`). There is **no API to
+    add a `print` field**;
+  - `server.info`, `objects.list`, `objects.query`, `history.list`, and
+    `webcams.list` parsers. `HistoryJob.job_id` is parsed from
+    Moonraker's hex string to `u64`; a job whose id doesn't parse is
+    dropped. Webcam URLs are discarded;
+  - `HostJobState` with every tool matching `^extruder\d*$` as
+    `ToolTemperature` in index order, plus the bed (absent, not zero, on a
+    no-bed printer);
   - response classification into `CommandFailure::Definitive` or
-    `Indeterminate`, per the spec's list.
+    `Indeterminate`, exactly per the dispatch table in spec D5 (status
+    code, and the error `message` for 400 and 503: `SD busy`, `Unable to
+    open file`, `Klippy Host not connected`, `Klippy Disconnected`). A
+    connect failure is `Definitive(hostUnreachable)`. Any status or body
+    not in the table is `Indeterminate`. Raw bodies never leave this
+    function.
 - New `connections/moonraker/control.rs`:
   - implements `ArtifactStaging`, `PrintControl`, `HostStateQuery`, and
-    `CameraDiscovery` over `reqwest` (HTTP) and the existing WebSocket
-    framing (`printer.print.*`, `printer.objects.query`,
-    `server.history.list`, `server.webcams.list`);
+    `CameraDiscovery` over `reqwest` **HTTP only** (spec D10 lists the
+    endpoints). The WebSocket stays the supervisor's;
+  - `locate` is one streamed `GET /server/files/gcodes/<host_path>`:
+    404 → `Absent`; a `Content-Length` or byte count other than the size →
+    `Differs { Size }`; a SHA-256 mismatch → `Differs { Hash }`; else
+    `Matches`. A timeout, reset, 401, or other status is an `Err`, never
+    `Absent`;
+  - `host_job_state` reads `server.info` first and queries objects only
+    when `klippy_state` is `ready`;
   - the same HTTP client rules as the OctoPrint adapter: no redirects, no
-    system proxy, and `X-Api-Key` marked sensitive;
-  - timeouts: connect 5 s; upload per the spec; RPC 10 s. A timeout is
-    `Indeterminate`.
+    system proxy, and `X-Api-Key` on every request, marked sensitive;
+  - timeouts (spec D10): connect 5 s; JSON queries 10 s; control POSTs
+    60 s; upload and `locate` download 60 s + 1 s per started MiB. A
+    timeout is `Indeterminate` for a write and an `Err` for a read.
 - `adapters.rs`: the Moonraker descriptor gains the four builders. The
   `evidence` row stays `notVerified` until Task 12.
-- New `tests/common/fake_moonraker.rs`: an in-process HTTP and WebSocket
-  server on a loopback `TcpListener`. It stores uploads in memory and
+- New `tests/common/fake_moonraker.rs`: an in-process HTTP server on a
+  loopback `TcpListener` (the capability adapter is HTTP only, so no
+  WebSocket is needed). It stores uploads in memory, serves them back at
+  `/server/files/gcodes/...`, keeps a job history with hex job ids, and
   records every request. Scripted faults:
   - store the file, then drop the response;
-  - store a partial file;
+  - drop the request mid-body and store nothing;
+  - deliver a stored file late (absent at first, present after a scripted
+    delay), for the settle-period rule;
+  - leave a different file at the path (the "partial file" case: a size
+    or hash mismatch);
   - delay past the timeout;
-  - 401;
-  - apply a start, then drop the response;
-  - reject a start definitively (with the spike's error shape);
+  - 401 (with the spike's body shape), 403 file loaded, 422 checksum;
+  - apply a start, then drop the response (with a history job, with only
+    `printing`, and with only `complete` and no job);
+  - reject a start definitively: 400 `SD busy`, 400 `Unable to open
+    file`, 503 `Klippy Host not connected`;
+  - 503 `Klippy Disconnected` (a queued start dropped by a restart);
+  - control `ok` with no state change;
   - "restart": clear live state but keep files and history.
 
   It fails the test if any upload has a `print` field.
@@ -1024,30 +1125,61 @@ just check-hosts
 
 **Files:**
 
-- `host_ops/executor.rs`: `run(operation)` does a write-ahead
-  `insert_dispatching` (commit), calls the capability trait, then commits
-  `succeeded`, `failed` (on `Definitive`), or `uncertain` (on
-  `Indeterminate`, a timeout, or a panic). Fault points are injectable
-  for tests: before send, after send, and after the response but before
+- `host_ops/executor.rs`: after the command's write-ahead
+  `insert_dispatching` (commit), `run(operation)` runs in the background:
+  `mark_sent` (commits `dispatched_at` just before connecting), calls the
+  capability trait, then commits per the spec D5 dispatch table:
+  - upload: a 201 is followed by `locate`; only `Matches` is `succeeded`,
+    anything else `uncertain`;
+  - start: 200 `ok` is `succeeded` (`startAccepted`);
+  - pause/resume/cancel: 200 `ok` is followed by the verification window
+    (poll `host_job_state` every 500 ms for up to 10 s); `succeeded` only
+    when the verb's effect is observed, else `uncertain`
+    (`effectNotObserved`);
+  - `Definitive` → `failed` with its code; `Indeterminate`, a timeout, or
+    a panic after `mark_sent` → `uncertain` with `uncertain_since = now`
+    (a panic before `mark_sent` → `failed { neverSent }`). A 503 `Klippy
+    Disconnected` also sets `no_longer_pending`.
+
+  Fault points are injectable for tests: before `mark_sent`, after
+  `mark_sent` before send, after send, and after the response but before
   commit.
-- `host_ops/reconciler.rs` applies the D5 rules:
+- `host_ops/reconciler.rs` applies the spec D5 rules (final; they replace
+  the draft table this plan had):
 
-  | Kind | Proved applied | Proved not applied |
+  | Kind | Proved applied → `succeeded` | Proved not applied → `failed` |
   |---|---|---|
-  | upload | `locate` present, size matches, and the hash matches if checked | absent |
-  | start | `print_stats.filename == host_path` and the state is printing, paused, or complete, or a history job for `host_path` started after `dispatched_at` (within the spec's skew tolerance) | standby with no such job |
-  | pause/resume/cancel | observed state matches | observed state proves no effect |
+  | upload | `locate` = `Matches` (size **and** streamed SHA-256) | `Absent` → `notApplied`, or `Differs` → `hostFileDiffers`, **only** when `now ≥ uncertain_since + 60 s` (the settle period) |
+  | start | (a) `print_stats` `printing` or `paused` with `filename == host_path`; or (b) a history job with `filename == host_path`, parsed `job_id > history_mark`, and parsed `start_time ≥ dispatched_at − 30 s`, whatever its status (`klippy_disconnect`, `klippy_shutdown`, `server_exit` → applied, `interrupted: true`) | **never** |
+  | pause | `paused`, `filename == host_path` | never |
+  | resume | `printing` or `complete`, `filename == host_path` | never |
+  | cancel | `cancelled`, `filename == host_path` | never |
 
-  - Anything else is back to `uncertain`, with `attempts` and
-    `last_attempt_error` bumped.
-  - It **never** issues a write.
+  - `complete` with our filename is **not** proof of a start by itself: a
+    previous print of the same file leaves the same state (answer 12).
+  - Job ids and times are compared as numbers (hex id → `u64`; RFC 3339 →
+    epoch seconds), never as strings.
+  - A Klipper restart after dispatch (a 503 `Klippy Disconnected` answer,
+    or a reconcile read that finds Klipper not ready) sets
+    `no_longer_pending`. It never proves "not applied".
+  - Anything else is back to `uncertain` via `record_attempt`, with
+    `attempts` bumped and the `InconclusiveReason` (`uploadSettling`,
+    `noStartEvidence`, `differentFileOnHost`, `effectNotObserved`,
+    `identityCheckFailed`, `hostUnreachable`, `hostNotReady`,
+    `authRejected`).
+  - It **never** issues a write. It uses the row's `endpoint_json` with
+    the Printer's current credential.
   - Triggers:
-    - startup, after `restore_persisted_connections` in `lib.rs`: first
-      `mark_dispatching_uncertain`, then reconcile each unresolved row;
-    - when `ConnectionManager` publishes Online for a Printer (a hook);
-    - `reconcile_host_operation`.
-  - It serializes per Printer and backs off with
-    `supervisor::backoff_delay`.
+    - startup, after `restore_persisted_connections` in `lib.rs`
+      (`recover_after_restart` has already run inside
+      `build_runtime_services`), then one attempt per `uncertain` row;
+    - when `ConnectionManager` publishes Online for a Printer (a hook),
+      which also refreshes that Printer's cached `HostFacts`;
+    - `reconcile_host_operation` (resets the backoff).
+  - It serializes per Printer (the same lock as the write commands). While
+    the Printer is Online it retries after `supervisor::backoff_delay(
+    attempts)`, and for `uploadSettling` also at exactly `uncertain_since
+    + 60 s`. The clock is injectable, so tests never sleep.
 - `host_ops/start_rule.rs` (pure) implements the Start table:
 
   | Printer `OperationalState` | Allowed `priorState` |
@@ -1058,30 +1190,50 @@ just check-hosts
   | `Failed`, `Printing`, `Paused`, `Busy`, `Offline`, `Connecting`, `Unknown`, `Error`, `SetupIncomplete`, or stale freshness | none |
 
   `check(status, prior_state) -> Result<(), StartRejection { NotAllowed
-  { observed }, PreconditionChanged { observed } }>`.
+  { observed_state, freshness }, PreconditionChanged { observed_state,
+  freshness } }>`. It also holds the control rule (spec D9): pause only
+  from `Printing`, resume only from `Paused`, cancel from either, all with
+  fresh telemetry.
 - `host_ops/commands.rs`, registered per Global Constraint 7:
   - `stage_slice_revision(operationId, printerId, sliceRevisionId)`;
   - `start_staged_artifact(operationId, printerId, hostOperationId,
-    priorState)`: re-reads the Printer's live status from
-    `ConnectionManager`, applies `start_rule::check` **before** the
-    write-ahead, and writes no row on rejection;
+    priorState)`, running the spec D9 order before the write-ahead:
+    replay check; Printer exists and is not archived; `start` capability;
+    no unresolved row; `hostOperationId` is a `succeeded` upload of this
+    Printer; `start_rule::check` on the live status from
+    `ConnectionManager`; a host re-read (`printing`/`paused` or Klipper
+    not ready → `START_NOT_ALLOWED`); the history high-water mark; `locate`
+    of the staged artifact (`STAGED_ARTIFACT_INVALID` on `Absent` or
+    `Differs`); `start_rule::check` again. It writes no row on any
+    rejection;
   - `pause_host_print`, `resume_host_print`, `cancel_host_print`
-    `(operationId, printerId)`;
+    `(operationId, printerId)`: the control rule on the live status and on
+    a host re-read (`CONTROL_NOT_ALLOWED`, no row); the re-read's filename
+    becomes the row's `host_path`;
   - `reconcile_host_operation(hostOperationId)`;
   - `abandon_host_operation(operationId, hostOperationId, acknowledgement:
     "hostStateUnknown", note?)`: allowed only from `uncertain` with
-    `attempts >= 1`, otherwise `HOST_OPERATION_NOT_ABANDONABLE`;
-  - `list_host_operations(printerId?)`.
+    `attempts >= 1`, otherwise `HOST_OPERATION_NOT_ABANDONABLE`; `note` is
+    at most 500 characters;
+  - `list_host_operations(printerId?)`, the backfill, returning
+    `HostOperationsSnapshot { streamId, snapshotSequence, operations }`.
 
-  Every capability command checks `capabilities_for` first and returns
-  `CAPABILITY_UNSUPPORTED` with **no** row written.
-- New error codes in `contracts/command.rs`: `CapabilityUnsupported`,
-  `HostOperationNotAbandonable`, `StartNotAllowed`, and
-  `StartPreconditionChanged`, each with a `RecoveryCode` where one
-  applies.
-- `host_ops/events.rs`: the `hostOperations` stream (type prefix
-  `hostOperations.`), `changed` events after commit, and a backfill
-  command, using the same envelope and sequence as `slicing/events.rs`.
+  Every write command checks `capabilities_for` first and returns
+  `CAPABILITY_UNSUPPORTED` with **no** row written, then
+  `HOST_OPERATION_PENDING` if the Printer already has an unresolved row.
+  The write commands return the row right after the write-ahead commit;
+  outcomes arrive as events. Argument and result types are in spec
+  "Commands".
+- New error codes in `contracts/command.rs`, with the details, recovery,
+  and messages in spec "Error codes": `CapabilityUnsupported`,
+  `HostOperationNotAbandonable`, `StartNotAllowed`,
+  `StartPreconditionChanged`, `ControlNotAllowed`, and
+  `StagedArtifactInvalid`. (`ConnectionInUse`, `HostOperationPending`, and
+  `OPEN_PRINTER_JOB` come from Task 7.)
+- `host_ops/events.rs`: the `hostOperations` stream with one type,
+  `hostOperations.operation.changed` (subject `{ kind: "hostOperation",
+  id }`, payload `HostOperation`), emitted after every committed change to
+  a row, using the same envelope and sequence as `slicing/events.rs`.
 - `lib.rs`: add `HostOperationServices` to `RuntimeServices` and wire the
   startup order.
 
@@ -1096,19 +1248,33 @@ rebuilt `RuntimeServices` over the same roots for "restart"):
 
 | Fault | Kind | Expected |
 |---|---|---|
-| Crash after write-ahead, before send | upload | `uncertain` → reconcile → absent → `failed{notApplied}`; no upload seen |
+| Crash after write-ahead, before `mark_sent` | upload, start | restart → `failed{neverSent}`; nothing sent |
+| Crash after `mark_sent`, before send | upload | restart → `uncertain`; reconcile inside the settle period → still `uncertain` (`uploadSettling`); after 60 s (injected clock) → `failed{notApplied}`; no upload seen |
 | Response lost after store | upload | `uncertain` → `succeeded`; exactly one upload seen |
-| Partial file | upload | per the spec's partial-file rule |
-| Start applied, response lost | start | `uncertain` → `succeeded`; exactly one start seen |
-| Start definitively rejected | start | `failed`, not reconciled |
-| Host unreachable throughout | any | stays `uncertain`; abandon allowed; guards lift after abandon |
-| Host printing a different file | start | stays `uncertain`; no start sent |
+| Body cut mid-way | upload | `uncertain` → `uploadSettling` → after 60 s `failed{notApplied}` |
+| File delivered late (inside the settle period) | upload | `uncertain` → `succeeded` |
+| A different file at the path ("partial file") | upload | `uncertain` → after 60 s `failed{hostFileDiffers}`; the file is not deleted |
+| 201, then `locate` fails | upload | `uncertain` (`identityCheckFailed`) → later `succeeded` |
+| Start applied, response lost (printing) | start | `uncertain` → `succeeded` (`printStats`); exactly one start seen |
+| Start applied, response lost (history job only) | start | `uncertain` → `succeeded` (`history`) |
+| Start applied, only `complete` left, no job | start | stays `uncertain` (`noStartEvidence`) |
+| Old job for the same file (id ≤ mark, or started before `dispatched_at − 30 s`) | start | stays `uncertain` |
+| Start definitively rejected (400, 503 not connected, 401) | start | `failed` with its code, not reconciled |
+| 503 `Klippy Disconnected` | start | `uncertain`, `noLongerPending: true`; never `failed` |
+| Control `ok`, no state change | pause | `uncertain` (`effectNotObserved`) |
+| Host unreachable throughout | any | stays `uncertain`; abandon allowed after one attempt; guards lift after abandon |
+| Host printing a different file | start | stays `uncertain` (`differentFileOnHost`); no start sent |
 
 Also test:
 
 - `start_rule` unit tests, one per table row. `Finished` + `finished` is
   OK; `Finished` + `ready` gives `PreconditionChanged`; `Failed` +
-  anything gives `NotAllowed`.
+  anything gives `NotAllowed`. Control rule tests per verb and state.
+- Command-level pre-check tests, each writing no row: host re-read shows
+  `paused` → `START_NOT_ALLOWED`; staged file absent or changed →
+  `STAGED_ARTIFACT_INVALID`; history unreadable → a network error;
+  pause while the host is idle → `CONTROL_NOT_ALLOWED`; a second write
+  while one is unresolved → `HOST_OPERATION_PENDING`.
 - Four-tool status inputs.
 - Command-level Start tests: no row on `START_NOT_ALLOWED` or
   `START_PRECONDITION_CHANGED`, and allowed again after `Failed` clears
@@ -1147,7 +1313,7 @@ just check-hosts
   - an OctoPrint Printer (every write `notVerified`);
   - a `Finished` Printer with a staged artifact;
   - a `Failed` Printer;
-  - a Printer with an `uncertain` upload.
+  - a Printer with an `uncertain` upload (`attempts: 1`).
 - `src/host-ops/start-rule.ts`, a pure mirror of the backend table.
   `startOffer(status) -> { offered: false, reason } | { offered: true,
   priorState, confirmLabel }`:
@@ -1155,12 +1321,25 @@ just check-hosts
   - `finished` → "The previous print finished. The bed is clear.";
   - `cancelled` → "The previous print was cancelled. The bed is clear.";
   - `Failed` → not offered, "Clear the error on the printer first.";
-  - other states → not offered, with the state as the reason.
-- `src/host-ops/presentation.ts`, pure:
-  - Host Operation state labels (Uploading, Staged, Uncertain, Checking,
-    Failed, Abandoned) with severity;
+  - other states → not offered, with the state as the reason;
+  - not offered while the Printer has an unresolved Host Operation ("A
+    printer operation is pending.").
+
+  It also has `controlOffer(status, verb, hasUnresolved)` (spec D9 control
+  rule): pause only from `printing`, resume only from `paused`, cancel
+  from either, all with fresh telemetry; not offered while a Host
+  Operation is unresolved ("A printer operation is pending. You can still
+  pause or cancel on the printer itself.").
+- `src/host-ops/presentation.ts`, pure (every string is in spec
+  "Frontend architecture" and D11):
+  - Host Operation labels per kind and state (Uploading, Upload uncertain,
+    Checking, Staged, Upload failed, Starting, Started, "Started, then
+    interrupted", Pausing, Paused, …, Abandoned) with severity;
+  - failure copy per `HostOperationFailureCode` and inconclusive copy per
+    `InconclusiveReason`, plus the `noLongerPending` sentence;
   - `CapabilityState` labels ("Supported", "Not supported by
-    <adapter>", "Not verified yet", "Not available on this printer");
+    <adapter>", "Not verified yet", "Not available on this printer") and
+    the evidence tier ("Simulator", "Read-only hardware");
   - unsupported and failed use **different** copy and severity.
 
 **Acceptance criteria:**
@@ -1172,7 +1351,8 @@ just check-hosts
 **TDD tests (Vitest):**
 
 - Stream ordering and backfill.
-- `startOffer` for every `OperationalState`, and for stale freshness.
+- `startOffer` for every `OperationalState`, for stale freshness, and with
+  an unresolved row; `controlOffer` for every verb and state.
 - Presentation for every state.
 - Unsupported and failed never share copy.
 
@@ -1194,16 +1374,26 @@ just test
   - the host's current print from telemetry: file, state, progress, and
     every tool's temperature/target from `telemetry.tools` (fall back to
     `nozzle_*` when `tools` is empty) plus the bed;
-  - **Pause**, **Resume**, and **Cancel print…** (cancel confirms), shown
-    only when the capability is supported;
-  - **Staged on this Printer**: Host Operations with state, and
-    **Check again**, **Abandon check…**, and **Start…**.
+  - **Pause**, **Resume**, and **Cancel print…** (cancel confirms in a
+    Kobalte `AlertDialog`), shown only when the capability is supported,
+    and enabled only when `controlOffer` says so (the reason is visible
+    text otherwise);
+  - **Staged on this Printer**: staged artifacts with **Start…**, and
+    Host Operations with their state and inconclusive reason, **Check
+    again** (enabled in `uncertain`), and **Abandon check…** (enabled in
+    `uncertain` with `attempts >= 1`);
+  - one `aria-live="polite"` region announcing Host Operation state
+    changes.
 - `src/screens/StartStagedDialog.tsx`: a Kobalte Dialog.
   - The checkbox label comes from `startOffer(status).confirmLabel`, and
     Confirm is disabled until it is ticked.
   - It sends `priorState`.
+  - While the command runs it shows "Checking the file on the printer…"
+    (the backend re-verifies the staged bytes before starting).
   - On `START_PRECONDITION_CHANGED` or `START_NOT_ALLOWED` it clears the
     tick and re-renders for the new status. A tick is never reused.
+  - On `STAGED_ARTIFACT_INVALID` it shows the message with **Stage
+    again**.
   - This holds for both `StartSafety` values.
 - `src/screens/StageOnPrinterDialog.tsx`: opened from **Stage on
   Printer…** in `SliceRevisionReview.tsx`, using Kobalte Dialog and
@@ -1212,16 +1402,22 @@ just test
     the capability reason.
   - Offline Printers are disabled with "Offline", which is different
     copy.
+  - A Printer with an unresolved Host Operation is disabled with "A
+    printer operation is pending.".
   - **Add to Queue…** stays disabled.
 - `src/screens/AbandonReconciliationDialog.tsx`: a Kobalte AlertDialog.
   - Required checkbox: "I understand the printer may still have this
     file or be printing it."
   - Body names the Printer and file, and states that farm3d will stop
-    checking.
+    checking and the printer's state stays unknown. When `noLongerPending`
+    is set it adds "Klipper restarted after farm3d sent this, so it is no
+    longer waiting to run."
+  - Optional note, at most 500 characters.
 - `src/screens/CapabilityList.tsx`: a read-only list in the Setup tab.
   Each capability shows its label and evidence tier.
 - `PrinterConnectionPanel.tsx`: show `CONNECTION_IN_USE` with a link to
-  the Job tab.
+  the Job tab (`OPEN_PRINTER_JOB`). `HOST_OPERATION_PENDING` renders the
+  same way wherever it appears.
 
 **Acceptance criteria:**
 
@@ -1240,7 +1436,10 @@ just test
 - One Start test per table row, with exact labels.
 - The command receives the matching `priorState`.
 - A `Failed` → `Ready` status event enables Start without a reload.
-- `START_PRECONDITION_CHANGED` clears the tick.
+- `START_PRECONDITION_CHANGED` clears the tick; `STAGED_ARTIFACT_INVALID`
+  offers **Stage again**.
+- Pause is disabled while the Printer is idle, and every control is
+  disabled while a Host Operation is unresolved.
 - The Stage dialog's unsupported and Offline reasons differ.
 - Abandon cannot be confirmed unticked.
 - A four-tool Printer shows four tools.
@@ -1279,13 +1478,19 @@ just web      # manual check at /#showcase and the Job tab with the web fixtures
       after the host stored the file;
     - rebuild the services (a restart), reconcile, and expect `succeeded`
       with exactly one file;
-    - `cut_request_after` mid-body, then reconcile per the spec;
-    - start with the response cut, then reconcile to `succeeded`;
+    - `cut_request_after` mid-body, then reconcile: `uncertain`
+      (`uploadSettling`) until 60 s after `uncertain_since`, then
+      `failed{notApplied}`;
+    - start with the response cut, then reconcile to `succeeded` (from
+      `print_stats` or the history job above the mark);
     - pause, resume, and cancel;
     - a second start from `Finished` with `priorState: finished`
       (answer 13);
     - `set_enabled(false)` for longer than the backoff, then abandon;
-    - Klipper restart mid-print;
+    - Klipper restart mid-print (a started row stays `succeeded`; an
+      uncertain start gets `noLongerPending` and stays `uncertain`);
+    - a queued start (a `G4` dwell first) with a short client timeout
+      stays `uncertain` until it runs, then reconciles to `succeeded`;
     - capability detection on `moonraker`, `moonraker-multi` (four
       tools), `variant no-bed`, and `variant apikey`.
 - New `src-tauri/tests/p6_moonraker_readonly.rs`, the real-hardware tier
@@ -1301,8 +1506,9 @@ just web      # manual check at /#showcase and the Job tab with the web fixtures
     - probe and capability detection;
     - `host_job_state` with every tool;
     - `locate` of a never-sent `farm3d/<uuid>.gcode` is absent;
-    - a seeded local `uncertain` upload row for that path reconciles to
-      `failed{notApplied}`;
+    - a seeded local `uncertain` upload row for that path, with
+      `uncertain_since` more than 60 s in the past, reconciles to
+      `failed{notApplied}` (a newer one stays `uncertain`);
     - blocking the port on the farm3d machine keeps the row `uncertain`,
       and abandon is local only;
     - each test asserts zero recorded writes.
@@ -1312,10 +1518,12 @@ just web      # manual check at /#showcase and the Job tab with the web fixtures
   p6_moonraker_readonly -- --ignored --test-threads=1 --nocapture`. Also
   add `p6_*` sim tests to `test-sim` if they live in a new file (prefer
   `sim_moonraker.rs`).
-- `adapters.rs`: flip each Moonraker write capability to `supported` or
-  `adapter` with `tier: Sim` and `source` naming this run's manifest.
-  Read-only results may add `host` facts and `verified_host_versions`
-  only.
+- `adapters.rs`: add Moonraker evidence rows (per capability, spec D6)
+  with `tier: Sim` and `source` naming this run's manifest, for `upload`,
+  `start`, `pause`, `resume`, `cancel`, `hostState`, `artifactIdentity`,
+  and `camera` (the query only; the sim has no webcam). Read-only results
+  may add `verified_host_versions` only, and never make a write
+  capability `supported`.
 
 **Acceptance criteria:**
 
@@ -1368,7 +1576,8 @@ just check-hosts
      kept as `abandoned`.
 - `p6_moonraker_readonly.rs`: add `readonly_reconciliation_tracer`. It
   does **no upload**:
-  1. Seed an `uncertain` upload row for a never-sent path.
+  1. Seed an `uncertain` upload row for a never-sent path, with
+     `uncertain_since` more than 60 s in the past (the settle period).
   2. Restart.
   3. Reconcile against the real host, expecting `failed{notApplied}`.
   4. Assert that the guards lifted, with zero writes recorded.
