@@ -3,7 +3,7 @@
 //! which is what makes the merge semantics below testable without a printer.
 
 use crate::connections::status_repository::PrinterTelemetry;
-use crate::connections::{ProbeResult, ReportedCapabilities};
+use crate::connections::{ConnectionState, ProbeResult, ReportedCapabilities};
 use crate::printers::operational::HostActivity;
 use serde_json::{json, Value};
 
@@ -130,18 +130,19 @@ impl StatusSnapshot {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
     fn number(&self, object: &str, attribute: &str) -> Option<f64> {
         self.objects.get(object)?.get(attribute)?.as_f64()
     }
 
+    /// An empty string is Klipper's "nothing here" (an idle printer reports
+    /// `filename: ""`), so it reads as absent.
     fn string(&self, object: &str, attribute: &str) -> Option<String> {
-        Some(
-            self.objects
-                .get(object)?
-                .get(attribute)?
-                .as_str()?
-                .to_string(),
-        )
+        let value = self.objects.get(object)?.get(attribute)?.as_str()?;
+        (!value.is_empty()).then(|| value.to_string())
     }
 
     /// Reads one axis extent. The arrays are `[x, y, z, e]` where the 4th
@@ -185,6 +186,128 @@ impl StatusSnapshot {
             bed_temp_c: self.number("heater_bed", "temperature"),
             bed_target_c: self.number("heater_bed", "target"),
             print_duration_s: self.number("print_stats", "print_duration"),
+        }
+    }
+}
+
+/// Whether a JSON-RPC error means Moonraker rejected the credential.
+///
+/// Moonraker accepts every WebSocket upgrade and rejects requests one by one.
+/// Its JSON-RPC layer rewrites HTTP 401 to -32602 ("Invalid params") but
+/// keeps the message "Unauthorized" (seen in A0.1, #9), so the message is
+/// what tells a rejected key from a genuinely bad parameter.
+pub fn is_auth_error(code: Option<i64>, message: &str) -> bool {
+    matches!(code, Some(401) | Some(403))
+        || (code == Some(-32602) && message.trim() == "Unauthorized")
+}
+
+/// Request ids. Each connection sends at most one of each at a time, so fixed
+/// ids are enough to route the responses.
+pub const ID_SERVER_INFO: u64 = 1;
+pub const ID_PRINTER_INFO: u64 = 2;
+pub const ID_SUBSCRIBE: u64 = 3;
+
+/// One thing the subscription loop must do after a frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Step {
+    /// Publish the accumulated telemetry.
+    Telemetry,
+    /// Publish the connection state.
+    Health(ConnectionState),
+    /// Send `printer.objects.subscribe` again.
+    Resubscribe,
+    /// Moonraker rejected the credential; end the subscription.
+    AuthFailed(String),
+}
+
+/// The subscription's view of Klipper behind a Moonraker socket. PURE: it
+/// maps each decoded frame to the `Step`s the I/O loop performs.
+///
+/// Live validation (A0.1, #9) found three facts this type encodes:
+///
+/// - Klipper can already be shut down when the socket opens. Then no
+///   lifecycle notification ever arrives, so the starting state has to come
+///   from `server.info`'s `klippy_state`. Assuming "online" reported a
+///   shut-down printer as Ready.
+/// - Moonraker drops every subscription when Klippy disconnects (a
+///   FIRMWARE_RESTART, a host restart, a crash). A client has to subscribe
+///   again on `notify_klippy_ready`, or its readings silently stop.
+/// - Readings merge into the snapshot in every state, but they are published
+///   only while Klipper is ready. The supervisor treats telemetry as proof of
+///   an online printer, so publishing it during a shutdown would flip the
+///   state back to online.
+#[derive(Debug, Default)]
+pub struct SubscriptionState {
+    snapshot: StatusSnapshot,
+    klippy: Option<ConnectionState>,
+}
+
+impl SubscriptionState {
+    /// The state the liveness tick reports. `None` until Moonraker has said
+    /// whether Klipper is ready.
+    pub fn health(&self) -> Option<ConnectionState> {
+        self.klippy
+    }
+
+    pub fn telemetry(&self) -> PrinterTelemetry {
+        self.snapshot.to_telemetry()
+    }
+
+    fn ready(&self) -> bool {
+        self.klippy == Some(ConnectionState::Online)
+    }
+
+    fn publish(&self) -> Vec<Step> {
+        if self.ready() {
+            vec![Step::Telemetry, Step::Health(ConnectionState::Online)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn on_frame(&mut self, frame: Frame) -> Vec<Step> {
+        match frame {
+            Frame::Response { id, result } if id == ID_SERVER_INFO => {
+                let state = if result.get("klippy_state").and_then(Value::as_str) == Some("ready") {
+                    ConnectionState::Online
+                } else {
+                    ConnectionState::Offline
+                };
+                self.klippy = Some(state);
+                let mut steps = if self.snapshot.is_empty() {
+                    Vec::new()
+                } else {
+                    self.publish()
+                };
+                if steps.is_empty() {
+                    steps.push(Step::Health(state));
+                }
+                steps
+            }
+            Frame::Response { id, result } if id == ID_SUBSCRIBE => {
+                // `printer.objects.subscribe` wraps its payload in a `status`
+                // key; the notifications do not.
+                self.snapshot.merge(&result["status"]);
+                self.publish()
+            }
+            Frame::StatusUpdate(update) => {
+                self.snapshot.merge(&update);
+                self.publish()
+            }
+            Frame::KlippyReady => {
+                self.klippy = Some(ConnectionState::Online);
+                vec![Step::Resubscribe, Step::Health(ConnectionState::Online)]
+            }
+            Frame::KlippyDown => {
+                self.klippy = Some(ConnectionState::Offline);
+                vec![Step::Health(ConnectionState::Offline)]
+            }
+            Frame::Error { message, code, .. } if is_auth_error(code, &message) => {
+                vec![Step::AuthFailed(message)]
+            }
+            // A subscribe sent while Klippy is disconnected fails with 503.
+            // `notify_klippy_ready` triggers the next attempt.
+            _ => Vec::new(),
         }
     }
 }
@@ -279,6 +402,195 @@ mod tests {
         assert_eq!(telemetry.nozzle_temp_c, None);
         assert_eq!(telemetry.bed_temp_c, None);
         assert_eq!(telemetry.host_activity, HostActivity::Unknown);
+    }
+
+    fn server_info(klippy_state: &str) -> Frame {
+        Frame::Response {
+            id: ID_SERVER_INFO,
+            result: serde_json::json!({"klippy_state": klippy_state}),
+        }
+    }
+
+    fn subscribe_response(nozzle: f64) -> Frame {
+        Frame::Response {
+            id: ID_SUBSCRIBE,
+            result: serde_json::json!({"eventtime": 1.0, "status": {
+                "extruder": {"temperature": nozzle, "target": 0.0},
+                "print_stats": {"state": "standby", "filename": ""}
+            }}),
+        }
+    }
+
+    fn ready_subscription() -> SubscriptionState {
+        let mut state = SubscriptionState::default();
+        state.on_frame(server_info("ready"));
+        state.on_frame(subscribe_response(24.0));
+        state
+    }
+
+    #[test]
+    fn a_ready_klipper_publishes_the_subscription_snapshot() {
+        let mut state = SubscriptionState::default();
+        assert_eq!(
+            state.on_frame(server_info("ready")),
+            vec![Step::Health(ConnectionState::Online)]
+        );
+        assert_eq!(
+            state.on_frame(subscribe_response(24.0)),
+            vec![Step::Telemetry, Step::Health(ConnectionState::Online)]
+        );
+        assert_eq!(state.telemetry().nozzle_temp_c, Some(24.0));
+    }
+
+    #[test]
+    fn subscribing_while_klipper_is_shut_down_reports_offline_and_publishes_no_readings() {
+        // Seen live (A0.1, #9, simulator): supervision started after an M112
+        // reported the printer online and Ready, because no lifecycle
+        // notification arrives for a shutdown that already happened.
+        let mut state = SubscriptionState::default();
+        assert_eq!(
+            state.on_frame(server_info("shutdown")),
+            vec![Step::Health(ConnectionState::Offline)]
+        );
+        assert_eq!(state.on_frame(subscribe_response(24.0)), Vec::new());
+        assert_eq!(
+            state.on_frame(Frame::StatusUpdate(
+                serde_json::json!({"extruder": {"temperature": 23.0}})
+            )),
+            Vec::new()
+        );
+        assert_eq!(state.health(), Some(ConnectionState::Offline));
+        // Readings still accumulate for when Klipper comes back.
+        assert_eq!(state.telemetry().nozzle_temp_c, Some(23.0));
+    }
+
+    #[test]
+    fn a_subscription_answer_that_beats_server_info_waits_for_the_klippy_state() {
+        let mut state = SubscriptionState::default();
+        assert_eq!(state.health(), None);
+        assert_eq!(state.on_frame(subscribe_response(24.0)), Vec::new());
+        assert_eq!(
+            state.on_frame(server_info("ready")),
+            vec![Step::Telemetry, Step::Health(ConnectionState::Online)]
+        );
+    }
+
+    #[test]
+    fn klipper_becoming_ready_again_resubscribes() {
+        // Seen live (A0.1, #9, simulator): after a Klipper restart the
+        // readings stopped for good, because Moonraker drops every
+        // subscription when Klippy disconnects.
+        let mut state = ready_subscription();
+        assert_eq!(
+            state.on_frame(Frame::KlippyDown),
+            vec![Step::Health(ConnectionState::Offline)]
+        );
+        assert_eq!(
+            state.on_frame(Frame::KlippyReady),
+            vec![Step::Resubscribe, Step::Health(ConnectionState::Online)]
+        );
+        assert_eq!(
+            state.on_frame(subscribe_response(30.0)),
+            vec![Step::Telemetry, Step::Health(ConnectionState::Online)]
+        );
+        assert_eq!(state.telemetry().nozzle_temp_c, Some(30.0));
+    }
+
+    #[test]
+    fn readings_during_a_shutdown_do_not_publish_until_klipper_is_ready() {
+        let mut state = ready_subscription();
+        state.on_frame(Frame::KlippyDown);
+        assert_eq!(
+            state.on_frame(Frame::StatusUpdate(
+                serde_json::json!({"extruder": {"temperature": 20.0}})
+            )),
+            Vec::new(),
+            "telemetry during a shutdown would flip the supervisor back to online"
+        );
+    }
+
+    #[test]
+    fn a_failed_subscribe_waits_for_klipper_rather_than_failing() {
+        let mut state = SubscriptionState::default();
+        state.on_frame(server_info("startup"));
+        assert_eq!(
+            state.on_frame(Frame::Error {
+                id: ID_SUBSCRIBE,
+                message: "Klippy Host not connected".into(),
+                code: Some(503),
+            }),
+            Vec::new()
+        );
+        assert_eq!(state.health(), Some(ConnectionState::Offline));
+    }
+
+    #[test]
+    fn a_rejected_credential_ends_the_subscription() {
+        let mut state = SubscriptionState::default();
+        assert_eq!(
+            state.on_frame(Frame::Error {
+                id: ID_SUBSCRIBE,
+                message: "Unauthorized".into(),
+                code: Some(401),
+            }),
+            vec![Step::AuthFailed("Unauthorized".into())]
+        );
+    }
+
+    #[test]
+    fn moonraker_reports_a_rejected_credential_as_invalid_params() {
+        // Seen live (A0.1, #9, simulator in API-key mode): Moonraker's
+        // JSON-RPC layer rewrites HTTP 401 to -32602 ("Invalid params") and
+        // keeps the "Unauthorized" message. Checking for 401 alone told the
+        // user "unexpected response" instead of "check the API key".
+        assert!(is_auth_error(Some(-32602), "Unauthorized"));
+        assert!(is_auth_error(Some(401), "Unauthorized"));
+        assert!(is_auth_error(Some(403), "Forbidden"));
+        assert!(!is_auth_error(
+            Some(-32602),
+            "Invalid params:\nmissing required argument"
+        ));
+        assert!(!is_auth_error(Some(503), "Klippy Host not connected"));
+
+        let mut state = SubscriptionState::default();
+        assert_eq!(
+            state.on_frame(parse_frame(
+                r#"{"jsonrpc":"2.0","error":{"code":-32602,"message":"Unauthorized"},"id":3}"#
+            )),
+            vec![Step::AuthFailed("Unauthorized".into())]
+        );
+    }
+
+    #[test]
+    fn an_object_the_printer_lacks_reads_as_absent_not_zero() {
+        // Seen live (A0.1, #9, simulator without a heated bed): Moonraker
+        // answers for a missing object with every attribute set to null.
+        let mut snapshot = StatusSnapshot::default();
+        snapshot.merge(&serde_json::json!({
+            "extruder": {"temperature": 24.0, "target": 0.0},
+            "heater_bed": {"temperature": null, "target": null}
+        }));
+
+        let telemetry = snapshot.to_telemetry();
+        assert_eq!(telemetry.nozzle_temp_c, Some(24.0));
+        assert_eq!(telemetry.bed_temp_c, None);
+        assert_eq!(telemetry.bed_target_c, None);
+    }
+
+    #[test]
+    fn an_idle_printer_with_no_job_reports_no_job_name() {
+        // Seen live (A0.1, #9): an idle Klipper reports `filename: ""` and
+        // `message: ""`. An empty job name is not a job, and the telemetry
+        // cache rejects empty strings, so passing it through failed every
+        // cache write while the printer sat idle.
+        let mut snapshot = StatusSnapshot::default();
+        snapshot.merge(&serde_json::json!({
+            "print_stats": {"filename": "", "state": "standby", "print_duration": 0.0}
+        }));
+
+        let telemetry = snapshot.to_telemetry();
+        assert_eq!(telemetry.job_name, None);
+        assert_eq!(telemetry.host_activity_name, Some("standby".to_string()));
     }
 
     #[test]

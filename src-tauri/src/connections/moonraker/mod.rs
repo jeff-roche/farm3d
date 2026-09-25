@@ -14,7 +14,8 @@ use crate::connections::{
 };
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    parse_frame, probe_result_from, rpc_request, subscribe_params, Frame, StatusSnapshot,
+    is_auth_error, parse_frame, probe_result_from, rpc_request, subscribe_params, Frame,
+    StatusSnapshot, Step, SubscriptionState, ID_PRINTER_INFO, ID_SERVER_INFO, ID_SUBSCRIBE,
 };
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -28,29 +29,45 @@ pub mod protocol;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
-
-const ID_SERVER_INFO: u64 = 1;
-const ID_PRINTER_INFO: u64 = 2;
-const ID_SUBSCRIBE: u64 = 3;
+/// How long a subscription may hear nothing before it counts as dead.
+/// Moonraker pushes `notify_proc_stat_update` every second and answers the
+/// Ping that each liveness tick sends, so this much silence means the network
+/// path is gone. A pulled cable or a Wi-Fi drop sends no FIN or RST. Without
+/// this check the socket waits forever while the liveness tick keeps
+/// reporting the printer online (seen in A0.1, #9).
+const SILENCE_LIMIT: Duration = Duration::from_secs(25);
 
 pub struct MoonrakerConnection {
     config: ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
+    liveness_interval: Duration,
+    silence_limit: Duration,
 }
 
 impl MoonrakerConnection {
     pub fn new(config: ConnectionConfig, api_key: Option<String>) -> Self {
-        Self {
-            config,
-            api_key: api_key.map(zeroize::Zeroizing::new),
-        }
+        Self::with_zeroizing_secret(config, api_key.map(zeroize::Zeroizing::new))
     }
 
     pub fn with_zeroizing_secret(
         config: ConnectionConfig,
         api_key: Option<zeroize::Zeroizing<String>>,
     ) -> Self {
-        Self { config, api_key }
+        Self {
+            config,
+            api_key,
+            liveness_interval: LIVENESS_INTERVAL,
+            silence_limit: SILENCE_LIMIT,
+        }
+    }
+
+    /// Shorter timings so a socket-level test does not wait 25 s of real
+    /// time. Real sockets and a paused tokio clock do not mix.
+    #[cfg(test)]
+    fn with_timings(mut self, liveness_interval: Duration, silence_limit: Duration) -> Self {
+        self.liveness_interval = liveness_interval;
+        self.silence_limit = silence_limit;
+        self
     }
 }
 
@@ -107,9 +124,9 @@ fn classify(error: tokio_tungstenite::tungstenite::Error) -> ConnectionError {
     }
 }
 
-async fn send(socket: &mut Socket, frame: String) -> Result<(), ConnectionError> {
+async fn send(socket: &mut Socket, frame: impl Into<Message>) -> Result<(), ConnectionError> {
     socket
-        .send(Message::Text(frame.into()))
+        .send(frame.into())
         .await
         .map_err(|e| ConnectionError::Unreachable(e.to_string()))
 }
@@ -188,7 +205,7 @@ impl PrinterConnection for MoonrakerConnection {
                     // rest. Reporting it as a connection failure would send a
                     // user hunting for a network problem they do not have.
                     Some(Frame::Error { id, message, code }) => {
-                        if code == Some(401) || code == Some(403) {
+                        if is_auth_error(code, &message) {
                             return Err(ConnectionError::Auth(message));
                         }
                         if id == ID_PRINTER_INFO || id == ID_SUBSCRIBE {
@@ -218,62 +235,81 @@ impl PrinterConnection for MoonrakerConnection {
             self.api_key.as_ref().map(|value| value.as_str()),
         )
         .await?;
+        // Klipper can be down behind a perfectly healthy Moonraker socket, so
+        // the connection state comes from Moonraker, never from the socket
+        // being open. `server.info` gives the state at connect time; the
+        // lifecycle notifications give every change after it.
         send(
             &mut socket,
-            rpc_request(
-                ID_SUBSCRIBE,
-                "printer.objects.subscribe",
-                Some(subscribe_params()),
-            ),
+            rpc_request(ID_SERVER_INFO, "server.info", None),
         )
         .await?;
+        send(&mut socket, subscribe_request()).await?;
 
-        let mut snapshot = StatusSnapshot::default();
-        // Klipper can be down behind a perfectly healthy Moonraker socket, so
-        // connection state is tracked from the lifecycle notifications rather
-        // than assumed from the socket being open.
-        let mut state = ConnectionState::Online;
-
-        let mut liveness = liveness_interval();
+        let mut state = SubscriptionState::default();
+        let mut last_inbound = tokio::time::Instant::now();
+        let mut liveness = liveness_interval(self.liveness_interval);
         loop {
             tokio::select! {
                 _ = liveness.tick() => {
-                    if send_health(&tx, state).await { return Ok(()); }
-                }
-                frame = next_frame(&mut socket) => {
-                    let Some(frame) = frame else { return Ok(()); };
-                    match frame {
-                        Frame::Response { id, result } if id == ID_SUBSCRIBE => {
-                            snapshot.merge(&result["status"]);
-                            if tx.send(ConnectionObservation::Telemetry(snapshot.to_telemetry())).await.is_err() {
-                                return Ok(());
-                            }
-                        }
-                        Frame::StatusUpdate(update) => {
-                            snapshot.merge(&update);
-                            if tx.send(ConnectionObservation::Telemetry(snapshot.to_telemetry())).await.is_err() {
-                                return Ok(());
-                            }
-                        }
-                        Frame::KlippyReady => state = ConnectionState::Online,
-                        Frame::KlippyDown => state = ConnectionState::Offline,
-                        Frame::Error { message, code, .. } if code == Some(401) || code == Some(403) => {
-                            return Err(ConnectionError::Auth(message));
-                        }
-                        _ => continue,
+                    if last_inbound.elapsed() >= self.silence_limit {
+                        return Err(ConnectionError::Timeout);
                     }
-                    if send_health(&tx, state).await { return Ok(()); }
+                    if let Some(health) = state.health() {
+                        if send_health(&tx, health).await { return Ok(()); }
+                    }
+                    send(&mut socket, Message::Ping(Vec::new().into())).await?;
+                }
+                message = socket.next() => {
+                    let frame = match message {
+                        Some(Ok(Message::Text(text))) => parse_frame(&text),
+                        // Binary and Close are not part of Moonraker's
+                        // JSON-RPC surface. tungstenite answers Pings itself;
+                        // a Pong still proves the path is alive.
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
+                        Some(Ok(_)) => {
+                            last_inbound = tokio::time::Instant::now();
+                            continue;
+                        }
+                    };
+                    last_inbound = tokio::time::Instant::now();
+                    for step in state.on_frame(frame) {
+                        let closed = match step {
+                            Step::Telemetry => tx
+                                .send(ConnectionObservation::Telemetry(state.telemetry()))
+                                .await
+                                .is_err(),
+                            Step::Health(health) => send_health(&tx, health).await,
+                            // Moonraker drops subscriptions when Klippy
+                            // disconnects; readings stop unless we ask again.
+                            Step::Resubscribe => {
+                                send(&mut socket, subscribe_request()).await?;
+                                false
+                            }
+                            Step::AuthFailed(message) => {
+                                return Err(ConnectionError::Auth(message));
+                            }
+                        };
+                        if closed {
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-fn liveness_interval() -> tokio::time::Interval {
-    tokio::time::interval_at(
-        tokio::time::Instant::now() + LIVENESS_INTERVAL,
-        LIVENESS_INTERVAL,
+fn subscribe_request() -> String {
+    rpc_request(
+        ID_SUBSCRIBE,
+        "printer.objects.subscribe",
+        Some(subscribe_params()),
     )
+}
+
+fn liveness_interval(period: Duration) -> tokio::time::Interval {
+    tokio::time::interval_at(tokio::time::Instant::now() + period, period)
 }
 
 /// Returns true when supervision has dropped the receiver.
@@ -337,7 +373,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn liveness_scheduler_waits_ten_seconds_before_emitting_health() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut liveness = liveness_interval();
+        let mut liveness = liveness_interval(LIVENESS_INTERVAL);
         let sender = tokio::spawn(async move {
             liveness.tick().await;
             send_health(&tx, ConnectionState::Online).await
@@ -354,5 +390,169 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // --- Socket-level regressions for A0.1 (#9) ------------------------------
+
+    type ServerSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+    /// A one-connection fake Moonraker on an ephemeral local port. `script`
+    /// plays the server side of the conversation.
+    async fn fake_moonraker<F, Fut>(script: F) -> (ConnectionConfig, tokio::task::JoinHandle<()>)
+    where
+        F: FnOnce(ServerSocket) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            script(tokio_tungstenite::accept_async(stream).await.unwrap()).await;
+        });
+        let config = ConnectionConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..config(false)
+        };
+        (config, server)
+    }
+
+    /// Reads requests until one names `method`, and returns its id.
+    async fn expect_request(socket: &mut ServerSocket, method: &str) -> u64 {
+        while let Some(Ok(message)) = socket.next().await {
+            if let Message::Text(text) = message {
+                let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if request["method"] == method {
+                    return request["id"].as_u64().unwrap();
+                }
+            }
+        }
+        panic!("the client never sent {method}");
+    }
+
+    async fn reply(socket: &mut ServerSocket, frame: serde_json::Value) {
+        socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .unwrap();
+    }
+
+    fn subscribed(id: u64, nozzle: f64) -> serde_json::Value {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {"eventtime": 1.0, "status": {
+            "extruder": {"temperature": nozzle, "target": 0.0},
+            "print_stats": {"state": "standby", "filename": ""}
+        }}})
+    }
+
+    async fn next_telemetry(
+        rx: &mut tokio::sync::mpsc::Receiver<ConnectionObservation>,
+    ) -> crate::connections::status_repository::PrinterTelemetry {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+                Ok(Some(ConnectionObservation::Telemetry(telemetry))) => return telemetry,
+                Ok(Some(_)) => continue,
+                other => panic!("no telemetry arrived: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_subscription_resubscribes_when_klipper_becomes_ready_again() {
+        let (config, server) = fake_moonraker(|mut socket| async move {
+            let info = expect_request(&mut socket, "server.info").await;
+            reply(
+                &mut socket,
+                serde_json::json!({"jsonrpc": "2.0", "id": info,
+                "result": {"klippy_state": "ready"}}),
+            )
+            .await;
+            let first = expect_request(&mut socket, "printer.objects.subscribe").await;
+            reply(&mut socket, subscribed(first, 24.0)).await;
+            // A FIRMWARE_RESTART: Moonraker forgets every subscription.
+            reply(
+                &mut socket,
+                serde_json::json!({"jsonrpc": "2.0", "method": "notify_klippy_disconnected"}),
+            )
+            .await;
+            reply(
+                &mut socket,
+                serde_json::json!({"jsonrpc": "2.0", "method": "notify_klippy_ready"}),
+            )
+            .await;
+            let second = expect_request(&mut socket, "printer.objects.subscribe").await;
+            reply(&mut socket, subscribed(second, 31.0)).await;
+            std::future::pending::<()>().await;
+        })
+        .await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let connection = MoonrakerConnection::new(config, None);
+        let client = tokio::spawn(async move { connection.subscribe(tx).await });
+
+        assert_eq!(next_telemetry(&mut rx).await.nozzle_temp_c, Some(24.0));
+        assert_eq!(
+            next_telemetry(&mut rx).await.nozzle_temp_c,
+            Some(31.0),
+            "no readings after Klipper came back"
+        );
+        client.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_silent_connection_ends_the_subscription_with_a_timeout() {
+        let (config, server) = fake_moonraker(|mut socket| async move {
+            let info = expect_request(&mut socket, "server.info").await;
+            reply(
+                &mut socket,
+                serde_json::json!({"jsonrpc": "2.0", "id": info,
+                "result": {"klippy_state": "ready"}}),
+            )
+            .await;
+            // A pulled cable: the socket stays open, nothing more arrives,
+            // and Pings go unanswered because nobody reads them.
+            std::future::pending::<()>().await;
+        })
+        .await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let connection = MoonrakerConnection::new(config, None)
+            .with_timings(Duration::from_millis(50), Duration::from_millis(200));
+
+        let outcome = tokio::time::timeout(Duration::from_secs(5), connection.subscribe(tx))
+            .await
+            .expect("the subscription never noticed the silence");
+        assert_eq!(outcome, Err(ConnectionError::Timeout));
+        drain.abort();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_quiet_but_answering_connection_stays_up() {
+        // The server says nothing on its own but reads (and so answers
+        // Pings). That is a healthy idle socket, not a dead one.
+        let (config, server) = fake_moonraker(|mut socket| async move {
+            let info = expect_request(&mut socket, "server.info").await;
+            reply(
+                &mut socket,
+                serde_json::json!({"jsonrpc": "2.0", "id": info,
+                "result": {"klippy_state": "ready"}}),
+            )
+            .await;
+            while let Some(Ok(_)) = socket.next().await {}
+        })
+        .await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let connection = MoonrakerConnection::new(config, None)
+            .with_timings(Duration::from_millis(50), Duration::from_millis(200));
+
+        let outcome =
+            tokio::time::timeout(Duration::from_millis(800), connection.subscribe(tx)).await;
+        assert!(
+            outcome.is_err(),
+            "a Pong-answering socket was dropped: {outcome:?}"
+        );
+        drain.abort();
+        server.abort();
     }
 }
