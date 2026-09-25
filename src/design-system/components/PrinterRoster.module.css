@@ -102,3 +102,7 @@
 .viewAll:hover {
   color: var(--f3d-color-text);
 }
+
+.detail {
+  color: var(--f3d-color-text-muted);
+}

@@ -156,6 +156,22 @@ passes `modal` on that specific `Popover` (no visual backdrop exists on
 A `Popover` with its own `trigger` (the Showcase example) doesn't need
 either workaround.
 
+**Returning focus from a trigger-less `Dialog`.** Kobalte returns focus to a
+dialog's own trigger when it closes, so a `Dialog` opened only through
+`open` has nowhere to put focus back. Pass `returnFocus`, an accessor called
+at close time, to name the element that should get it (the Showcase's "Open
+without a trigger" demo; the Slicer settings, which return to whichever
+control opened them).
+
+**`PrinterRoster` and the Tab order.** Focusing a roster chip never opens
+it, so tabbing across a row of chips (the header's, or the preparation
+panel's matching Printers) stays in page order. A pointer hover shows the
+roster without taking focus. A press (click, Enter or Space) opens it and
+moves focus in, and Escape returns focus to the chip. Because the roster is
+portalled to the end of `<body>`, Tab and Shift+Tab at its edges close it
+and move on as if it sat right after its chip: Tab goes to whatever follows
+the chip, and Shift+Tab goes back to the chip.
+
 ## Showcase page
 
 `src/design-system/Showcase.tsx` renders every component and its states.

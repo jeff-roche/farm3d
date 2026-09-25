@@ -16,9 +16,9 @@ use farm3d_lib::library::content::{
     mark_unreferenced_blobs, CancelFlag, ContentError, ContentFailurePoint, ContentStore,
     StagedFile, MAX_SOURCE_BYTES,
 };
-use farm3d_lib::persistence::{
-    MetadataRootLease, RepositoryError, Storage, StorageError, StoragePaths,
-};
+#[cfg(unix)]
+use farm3d_lib::persistence::StorageError;
+use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StoragePaths};
 
 const MIB: usize = 1024 * 1024;
 

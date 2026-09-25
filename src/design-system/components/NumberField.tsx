@@ -18,6 +18,8 @@ export interface NumberFieldProps {
   maxValue?: number;
   step?: number;
   suffix?: string;
+  /** Shown while the field is empty, e.g. the value used when unset. */
+  placeholder?: string;
   disabled?: boolean;
   error?: string;
   class?: string;
@@ -31,6 +33,7 @@ export function NumberField(props: NumberFieldProps) {
     "defaultValue",
     "onChange",
     "suffix",
+    "placeholder",
     "error",
     "class",
   ]);
@@ -48,7 +51,7 @@ export function NumberField(props: NumberFieldProps) {
         <KNumberField.Label class={styles.label}>{local.label}</KNumberField.Label>
       )}
       <div class={styles.inputRow}>
-        <KNumberField.Input class={styles.input} aria-label={local["aria-label"]} />
+        <KNumberField.Input class={styles.input} aria-label={local["aria-label"]} placeholder={local.placeholder} />
         {local.suffix && <span class={styles.suffix}>{local.suffix}</span>}
         <div class={styles.spinner}>
           <KNumberField.IncrementTrigger class={styles.spinButton} aria-label="Increment">

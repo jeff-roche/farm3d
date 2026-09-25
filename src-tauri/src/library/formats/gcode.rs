@@ -89,6 +89,17 @@ fn decode(line: &[u8]) -> Cow<'_, str> {
 }
 
 pub fn inspect(path: &Path, cancel: &CancelFlag) -> Result<Inspected, InspectError> {
+    inspect_visiting(path, cancel, &mut |_| {})
+}
+
+/// [`inspect`], also handing `visit` every decoded line of at most the
+/// line limit, in the same single pass (P5's printed bounds, D11). Longer
+/// lines are skipped for `visit` too.
+pub fn inspect_visiting(
+    path: &Path,
+    cancel: &CancelFlag,
+    visit: &mut dyn FnMut(&str),
+) -> Result<Inspected, InspectError> {
     if cancel.is_cancelled() {
         return Err(InspectError::Cancelled);
     }
@@ -100,7 +111,11 @@ pub fn inspect(path: &Path, cancel: &CancelFlag) -> Result<Inspected, InspectErr
             return Err(InspectError::Cancelled);
         }
         match line {
-            Some(bytes) => scanner.line(&decode(bytes)),
+            Some(bytes) => {
+                let line = decode(bytes);
+                visit(&line);
+                scanner.line(&line);
+            }
             None => scanner.long_line(),
         }
     }

@@ -44,6 +44,10 @@
   font-size: var(--f3d-type-body-size);
 }
 
+.input::placeholder {
+  color: var(--f3d-color-text-disabled);
+}
+
 .input:focus {
   outline: none;
 }

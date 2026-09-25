@@ -899,7 +899,6 @@ mod tests {
     fn an_unblocked_delete_cascades_and_marks_the_unreferenced_blob() {
         let (_temp, _lease, storage) = crate::test_storage();
         seed(&storage);
-        assert!(blockers::blocker_sources().is_empty(), "P4 registers none");
 
         let deleted = storage
             .write_repo(|tx| delete_model_in(tx, "mdl-a", 1, blockers::blocker_sources()))
@@ -909,5 +908,155 @@ mod tests {
         assert_eq!(deleted.projects.len(), 1);
         assert_eq!(deleted.projects[0].model_count, 0);
         assert_eq!(counts(&storage), [0, 0, 0, 0, 1]);
+    }
+
+    /// P5 D14: one Slice Revision is named in the singular.
+    #[test]
+    fn one_slice_revision_is_named_in_the_singular() {
+        use crate::slicing::repository::{fixtures, insert_farm3d_revision};
+
+        let (_temp, _lease, storage) = crate::test_storage();
+        storage
+            .write(|tx| {
+                fixtures::seed(tx);
+                Ok(())
+            })
+            .expect("seed");
+        storage
+            .write_repo(|tx| insert_farm3d_revision(tx, &fixtures::a_farm3d_revision("slr-a", 1)))
+            .expect("revision");
+
+        let error = storage
+            .write_repo(|tx| delete_model_in(tx, "mdl-stl", 1, blockers::blocker_sources()))
+            .err()
+            .expect("the Slice Revision must block the delete");
+        let RepositoryError::LifecycleBlocked(blockers) = &error else {
+            panic!("expected LifecycleBlocked, got {error:?}");
+        };
+        assert_eq!(
+            blockers[0].message,
+            "Delete this Model's 1 Slice Revision first."
+        );
+    }
+
+    /// P5 D14: a Model with Slice Revisions can't be deleted until they
+    /// are; the production registry reports how many there are.
+    #[test]
+    fn a_model_with_slice_revisions_is_blocked_by_the_registered_source() {
+        use crate::slicing::repository::{fixtures, insert_farm3d_revision};
+
+        let (_temp, _lease, storage) = crate::test_storage();
+        storage
+            .write(|tx| {
+                fixtures::seed(tx);
+                Ok(())
+            })
+            .expect("seed");
+        storage
+            .write_repo(|tx| {
+                insert_farm3d_revision(tx, &fixtures::a_farm3d_revision("slr-a", 1))?;
+                insert_farm3d_revision(tx, &fixtures::a_farm3d_revision("slr-b", 2))
+            })
+            .expect("revisions");
+
+        let error = storage
+            .write_repo(|tx| delete_model_in(tx, "mdl-stl", 1, blockers::blocker_sources()))
+            .err()
+            .expect("the Slice Revisions must block the delete");
+
+        let RepositoryError::LifecycleBlocked(blockers) = &error else {
+            panic!("expected LifecycleBlocked, got {error:?}");
+        };
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].action, LifecycleAction::Delete);
+        assert_eq!(blockers[0].code, LifecycleBlockerCode::SliceRevisionsExist);
+        assert_eq!(
+            blockers[0].message,
+            "Delete this Model's 2 Slice Revisions first."
+        );
+        assert_eq!(
+            CommandError::from_repository(error).code,
+            ErrorCode::LifecycleBlocked
+        );
+        let models: i64 = storage
+            .read(|c| c.query_row("SELECT COUNT(*) FROM library_models", [], |row| row.get(0)))
+            .expect("models");
+        assert_eq!(models, 2, "nothing was deleted");
+    }
+
+    /// P5 D14: a Model's Preparation and its operations cascade with it,
+    /// and an operation's log is cleaned up with the Model's own blobs.
+    #[test]
+    fn deleting_a_model_releases_its_preparations_operation_logs() {
+        use crate::slicing::repository::{
+            fixtures, insert_operation, insert_preparation, transition_operation,
+            NewSliceOperation, OperationTransition,
+        };
+        use crate::slicing::PlateSnapshot;
+
+        let (_temp, _lease, storage) = crate::test_storage();
+        storage
+            .write(|tx| {
+                fixtures::seed(tx);
+                Ok(())
+            })
+            .expect("seed");
+        storage
+            .write_repo(|tx| {
+                insert_preparation(tx, "prp-a", "mdl-stl", "msr-stl-1", &fixtures::a_document())?;
+                insert_operation(
+                    tx,
+                    &NewSliceOperation {
+                        id: "sop-a".to_string(),
+                        preparation_id: "prp-a".to_string(),
+                        source_revision_id: "msr-stl-1".to_string(),
+                        plate: PlateSnapshot {
+                            plate_index: 1,
+                            plate: fixtures::a_plate("plate-a", None),
+                        },
+                    },
+                )?;
+                transition_operation(
+                    tx,
+                    "sop-a",
+                    OperationTransition::Cancel {
+                        log_sha256: Some(fixtures::LOG_HASH.to_string()),
+                    },
+                )
+            })
+            .expect("preparation");
+
+        storage
+            .write_repo(|tx| delete_model_in(tx, "mdl-stl", 1, blockers::blocker_sources()))
+            .expect("delete");
+
+        let pending: Vec<String> = storage
+            .read(|c| {
+                let mut statement =
+                    c.prepare("SELECT sha256 FROM pending_blob_cleanup ORDER BY sha256")?;
+                let rows = statement
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .expect("pending");
+        assert_eq!(
+            pending,
+            vec![
+                fixtures::STL_HASH.to_string(),
+                fixtures::LOG_HASH.to_string()
+            ]
+        );
+        let remaining: i64 = storage
+            .read(|c| {
+                c.query_row(
+                    "SELECT (SELECT COUNT(*) FROM slice_preparations)
+                          + (SELECT COUNT(*) FROM slice_operations)",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .expect("remaining");
+        assert_eq!(remaining, 0);
     }
 }

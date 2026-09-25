@@ -1,5 +1,5 @@
-//! D18 step 1: what may block deleting a Model. P4 registers no source; P5
-//! and P7 add "referenced by a Slice Revision, Queue Entry, or Job" here,
+//! D18 step 1: what may block deleting a Model. P5 registers "has Slice
+//! Revisions" (spec D14); P7 adds Queue Entries and Jobs here,
 //! the same way P2/P3 register `LifecycleBlockerSource`s for Printers
 //! (`printers::lifecycle::blocker_sources`). A blocked delete is
 //! `LIFECYCLE_BLOCKED`, reusing P2's `LifecycleBlocker` with
@@ -22,10 +22,9 @@ pub trait ModelDeletionBlocker: Send + Sync {
     ) -> Result<Vec<LifecycleBlocker>, StorageError>;
 }
 
-/// Every registered source, in the order their blockers are reported. Empty
-/// in P4.
+/// Every registered source, in the order their blockers are reported.
 pub fn blocker_sources() -> &'static [&'static dyn ModelDeletionBlocker] {
-    &[]
+    &[&crate::slicing::blockers::SliceRevisionsBlockModelDeletion]
 }
 
 /// Every blocker `sources` report for deleting `model`.

@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryWorkspace } from "./LibraryWorkspace";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
@@ -7,6 +8,7 @@ import { navigation, type NavigationTarget } from "../navigation/navigation-stor
 import type { ImportSelectionSummary, ModelRecord } from "../library/types";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
+vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 
 const desktop = vi.hoisted(() => ({ available: false }));
 vi.mock("../ipc/client", async (importOriginal) => ({
@@ -56,6 +58,36 @@ const SELECTION: ImportSelectionSummary = {
   purpose: "import",
   files: [{ fileIndex: 0, fileName: "hook.stl", sizeBytes: 684 }],
 };
+
+// `importSelection` is App's state, cleared on `onImportClose` in the real
+// app; the plain `renderWorkspace` above never updates it once rendered, so
+// the dialog never actually leaves the document. This wires it up as a
+// signal, the way App does, for tests that need the dialog to really close.
+function renderWorkspaceWithImportControl(initial: ImportSelectionSummary | null = SELECTION) {
+  const onImport = vi.fn();
+  const [selection, setSelection] = createSignal<ImportSelectionSummary | null>(initial);
+  render(() => (
+    <LibraryWorkspace
+      navigate={navigate}
+      onImport={onImport}
+      importSelection={selection()}
+      onImportClose={() => setSelection(null)}
+    />
+  ));
+  return { onImport, setSelection };
+}
+
+function readyInspection(selectionId: string) {
+  return {
+    selectionId,
+    items: [{
+      status: "ready" as const, fileIndex: 0, fileName: "hook.stl", format: "stl" as const, sizeBytes: 684,
+      sha256: "e".repeat(64),
+      summary: { format: "stl" as const, triangleCount: 12, boundsMm: { min: [0, 0, 0] as [number, number, number], max: [1, 1, 1] as [number, number, number] }, unitsAssumed: true as const },
+      unsupported: [], warnings: [], duplicates: [],
+    }],
+  };
+}
 
 function sidebarEntry(name: RegExp): HTMLElement {
   return within(screen.getByRole("navigation", { name: "Library" })).getByRole("button", { name });
@@ -219,6 +251,79 @@ describe("LibraryWorkspace", () => {
     expect(within(details).getByRole("textbox", { name: "Name" })).toHaveValue("Spare knob");
   });
 
+  it("Prepare… turns the Library into the Preparation workspace until Back to Library or another selection", async () => {
+    const { loadWebSlicingFixture } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    const details = screen.getByRole("complementary", { name: "Model details" });
+    fireEvent.click(within(details).getByRole("button", { name: "Prepare…" }));
+    expect(await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 })).toBeInTheDocument();
+    // Focus moves to the workspace, since the button that opened it is gone.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Preparing Enclosure lid" })).toHaveFocus());
+    // The sidebar and the details panel make way; the target is unchanged.
+    expect(screen.queryByRole("navigation", { name: "Library" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Model details" })).toBeNull();
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-web-enclosure" });
+    fireEvent.click(screen.getByRole("button", { name: /Back to Library/ }));
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    // Back on the Model that was being prepared.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enclosure lid", pressed: true })).toHaveFocus());
+
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 });
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-knob" } });
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
+  });
+
+  it("has one Prepare… entry, in the Model's details, and none on the card menu", async () => {
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    const prepare = screen.getAllByRole("button", { name: "Prepare…" });
+    expect(prepare).toHaveLength(1);
+    expect(screen.getByRole("complementary", { name: "Model details" })).toContainElement(prepare[0]);
+    await fireEvent.pointerDown(screen.getByLabelText("Actions for Enclosure lid"), { pointerType: "mouse", button: 0 });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText(/Prepare/)).toBeNull();
+  });
+
+  it("a finished slice's Open the Slice Revision ends preparing and shows its review in the details", async () => {
+    const { loadWebSlicingFixture } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the Slice Revision" }, { timeout: 5000 }));
+
+    const details = await screen.findByRole("complementary", { name: "Model details" });
+    const heading = await within(details).findByRole("heading", { level: 3, name: "Plate 1: Lid" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-web-enclosure" });
+    // Back to the details: the request was used once and isn't replayed.
+    fireEvent.click(within(details).getByRole("button", { name: "Model details" }));
+    expect(await within(details).findByRole("heading", { name: "Slice Revisions" })).toBeInTheDocument();
+  });
+
+  it("saves an edit still waiting for its pause when another selection ends preparing", async () => {
+    const { loadWebSlicingFixture, slicingStoreMock } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    await screen.findByRole("tab", { name: "Lid" }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole("button", { name: /Plate$/ }));
+    await screen.findByRole("tab", { name: /^Plate 3/ });
+    expect(slicingStoreMock.updatePreparation).not.toHaveBeenCalled();
+
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-knob" } });
+    expect(await screen.findByRole("navigation", { name: "Library" })).toBeInTheDocument();
+    await waitFor(() => expect(slicingStoreMock.updatePreparation).toHaveBeenCalledTimes(1));
+    const [, document] = slicingStoreMock.updatePreparation.mock.calls[0];
+    expect(document.plates).toHaveLength(3);
+  });
+
   it("a card's Add to Project… selects the Model and focuses the details panel's picker", async () => {
     renderWorkspace();
     await fireEvent.pointerDown(screen.getByLabelText("Actions for Spare knob"), { pointerType: "mouse", button: 0 });
@@ -331,6 +436,46 @@ async function openProjectMenu(name: string, item: string) {
   await fireEvent.pointerDown(screen.getByLabelText(`Actions for ${name}`), { pointerType: "mouse", button: 0 });
   await fireEvent.pointerUp(await screen.findByText(item), { pointerType: "mouse", button: 0 });
 }
+
+describe("LibraryWorkspace focus return", () => {
+  it("returns focus to Import… after Done closes the import dialog", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => readyInspection(selectionId));
+    libraryStoreMock.importModels.mockImplementation(async () => ({
+      items: [{ fileIndex: 0, outcome: "imported", model: fixture.models[1]!, errors: [], warnings: [] }],
+    }));
+    renderWorkspaceWithImportControl();
+    const importButton = screen.getByRole("button", { name: "Import…" });
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Models" })).toBeNull());
+    await waitFor(() => expect(importButton).toHaveFocus());
+  });
+
+  it("returns focus to Import… after Escape closes the import dialog", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => readyInspection(selectionId));
+    renderWorkspaceWithImportControl();
+    const importButton = screen.getByRole("button", { name: "Import…" });
+
+    const dialog = await screen.findByRole("dialog", { name: "Import Models" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Models" })).toBeNull());
+    await waitFor(() => expect(importButton).toHaveFocus());
+  });
+
+  it("returns focus to New Project after Cancel closes its dialog", async () => {
+    renderWorkspace();
+    const newProjectButton = screen.getByRole("button", { name: "New Project" });
+    await fireEvent.click(newProjectButton);
+    const dialog = await screen.findByRole("dialog", { name: "New Project" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New Project" })).toBeNull());
+    await waitFor(() => expect(newProjectButton).toHaveFocus());
+  });
+});
 
 describe("LibraryWorkspace recovery", () => {
   it("Locate source… opens the dialog; a successful locate closes it and the panel shows the source OK", async () => {

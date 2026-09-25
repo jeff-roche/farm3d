@@ -48,3 +48,15 @@
     transform: translateX(250%);
   }
 }
+
+/* Accessibility and adaptation: progress bars don't animate under reduced
+   motion; an indeterminate bar holds still as a partial fill. */
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+
+  .track[data-indeterminate] .fill {
+    animation: none;
+  }
+}

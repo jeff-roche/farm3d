@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MonitorPrinterView, MonitorRosterView } from "../monitor/monitor-store";
 import { AppShell } from "./AppShell";
@@ -60,7 +60,7 @@ describe("AppShell", () => {
     ));
 
     const totalRoster = screen.getByRole("button", { name: "3 Printers" });
-    await fireEvent.focus(totalRoster);
+    await fireEvent.click(totalRoster);
     expect(await screen.findByText("Bay One")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "All adapters connected" })).toBeInTheDocument();
     expect(screen.getByText("Last live event 2m ago")).toBeInTheDocument();
@@ -70,6 +70,41 @@ describe("AppShell", () => {
     expect(Array.from(shell?.children ?? []).map((child) => child.nodeName)).toEqual([
       "HEADER", "NAV", "MAIN", "FOOTER",
     ]);
+  });
+
+  it("keeps the header's Tab order through its roster chips", async () => {
+    render(() => (
+      <AppShell
+        active="monitor"
+        onSelect={() => {}}
+        title="Monitor"
+        printerRoster={roster()}
+        operationalRosters={[roster({ key: "ready", label: "Ready", count: 1 })]}
+        adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
+      >
+        <p>Workspace</p>
+      </AppShell>
+    ));
+    const total = screen.getByRole("button", { name: "3 Printers" });
+    const ready = screen.getByRole("button", { name: "1 Ready" });
+
+    total.focus();
+    await fireEvent.focus(total);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.activeElement).toBe(total);
+    expect(total).toHaveAttribute("aria-expanded", "false");
+
+    await fireEvent.click(total);
+    const list = await screen.findByRole("dialog", { hidden: true });
+    await waitFor(() => expect(list).toHaveFocus());
+    await fireEvent.keyDown(list, { key: "Tab" });
+    await waitFor(() => expect(ready).toHaveFocus());
+
+    await fireEvent.click(ready);
+    const readyList = await screen.findByRole("dialog", { hidden: true });
+    await waitFor(() => expect(readyList).toHaveFocus());
+    await fireEvent.keyDown(readyList, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(ready).toHaveFocus());
   });
 
   it("refreshes the relative age on a low-frequency timer and clears it on unmount", () => {

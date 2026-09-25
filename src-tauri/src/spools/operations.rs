@@ -28,6 +28,10 @@ pub enum OperationKind {
     MoveSpool,
     ArchivePrinter,
     SpoolLifecycle,
+    /// P5 D10: `start_slice`.
+    StartSlice,
+    /// P5 D16: `create_external_slice_revision`.
+    CreateExternalSliceRevision,
 }
 
 /// What [`claim`] found.

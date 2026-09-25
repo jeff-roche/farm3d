@@ -34,7 +34,8 @@ pub enum LifecycleAction {
 /// Why a `LifecycleAction` is currently blocked. P2 produces
 /// `NotArchived`/`AlreadyArchived`; P3 adds `SpoolsLoaded` (a Printer still
 /// holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
-/// has open reservations, D8).
+/// has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
+/// still has Slice Revisions, D14).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(
@@ -46,6 +47,7 @@ pub enum LifecycleBlockerCode {
     AlreadyArchived,
     SpoolsLoaded,
     SpoolReserved,
+    SliceRevisionsExist,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]

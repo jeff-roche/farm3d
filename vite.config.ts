@@ -8,6 +8,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [solid()],
 
+  build: {
+    // Only the three.js chunk (~557 kB) is above Vite's 500 kB default. It
+    // is loaded lazily, when a 3D viewport first mounts
+    // (src/slicing/viewport/renderer-factory.ts); the main chunk stays
+    // under 500 kB.
+    chunkSizeWarningLimit: 600,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

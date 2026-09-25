@@ -3,10 +3,12 @@ pub mod catalog;
 pub mod connections;
 pub mod contracts;
 pub mod document_io;
+mod file_links;
 pub mod library;
 pub mod persistence;
 pub mod printers;
 pub mod settings;
+pub mod slicing;
 pub mod spools;
 
 use catalog::commands::{
@@ -32,6 +34,13 @@ use printers::commands::{
 };
 use printers::create::probe_connection;
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
+use slicing::commands::{
+    cancel_slice_operation, check_slicer_runtime, create_external_slice_revision,
+    create_preparation, delete_preparation, delete_slice_revision, get_revision_geometry,
+    get_revision_mesh, get_slice_operation_log, get_slice_revision, get_slice_revision_log,
+    get_slicer_runtime, list_slice_options, list_slice_revisions, list_slicing, pick_preset_source,
+    pick_slicer_engine, reload_preparation, reset_slicer_runtime, start_slice, update_preparation,
+};
 use spools::commands::{
     create_spool, create_tare, delete_tare, list_spools, move_spool, record_spool_amount,
     set_spool_lifecycle, spool_history, update_spool, update_tare,
@@ -53,6 +62,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub inventory_changes: tokio::sync::broadcast::Sender<spools::events::InventoryChange>,
     /// P4: the content store, Library stream, selections, and picker.
     pub library: Arc<library::LibraryServices<R>>,
+    /// P5: the slicer runtime, the scheduler, and the `slicing` stream.
+    pub slicing: Arc<slicing::SlicingServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -85,11 +96,19 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             library::content::ContentStore::open(storage.paths().content_root())
                 .expect("content store"),
         );
+        let slicing = Arc::new(slicing::SlicingServices::new(
+            Arc::clone(&storage),
+            Arc::clone(&content),
+            Arc::clone(&catalog),
+            Arc::new(slicing::runtime::FixedSlicerRuntimeFileIo::default()),
+            storage.paths().metadata_root().join("slicer-cache"),
+        ));
         Self {
             library: Arc::new(library::LibraryServices::new(
                 content,
                 Arc::new(library::selection::CancelledModelFileIo),
             )),
+            slicing,
             storage,
             catalog,
             manager,
@@ -105,7 +124,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 58] = [
+pub const COMMAND_NAMES: [&str; 79] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -164,6 +183,27 @@ pub const COMMAND_NAMES: [&str; 58] = [
     "check_linked_sources",
     "locate_linked_source",
     "convert_model_to_managed",
+    "get_slicer_runtime",
+    "check_slicer_runtime",
+    "pick_slicer_engine",
+    "pick_preset_source",
+    "reset_slicer_runtime",
+    "list_slice_options",
+    "get_revision_geometry",
+    "get_revision_mesh",
+    "list_slicing",
+    "create_preparation",
+    "update_preparation",
+    "reload_preparation",
+    "delete_preparation",
+    "start_slice",
+    "cancel_slice_operation",
+    "get_slice_operation_log",
+    "list_slice_revisions",
+    "get_slice_revision",
+    "get_slice_revision_log",
+    "create_external_slice_revision",
+    "delete_slice_revision",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -205,6 +245,17 @@ pub fn start_library_runtime<R: tauri::Runtime>(
         return;
     }
     tauri::async_runtime::spawn(async move { supervisor.reconcile_all().await });
+}
+
+/// P5: attaches the slicing services to `app` and has them follow the
+/// Library (a linked source's new revision makes a Preparation stale, D5).
+/// `build_runtime_services` calls it on every successful start; tests call
+/// it the same way. A second call for the same services does nothing.
+pub fn start_slicing_runtime<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    app: &tauri::AppHandle<R>,
+) {
+    services.slicing.start(app);
 }
 
 enum StartupFailure {
@@ -281,6 +332,12 @@ fn build_runtime_services<R: tauri::Runtime>(
             .map_err(startup_error)?,
     );
     content.startup_sweep(&storage).map_err(startup_error)?;
+    // P5 D10: interrupt what a previous run left queued or running, and
+    // remove every work directory, before any command is served.
+    slicing::operations::recover_after_restart(&storage).map_err(startup_error)?;
+    // Recovery pruned old operation logs; unlink them now. A blob that
+    // can't be unlinked is retried by the next startup sweep.
+    let _ = content.release_unreferenced(&storage);
 
     let resource_path = app
         .path()
@@ -331,6 +388,19 @@ fn build_runtime_services<R: tauri::Runtime>(
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?
         .take()
         .ok_or_else(|| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    let slicer_cache = app
+        .path()
+        .app_cache_dir()
+        .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    let slicing = Arc::new(slicing::SlicingServices::new(
+        Arc::clone(&storage),
+        Arc::clone(&content),
+        Arc::clone(&catalog),
+        Arc::new(slicing::runtime::NativeSlicerRuntimeFileIo::new(
+            app.clone(),
+        )),
+        slicer_cache,
+    ));
     let services = RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -343,9 +413,14 @@ fn build_runtime_services<R: tauri::Runtime>(
             content,
             Arc::new(library::selection::NativeModelFileIo::new(app.clone())),
         )),
+        slicing,
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     };
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
+    start_slicing_runtime(&services, app);
+    // D2: the startup probe runs in the background; `get_slicer_runtime`
+    // meanwhile waits on the same probe rather than starting another.
+    services.slicing.probe_in_background();
     Ok(services)
 }
 
@@ -536,6 +611,27 @@ pub fn run() {
             check_linked_sources,
             locate_linked_source,
             convert_model_to_managed,
+            get_slicer_runtime,
+            check_slicer_runtime,
+            pick_slicer_engine,
+            pick_preset_source,
+            reset_slicer_runtime,
+            list_slice_options,
+            get_revision_geometry,
+            get_revision_mesh,
+            list_slicing,
+            create_preparation,
+            update_preparation,
+            reload_preparation,
+            delete_preparation,
+            start_slice,
+            cancel_slice_operation,
+            get_slice_operation_log,
+            list_slice_revisions,
+            get_slice_revision,
+            get_slice_revision_log,
+            create_external_slice_revision,
+            delete_slice_revision,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

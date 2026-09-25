@@ -10,9 +10,26 @@ install:
 install-rust:
     cargo fetch --manifest-path src-tauri/Cargo.toml
 
-# Run the Tauri backend's Rust test suite
+# Run the Tauri backend's Rust test suite (with the fake-orca test double)
 test-rust:
-    cargo test --manifest-path src-tauri/Cargo.toml
+    cargo test --manifest-path src-tauri/Cargo.toml --features test-support
+
+# Run the ignored real-OrcaSlicer tests; FARM3D_ORCA names the engine (e.g. the v2.4.2 AppImage), FARM3D_ORCA_PRESETS optionally a preset source
+test-orca:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_ORCA:-}" ]; then
+        echo "error: set FARM3D_ORCA to an OrcaSlicer engine, e.g. FARM3D_ORCA=~/Downloads/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage just test-orca" >&2
+        exit 1
+    fi
+    # One at a time: the cancel twin counts AppImage mounts.
+    cargo test --manifest-path src-tauri/Cargo.toml --features test-support \
+        --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing --test p5_tracer \
+        real_orca -- --ignored --test-threads=1
+
+# Type-check the backend for Windows from Linux (no mingw needed; nothing is linked). `just check-windows clippy` lints instead
+check-windows mode="check":
+    scripts/check-windows.sh {{mode}}
 
 # Regenerate TypeScript contracts from the Rust wire types
 gen-contracts:
@@ -21,6 +38,10 @@ gen-contracts:
 # Regenerate the generated Library format fixtures (never the *.expected.json oracles)
 gen-library-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
+
+# Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF, argument vectors, flat presets)
+gen-slicing-fixtures:
+    cargo test --manifest-path src-tauri/Cargo.toml --test p5_geometry regenerate_slicing_fixtures -- --ignored --exact
 
 # Regenerate the bundled printer catalog from a pinned OrcaSlicer git tag
 gen-catalog tag="v2.4.2":

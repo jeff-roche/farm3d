@@ -21,6 +21,7 @@ import { Stepper, type StepperStep } from "./Stepper";
 import { Textarea } from "./Textarea";
 import { FileDropSurface } from "./FileDropSurface";
 import { SegmentedControl } from "./SegmentedControl";
+import { Progress } from "./Progress";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -162,6 +163,38 @@ describe("Select", () => {
     expect(message.id).not.toBe("");
     const describedBy = screen.getByRole("button").getAttribute("aria-describedby") ?? "";
     expect(describedBy.split(" ")).toContain(message.id);
+  });
+});
+
+describe("Select groups and an empty controlled value", () => {
+  it("lists options under their group headings and selects one", async () => {
+    const onChange = vi.fn();
+    render(() => (
+      <Select
+        label="Target"
+        placeholder="Choose a target"
+        value={null}
+        groups={[
+          { label: "Printers", options: ["CC Left"] },
+          { label: "Printer profiles", options: ["Centauri Carbon 0.4"] },
+        ]}
+        onChange={onChange}
+      />
+    ));
+    expect(screen.getByRole("button")).toHaveTextContent("Choose a target");
+    await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
+    expect(await screen.findByText("Printers")).toBeInTheDocument();
+    expect(screen.getByText("Printer profiles")).toBeInTheDocument();
+    await fireEvent.pointerUp(screen.getByRole("option", { name: "Centauri Carbon 0.4" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenCalledWith("Centauri Carbon 0.4");
+  });
+
+  it("shows the placeholder again when the value goes back to null", () => {
+    const [value, setValue] = createSignal<string | null>("Apple");
+    render(() => <Select label="Fruit" placeholder="None" options={["Apple", "Banana"]} value={value()} />);
+    expect(screen.getByRole("button")).toHaveTextContent("Apple");
+    setValue(null);
+    expect(screen.getByRole("button")).toHaveTextContent("None");
   });
 });
 
@@ -310,6 +343,24 @@ describe("Dialog", () => {
     // Only the Close button — no trigger.
     expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Close"]);
   });
+
+  it("returns focus to `returnFocus` when a trigger-less dialog closes", async () => {
+    const [open, setOpen] = createSignal(false);
+    render(() => (
+      <>
+        <button onClick={() => setOpen(true)}>Opener</button>
+        <Dialog title="Confirm" open={open()} onOpenChange={setOpen} returnFocus={() => screen.getByText("Opener")}>
+          Body content
+        </Dialog>
+      </>
+    ));
+    await fireEvent.click(screen.getByText("Opener"));
+    await screen.findByText("Body content");
+    await waitFor(() => expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true));
+    await fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText("Body content")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Opener")).toHaveFocus());
+  });
 });
 
 describe("Popover", () => {
@@ -389,6 +440,11 @@ describe("NumberField", () => {
   it("renders the suffix text", () => {
     render(() => <NumberField label="Height" value={10} suffix="mm" />);
     expect(screen.getByText("mm")).toBeInTheDocument();
+  });
+
+  it("shows a placeholder while empty", () => {
+    render(() => <NumberField label="Walls" placeholder="Preset's value" />);
+    expect(screen.getByLabelText("Walls")).toHaveAttribute("placeholder", "Preset's value");
   });
 });
 
@@ -471,27 +527,124 @@ const rosterPrinters = Array.from({ length: 10 }, (_, index) => ({
 }));
 
 describe("PrinterRoster", () => {
-  it("opens on keyboard focus and returns focus after Escape", async () => {
+  it("shows each Printer's detail beside its state", async () => {
+    render(() => (
+      <PrinterRoster
+        label="matching Printers"
+        count={1}
+        printers={[{ id: "a", name: "CC 1", detail: "Bench 1", stateLabel: "Ready" }]}
+      />
+    ));
+    await fireEvent.click(screen.getByLabelText("1 matching Printers"));
+    expect(await screen.findByText("· Bench 1")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("keeps focus on the chip when it's focused, without opening", async () => {
     render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
 
     const trigger = screen.getByLabelText("10 offline Printers");
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-
     trigger.focus();
+    await fireEvent.focus(trigger);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
+  });
+
+  it("opens on press and returns focus to the chip after Escape", async () => {
+    render(() => <PrinterRoster label="offline Printers" count={10} printers={rosterPrinters} />);
+
+    const trigger = screen.getByLabelText("10 offline Printers");
+    trigger.focus();
+    // Enter and Space press a button through its click.
+    await fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(screen.getByRole("dialog", { hidden: true }).contains(document.activeElement)).toBe(true));
 
-    const viewAll = screen.getByRole("button", { name: "View all" });
-    viewAll.focus();
-    expect(viewAll).toHaveFocus();
-
-    await fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
+    await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     await waitFor(() => {
+      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
       expect(trigger).toHaveFocus();
       expect(trigger).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByText("Printer 1")).not.toBeInTheDocument();
     });
+  });
+
+  it("continues the Tab order after the chip, either way, from the open roster", async () => {
+    render(() => (
+      <div>
+        <button type="button">Before</button>
+        <PrinterRoster label="Printers" count={10} printers={rosterPrinters} />
+        <button type="button">After</button>
+      </div>
+    ));
+    const trigger = screen.getByLabelText("10 Printers");
+
+    await fireEvent.click(trigger);
+    const viewAll = await screen.findByRole("button", { name: "View all", hidden: true });
+    viewAll.focus();
+    await fireEvent.keyDown(viewAll, { key: "Tab" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "After", hidden: true })).toHaveFocus();
+    });
+
+    await fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    dialog.focus();
+    await fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+  });
+
+  it("moves on from a roster with nothing to press, when tabbed", async () => {
+    render(() => (
+      <div>
+        <PrinterRoster label="Printers" count={2} printers={rosterPrinters.slice(0, 2)} />
+        <button type="button" disabled>Disabled</button>
+        <button type="button">After</button>
+      </div>
+    ));
+    await fireEvent.click(screen.getByLabelText("2 Printers"));
+    const dialog = await screen.findByRole("dialog", { hidden: true });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await fireEvent.keyDown(dialog, { key: "Tab" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "After", hidden: true })).toHaveFocus());
+  });
+
+  it("opens on hover without taking focus", async () => {
+    render(() => (
+      <div>
+        <button type="button">Elsewhere</button>
+        <PrinterRoster label="Printers" count={3} printers={rosterPrinters.slice(0, 3)} />
+      </div>
+    ));
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere", hidden: true });
+    elsewhere.focus();
+    const trigger = screen.getByLabelText("3 Printers");
+
+    await fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
+    expect(elsewhere).toHaveFocus();
+
+    await fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.queryByText("Printer 1")).not.toBeInTheDocument());
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it("stays open when the hovered chip is clicked", async () => {
+    render(() => <PrinterRoster label="Printers" count={3} printers={rosterPrinters.slice(0, 3)} />);
+    const trigger = screen.getByLabelText("3 Printers");
+    await fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.getByText("Printer 1")).toBeVisible());
+    await fireEvent.click(trigger);
+    await fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.getByText("Printer 1")).toBeVisible();
   });
 
   it("opens on pointer hover and bounds rows with a View all action", async () => {
@@ -727,5 +880,22 @@ describe("SegmentedControl", () => {
 
     listInput.focus();
     expect(document.activeElement).toBe(listInput);
+  });
+});
+
+describe("Progress", () => {
+  it("reads its value as the given text", () => {
+    render(() => <Progress label="Slicing" value={42} showValue valueLabel="42% of the plate" />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "42");
+    expect(bar).toHaveAttribute("aria-valuetext", "42% of the plate");
+    expect(screen.getByText("42% of the plate")).toBeInTheDocument();
+  });
+
+  it("has no value while indeterminate", () => {
+    render(() => <Progress label="Slicing" indeterminate />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    expect(bar).toHaveAttribute("data-indeterminate");
   });
 });

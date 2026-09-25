@@ -804,6 +804,34 @@ impl ContentStore {
         })
     }
 
+    /// Opens the blob for `sha256` as a plain, seekable file, without
+    /// verifying it. For readers that need to seek (a 3MF's ZIP directory,
+    /// P5 D6); pair it with [`ContentStore::verify`] before trusting the
+    /// bytes. A blob is never buffered whole.
+    pub fn open_unverified(&self, sha256: &str) -> Result<File, ContentError> {
+        if !is_sha256_hex(sha256) {
+            return Err(ContentError::Unreadable(io::ErrorKind::InvalidInput));
+        }
+        let path = self.blobs.join(&sha256[..2]).join(sha256);
+        let file = open_no_follow(&path).map_err(|error| ContentError::Unreadable(error.kind()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| ContentError::Unreadable(error.kind()))?;
+        if !metadata.is_file() {
+            return Err(ContentError::NotAFile);
+        }
+        Ok(file)
+    }
+
+    /// Streams the blob for `sha256` through its hash, in one pass with a
+    /// fixed buffer. [`ContentError::HashMismatch`] when the bytes no
+    /// longer match.
+    pub fn verify(&self, sha256: &str) -> Result<(), ContentError> {
+        let mut reader = self.open_verified(sha256)?;
+        io::copy(&mut reader, &mut io::sink())?;
+        Ok(())
+    }
+
     /// Deletes `staging/<staging_key>` and everything in it. Best effort:
     /// anything left behind goes at the next startup sweep.
     pub fn discard_staging(&self, staging_key: &str) {
@@ -844,7 +872,9 @@ impl ContentStore {
 
 /// The in-transaction half of D4 cleanup, called by whatever deletes the
 /// rows that referenced `candidates`. Each candidate no longer referenced
-/// by any revision or thumbnail loses its `content_blobs` row and gains a
+/// by any Model Source Revision, thumbnail, Slice Revision (its G-code or
+/// an input blob), or slice operation log (P5 D13) loses its
+/// `content_blobs` row and gains a
 /// `pending_blob_cleanup` row. After commit, call
 /// [`ContentStore::release_unreferenced`] to unlink the files.
 pub fn mark_unreferenced_blobs(
@@ -855,7 +885,10 @@ pub fn mark_unreferenced_blobs(
     for sha256 in candidates {
         let referenced: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM model_source_revisions WHERE content_sha256 = ?1)
-                 OR EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = ?1)",
+                 OR EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_revisions WHERE gcode_sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_revision_blobs WHERE sha256 = ?1)
+                 OR EXISTS(SELECT 1 FROM slice_operations WHERE log_sha256 = ?1)",
             [sha256],
             |row| row.get(0),
         )?;

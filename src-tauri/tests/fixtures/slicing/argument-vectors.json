@@ -1,0 +1,40 @@
+{
+  "linux": [
+    "<engine>",
+    "--datadir",
+    "<work>/datadir",
+    "--outputdir",
+    "<work>/out",
+    "--load-settings",
+    "<work>/input/machine.json;<work>/input/process.json",
+    "--load-filaments",
+    "<work>/input/filament.json",
+    "--arrange",
+    "0",
+    "--orient",
+    "0",
+    "--slice",
+    "1",
+    "--pipe",
+    "<work>/progress.fifo",
+    "<work>/input/plate.3mf"
+  ],
+  "otherPlatforms": [
+    "<engine>",
+    "--datadir",
+    "<work>/datadir",
+    "--outputdir",
+    "<work>/out",
+    "--load-settings",
+    "<work>/input/machine.json;<work>/input/process.json",
+    "--load-filaments",
+    "<work>/input/filament.json",
+    "--arrange",
+    "0",
+    "--orient",
+    "0",
+    "--slice",
+    "1",
+    "<work>/input/plate.3mf"
+  ]
+}

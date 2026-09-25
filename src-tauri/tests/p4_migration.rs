@@ -43,7 +43,7 @@ fn raw_connection(paths: &StoragePaths) -> rusqlite::Connection {
 /// v4-shaped Printer/Spool rows before ever letting `Storage::open` see it.
 fn v4_database(paths: &StoragePaths) -> rusqlite::Connection {
     let mut connection = rusqlite::Connection::open(paths.database()).expect("v4 database");
-    apply_through(&mut connection, CURRENT_SCHEMA_VERSION - 1).expect("v4 migrations");
+    apply_through(&mut connection, 4).expect("v4 migrations");
     connection
 }
 
@@ -430,23 +430,19 @@ fn a_crash_before_commit_leaves_the_database_unchanged_at_v4() {
     let mut connection = v4_database(&paths);
     insert_v4_printer(&connection, "prn-a", "2026-01-01T00:00:00.000Z");
 
-    let error = apply_through_failing_before_commit(&mut connection, CURRENT_SCHEMA_VERSION)
+    let error = apply_through_failing_before_commit(&mut connection, 5)
         .expect_err("the injected failure must surface");
     assert!(matches!(error, StorageError::MigrationFailed));
 
     let user_version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user_version");
-    assert_eq!(
-        user_version,
-        CURRENT_SCHEMA_VERSION - 1,
-        "the schema version must roll back to v4"
-    );
+    assert_eq!(user_version, 4, "the schema version must roll back to v4");
 
     let v5_ledger_rows: i64 = connection
         .query_row(
             "SELECT count(*) FROM schema_migrations WHERE version = ?1",
-            [CURRENT_SCHEMA_VERSION],
+            [5],
             |row| row.get(0),
         )
         .expect("ledger rows");

@@ -1,0 +1,13 @@
+{
+  "type": "filament",
+  "name": "Test ABS @Test Printer",
+  "inherits": "fdm_filament_common",
+  "from": "system",
+  "instantiation": "true",
+  "filament_type": [
+    "ABS"
+  ],
+  "compatible_printers": [
+    "Test Printer 0.4 nozzle"
+  ]
+}

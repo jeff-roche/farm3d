@@ -141,6 +141,16 @@ vi.mock("./library/library-store", async () => {
   };
 });
 
+vi.mock("./slicing/slicing-store", async () => (await import("./slicing/slicing-store-mock")).slicingStoreMock);
+
+vi.mock("./screens/SlicerSettingsDialog", () => ({
+  SlicerSettingsDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
+    <div role="dialog" aria-label="Slicer">
+      <button onClick={() => props.onOpenChange(false)}>Close Slicer</button>
+    </div>
+  ),
+}));
+
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
 }));
@@ -220,8 +230,11 @@ const SETTINGS = {
   updatedAt: "",
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  // The mocked slicing store outlives `vi.resetModules`; start each test
+  // with its default spies.
+  vi.mocked(await import("./slicing/slicing-store")).startSlicing.mockReset();
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -274,6 +287,19 @@ afterEach(() => {
 });
 
 describe("App", () => {
+  it("mounts the Slicer settings once, at app level, whenever the opener asks, on any screen", async () => {
+    const { App } = await importAppAndNavigation();
+    const opener = await import("./slicing/slicer-settings-opener");
+    render(() => <App />);
+    expect(screen.queryByRole("dialog", { name: "Slicer" })).toBeNull();
+
+    opener.openSlicerSettings();
+    expect(await screen.findByRole("dialog", { name: "Slicer" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close Slicer" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Slicer" })).toBeNull());
+    expect(opener.slicerSettingsOpen()).toBe(false);
+  });
+
   it("loads settings and durable Printers before listener/backfill startup, retaining Printer content while status syncs", async () => {
     const callOrder: string[] = [];
     appState.loadSettings.mockImplementation(async () => {
@@ -365,6 +391,47 @@ describe("App", () => {
     expect(callOrder).toEqual(["loadPrinters", "startLibrary"]);
     unmount();
     expect(libraryStore.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("starts slicing right after the Library and disposes it on unmount", async () => {
+    const callOrder: string[] = [];
+    libraryStore.startLibrary.mockImplementation(async () => {
+      callOrder.push("startLibrary");
+      return libraryStore.dispose;
+    });
+    // The mocked store, as App sees it (mocks outlive `vi.resetModules`).
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    const disposeSlicing = vi.fn();
+    slicingStoreMock.startSlicing.mockImplementation(async () => {
+      callOrder.push("startSlicing");
+      return disposeSlicing;
+    });
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(slicingStoreMock.startSlicing).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["startLibrary", "startSlicing"]);
+    // Let the start settle, so unmount has its disposer.
+    await Promise.resolve();
+    unmount();
+    expect(disposeSlicing).toHaveBeenCalledOnce();
+  });
+
+  it("disposes a slicing start that finishes after unmount", async () => {
+    // The mocked store, as App sees it (mocks outlive `vi.resetModules`).
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    const disposeSlicing = vi.fn();
+    let finish: (() => void) | undefined;
+    slicingStoreMock.startSlicing.mockImplementation(() => new Promise((resolve) => {
+      finish = () => resolve(disposeSlicing);
+    }));
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(slicingStoreMock.startSlicing).toHaveBeenCalled());
+    unmount();
+    finish?.();
+    await waitFor(() => expect(disposeSlicing).toHaveBeenCalledOnce());
   });
 
   it("lists the Library as an available destination", async () => {

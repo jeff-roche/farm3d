@@ -1165,10 +1165,22 @@ mod tests {
             .iter()
             .map(|(kind, name, _)| (kind.as_str(), name.as_str()))
             .collect();
-        let all_tables_are_strict = inventory
-            .iter()
-            .filter(|(kind, _, _)| kind == "table")
-            .all(|(_, _, sql)| sql.as_deref().is_some_and(|sql| sql.ends_with(" STRICT")));
+        // SQLite's own `strict` flag, rather than the CREATE text's suffix:
+        // `slice_revision_blobs` is `STRICT, WITHOUT ROWID` (P5 D14).
+        let non_strict_tables: Vec<String> = storage
+            .read(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT name FROM pragma_table_list
+                     WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+                       AND strict = 0",
+                )?;
+                let rows = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .expect("table strictness");
+        let all_tables_are_strict = non_strict_tables.is_empty();
 
         assert_eq!(
             (names, all_tables_are_strict),
@@ -1183,6 +1195,10 @@ mod tests {
                     ("index", "model_source_revisions_content"),
                     ("index", "printers_active_host_identity"),
                     ("index", "project_models_model"),
+                    ("index", "slice_operations_active"),
+                    ("index", "slice_revision_blobs_sha"),
+                    ("index", "slice_revisions_gcode"),
+                    ("index", "slice_revisions_model"),
                     ("index", "spool_movements_operation"),
                     ("index", "spool_movements_spool"),
                     ("index", "spool_reservations_open"),
@@ -1204,12 +1220,19 @@ mod tests {
                     ("table", "project_models"),
                     ("table", "schema_migrations"),
                     ("table", "settings"),
+                    ("table", "slice_operations"),
+                    ("table", "slice_preparations"),
+                    ("table", "slice_revision_blobs"),
+                    ("table", "slice_revisions"),
+                    ("table", "slicer_runtime_config"),
                     ("table", "spool_amount_events"),
                     ("table", "spool_movements"),
                     ("table", "spool_reservations"),
                     ("table", "spool_tares"),
                     ("table", "spools"),
                     ("trigger", "model_source_revisions_immutable"),
+                    ("trigger", "slice_revision_blobs_immutable"),
+                    ("trigger", "slice_revisions_immutable"),
                     ("trigger", "spool_amount_events_no_delete"),
                     ("trigger", "spool_amount_events_no_update"),
                 ],
@@ -1560,6 +1583,85 @@ mod tests {
                 Some("'comfortable'"),
                 0,
             ),
+            ("slice_operations", "id", "TEXT", 1, None, 1),
+            ("slice_operations", "preparation_id", "TEXT", 1, None, 0),
+            ("slice_operations", "source_revision_id", "TEXT", 1, None, 0),
+            ("slice_operations", "plate_key", "TEXT", 1, None, 0),
+            (
+                "slice_operations",
+                "plate_snapshot_json",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("slice_operations", "state", "TEXT", 1, None, 0),
+            ("slice_operations", "failure_json", "TEXT", 0, None, 0),
+            ("slice_operations", "pid", "INTEGER", 0, None, 0),
+            ("slice_operations", "pid_started_at", "INTEGER", 0, None, 0),
+            ("slice_operations", "log_sha256", "TEXT", 0, None, 0),
+            ("slice_operations", "slice_revision_id", "TEXT", 0, None, 0),
+            ("slice_operations", "queued_at", "TEXT", 1, None, 0),
+            ("slice_operations", "started_at", "TEXT", 0, None, 0),
+            ("slice_operations", "finished_at", "TEXT", 0, None, 0),
+            ("slice_preparations", "id", "TEXT", 1, None, 1),
+            ("slice_preparations", "model_id", "TEXT", 1, None, 0),
+            (
+                "slice_preparations",
+                "source_revision_id",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
+            ("slice_preparations", "revision", "INTEGER", 1, None, 0),
+            ("slice_preparations", "document_json", "TEXT", 1, None, 0),
+            ("slice_preparations", "created_at", "TEXT", 1, None, 0),
+            ("slice_preparations", "updated_at", "TEXT", 1, None, 0),
+            ("slice_revision_blobs", "revision_id", "TEXT", 1, None, 1),
+            ("slice_revision_blobs", "role", "TEXT", 1, None, 2),
+            ("slice_revision_blobs", "sha256", "TEXT", 1, None, 0),
+            ("slice_revisions", "id", "TEXT", 1, None, 1),
+            ("slice_revisions", "kind", "TEXT", 1, None, 0),
+            ("slice_revisions", "model_id", "TEXT", 1, None, 0),
+            ("slice_revisions", "source_revision_id", "TEXT", 1, None, 0),
+            ("slice_revisions", "plate_key", "TEXT", 0, None, 0),
+            ("slice_revisions", "plate_index", "INTEGER", 0, None, 0),
+            ("slice_revisions", "plate_name", "TEXT", 0, None, 0),
+            ("slice_revisions", "gcode_sha256", "TEXT", 1, None, 0),
+            ("slice_revisions", "gcode_size", "INTEGER", 1, None, 0),
+            ("slice_revisions", "target_json", "TEXT", 1, None, 0),
+            ("slice_revisions", "facts_json", "TEXT", 1, None, 0),
+            (
+                "slice_revisions",
+                "requires_manual_printer_selection",
+                "INTEGER",
+                1,
+                None,
+                0,
+            ),
+            ("slice_revisions", "estimates_json", "TEXT", 1, None, 0),
+            ("slice_revisions", "runtime_json", "TEXT", 0, None, 0),
+            ("slice_revisions", "created_at", "TEXT", 1, None, 0),
+            (
+                "slicer_runtime_config",
+                "singleton_id",
+                "INTEGER",
+                0,
+                None,
+                1,
+            ),
+            ("slicer_runtime_config", "revision", "INTEGER", 1, None, 0),
+            ("slicer_runtime_config", "engine_path", "TEXT", 0, None, 0),
+            (
+                "slicer_runtime_config",
+                "preset_source_path",
+                "TEXT",
+                0,
+                None,
+                0,
+            ),
+            ("slicer_runtime_config", "updated_at", "TEXT", 1, None, 0),
             ("spool_amount_events", "id", "TEXT", 1, None, 1),
             ("spool_amount_events", "spool_id", "TEXT", 1, None, 0),
             ("spool_amount_events", "sequence", "INTEGER", 1, None, 0),

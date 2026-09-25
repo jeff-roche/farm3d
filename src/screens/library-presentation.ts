@@ -1,6 +1,5 @@
 /** Display labels for the Library screens. Pure: no store access. */
 import type { LibraryView, SavedViewId } from "../library/saved-views";
-import type { BoundsMm } from "../generated/contracts/domain/BoundsMm";
 import type { ModelRecord, ProjectRecord, RevisionOrigin, SourceState } from "../library/types";
 
 export type ModelFormatLabel = "STL" | "3MF" | "G-code";
@@ -90,20 +89,4 @@ export function formatBytes(bytes: number): string {
 export function formatDate(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(undefined, { dateStyle: "medium" });
-}
-
-function roundMm(value: number): string {
-  return String(Math.round(value * 10) / 10);
-}
-
-function boundsSize(bounds: BoundsMm): string {
-  const [x, y, z] = [0, 1, 2].map((axis) => roundMm(bounds.max[axis]! - bounds.min[axis]!));
-  return `${x} × ${y} × ${z} mm`;
-}
-
-/** The current revision's extents, for the build plate placeholder. G-code
- *  has none in its summary. */
-export function approximateSize(model: ModelRecord): string | null {
-  const summary = model.currentRevision.summary;
-  return summary.format === "gcode" ? null : boundsSize(summary.boundsMm);
 }

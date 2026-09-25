@@ -307,6 +307,28 @@ pub enum ErrorCode {
     SourceContentDiffers,
     SourceUnavailable,
     UnsupportedFormat,
+    /// P5 D2: no accepted OrcaSlicer engine is available.
+    SlicerUnavailable,
+    /// P5 D2: no readable preset source is available.
+    PresetSourceUnavailable,
+    /// P5 D3: the preset source has no preset by this name.
+    PresetNotFound,
+    /// P5 D3: a preset's `inherits` chain can't be resolved.
+    PresetInvalid,
+    /// P5 D3: the filament preset is not offered for the machine preset.
+    FilamentIncompatible,
+    /// P5 D4: a Printer Profile override has no row in the mapping table.
+    UnmappedProfileOverride,
+    /// P5 D4: a mapped key is unknown to the preset source.
+    UnsupportedSettingForRuntime,
+    /// P5 D7: a plate can't be sliced as it stands (for example, it is
+    /// empty).
+    PreparationInvalid,
+    /// P5 D5: the Preparation is pinned to an older revision of its Model,
+    /// and `start_slice` didn't say to continue with it.
+    PreparationStale,
+    /// P5 D10: the slice operation has already finished.
+    OperationNotCancellable,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -326,6 +348,12 @@ pub enum RecoveryCode {
     CheckCredentials,
     RestartApplication,
     UpgradeFarm3d,
+    /// P5: open the Slicer settings (engine and preset source).
+    OpenSlicerSettings,
+    /// P5 D5: reload the Preparation onto its Model's current revision.
+    ReloadPreparation,
+    /// P5: change the Preparation (presets, controls, or plates).
+    EditPreparation,
 }
 
 /// The versioned success envelope returned by every command.
@@ -415,6 +443,22 @@ impl CommandError {
         error.details = Some(BTreeMap::from([(
             "fieldPath".to_string(),
             JsonValue::String(field_path.into()),
+        )]));
+        error
+    }
+
+    /// A succeeded Slice Operation's log went with its deleted Slice
+    /// Revision (D13 stores it only there).
+    pub fn slice_log_deleted(operation_id: &str) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::NotFound,
+            "This slice's log was deleted with its Slice Revision.",
+            vec![RecoveryCode::Reload],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "entityId".to_string(),
+            JsonValue::String(operation_id.to_string()),
         )]));
         error
     }
@@ -703,6 +747,152 @@ impl CommandError {
         error
     }
 
+    fn with_string_details(mut self, details: &[(&str, &str)]) -> Self {
+        self.details = Some(
+            details
+                .iter()
+                .map(|(key, value)| (key.to_string(), JsonValue::String(value.to_string())))
+                .collect(),
+        );
+        self
+    }
+
+    /// P5 D2: no accepted engine. `reason` names no full path.
+    pub fn slicer_unavailable(reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::SlicerUnavailable,
+            format!("OrcaSlicer is not available: {reason}"),
+            vec![RecoveryCode::OpenSlicerSettings],
+            false,
+        )
+        .with_string_details(&[("reason", reason)])
+    }
+
+    /// P5 D2: no readable preset source. `reason` names no full path.
+    pub fn preset_source_unavailable(reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetSourceUnavailable,
+            format!("No OrcaSlicer presets are available: {reason}"),
+            vec![RecoveryCode::OpenSlicerSettings],
+            false,
+        )
+        .with_string_details(&[("reason", reason)])
+    }
+
+    /// P5 D3: `kind` is `machine`, `process`, or `filament`.
+    pub fn preset_not_found(kind: &str, preset: &str, preset_source_version: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetNotFound,
+            format!("OrcaSlicer {preset_source_version} has no {kind} preset named \"{preset}\"."),
+            vec![
+                RecoveryCode::EditPreparation,
+                RecoveryCode::OpenSlicerSettings,
+            ],
+            false,
+        )
+        .with_string_details(&[
+            ("kind", kind),
+            ("preset", preset),
+            ("presetSourceVersion", preset_source_version),
+        ])
+    }
+
+    /// P5 D3: `preset` can't be flattened (a cycle, a chain deeper than
+    /// 20, a missing parent, or an unreadable file).
+    pub fn preset_invalid(kind: &str, preset: &str, reason: &str) -> Self {
+        Self::typed(
+            ErrorCode::PresetInvalid,
+            format!("The {kind} preset \"{preset}\" can't be used: {reason}"),
+            vec![RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[("kind", kind), ("preset", preset), ("reason", reason)])
+    }
+
+    /// P5 D3: OrcaSlicer would silently slice with this filament (Gate F),
+    /// so farm3d refuses it.
+    pub fn filament_incompatible(filament_preset: &str, machine_preset: &str) -> Self {
+        Self::typed(
+            ErrorCode::FilamentIncompatible,
+            format!(
+                "The filament preset \"{filament_preset}\" is not made for \"{machine_preset}\"."
+            ),
+            vec![RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[
+            ("filamentPreset", filament_preset),
+            ("machinePreset", machine_preset),
+        ])
+    }
+
+    /// P5 D4: `field` is the override's `PrinterProfile` field name.
+    pub fn unmapped_profile_override(field: &str) -> Self {
+        Self::typed(
+            ErrorCode::UnmappedProfileOverride,
+            format!("The Printer Profile override \"{field}\" can't be applied to a slice."),
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[("field", field)])
+    }
+
+    /// P5 D4: the preset source doesn't know the OrcaSlicer key `key`.
+    pub fn unsupported_setting_for_runtime(key: &str, preset_source_version: &str) -> Self {
+        Self::typed(
+            ErrorCode::UnsupportedSettingForRuntime,
+            format!("OrcaSlicer {preset_source_version} does not support the setting \"{key}\"."),
+            vec![
+                RecoveryCode::EditPreparation,
+                RecoveryCode::OpenSlicerSettings,
+            ],
+            false,
+        )
+        .with_string_details(&[("key", key), ("presetSourceVersion", preset_source_version)])
+    }
+
+    /// P5 D7: the plate `plate_key` can't be written for OrcaSlicer.
+    /// `reason` is `empty`, `unknownObject`, `emptyObject`, or
+    /// `invalidTransform`.
+    pub fn preparation_invalid(plate_key: &str, reason: &str, message: &str) -> Self {
+        Self::typed(
+            ErrorCode::PreparationInvalid,
+            message,
+            vec![RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[("plateKey", plate_key), ("reason", reason)])
+    }
+
+    /// P5 D5: Preparation `preparation_id` is pinned to
+    /// `source_revision_id`, which is no longer its Model's current
+    /// revision. `start_slice` goes ahead only with
+    /// `continueWithSourceRevision` equal to the pinned revision.
+    pub fn preparation_stale(preparation_id: &str, source_revision_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::PreparationStale,
+            "The Model changed since this Preparation was made. Reload it onto the current revision, or continue with the revision it was made from.",
+            vec![RecoveryCode::ReloadPreparation, RecoveryCode::EditPreparation],
+            false,
+        )
+        .with_string_details(&[
+            ("preparationId", preparation_id),
+            ("sourceRevisionId", source_revision_id),
+        ])
+    }
+
+    /// P5 D10: the operation is already `succeeded`, `failed`,
+    /// `cancelled`, or `interrupted`.
+    pub fn operation_not_cancellable(operation_id: &str, state: &str) -> Self {
+        Self::typed(
+            ErrorCode::OperationNotCancellable,
+            "This slice has already finished.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("sliceOperationId", operation_id), ("state", state)])
+    }
+
     /// D7: an action (a Printer's archive/delete, or a Spool's archive/
     /// mark empty) is blocked. The message lists every blocker's own
     /// message, so it reads right whichever entity was blocked.
@@ -874,6 +1064,10 @@ impl CommandError {
                 "operationId",
                 "operationId was already used for a different request",
             ),
+            // A move D10 doesn't allow is a caller bug until the slicing
+            // commands give it a user-facing code (e.g. cancelling a
+            // finished operation).
+            RepositoryError::IllegalSliceTransition { .. } => Self::internal(),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

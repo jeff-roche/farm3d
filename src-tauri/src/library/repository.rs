@@ -890,7 +890,9 @@ pub fn delete_project(
 }
 
 /// D18: every content hash Model `model_id`'s revisions and their
-/// thumbnails refer to, the candidates for cleanup once it is deleted.
+/// thumbnails refer to, plus the logs of its Preparation's slice operations
+/// (which cascade with it, P5 D14): the candidates for cleanup once it is
+/// deleted.
 pub(crate) fn model_content_hashes(
     connection: &Connection,
     model_id: &str,
@@ -901,6 +903,10 @@ pub(crate) fn model_content_hashes(
          SELECT t.content_sha256 FROM model_revision_thumbnails t
          JOIN model_source_revisions r ON r.id = t.revision_id
          WHERE r.model_id = ?1
+         UNION
+         SELECT o.log_sha256 FROM slice_operations o
+         JOIN slice_preparations p ON p.id = o.preparation_id
+         WHERE p.model_id = ?1 AND o.log_sha256 IS NOT NULL
          ORDER BY 1",
     )?;
     let hashes = statement
@@ -965,6 +971,29 @@ pub(crate) fn list_revision_records(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(records)
+}
+
+/// P5 D16: source revision `id`'s stored [`Inspection`] (the G-code
+/// inspector's claims and producer, for an external Slice Revision's
+/// `claimedEstimates`). `None` for an unknown revision id.
+pub(crate) fn load_source_revision_inspection(
+    connection: &Connection,
+    id: &str,
+) -> Result<Option<Inspection>, StorageError> {
+    let inspection_json: Option<String> = connection
+        .query_row(
+            "SELECT inspection_json FROM model_source_revisions WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(inspection_json) = inspection_json else {
+        return Ok(None);
+    };
+    let stored: StoredInspection = serde_json::from_str(&inspection_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+    })?;
+    Ok(Some(stored.inspection))
 }
 
 /// A revision's stored thumbnail row (D12).

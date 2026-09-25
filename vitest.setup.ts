@@ -1,4 +1,12 @@
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
+
+// jsdom has no WebGL: every viewport gets the recording fake renderer
+// instead of three.js (see src/slicing/viewport/fake-renderer.ts).
+vi.mock("./src/slicing/viewport/renderer-factory", async () => {
+  const { createFakeViewportRenderer } = await import("./src/slicing/viewport/fake-renderer");
+  return { createViewportRenderer: createFakeViewportRenderer };
+});
 
 // jsdom doesn't implement these; Kobalte's positioning/overlay logic needs them.
 if (typeof ResizeObserver === "undefined") {

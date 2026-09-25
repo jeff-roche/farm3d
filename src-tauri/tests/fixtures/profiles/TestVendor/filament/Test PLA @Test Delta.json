@@ -1,0 +1,10 @@
+{
+  "type": "filament",
+  "name": "Test PLA @Test Delta",
+  "inherits": "fdm_filament_pla",
+  "from": "system",
+  "instantiation": "true",
+  "compatible_printers": [
+    "Test Delta 0.4 nozzle"
+  ]
+}

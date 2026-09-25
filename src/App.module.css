@@ -29,3 +29,10 @@
   composes: errorMessage;
   color: var(--f3d-color-warning);
 }
+
+.loading {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-size);
+}

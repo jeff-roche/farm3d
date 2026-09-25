@@ -1,0 +1,13 @@
+{
+  "type": "filament",
+  "name": "Generic PLA @Test Printer",
+  "inherits": "Generic PLA @Test Library",
+  "from": "system",
+  "instantiation": "true",
+  "nozzle_temperature": [
+    "215"
+  ],
+  "compatible_printers": [
+    "Test Printer 0.4 nozzle"
+  ]
+}

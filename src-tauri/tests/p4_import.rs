@@ -1546,10 +1546,11 @@ fn gcode_is_retained_byte_for_byte_with_its_claims_untrusted() {
         "{stored}"
     );
 
+    // P5 adds the slicing tables; Queue data still waits for P7.
     assert_eq!(
         env.count(
             "SELECT COUNT(*) FROM sqlite_schema
-             WHERE type = 'table' AND (name LIKE '%slice%' OR name LIKE '%queue%')"
+             WHERE type = 'table' AND (name LIKE '%queue%' OR name LIKE '%job%')"
         ),
         0
     );

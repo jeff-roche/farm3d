@@ -1,0 +1,68 @@
+{
+  "filament": {
+    "compatible_printers": [
+      "Test Printer 0.4 nozzle"
+    ],
+    "filament_diameter": [
+      "1.75"
+    ],
+    "filament_type": [
+      "PLA"
+    ],
+    "from": "system",
+    "instantiation": "true",
+    "name": "Generic PLA @Test Printer",
+    "nozzle_temperature": [
+      "215"
+    ],
+    "type": "filament"
+  },
+  "machine": {
+    "auxiliary_fan": "1",
+    "bed_exclude_area": [
+      "0x0"
+    ],
+    "default_bed_type": "1",
+    "from": "system",
+    "gcode_flavor": "marlin",
+    "host_type": "moonraker",
+    "name": "Test Printer 0.4 nozzle",
+    "nozzle_diameter": [
+      "0.4"
+    ],
+    "nozzle_type": "brass",
+    "printable_area": [
+      "0x0",
+      "220x0",
+      "220x220",
+      "0x220"
+    ],
+    "printable_height": "250",
+    "printer_model": "Test Printer",
+    "printer_variant": "0.4",
+    "support_air_filtration": "1",
+    "support_multi_filament": "0",
+    "type": "machine"
+  },
+  "process": {
+    "bottom_shell_layers": "3",
+    "brim_type": "auto_brim",
+    "brim_width": "5",
+    "compatible_printers": [
+      "Test Printer 0.4 nozzle"
+    ],
+    "enable_support": "0",
+    "from": "system",
+    "instantiation": "true",
+    "layer_height": "0.2",
+    "name": "0.20mm Standard @Test",
+    "skirt_loops": "0",
+    "sparse_infill_density": "15%",
+    "sparse_infill_pattern": "grid",
+    "support_threshold_angle": "30",
+    "support_type": "normal(auto)",
+    "top_shell_layers": "4",
+    "type": "process",
+    "wall_loops": "3"
+  }
+}

@@ -8,6 +8,9 @@ export interface ProgressProps {
   maxValue?: number;
   indeterminate?: boolean;
   showValue?: boolean;
+  /** The value as text, for the visible value and `aria-valuetext`
+   *  (Kobalte's default is the percentage). */
+  valueLabel?: string;
   class?: string;
 }
 
@@ -19,6 +22,7 @@ export function Progress(props: ProgressProps) {
       minValue={props.minValue}
       maxValue={props.maxValue}
       indeterminate={props.indeterminate}
+      getValueLabel={props.valueLabel === undefined ? undefined : () => props.valueLabel!}
     >
       {(props.label || props.showValue) && (
         <div class={styles.labelRow}>

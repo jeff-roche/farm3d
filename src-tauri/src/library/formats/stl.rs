@@ -3,13 +3,19 @@
 //! Detection follows D9 rather than trusting a `solid` prefix: a binary
 //! STL's 80-byte header may start with `solid `, and an ASCII file's first
 //! line may be a bare `solid`. Both readers stream triangles and keep only a
-//! count and bounds.
+//! count and bounds, unless [`read_mesh`] asks them to also weld the
+//! vertices into an [`ObjectMesh`] (P5 D6).
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use super::{include_point, BoundsMm, InspectError, StlEncoding, StlInspection};
+use super::{
+    include_point, BoundsMm, InspectError, ObjectMesh, StlEncoding, StlInspection,
+    MAX_MESH_TRIANGLES,
+};
 use crate::library::content::CancelFlag;
 use crate::library::{ImportWarning, ImportWarningCode};
 
@@ -77,14 +83,55 @@ pub fn inspect(
     }
     let file = File::open(path)?;
     let file_len = file.metadata()?.len();
-    let reader = BufReader::with_capacity(64 * 1024, file);
+    read(file, file_len, encoding, cancel, None)
+}
+
+/// P5 D6: the STL as one mesh, its vertices welded exactly by their `f32`
+/// bit patterns (ASCII values are rounded to `f32` first). The same reader,
+/// limits, and rejections as [`inspect`], plus [`MAX_MESH_TRIANGLES`].
+pub fn read_mesh(
+    reader: impl Read,
+    file_len: u64,
+    encoding: StlEncoding,
+    cancel: &CancelFlag,
+) -> Result<ObjectMesh, InspectError> {
+    read_mesh_capped(reader, file_len, encoding, cancel, MAX_MESH_TRIANGLES)
+}
+
+fn read_mesh_capped(
+    reader: impl Read,
+    file_len: u64,
+    encoding: StlEncoding,
+    cancel: &CancelFlag,
+    max_triangles: u64,
+) -> Result<ObjectMesh, InspectError> {
+    let mut welder = Welder {
+        max_triangles,
+        ..Welder::default()
+    };
+    read(reader, file_len, encoding, cancel, Some(&mut welder))?;
+    Ok(welder.mesh)
+}
+
+fn read(
+    reader: impl Read,
+    file_len: u64,
+    encoding: StlEncoding,
+    cancel: &CancelFlag,
+    mut welder: Option<&mut Welder>,
+) -> Result<(StlInspection, Vec<ImportWarning>), InspectError> {
+    if cancel.is_cancelled() {
+        return Err(InspectError::Cancelled);
+    }
+    let reader = BufReader::with_capacity(64 * 1024, reader);
     let (solid_name, triangle_count, bounds, warnings) = match encoding {
         StlEncoding::Binary => {
-            let (count, bounds, warnings) = read_binary(reader, file_len, cancel)?;
+            let (count, bounds, warnings) =
+                read_binary(reader, file_len, cancel, welder.as_deref_mut())?;
             (None, count, bounds, warnings)
         }
         StlEncoding::Ascii => {
-            let (name, count, bounds) = read_ascii(reader, cancel)?;
+            let (name, count, bounds) = read_ascii(reader, cancel, welder)?;
             (name, count, bounds, Vec::new())
         }
     };
@@ -104,6 +151,47 @@ pub fn inspect(
     ))
 }
 
+/// Welds vertices by their `f32` bit patterns into an indexed mesh.
+#[derive(Default)]
+struct Welder {
+    max_triangles: u64,
+    index: HashMap<[u32; 3], u32>,
+    mesh: ObjectMesh,
+    triangle: [u32; 3],
+    corner: usize,
+}
+
+impl Welder {
+    /// Adds the next corner. Every third corner completes a triangle.
+    fn vertex(&mut self, point: [f64; 3], triangle: u64) -> Result<(), InspectError> {
+        let point = point.map(|value| value as f32);
+        if !point.iter().all(|value| value.is_finite()) {
+            return Err(non_finite(triangle));
+        }
+        let index = match self.index.entry(point.map(f32::to_bits)) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let index = self.mesh.positions.len() as u32;
+                self.mesh.positions.push(point);
+                *entry.insert(index)
+            }
+        };
+        self.triangle[self.corner] = index;
+        self.corner += 1;
+        if self.corner == 3 {
+            self.corner = 0;
+            self.mesh.triangles.push(self.triangle);
+        }
+        Ok(())
+    }
+}
+
+fn too_many_triangles(max_triangles: u64) -> InspectError {
+    InspectError::invalid(format!(
+        "This STL has more than {max_triangles} triangles, the most farm3d can show."
+    ))
+}
+
 fn non_finite(triangle: u64) -> InspectError {
     InspectError::invalid(format!(
         "This STL has a non-finite coordinate in triangle {triangle}."
@@ -114,6 +202,7 @@ fn read_binary(
     mut reader: impl Read,
     file_len: u64,
     cancel: &CancelFlag,
+    mut welder: Option<&mut Welder>,
 ) -> Result<(u64, Option<BoundsMm>, Vec<ImportWarning>), InspectError> {
     let mut header = [0u8; HEADER_LEN as usize];
     reader.read_exact(&mut header)?;
@@ -124,6 +213,13 @@ fn read_binary(
         return Err(InspectError::invalid(format!(
             "This binary STL is truncated: it declares {count} triangles but holds {present}."
         )));
+    }
+    if let Some(welder) = welder.as_deref_mut() {
+        if u64::from(count) > welder.max_triangles {
+            return Err(too_many_triangles(welder.max_triangles));
+        }
+        welder.mesh.positions.reserve(count as usize / 2);
+        welder.mesh.triangles.reserve(count as usize);
     }
 
     let mut bounds = None;
@@ -144,6 +240,9 @@ fn read_binary(
                 point[axis] = f64::from(value);
             }
             include_point(&mut bounds, point);
+            if let Some(welder) = welder.as_deref_mut() {
+                welder.vertex(point, triangle + 1)?;
+            }
         }
     }
 
@@ -161,6 +260,7 @@ fn read_binary(
 fn read_ascii(
     mut reader: impl BufRead,
     cancel: &CancelFlag,
+    mut welder: Option<&mut Welder>,
 ) -> Result<(Option<String>, u64, Option<BoundsMm>), InspectError> {
     let solid_name = read_solid_line(&mut reader)?;
     let mut tokens = Tokens { reader };
@@ -177,6 +277,11 @@ fn read_ascii(
             return Err(InspectError::Cancelled);
         }
         triangles += 1;
+        if let Some(welder) = welder.as_deref() {
+            if triangles > welder.max_triangles {
+                return Err(too_many_triangles(welder.max_triangles));
+            }
+        }
         tokens.expect(b"normal")?;
         for _ in 0..3 {
             tokens.number()?;
@@ -193,6 +298,9 @@ fn read_ascii(
                 }
             }
             include_point(&mut bounds, point);
+            if let Some(welder) = welder.as_deref_mut() {
+                welder.vertex(point, triangles)?;
+            }
         }
         tokens.expect(b"endloop")?;
         tokens.expect(b"endfacet")?;
@@ -520,5 +628,79 @@ mod tests {
             inspect(&path, StlEncoding::Binary, &CancelFlag::new(receiver)).unwrap_err(),
             InspectError::Cancelled
         );
+    }
+
+    // --- P5 D6: welded meshes ----------------------------------------------
+
+    fn mesh_bytes(bytes: &[u8], max_triangles: u64) -> Result<ObjectMesh, InspectError> {
+        let encoding = detect_bytes(bytes).expect("test input is an STL");
+        read_mesh_capped(
+            bytes,
+            bytes.len() as u64,
+            encoding,
+            &CancelFlag::never(),
+            max_triangles,
+        )
+    }
+
+    #[test]
+    fn a_mesh_welds_vertices_by_exact_bit_pattern() {
+        let quad = [
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 5.0, 0.0]],
+            [[0.0, 0.0, 0.0], [10.0, 5.0, 0.0], [0.0, 5.0, 0.0]],
+            // -0.0 is a different bit pattern from 0.0, so not welded.
+            [[-0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 5.0, 0.0]],
+        ];
+        let mesh = mesh_bytes(&binary(b"cad", 3, &quad), 3).unwrap();
+        assert_eq!(
+            mesh.positions,
+            vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 5.0, 0.0],
+                [0.0, 5.0, 0.0],
+                [-0.0, 0.0, 0.0],
+            ]
+        );
+        assert_eq!(mesh.triangles, vec![[0, 1, 2], [0, 2, 3], [4, 1, 3]]);
+        assert!(mesh.positions[4][0].is_sign_negative());
+    }
+
+    #[test]
+    fn an_ascii_mesh_rounds_to_f32_before_welding() {
+        let triangles = [
+            [["0.1", "0", "0"], ["1", "0", "0"], ["0", "1", "0"]],
+            // 0.1000000001 rounds to the same f32 as 0.1.
+            [["0.1000000001", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]],
+        ];
+        let mesh = mesh_bytes(&ascii("solid part", &triangles), 2).unwrap();
+        assert_eq!(mesh.positions.len(), 4);
+        assert_eq!(mesh.positions[0], [0.1f32, 0.0, 0.0]);
+        assert_eq!(mesh.triangles, vec![[0, 1, 2], [0, 2, 3]]);
+
+        // Finite as f64, but not as f32.
+        let huge = [[["1e39", "0", "0"], ["1", "0", "0"], ["0", "1", "0"]]];
+        let error = mesh_bytes(&ascii("solid part", &huge), 1).unwrap_err();
+        assert!(
+            matches!(&error, InspectError::InvalidContent(reason) if reason.contains("non-finite"))
+        );
+    }
+
+    #[test]
+    fn a_mesh_is_capped_and_keeps_the_inspection_rejections() {
+        let two = binary(b"cad", 2, &[TRIANGLE; 2]);
+        assert_eq!(mesh_bytes(&two, 2).unwrap().triangles.len(), 2);
+        let error = mesh_bytes(&two, 1).unwrap_err();
+        assert!(
+            matches!(&error, InspectError::InvalidContent(reason) if reason.contains("more than 1")),
+            "{error:?}"
+        );
+        let text = ascii("solid x", &[ASCII_TRIANGLE; 2]);
+        assert!(mesh_bytes(&text, 1).is_err());
+
+        assert!(mesh_bytes(&binary(b"empty", 0, &[]), 1).is_err());
+        let mut nan = [TRIANGLE; 1];
+        nan[0][1][2] = f32::NAN;
+        assert!(mesh_bytes(&binary(b"cad", 1, &nan), 1).is_err());
     }
 }

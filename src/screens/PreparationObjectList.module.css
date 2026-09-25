@@ -1,0 +1,30 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.numbers {
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-body-small-size);
+  white-space: nowrap;
+}
+
+.ok {
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.note {
+  margin: 0;
+  color: var(--f3d-color-warning);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.placement {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+}

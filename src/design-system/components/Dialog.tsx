@@ -13,6 +13,11 @@ export interface DialogProps extends ParentProps {
   triggerClass?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Where focus goes when the dialog closes, for a dialog with no
+   *  `trigger` (Kobalte returns focus to its own trigger otherwise). Called
+   *  at close time, so it can pick whichever opener is still in the
+   *  document; returning nothing leaves Kobalte's default. */
+  returnFocus?: () => HTMLElement | null | undefined;
 }
 
 export function Dialog(props: DialogProps) {
@@ -25,7 +30,7 @@ export function Dialog(props: DialogProps) {
       </Show>
       <KDialog.Portal>
         <KDialog.Overlay class={styles.overlay} />
-        <KDialog.Content class={styles.content}>
+        <KDialog.Content class={styles.content} onCloseAutoFocus={(event) => returnFocus(event, props.returnFocus)}>
           <div class={styles.header}>
             <KDialog.Title class={styles.title}>{props.title}</KDialog.Title>
             <KDialog.CloseButton class={styles.closeButton} aria-label="Close">
@@ -42,6 +47,15 @@ export function Dialog(props: DialogProps) {
       </KDialog.Portal>
     </KDialog>
   );
+}
+
+/** Kobalte's close-autofocus: a modal dialog then focuses its own trigger,
+ *  which a trigger-less dialog doesn't have, so this focus stands. */
+function returnFocus(event: Event, target: DialogProps["returnFocus"]) {
+  const element = target?.();
+  if (!element) return;
+  event.preventDefault();
+  element.focus({ preventScroll: true });
 }
 
 function CloseIcon() {

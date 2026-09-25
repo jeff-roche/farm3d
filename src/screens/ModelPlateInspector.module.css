@@ -1,0 +1,29 @@
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.plateBar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.plateName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.note {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}

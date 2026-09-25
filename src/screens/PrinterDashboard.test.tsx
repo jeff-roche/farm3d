@@ -51,7 +51,8 @@ describe("PrinterDashboard", () => {
 
     expect(screen.queryByRole("dialog", { name: "Add Printers" })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "Add Printers…" }));
-    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
+    // The dialog loads on first use.
+    expect(await screen.findByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
   });
 
   it("also offers 'Add Printers…' from the first-run empty state", async () => {
@@ -62,7 +63,7 @@ describe("PrinterDashboard", () => {
     const buttons = screen.getAllByRole("button", { name: "Add Printers…" });
     expect(buttons).toHaveLength(2);
     await fireEvent.click(buttons[1]);
-    expect(screen.getByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Add Printers" })).toBeInTheDocument();
   });
 
   it("preserves the active filter for filtered-empty results and clears it only on request", async () => {
@@ -99,8 +100,8 @@ describe("PrinterDashboard", () => {
     render(() => <PrinterDashboard store={monitor} />);
 
     const heading = screen.getByRole("heading", { name: "X1 Carbon" });
-    await fireEvent.focus(screen.getByRole("button", { name: "9 Printers" }));
-    await fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    await fireEvent.click(screen.getByRole("button", { name: "9 Printers" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "View all" }));
     await waitFor(() => expect(heading).toHaveFocus());
   });
 

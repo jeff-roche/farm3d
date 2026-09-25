@@ -98,13 +98,15 @@ impl Host {
             }
         });
         farm3d_lib::start_library_runtime(&services, app.handle(), policy);
-        Running {
+        let running = Running {
             _app: app,
             webview,
             services,
             events,
             _credentials: credentials,
-        }
+        };
+        running.wait_until_reconciled();
+        running
     }
 }
 
@@ -276,6 +278,12 @@ impl Running {
         })
     }
 
+    /// Waits for the startup pass. It runs on its own task, registers every
+    /// linked Model again, and checks each one. Under load it can start
+    /// after a test's first import or edit. It would then re-create a watch
+    /// the test forced to poll, take a one-shot injected failure, or record
+    /// an edit before the test's own check. [`Host::start`] calls this, so
+    /// every test begins after it.
     fn wait_until_reconciled(&self) {
         wait_for("the startup pass", || {
             self.links().has_reconciled().then_some(())
@@ -312,7 +320,6 @@ fn a_linked_model_survives_a_restart_and_an_edit_while_stopped_is_captured() {
     drop(running);
 
     let restarted = host.start(WatchPolicy::native());
-    restarted.wait_until_reconciled();
     let record = restarted.record(&id);
     assert_eq!(record["link"]["state"], "ok");
     assert_eq!(record["revisionCount"], 1);
@@ -323,7 +330,6 @@ fn a_linked_model_survives_a_restart_and_an_edit_while_stopped_is_captured() {
 
     fs::write(&path, fixture("cube-ascii.stl")).unwrap();
     let restarted = host.start(WatchPolicy::native());
-    restarted.wait_until_reconciled();
     let record = restarted.record(&id);
     assert_eq!(record["revisionCount"], 2);
     assert_eq!(record["currentRevision"]["origin"], "linkedChange");

@@ -4,6 +4,10 @@
 //! candidate thumbnail, never vertex arrays or whole parts. `inspect` always
 //! reads the *staged* copy it is given, never the user's source file.
 //!
+//! [`read_mesh`] is the one exception (P5 D6): the same STL and 3MF readers,
+//! with the same limits, also collect the vertices and triangles, capped by
+//! [`MAX_MESH_TRIANGLES`] and [`MAX_MESH_VERTICES`].
+//!
 //! Messages in [`InspectError`] and [`ImportWarning`] name extensions,
 //! line numbers, and 3MF part names only, never a filesystem path.
 
@@ -13,13 +17,13 @@ pub mod stl;
 pub mod threemf;
 
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::content::CancelFlag;
+use super::content::{CancelFlag, MAX_SOURCE_BYTES};
 use super::{ImportWarning, ImportWarningCode, ModelFormat};
 
 /// Stored on every revision so a later inspector can tell which rules
@@ -28,6 +32,97 @@ pub const INSPECTOR_VERSION: i64 = 1;
 
 /// How much of the file detection reads (D8's G-code text window).
 const DETECTION_WINDOW: usize = 64 * 1024;
+
+/// P5 D6: the most triangles a revision's geometry may hold across its
+/// objects, as placed in their object frames. It is the most a binary STL
+/// under the 1 GiB import limit ([`MAX_SOURCE_BYTES`]) can hold, so every
+/// importable STL fits and a 3MF can't expand past it through components.
+pub const MAX_MESH_TRIANGLES: u64 = (MAX_SOURCE_BYTES - 84) / 50;
+/// P5 D6: the most vertices a revision's geometry may hold.
+pub const MAX_MESH_VERTICES: u64 = 3 * MAX_MESH_TRIANGLES;
+
+/// P5 D6: one object's mesh in its own frame, in millimetres. Every
+/// triangle's indices are below `positions.len()`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectMesh {
+    pub positions: Vec<[f32; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// P5 D6: a model file's objects and build items, as [`read_mesh`] reads
+/// them. An STL is object 1 with one identity build item.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshModel {
+    /// Objects the build names, in the order it first names them.
+    pub objects: Vec<MeshObject>,
+    pub build_items: Vec<MeshBuildItem>,
+}
+
+/// A build-item object with its components flattened into its own frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshObject {
+    pub id: u32,
+    pub name: Option<String>,
+    pub mesh: ObjectMesh,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshBuildItem {
+    pub object_id: u32,
+    /// The 3MF `transform` attribute order, in millimetres: a point maps to
+    /// `x' = x·m[0] + y·m[3] + z·m[6] + m[9]`, and likewise for y and z.
+    pub transform: [f64; 12],
+    /// The Orca/Bambu plate (P4 [`Plate::index`]) that lists this item.
+    pub plate_index: Option<u32>,
+    pub printable: bool,
+}
+
+/// The identity in [`MeshBuildItem::transform`] order.
+pub const IDENTITY_TRANSFORM: [f64; 12] =
+    [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+
+/// P5 D6: reads the geometry of an STL or 3MF with the inspection readers,
+/// which apply the same limits and rejections as [`inspect`]. G-code has
+/// no geometry and is `UNSUPPORTED_FORMAT`.
+pub fn read_mesh<R: Read + Seek>(
+    mut reader: R,
+    format: ModelFormat,
+    cancel: &CancelFlag,
+) -> Result<MeshModel, InspectError> {
+    if cancel.is_cancelled() {
+        return Err(InspectError::Cancelled);
+    }
+    match format {
+        ModelFormat::Stl => {
+            let file_len = reader.seek(SeekFrom::End(0))?;
+            reader.seek(SeekFrom::Start(0))?;
+            let mut head = Vec::with_capacity(DETECTION_WINDOW);
+            reader
+                .by_ref()
+                .take(DETECTION_WINDOW as u64)
+                .read_to_end(&mut head)?;
+            reader.seek(SeekFrom::Start(0))?;
+            let encoding = stl::detect(&head, file_len)
+                .ok_or_else(|| InspectError::invalid("This file isn't an STL."))?;
+            let mesh = stl::read_mesh(reader, file_len, encoding, cancel)?;
+            Ok(MeshModel {
+                objects: vec![MeshObject {
+                    id: 1,
+                    name: None,
+                    mesh,
+                }],
+                build_items: vec![MeshBuildItem {
+                    object_id: 1,
+                    transform: IDENTITY_TRANSFORM,
+                    plate_index: None,
+                    printable: true,
+                }],
+            })
+        }
+        ModelFormat::ThreeMf => threemf::read_mesh(reader, cancel),
+        ModelFormat::Gcode => Err(InspectError::unsupported("G-code has no model geometry.")),
+    }
+}
 
 /// What [`detect`] found: the format, the STL encoding for STL, and any
 /// `EXTENSION_MISMATCH` warning.

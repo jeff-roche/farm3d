@@ -78,6 +78,27 @@ use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
 };
+use farm3d_lib::slicing::commands::{
+    PresetSourceKind, SliceOperationLog, SliceRevisionLog, SlicingDeleted, SlicingSnapshot,
+    StartSliceData,
+};
+use farm3d_lib::slicing::events::{
+    SliceProgressPayload, SlicingEvent, SlicingEventPayload, SlicingEventType,
+};
+use farm3d_lib::slicing::external::{ConfirmedFactRequest, CreateExternalSliceRevisionFacts};
+use farm3d_lib::slicing::preparation::ReloadPreparationData;
+use farm3d_lib::slicing::{
+    BrimType, ClaimedEstimateSource, ClaimedEstimates, EngineCandidate, EngineCandidateResult,
+    EngineSource, EngineState, Fact, FactProvenance, FilamentPresetOption, GeometryBuildItem,
+    GeometryObject, InfillPattern, InstanceDoc, InstanceTransform, LayFlatFace, PlateDoc,
+    PreparationDocument, PreparationRecord, PresetSourceOrigin, PresetSourceState,
+    ProcessPresetOption, ProfileSnapshot, RevisionGeometry, RuntimeChannel, SliceControls,
+    SliceEstimateSource, SliceEstimates, SliceFacts, SliceFailure, SliceFailureCode,
+    SliceOperationRecord, SliceOperationState, SliceOptionDefaults, SliceOptions, SlicePlateRef,
+    SliceRevisionBlob, SliceRevisionBlobRole, SliceRevisionKind, SliceRevisionRecord,
+    SliceRevisionSummary, SliceRevisionTarget, SliceRuntimeInfo, SliceTarget, SlicerRuntimeStatus,
+    SupportMode,
+};
 use farm3d_lib::spools::commands::{
     InventorySnapshot, MoveSpoolResult, SpoolHistory, SpoolMutationResult, TareMutationResult,
 };
@@ -418,6 +439,65 @@ fn export_registry() -> Vec<Export> {
         export::<DeleteModelResult>(),
         export::<RevisionThumbnail>(),
         export::<LibraryContentInfo>(),
+        export::<FactProvenance>(),
+        export::<Fact<f64>>(),
+        export::<ProfileSnapshot>(),
+        export::<SliceFacts>(),
+        export::<SliceTarget>(),
+        export::<InfillPattern>(),
+        export::<SupportMode>(),
+        export::<BrimType>(),
+        export::<SliceControls>(),
+        export::<InstanceTransform>(),
+        export::<InstanceDoc>(),
+        export::<PlateDoc>(),
+        export::<PreparationDocument>(),
+        export::<PreparationRecord>(),
+        export::<SliceOperationState>(),
+        export::<SliceFailureCode>(),
+        export::<SliceFailure>(),
+        export::<SliceOperationRecord>(),
+        export::<SliceRevisionKind>(),
+        export::<SlicePlateRef>(),
+        export::<RuntimeChannel>(),
+        export::<SliceRuntimeInfo>(),
+        export::<SliceEstimateSource>(),
+        export::<ClaimedEstimateSource>(),
+        export::<SliceEstimates>(),
+        export::<ClaimedEstimates>(),
+        export::<SliceRevisionTarget>(),
+        export::<SliceRevisionBlobRole>(),
+        export::<SliceRevisionBlob>(),
+        export::<SliceRevisionSummary>(),
+        export::<SliceRevisionRecord>(),
+        export::<EngineSource>(),
+        export::<EngineState>(),
+        export::<PresetSourceOrigin>(),
+        export::<PresetSourceState>(),
+        export::<SlicerRuntimeStatus>(),
+        export::<ProcessPresetOption>(),
+        export::<FilamentPresetOption>(),
+        export::<SliceOptionDefaults>(),
+        export::<SliceOptions>(),
+        export::<LayFlatFace>(),
+        export::<GeometryObject>(),
+        export::<GeometryBuildItem>(),
+        export::<RevisionGeometry>(),
+        export::<EngineCandidate>(),
+        export::<EngineCandidateResult>(),
+        export::<SlicingEventType>(),
+        export::<SlicingEventPayload>(),
+        export::<SlicingEvent>(),
+        export::<SliceProgressPayload>(),
+        export::<SlicingSnapshot>(),
+        export::<PresetSourceKind>(),
+        export::<StartSliceData>(),
+        export::<SliceOperationLog>(),
+        export::<SliceRevisionLog>(),
+        export::<SlicingDeleted>(),
+        export::<ReloadPreparationData>(),
+        export::<ConfirmedFactRequest<f64>>(),
+        export::<CreateExternalSliceRevisionFacts>(),
     ]
 }
 
@@ -643,6 +723,16 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::SourceContentDiffers,
         ErrorCode::SourceUnavailable,
         ErrorCode::UnsupportedFormat,
+        ErrorCode::SlicerUnavailable,
+        ErrorCode::PresetSourceUnavailable,
+        ErrorCode::PresetNotFound,
+        ErrorCode::PresetInvalid,
+        ErrorCode::FilamentIncompatible,
+        ErrorCode::UnmappedProfileOverride,
+        ErrorCode::UnsupportedSettingForRuntime,
+        ErrorCode::PreparationInvalid,
+        ErrorCode::PreparationStale,
+        ErrorCode::OperationNotCancellable,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -654,6 +744,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::CheckCredentials,
         RecoveryCode::RestartApplication,
         RecoveryCode::UpgradeFarm3d,
+        RecoveryCode::OpenSlicerSettings,
+        RecoveryCode::ReloadPreparation,
+        RecoveryCode::EditPreparation,
     ];
 
     assert_eq!(
@@ -666,12 +759,16 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "PRINTER_UNREACHABLE", "AUTHENTICATION_FAILED", "PROTOCOL_ERROR",
                 "TIMEOUT", "INCOMPATIBLE_CONTRACT_VERSION", "INTERNAL",
                 "SELECTION_EXPIRED", "SOURCE_CONTENT_DIFFERS", "SOURCE_UNAVAILABLE",
-                "UNSUPPORTED_FORMAT"
+                "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
+                "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
+                "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
+                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
                 "CHOOSE_SUPPORTED_ADAPTER", "CHECK_CONNECTION", "CHECK_CREDENTIALS",
-                "RESTART_APPLICATION", "UPGRADE_FARM3D"
+                "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
+                "RELOAD_PREPARATION", "EDIT_PREPARATION"
             ]
         })
     );

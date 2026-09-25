@@ -133,7 +133,9 @@ const readinessLabels = {
   archived: "Archived",
 } as const;
 
-function operationalLabel(status: PrinterStatus | undefined): string {
+/** A Printer's operational state in words ("Ready", "Offline", …), or
+ *  "Status unavailable" before any status arrives. */
+export function operationalLabel(status: PrinterStatus | undefined): string {
   return status ? operationalLabels[status.operationalState] : "Status unavailable";
 }
 

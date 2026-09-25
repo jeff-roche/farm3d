@@ -46,6 +46,7 @@ export function Showcase() {
   const [projects, setProjects] = createSignal(["Brackets"]);
   const [chipSelected, setChipSelected] = createSignal(true);
   const [numberValue, setNumberValue] = createSignal(120);
+  const [groupedTarget, setGroupedTarget] = createSignal<string | null>(null);
   const [dropActive, setDropActive] = createSignal(false);
   const [viewMode, setViewMode] = createSignal<"grid" | "list">("grid");
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
@@ -159,6 +160,16 @@ export function Showcase() {
         <div class={styles.column}>
           <Select label="Fruit" options={["Apple", "Banana", "Cherry"]} defaultValue="Banana" />
           <Select label="With error" options={["Apple", "Banana", "Cherry"]} error="That option no longer exists." />
+          <Select
+            label="Grouped"
+            placeholder="Choose a target"
+            value={groupedTarget()}
+            onChange={setGroupedTarget}
+            groups={[
+              { label: "Printers", options: ["CC Left", "CC Right"] },
+              { label: "Printer profiles", options: ["Elegoo Centauri Carbon 0.4 nozzle"] },
+            ]}
+          />
         </div>
       </Panel>
 
@@ -227,15 +238,18 @@ export function Showcase() {
       </Panel>
 
       <Panel title="NumberField">
-        <NumberField
-          label="Bed height"
-          suffix="mm"
-          minValue={0}
-          maxValue={500}
-          step={1}
-          value={numberValue()}
-          onChange={setNumberValue}
-        />
+        <div class={styles.column}>
+          <NumberField
+            label="Bed height"
+            suffix="mm"
+            minValue={0}
+            maxValue={500}
+            step={1}
+            value={numberValue()}
+            onChange={setNumberValue}
+          />
+          <NumberField label="Walls" minValue={1} maxValue={20} step={1} placeholder="Preset's value" />
+        </div>
       </Panel>
 
       <Panel title="Field">
@@ -265,6 +279,7 @@ export function Showcase() {
             <Button variant="danger">Confirm</Button>
           </div>
         </Dialog>
+        <ReturnFocusDialogDemo />
       </Panel>
 
       <Panel title="Popover">
@@ -291,6 +306,7 @@ export function Showcase() {
         <div class={styles.column}>
           <Progress label="Loading assets" showValue value={65} />
           <Progress label="Indeterminate" indeterminate />
+          <Progress label="Generating G-code" showValue value={42} valueLabel="42% of the plate" />
         </div>
       </Panel>
 
@@ -310,7 +326,7 @@ export function Showcase() {
             label="offline Printers"
             count={3}
             printers={[
-              { id: "1", name: "Atlas", stateLabel: "Offline" },
+              { id: "1", name: "Atlas", detail: "Bench 1", stateLabel: "Offline" },
               { id: "2", name: "Forge", stateLabel: "Offline" },
               { id: "3", name: "Nova", stateLabel: "Offline" },
             ]}
@@ -460,5 +476,22 @@ export function Showcase() {
         />
       </Panel>
     </div>
+  );
+}
+
+/** A dialog with no trigger of its own, opened from elsewhere: `returnFocus`
+ *  puts focus back on the control that opened it. */
+function ReturnFocusDialogDemo() {
+  const [open, setOpen] = createSignal(false);
+  let opener: HTMLButtonElement | undefined;
+  return (
+    <>
+      <Button ref={opener} variant="secondary" onClick={() => setOpen(true)}>
+        Open without a trigger
+      </Button>
+      <Dialog title="Opened from elsewhere" open={open()} onOpenChange={setOpen} returnFocus={() => opener}>
+        Closing returns focus to the button that opened this.
+      </Dialog>
+    </>
   );
 }

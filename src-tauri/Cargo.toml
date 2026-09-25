@@ -13,6 +13,10 @@ default-run = "farm3d"
 [features]
 default = []
 catalog-generator = []
+# Builds `fake-orca`, the OrcaSlicer CLI double the slicing tests drive
+# (spec D23). Never enabled for packaging; `scripts/assert-package-contents.sh`
+# fails if the binary shows up in a bundle.
+test-support = []
 
 [[bin]]
 name = "farm3d"
@@ -22,6 +26,33 @@ path = "src/main.rs"
 name = "gen-catalog"
 path = "src/bin/gen-catalog.rs"
 required-features = ["catalog-generator"]
+
+[[bin]]
+name = "fake-orca"
+path = "src/bin/fake-orca.rs"
+required-features = ["test-support"]
+
+# Drives the `fake-orca` binary, so it needs the feature that builds it.
+[[test]]
+name = "p5_process"
+path = "tests/p5_process.rs"
+required-features = ["test-support"]
+
+# Publishes what `fake-orca` slices.
+[[test]]
+name = "p5_publish"
+path = "tests/p5_publish.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "p5_slicing"
+path = "tests/p5_slicing.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "p5_tracer"
+path = "tests/p5_tracer.rs"
+required-features = ["test-support"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -59,10 +90,17 @@ quick-xml = "0.42"
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    # D9: the Job Object that contains an OrcaSlicer process tree.
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

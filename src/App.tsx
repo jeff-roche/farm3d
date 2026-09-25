@@ -1,11 +1,11 @@
 // src/App.tsx
-import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from "solid-js";
 import { createMonitorStore, type MonitorShellView, type MonitorStore } from "./monitor/monitor-store";
 import { AppShell } from "./screens/AppShell";
+import { SlicerSettingsHost } from "./screens/SlicerSettingsHost";
 import type { ScreenId } from "./screens/ActivityBar";
 import { PrinterDashboard } from "./screens/PrinterDashboard";
 import { LibraryWorkspace } from "./screens/LibraryWorkspace";
-import { SpoolInventory } from "./screens/SpoolInventory";
 import { ensureInventoryLoaded, spoolState } from "./spools/spool-store";
 import { desktopAvailable } from "./ipc/client";
 import {
@@ -17,6 +17,7 @@ import {
   startLibrary,
 } from "./library/library-store";
 import type { ImportSelectionSummary } from "./library/types";
+import { startSlicing } from "./slicing/slicing-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -41,6 +42,10 @@ import {
   serializeNavigationTarget,
   type NavigationDestination,
 } from "./navigation/navigation-store";
+
+// The Spools screen and its dialogs load on first visit, keeping them out of
+// the main chunk.
+const SpoolInventory = lazy(() => import("./screens/SpoolInventory").then((m) => ({ default: m.SpoolInventory })));
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -164,6 +169,7 @@ function App() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let disposeLibrary: (() => void) | undefined;
+    let disposeSlicing: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -210,6 +216,15 @@ function App() {
           disposeLibrary = dispose;
           reconcileNavigation();
         });
+        // Slicing follows the Library (the spec's startup order), with
+        // the same retry and unmount handling.
+        void startSlicing().then((dispose) => {
+          if (disposed || generation !== startupGeneration) {
+            dispose();
+            return;
+          }
+          disposeSlicing = dispose;
+        });
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -236,6 +251,7 @@ function App() {
       retryStartup = undefined;
       unlisten?.();
       disposeLibrary?.();
+      disposeSlicing?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });
@@ -317,7 +333,9 @@ function App() {
               />
             </Match>
             <Match when={active() === "spools"}>
-              <SpoolInventory />
+              <Suspense fallback={<p class={styles.loading} role="status">Loading Spools…</p>}>
+                <SpoolInventory />
+              </Suspense>
             </Match>
           </Switch>
         }
@@ -353,6 +371,8 @@ function App() {
           )}
         </Show>
       </Show>
+      {/* Portalled: it renders over the whole app, whatever the screen. */}
+      <SlicerSettingsHost />
     </AppShell>
   );
 }

@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store";
-import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
-import { buildWebLibraryFixture, type WebLibraryFixture } from "./web-fixtures";
+import type { WebLibraryFixture } from "./web-fixtures";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import {
@@ -87,12 +87,6 @@ function commandError(code: ErrorCode, message: string, details?: Record<string,
     retryable: false,
     ...(details ? { details } : {}),
   };
-}
-
-/** Web mode has no files and no content store, so anything that reads real
- *  files is refused rather than faked. */
-function needsDesktop(action: string): CommandError {
-  return commandError("PERSISTENCE_UNAVAILABLE", `${action} needs the desktop app.`);
 }
 
 function notFound(kind: "Project" | "Model", id: string): CommandError {
@@ -249,6 +243,8 @@ function applySnapshot(snapshot: LibrarySnapshot): void {
 export async function startLibrary(): Promise<() => void> {
   disposeListener();
   if (!desktopAvailable()) {
+    // Loaded only in web mode, so the fixtures stay out of the main chunk.
+    const { buildWebLibraryFixture } = await import("./web-fixtures");
     webFixture = buildWebLibraryFixture();
     setState({
       projects: webFixture.projects,
@@ -497,12 +493,12 @@ export function loadThumbnail(revisionId: string): Promise<string | null> {
 
 /** `null` when the user cancels the picker. */
 export async function pickFiles(purpose: SelectionPurpose): Promise<ImportSelectionSummary | null> {
-  if (!desktopAvailable()) throw needsDesktop(purpose === "import" ? "Importing Models" : "Locating a source file");
+  if (!desktopAvailable()) throw needsDesktopError(purpose === "import" ? "Importing Models" : "Locating a source file");
   return command("pick_model_files", { purpose });
 }
 
 export async function inspectSelection(selectionId: string): Promise<ImportInspection> {
-  if (!desktopAvailable()) throw needsDesktop("Importing Models");
+  if (!desktopAvailable()) throw needsDesktopError("Importing Models");
   return command("inspect_import_selection", { selectionId });
 }
 
@@ -514,7 +510,7 @@ export async function importModels(
   items: ImportItemRequest[],
   operationId: string = crypto.randomUUID(),
 ): Promise<ImportModelsResult> {
-  if (!desktopAvailable()) throw needsDesktop("Importing Models");
+  if (!desktopAvailable()) throw needsDesktopError("Importing Models");
   const result = await retryOnTransportFailure(() => command("import_models", { selectionId, operationId, items }));
   for (const item of result.items) if (item.model) settleModel(item.model);
   void refreshContentInfo();
@@ -537,7 +533,7 @@ let lastSourceCheckAt: number | undefined;
  *  toward the throttle, so a focus storm can't retry it in a loop. Settles
  *  the Models that changed. */
 export async function checkSources(modelIds?: string[], options: { force?: boolean } = {}): Promise<void> {
-  if (!desktopAvailable()) throw needsDesktop("Checking linked sources");
+  if (!desktopAvailable()) throw needsDesktopError("Checking linked sources");
   const now = Date.now();
   if (!options.force && lastSourceCheckAt !== undefined && now - lastSourceCheckAt < SOURCE_CHECK_INTERVAL_MS) return;
   lastSourceCheckAt = now;
@@ -554,7 +550,7 @@ export async function locateSource(
   fileIndex: number,
   acceptDifferentContent: boolean,
 ): Promise<ModelRecord> {
-  if (!desktopAvailable()) throw needsDesktop("Locating a source file");
+  if (!desktopAvailable()) throw needsDesktopError("Locating a source file");
   const expectedRevision = heldModel(modelId).revision;
   const { model } = await withConflictRefresh(() => command("locate_linked_source", {
     modelId, expectedRevision, selectionId, fileIndex, acceptDifferentContent,
@@ -564,7 +560,7 @@ export async function locateSource(
 }
 
 export async function convertToManaged(modelId: string): Promise<void> {
-  if (!desktopAvailable()) throw needsDesktop("Converting to managed storage");
+  if (!desktopAvailable()) throw needsDesktopError("Converting to managed storage");
   const expectedRevision = heldModel(modelId).revision;
   const { model } = await withConflictRefresh(() => command("convert_model_to_managed", { modelId, expectedRevision }));
   settleModel(model);

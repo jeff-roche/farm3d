@@ -6,6 +6,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::file_links::file_has_multiple_links;
 use crate::printers::{PrintersFile, StoredPrinter};
 
 use super::database::create_private_directory;
@@ -272,7 +273,7 @@ fn read_source(path: &Path) -> Result<Option<Vec<u8>>, StorageError> {
             }
             let mut file = options.open(path)?;
             let metadata = file.metadata()?;
-            if !metadata.is_file() || has_multiple_links(&metadata) {
+            if !metadata.is_file() || file_has_multiple_links(&file) {
                 return Err(StorageError::PathCollision);
             }
             let mut bytes = Vec::new();
@@ -573,23 +574,6 @@ fn atomic_write_new(path: &Path, bytes: &[u8]) -> Result<bool, StorageError> {
         let _ = fs::remove_file(&temporary);
     }
     result
-}
-
-#[cfg(unix)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    metadata.nlink() > 1
-}
-
-#[cfg(windows)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.number_of_links().is_some_and(|links| links > 1)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn has_multiple_links(_: &fs::Metadata) -> bool {
-    false
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StorageError> {

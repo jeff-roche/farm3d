@@ -1,0 +1,175 @@
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}
+
+.toolbar {
+  display: flex;
+}
+
+.heading {
+  margin: 0;
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  letter-spacing: var(--f3d-type-heading-tracking);
+}
+
+.heading:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+}
+
+.rows dt {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+}
+
+.rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.sectionHeading,
+.claimsHeading {
+  margin: 0;
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  text-transform: uppercase;
+  color: var(--f3d-color-text-muted);
+}
+
+.text {
+  margin: 0;
+}
+
+.note {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.manual {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin: 0;
+  color: var(--f3d-color-warning);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.manual svg {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The label sits above the value, and the badge has its own column on
+   the right, so the badges line up down the list and the value keeps the
+   rest of the dock's width. */
+.fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-areas:
+    "label badge"
+    "value badge";
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.fact .factLabel {
+  grid-area: label;
+}
+
+.fact .factValue {
+  grid-area: value;
+}
+
+.factBadge {
+  grid-area: badge;
+  justify-self: end;
+}
+
+.factLabel {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+}
+
+.factValue {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.claims {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px dashed var(--f3d-color-border-strong);
+  border-radius: var(--f3d-radius-sm);
+}
+
+.log {
+  max-height: 16rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-bg);
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-mono-font);
+  font-size: var(--f3d-type-mono-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log:focus-visible {
+  outline: 2px solid var(--f3d-color-focus-ring);
+  outline-offset: -1px;
+}
+
+/* D9: known noise is kept, only de-emphasised. */
+.noise {
+  color: var(--f3d-color-text-disabled);
+  font-style: italic;
+}

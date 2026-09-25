@@ -5,8 +5,11 @@ import { ModelDetailsPanel } from "./ModelDetailsPanel";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
 import { emitRevisionCreated, libraryStoreMock, resetLibraryStoreMock } from "../library/library-store-mock";
 import type { ModelRecord } from "../library/types";
+import { loadWebSlicingFixture, resetSlicingStoreMock, slicingStoreMock } from "../slicing/slicing-store-mock";
+import { lastFakeRenderer } from "../slicing/viewport/fake-renderer";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
+vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 
 const NOW = new Date("2026-09-24T12:00:00Z");
 const fixture = buildWebLibraryFixture(NOW);
@@ -19,6 +22,8 @@ function fixtureModel(id: string): ModelRecord {
 
 beforeEach(() => {
   resetLibraryStoreMock();
+  resetSlicingStoreMock();
+  loadWebSlicingFixture(NOW);
   libraryStoreMock.loadRevisions.mockImplementation(async (modelId: string) => fixture.revisions[modelId] ?? []);
 });
 afterEach(cleanup);
@@ -49,6 +54,16 @@ async function pickOption(name: string) {
 }
 
 describe("ModelDetailsPanel", () => {
+  it("offers Prepare… for STL and 3MF Models, not G-code", async () => {
+    const onPrepare = vi.fn();
+    renderPanel(fixtureModel("mdl-web-enclosure"), { onPrepare });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare…" }));
+    expect(onPrepare).toHaveBeenCalledWith("mdl-web-enclosure");
+    cleanup();
+    renderPanel(fixtureModel("mdl-web-cube-gcode"), { onPrepare });
+    expect(screen.queryByRole("button", { name: "Prepare…" })).toBeNull();
+  });
+
   it("saves a name edit on blur", async () => {
     renderPanel(fixtureModel("mdl-web-bracket"));
     const name = screen.getByRole("textbox", { name: "Name" });
@@ -144,13 +159,14 @@ describe("ModelDetailsPanel", () => {
       .toBeLessThan(libraryStoreMock.setModelProjects.mock.invocationCallOrder[0]!);
   });
 
-  it("shows a G-code Model's claims as unverified, with no Slice, Queue, or Dispatch", async () => {
-    renderPanel(fixtureModel("mdl-web-cube-gcode"));
-    expect(screen.getByText("Pre-sliced G-code. It can be sent to a Printer once G-code handoff is available.")).toBeInTheDocument();
+  it("shows a G-code Model's claims as unverified, with Create Slice Revision… and no Prepare, Queue, or Dispatch", async () => {
+    renderPanel(fixtureModel("mdl-web-cube-gcode"), { onPrepare: vi.fn() });
+    expect(screen.queryByText(/once G-code handoff is available/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create Slice Revision…" })).toBeInTheDocument();
     const claims = await screen.findByRole("region", { name: "What the file says (not verified)" });
     expect(within(claims).getByText("Elegoo Centauri Carbon")).toBeInTheDocument();
     expect(within(claims).getByText("printer_model")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Slice|Queue|Dispatch/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Prepare|Queue|Dispatch/ })).toBeNull();
   });
 
   it("shows a failed history load on a G-code Model without throwing", async () => {
@@ -257,10 +273,49 @@ describe("ModelDetailsPanel", () => {
     expect(screen.queryByText(/Updated from source ·/)).toBeNull();
   });
 
-  it("shows the build plate placeholder with the Model's name and approximate size", () => {
+  it("shows an STL's current revision in a read-only 3D view", async () => {
     renderPanel(fixtureModel("mdl-web-bracket"));
-    const plate = screen.getByRole("figure", { name: "Build plate" });
-    expect(plate).toHaveTextContent("Corner bracket");
-    expect(plate).toHaveTextContent("40 × 40 × 5 mm");
+    const view = await screen.findByRole("img", { name: "3D view of Corner bracket" });
+    await waitFor(() => expect(lastFakeRenderer()?.instances).toHaveLength(1));
+    const renderer = lastFakeRenderer()!;
+    expect(renderer.canvas).toBe(view);
+    expect(renderer.buildVolume).toBeNull();
+    expect([...renderer.meshes.keys()]).toEqual([1]);
+    expect(slicingStoreMock.loadGeometry).toHaveBeenCalledWith("msr-web-bracket-1");
+    expect(screen.queryByRole("button", { name: "Next plate" })).toBeNull();
+    const description = document.getElementById(view.getAttribute("aria-describedby")!)!;
+    expect(description).toHaveTextContent("Plate 1: 1 object. No object selected.");
+  });
+
+  it("steps through a 3MF's plates, and lists the item it doesn't place", async () => {
+    renderPanel(fixtureModel("mdl-web-enclosure"));
+    expect(await screen.findByText("Plate 1 of 2: Lid")).toBeInTheDocument();
+    await waitFor(() => expect(lastFakeRenderer()?.instances.map((i) => i.objectKey)).toEqual([1]));
+    const note = "Not placed (marked not printable in the file): Gasket.";
+    expect(screen.getByText(note, { selector: "p:not([aria-live])" })).toBeInTheDocument();
+    const view = screen.getByRole("img", { name: "3D view of Enclosure lid" });
+    const description = document.getElementById(view.getAttribute("aria-describedby")!)!;
+    expect(description).toHaveTextContent(`Plate Lid: 1 object. No object selected. ${note}`);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next plate" }));
+    expect(screen.getByText("Plate 2 of 2: Latch")).toBeInTheDocument();
+    await waitFor(() => expect(lastFakeRenderer()?.instances.map((i) => i.objectKey)).toEqual([2]));
+    fireEvent.click(screen.getByRole("button", { name: "Next plate" }));
+    expect(screen.getByText("Plate 1 of 2: Lid")).toBeInTheDocument();
+    // The Gasket's mesh is never fetched: it is not placed.
+    expect(slicingStoreMock.loadMesh.mock.calls.map(([, key]) => key).sort()).toEqual([1, 2]);
+  });
+
+  it("says so when the 3D view can't load", async () => {
+    slicingStoreMock.loadGeometry.mockRejectedValue(new Error("offline"));
+    renderPanel(fixtureModel("mdl-web-bracket"));
+    expect(await screen.findByText("The 3D view could not load.")).toBeInTheDocument();
+  });
+
+  it("shows a G-code Model's thumbnail instead of a 3D view", async () => {
+    renderPanel(fixtureModel("mdl-web-cube-gcode"));
+    expect(document.querySelector("[data-format-icon]")).toHaveTextContent("G-code");
+    expect(screen.queryByRole("img", { name: /3D view/ })).toBeNull();
+    expect(slicingStoreMock.loadGeometry).not.toHaveBeenCalled();
   });
 });

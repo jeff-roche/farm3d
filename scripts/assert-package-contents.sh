@@ -24,7 +24,7 @@ assert_inventory() {
         printf '%s inventory does not contain printer-catalog.json\n' "$format" >&2
         exit 1
     }
-    forbidden='(^|/)(gen-catalog|node_modules|src-tauri|src|tests?|target|\.git|legacy|snapshots)(/|$)|(^|/)(Cargo\.(toml|lock)|package(-lock)?\.json|justfile|credentials\.json|settings\.json|printers\.json|farm3d\.sqlite3([.-].*)?|farm3d\.lock)$'
+    forbidden='(^|/)(gen-catalog|fake-orca|node_modules|src-tauri|src|tests?|target|\.git|legacy|snapshots)(/|$)|(^|/)(Cargo\.(toml|lock)|package(-lock)?\.json|justfile|credentials\.json|settings\.json|printers\.json|farm3d\.sqlite3([.-].*)?|farm3d\.lock)$'
     if grep -Eqi "$forbidden" "$inventory"; then
         printf '%s inventory contains source, tests, build output, metadata, credentials, legacy data, or developer tooling\n' "$format" >&2
         grep -Ei "$forbidden" "$inventory" >&2

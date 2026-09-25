@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe("SettingsMenu", () => {
-  it("shows theme and explicit settings import/export actions", async () => {
+  it("shows theme, Slicer, and explicit settings import/export actions", async () => {
     render(() => <SettingsMenu />);
 
     await fireEvent.pointerDown(screen.getByLabelText("Settings"), {
@@ -16,6 +16,7 @@ describe("SettingsMenu", () => {
     });
 
     expect(await screen.findByText("Theme...")).toBeInTheDocument();
+    expect(screen.getByText("Slicer...")).toBeInTheDocument();
     expect(screen.getByText("Export settings...")).toBeInTheDocument();
     expect(screen.getByText("Import settings...")).toBeInTheDocument();
   });
