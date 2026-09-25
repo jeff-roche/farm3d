@@ -15,6 +15,7 @@ import {
 } from "solid-js";
 import { Button, Chip, Combobox, SeverityMarker, TextField, Timeline, type TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
+import { slicing } from "../slicing/slicing-store";
 import {
   createProject,
   loadRevisions,
@@ -44,6 +45,10 @@ import { ModelThumbnail } from "./ModelGrid";
 // The 3D inspector (and the viewport it builds on) loads on first use, to
 // keep it out of the main chunk.
 const ModelPlateInspector = lazy(async () => ({ default: (await import("./ModelPlateInspector")).ModelPlateInspector }));
+// So do the Slice Revision views (P5 D21).
+const SliceRevisionList = lazy(async () => ({ default: (await import("./SliceRevisionList")).SliceRevisionList }));
+const SliceRevisionReview = lazy(async () => ({ default: (await import("./SliceRevisionReview")).SliceRevisionReview }));
+const GcodeFactsDialog = lazy(async () => ({ default: (await import("./GcodeFactsDialog")).GcodeFactsDialog }));
 
 export interface ModelDetailsPanelProps {
   model: ModelRecord;
@@ -56,8 +61,13 @@ export interface ModelDetailsPanelProps {
   /** **Delete…** (D18). The caller confirms first. */
   onDelete: (modelId: string) => void;
   /** **Prepare…** (P5 D19), offered for STL and 3MF Models: opens the
-   *  Preparation workspace. */
+   *  Preparation workspace. The Library's one way in. */
   onPrepare?: (modelId: string) => void;
+  /** A Slice Revision to show the review of when the panel opens (a
+   *  finished slice's **Open the Slice Revision**). */
+  openRevisionId?: string | null;
+  /** Called once `openRevisionId` has been acted on. */
+  onRevisionOpened?: () => void;
   /** A new non-zero value moves focus to **Add to Project…**. */
   focusRequest?: number;
   /** Called once `focusRequest` has been acted on, so a remount doesn't
@@ -77,10 +87,53 @@ function errorMessage(error: unknown): string {
 }
 
 /** D19's details panel: name, Projects, format, storage and source state,
- *  the current revision, the format's own findings, the revision history,
- *  and the recovery actions. Details only: P4 has no Slice, Queue, or
- *  Dispatch control (D11). */
+ *  the current revision, the format's own findings, the Slice Revisions
+ *  (P5 D21), the revision history, and the actions: **Prepare…** for STL
+ *  and 3MF, **Create Slice Revision…** for G-code. A Slice Revision's
+ *  review replaces the details in the same dock until **Model details**. */
 export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
+  const [reviewing, setReviewing] = createSignal<string | null>(null);
+  createEffect(on(() => props.openRevisionId, (id) => {
+    if (!id) return;
+    setReviewing(id);
+    props.onRevisionOpened?.();
+  }));
+  let panel: HTMLDivElement | undefined;
+  /** Back from a review: focus returns to that revision's entry, or to the
+   *  section if it was deleted. */
+  const endReview = (revisionId: string) => {
+    setReviewing(null);
+    const stillThere = slicing.revision(revisionId) !== undefined;
+    // The list mounts again (and its chunk may still be arriving), so its
+    // entry can take a moment to appear.
+    const refocus = (tries: number) => {
+      const entry = panel?.querySelector<HTMLElement>(`[data-revision-open="${revisionId}"]`);
+      const heading = panel?.querySelector<HTMLElement>("[data-slice-revisions-heading]");
+      if (entry) entry.focus();
+      else if (stillThere && tries > 0) setTimeout(() => refocus(tries - 1), 16);
+      else heading?.focus();
+    };
+    queueMicrotask(() => refocus(30));
+  };
+
+  return (
+    <div ref={panel} class={styles.dock}>
+      <Show when={reviewing()} keyed fallback={<ModelDetails {...props} onReview={setReviewing} />}>
+        {(revisionId) => (
+          <Suspense fallback={<p class={styles.note} role="status">Loading the Slice Revision…</p>}>
+            <SliceRevisionReview
+              sliceRevisionId={revisionId}
+              onBack={() => endReview(revisionId)}
+              onDeleted={() => endReview(revisionId)}
+            />
+          </Suspense>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+function ModelDetails(props: ModelDetailsPanelProps & { onReview: (sliceRevisionId: string) => void }) {
   // The newest revision this panel has heard of: the record's current one,
   // or a `library.revision.created` that got here first. Both arrive for
   // one capture, in either order, and name the same revision.
@@ -107,14 +160,25 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
     () => loadRevisions(props.model.id),
   );
   const historyId = createUniqueId();
+  const sliceRevisionsId = createUniqueId();
+  // The facts dialog loads on first use, then stays mounted (closed).
+  const [factsOpen, setFactsOpen] = createSignal(false);
+  const [factsMounted, setFactsMounted] = createSignal(false);
+  const gcodeClaims = () => {
+    const inspection = readyInspection();
+    return inspection?.format === "gcode" ? inspection.claims : [];
+  };
   // Reading an errored resource throws, so check the error first.
   const currentInspection = (): Inspection | undefined =>
     revisions.error ? undefined : revisions()?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
   // The inspector sits in a Suspense boundary (for its lazy chunk), so its
   // props must not read a pending resource, which would suspend it again.
+  const readyInspection = (): Inspection | undefined => {
+    if (revisions.state !== "ready" && revisions.state !== "refreshing") return undefined;
+    return revisions.latest?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
+  };
   const sourcePlates = () => {
-    if (revisions.state !== "ready" && revisions.state !== "refreshing") return [];
-    const inspection = revisions.latest?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
+    const inspection = readyInspection();
     return inspection?.format === "3mf" ? inspection.plates : [];
   };
 
@@ -160,6 +224,16 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
           <ThreeMfFindings inspection={currentInspection()} />
         </Match>
       </Switch>
+      <section class={styles.section} aria-labelledby={sliceRevisionsId}>
+        <h3 id={sliceRevisionsId} class={styles.heading} tabIndex={-1} data-slice-revisions-heading>Slice Revisions</h3>
+        <Suspense fallback={<p class={styles.note}>Loading the Slice Revisions…</p>}>
+          <SliceRevisionList
+            modelId={props.model.id}
+            external={props.model.format === "gcode"}
+            onOpen={props.onReview}
+          />
+        </Suspense>
+      </section>
       <section class={styles.section} aria-labelledby={historyId}>
         <h3 id={historyId} class={styles.heading}>Revisions</h3>
         <Show when={!revisions.error} fallback={<p class={styles.note}>The revision history could not load.</p>}>
@@ -169,6 +243,17 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
       <div class={styles.actions}>
         <Show when={props.onPrepare && props.model.format !== "gcode"}>
           <Button variant="primary" onClick={() => props.onPrepare?.(props.model.id)}>Prepare…</Button>
+        </Show>
+        <Show when={props.model.format === "gcode"}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setFactsMounted(true);
+              setFactsOpen(true);
+            }}
+          >
+            Create Slice Revision…
+          </Button>
         </Show>
         <Show when={props.model.link}>
           {(link) => (
@@ -186,6 +271,21 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
         </Show>
         <Button variant="secondary" onClick={() => props.onDelete(props.model.id)}>Delete…</Button>
       </div>
+      <Show when={factsMounted()}>
+        <Suspense>
+          <GcodeFactsDialog
+            open={factsOpen()}
+            onOpenChange={setFactsOpen}
+            sourceRevisionId={props.model.currentRevision.id}
+            sourceRevisionSequence={props.model.currentRevision.sequence}
+            claims={gcodeClaims()}
+            onCreated={(record) => {
+              setFactsOpen(false);
+              props.onReview(record.id);
+            }}
+          />
+        </Suspense>
+      </Show>
     </div>
   );
 }
@@ -393,7 +493,9 @@ function GcodeFindings(props: { inspection: Inspection | undefined }) {
   const claims = () => (props.inspection?.format === "gcode" ? props.inspection.claims : []);
   return (
     <>
-      <p class={styles.note}>Pre-sliced G-code. It can be sent to a Printer once G-code handoff is available.</p>
+      <p class={styles.note}>
+        Pre-sliced G-code. Create a Slice Revision to confirm which Printer and material it is for.
+      </p>
       <section class={styles.section} aria-labelledby={headingId}>
         <h3 id={headingId} class={styles.heading}>What the file says (not verified)</h3>
         <Show when={claims().length > 0} fallback={<p class={styles.note}>No claims found.</p>}>

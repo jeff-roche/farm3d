@@ -12,6 +12,8 @@ export interface PreparationModeProps {
   /** An STL or 3MF Model. */
   model: ModelRecord;
   onBack: () => void;
+  /** A finished slice's **Open the Slice Revision**. */
+  onOpenRevision?: (sliceRevisionId: string) => void;
 }
 
 type Opening = { kind: "opening" } | { kind: "open" } | { kind: "failed"; message: string };
@@ -64,7 +66,7 @@ export function PreparationMode(props: PreparationModeProps) {
               <PreparationWorkspace
                 session={session}
                 onBack={props.onBack}
-                dock={<PreparationPanel session={session} />}
+                dock={<PreparationPanel session={session} onOpenRevision={props.onOpenRevision} />}
               />
             );
           }}

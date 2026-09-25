@@ -1,0 +1,32 @@
+.detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.prerelease {
+  padding: 0 0.25rem;
+  border: 1px solid currentColor;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-warning);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+}
+
+.manual {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--f3d-color-warning);
+}
+
+.open {
+  margin-left: auto;
+}
+
+.note {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}

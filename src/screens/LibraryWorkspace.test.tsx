@@ -246,6 +246,35 @@ describe("LibraryWorkspace", () => {
     expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
   });
 
+  it("has one Prepare… entry, in the Model's details, and none on the card menu", async () => {
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    const prepare = screen.getAllByRole("button", { name: "Prepare…" });
+    expect(prepare).toHaveLength(1);
+    expect(screen.getByRole("complementary", { name: "Model details" })).toContainElement(prepare[0]);
+    await fireEvent.pointerDown(screen.getByLabelText("Actions for Enclosure lid"), { pointerType: "mouse", button: 0 });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText(/Prepare/)).toBeNull();
+  });
+
+  it("a finished slice's Open the Slice Revision ends preparing and shows its review in the details", async () => {
+    const { loadWebSlicingFixture } = await import("../slicing/slicing-store-mock");
+    loadWebSlicingFixture();
+    navigate({ version: 1, destination: "library", selection: { kind: "model", id: "mdl-web-enclosure" } });
+    renderWorkspace();
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Model details" })).getByRole("button", { name: "Prepare…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the Slice Revision" }, { timeout: 5000 }));
+
+    const details = await screen.findByRole("complementary", { name: "Model details" });
+    const heading = await within(details).findByRole("heading", { level: 3, name: "Plate 1: Lid" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.queryByRole("tab", { name: "Lid" })).toBeNull();
+    expect(navigation.target().selection).toEqual({ kind: "model", id: "mdl-web-enclosure" });
+    // Back to the details: the request was used once and isn't replayed.
+    fireEvent.click(within(details).getByRole("button", { name: "Model details" }));
+    expect(await within(details).findByRole("heading", { name: "Slice Revisions" })).toBeInTheDocument();
+  });
+
   it("saves an edit still waiting for its pause when another selection ends preparing", async () => {
     const { loadWebSlicingFixture, slicingStoreMock } = await import("../slicing/slicing-store-mock");
     loadWebSlicingFixture();

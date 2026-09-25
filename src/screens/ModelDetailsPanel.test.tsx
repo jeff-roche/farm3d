@@ -159,13 +159,14 @@ describe("ModelDetailsPanel", () => {
       .toBeLessThan(libraryStoreMock.setModelProjects.mock.invocationCallOrder[0]!);
   });
 
-  it("shows a G-code Model's claims as unverified, with no Slice, Queue, or Dispatch", async () => {
-    renderPanel(fixtureModel("mdl-web-cube-gcode"));
-    expect(screen.getByText("Pre-sliced G-code. It can be sent to a Printer once G-code handoff is available.")).toBeInTheDocument();
+  it("shows a G-code Model's claims as unverified, with Create Slice Revision… and no Prepare, Queue, or Dispatch", async () => {
+    renderPanel(fixtureModel("mdl-web-cube-gcode"), { onPrepare: vi.fn() });
+    expect(screen.queryByText(/once G-code handoff is available/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create Slice Revision…" })).toBeInTheDocument();
     const claims = await screen.findByRole("region", { name: "What the file says (not verified)" });
     expect(within(claims).getByText("Elegoo Centauri Carbon")).toBeInTheDocument();
     expect(within(claims).getByText("printer_model")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Slice|Queue|Dispatch/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Prepare|Queue|Dispatch/ })).toBeNull();
   });
 
   it("shows a failed history load on a G-code Model without throwing", async () => {

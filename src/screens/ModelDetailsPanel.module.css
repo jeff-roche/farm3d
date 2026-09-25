@@ -121,3 +121,8 @@
 .thumbnail {
   max-width: 16rem;
 }
+
+.dock {
+  display: flex;
+  flex-direction: column;
+}

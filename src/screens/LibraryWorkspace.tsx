@@ -143,6 +143,9 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
   // D19: the Model being prepared. Workspace state, not deep-linked; the
   // navigation target stays the Model's.
   const [preparingId, setPreparingId] = createSignal<string | null>(null);
+  // A Slice Revision to review once the details panel is back (a finished
+  // slice's **Open the Slice Revision**, which ends preparing).
+  const [revisionRequest, setRevisionRequest] = createSignal<string | null>(null);
   const now = () => new Date();
 
   // D15 trigger 3: check linked sources when the Library becomes visible
@@ -320,6 +323,8 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
             setDetailsOpen(false);
             setPreparingId(modelId);
           }}
+          openRevisionId={revisionRequest()}
+          onRevisionOpened={() => setRevisionRequest(null)}
           focusRequest={focusRequest()}
           onFocusHandled={() => setFocusRequest(0)}
         />
@@ -523,7 +528,15 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
           {(_id) => (
             <div class={styles.preparing}>
               <Suspense fallback={<p class={styles.notice} role="status">Loading the Preparation workspace…</p>}>
-                <PreparationMode model={preparing()!} onBack={endPreparing} />
+                <PreparationMode
+                  model={preparing()!}
+                  onBack={endPreparing}
+                  onOpenRevision={(sliceRevisionId) => {
+                    setRevisionRequest(sliceRevisionId);
+                    setPreparingId(null);
+                    if (narrow()) setDetailsOpen(true);
+                  }}
+                />
               </Suspense>
             </div>
           )}

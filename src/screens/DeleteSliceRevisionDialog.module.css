@@ -1,0 +1,33 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 32rem;
+}
+
+.text {
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-size: var(--f3d-type-body-size);
+}
+
+.error {
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-size: var(--f3d-type-body-size);
+}
+
+.error p {
+  margin: 0;
+}
+
+.blockers {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
