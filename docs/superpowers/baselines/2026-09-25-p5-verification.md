@@ -15,6 +15,12 @@ two-plate fixture with the installed v2.4.2 AppImage. Two defects were found
 in the full user workflow (D1, D2 below), and some criteria are only
 partially met.
 
+**Update, Task 16c (after this pass):** D1 and D2 are fixed, along with the
+1024 × 700 overlay focus and the lay-flat "0 mm²" observations. The
+evidence is automated tests plus a headless-Chrome run of `just web`
+(details under each defect). The native re-check was **not** redone, so the
+native evidence in this record still describes the app before the fixes.
+
 ## Environment
 
 - Linux 7.2.6-1-cachyos, x86_64. KDE Plasma on Wayland, with Xwayland 24.1.13.
@@ -167,7 +173,7 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 |---|---|---|---|
 | 1 | The runtime spike is approved, and the deterministic invocation fixtures pass | **met** | The spike is approved (`2026-09-24-p5-orca-runtime-spike.md`, "Approval"). `the_deterministic_invocation_fixtures_match_the_committed_ones` passes. `just gen-slicing-fixtures` then `git diff --exit-code` exits 0. |
 | 2 | The cancellation/restart, stale-source, two-plate identity, external provenance/missing-fact, and immutable-artifact tests pass | **met** | All pass in `just test-rust` (names under spec AC6, 7, 9, 10, and 11 below). One sub-item has no automated test (PDEATHSIG, spec AC7); it is verified by hand. |
-| 3 | Accessible viewport and keyboard verification pass | **partially met** | The whole flow was done by keyboard in the native app, and reduced motion was checked. But **D1** breaks linear Tab order in the preparation panel, and the pass ran on a nested Xwayland, not `:0`. |
+| 3 | Accessible viewport and keyboard verification pass | **partially met** | The whole flow was done by keyboard in the native app, and reduced motion was checked. **D1** broke linear Tab order in the preparation panel; it is fixed in Task 16c, with automated and `just web` evidence, but the native keyboard pass was not redone. The pass also ran on a nested Xwayland, not `:0`. |
 | 4 | A packaged or installed OrcaSlicer executes on Linux x86_64 | **met** | The packaged farm3d (the .deb's binary, and farm3d's AppImage) sliced the two-plate fixture with the installed v2.4.2 AppImage (see above). An installed-package run remains a user action. |
 | 5 | The tracer completes with all revisions unchanged after restart | **met** | `tracer_runs_against_fake_orca` (CI) and `real_orca_tracer_runs_against_a_real_orcaslicer` (31.0 s) both pass. The native manual restarts also showed byte-identical revisions. |
 
@@ -187,8 +193,8 @@ farm3d                # then: Add Printer (Elegoo Centauri Carbon), import
 | 10 | Immutable artifacts | **met** | `revisions_are_immutable_and_deleting_a_model_cascades_everything`, `revisions_and_their_blobs_reject_updates_but_allow_a_guarded_delete`, `a_model_with_slice_revisions_is_blocked_by_the_registered_source`, `a_model_with_an_external_revision_blocks_delete_model`, and the tracer's `open_verified` hashes. Native: byte-identical across two restarts (an idle SIGKILL, and a SIGKILL mid-slice). |
 | 11 | External provenance and missing facts | **met** | `external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture`, `an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_source_blob`, `claimed_estimates_parse_from_the_orca_cube_claims_but_are_never_trusted`, and the `GcodeFactsDialog` tests. Native: the dialog started empty; the facts, the manual-selection flag, and blob reuse were checked in the DB. |
 | 12 | Events | **met** | `slicing::events` tests, `events_are_ordered_and_the_backfill_covers_what_came_before`, "ignores every event on the shared channel that is not slicing.*" (`slicing-store.test.ts`), and "4. ignores every event on the shared channel that is not library.*" (`library-store.test.ts`). |
-| 13 | Frontend tests | **met** | 1142 tests pass. Store: `slicing-store.test.ts` (84). Pure modules: transforms (13), layflat (5), arrange (13), bounds (16), validation (7), fact-parsing (8). `PlateViewport.test.tsx` (20). `PreparationWorkspace.test.tsx` (29). `PreparationPanel.test.tsx` (41; it also covers the operation panel's progress, cancel, and log expand-on-failure; there is no separate `SliceOperationPanel.test.tsx`). `SliceRevisionReview.test.tsx` (13). `GcodeFactsDialog.test.tsx` (14). `SlicerSettingsDialog.test.tsx` (25). |
-| 14 | Accessible viewport and keyboard verification | **partially met** | Native, keyboard-only, at 1440 × 900 and 1024 × 700, with reduced motion checked; screenshots `docs/screenshots/p5-*.png`. Reasons for partial: **D1** (the panel's Tab order is broken by the matching-Printers popover), and the keyboard ran through a nested Xwayland (see "How the native app was driven"). |
+| 13 | Frontend tests | **met** | 1142 tests pass (1154 after Task 16c). Store: `slicing-store.test.ts` (84). Pure modules: transforms (13), layflat (5), arrange (13), bounds (16), validation (7), fact-parsing (8). `PlateViewport.test.tsx` (20). `PreparationWorkspace.test.tsx` (29). `PreparationPanel.test.tsx` (41; it also covers the operation panel's progress, cancel, and log expand-on-failure; there is no separate `SliceOperationPanel.test.tsx`). `SliceRevisionReview.test.tsx` (13). `GcodeFactsDialog.test.tsx` (14). `SlicerSettingsDialog.test.tsx` (25). |
+| 14 | Accessible viewport and keyboard verification | **partially met** | Native, keyboard-only, at 1440 × 900 and 1024 × 700, with reduced motion checked; screenshots `docs/screenshots/p5-*.png`. Reasons for partial: the keyboard ran through a nested Xwayland (see "How the native app was driven"), and the native pass predates the Task 16c fixes. **D1** (the matching-Printers popover broke the panel's Tab order) is fixed in Task 16c, with automated and `just web` evidence only; the native re-check was not redone. |
 | 15 | Packaged OrcaSlicer execution | **met, via the AppImage/unpacked path** | See "Packaged app". The installed-`.deb` variant needs root and is left as a user action with the commands above. |
 | 16 | The tracer | **met** | `tracer_runs_against_fake_orca` and `real_orca_tracer_runs_against_a_real_orcaslicer`. |
 
@@ -221,6 +227,48 @@ Tab.
   preset.
 - **Actual:** focus wraps out of the panel.
 
+**Fixed in Task 16c** (`f532e6b`). The fix is in the design-system
+`PrinterRoster`, so it covers the header's chips too:
+
+- Focusing a chip never opens it. A hover shows the roster without taking
+  focus. A press (click, Enter or Space) opens it and moves focus in.
+- Escape closes it and returns focus to the chip.
+- Tab and Shift+Tab at the roster's edges close it and continue as if it
+  sat right after its chip. Tab goes to whatever follows the chip, and
+  Shift+Tab goes back to the chip.
+
+Tests (`@testing-library/user-event` isn't installed, so a test can't
+press a real Tab; they check that focusing a chip leaves focus on it, and
+drive the roster's own Tab handling with key events):
+
+- `components.test.tsx`, `PrinterRoster`: "keeps focus on the chip when
+  it's focused, without opening"; "opens on press and returns focus to the
+  chip after Escape"; "continues the Tab order after the chip, either way,
+  from the open roster"; "moves on from a roster with nothing to press,
+  when tabbed"; "opens on hover without taking focus"; and "stays open when
+  the hovered chip is clicked".
+- `PreparationPanel.test.tsx`: "keeps the Tab order through the matching
+  Printers chip, both ways" (from the roster, Tab reaches **Filament
+  preset** and Shift+Tab returns to the chip).
+- `AppShell.test.tsx`: "keeps the header's Tab order through its roster
+  chips".
+
+In `just web`, headless Chrome sent real Tab keys over CDP:
+
+- **Forward from Slice for:** "2 matching Printers", then Filament preset,
+  then Process preset.
+- **Shift+Tab back:** Filament preset, then the chip, then Slice for.
+- **On the chip:** no dialog opened. Enter opened the roster with focus
+  inside it. Tab from there went to Filament preset. Shift+Tab went back to
+  the chip, and Escape also returned focus to the chip.
+- **Header, forward:** 3 Printers, then 0 Ready, 0 Printing, 0 Offline, and
+  0 Setup incomplete. Shift+Tab went back through them in reverse.
+
+The screenshots are in
+`.superpowers/sdd/2026-09-24-p5-runtime-slicing-slice-revisions/task-16c-screens/`
+(`light-d1-*.png`). This run is not in git. The native re-check was not
+redone.
+
 ### D2: With no Printers, Prepare… is a dead end (feature completion, moderate)
 
 With an empty Farm, **Prepare…** shows "Add a Printer, or choose a printer
@@ -240,6 +288,33 @@ way to choose a printer profile from there.
   shown.
 - **Actual:** the user must first go to Monitor and add a Printer.
 
+**Fixed in Task 16c** (`9d2fd61`). The backend already accepted a target
+at create time, so no Rust change was needed. When `create_preparation`
+refuses with `VALIDATION` at `target`, the message now offers **Choose a
+printer profile…**. It opens the catalog picker (`TargetProfileDialog`,
+the same one as **Other printer profile…**), then creates the Preparation
+for `{ kind: "profile", catalogRef }`. Web mode now refuses the same way
+once its Farm has no active Printer.
+
+Tests:
+
+- `PreparationPanel.test.tsx`: "opens on a chosen printer profile when
+  there are no Printers to prepare for". With no Printers, it chooses Prusa
+  MK4 0.4, and the workspace opens with that target.
+- `slicing-store.test.ts`: "a local create needs a target once the Farm
+  has no active Printer, as the backend does".
+- `p5_slicing.rs`: `with_no_printers_a_preparation_needs_a_profile_target`.
+  With no Printers and no target, the error is `VALIDATION` with
+  `fieldPath` `target`. The same request with a profile target succeeds.
+
+In `just web`, headless Chrome was served a printer store with no Printers.
+Prepare… on the Corner bracket showed the message and the new button. The
+dialog chose Prusa and then MK4, and the workspace opened on "Prusa MK4 0.4
+nozzle" (`dark-d2-*.png`). In web mode, the fixture's slice options still
+report the Centauri presets and "2 matching Printers" for any target. That
+comes from the web fixture, not from this fix. The native re-check was not
+redone.
+
 ### Other observations (not blocking)
 
 - **Heap abort at one exit.** Once, the dev binary printed `free():
@@ -256,11 +331,19 @@ way to choose a printer profile from there.
 - **The 1024 × 700 overlay.** Opening **Settings panel** leaves focus on the
   toggle, and the next Tab goes to the plate tabs, not into the overlay.
   Escape closes it only when focus is inside it. While open, it covers the
-  right half of the object fields.
+  right half of the object fields. *The focus part is fixed in Task 16c
+  (`bfd1817`):* opening the overlay now focuses its first control, so
+  Escape works straight away. The test is "moves focus into the overlay
+  when Settings panel opens it" (`PreparationPanel.test.tsx`). In `just web`
+  at 1024 × 700, focus landed on **Slice for** inside the overlay. The
+  overlay still covers the object fields.
 - **Focus after the import dialog.** After **Done** in the import dialog
   (P4), focus returns to the start of the document, not to **Import…**.
 - **Lay flat on a sphere.** The UV sphere's lay-flat list shows eight faces
-  of "0 mm²".
+  of "0 mm²". *Fixed in Task 16c (`cb834c8`):* areas below 10 mm² now keep
+  two significant figures (for example "0.042 mm²"), and larger areas are
+  still whole mm². The test is `formatFaceArea` in
+  `slice-presentation.test.ts`. The sphere wasn't re-checked natively.
 - **The two-plate fixture.** Both plates hold identical content, so the
   fixture can't show different per-plate G-code on its own. Placement
   extents are covered separately by `real_orca_places_a_written_plate_exactly`.
