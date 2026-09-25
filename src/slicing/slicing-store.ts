@@ -26,6 +26,7 @@ import {
   type SliceOperationState,
   type SliceOptions,
   type SliceProgress,
+  type SliceRevisionLog,
   type SliceRevisionRecord,
   type SliceRevisionSummary,
   type SlicerRuntimeStatus,
@@ -579,6 +580,20 @@ export function loadSliceRevision(sliceRevisionId: string): Promise<SliceRevisio
   revisionRecords.set(sliceRevisionId, load);
   load.catch(() => revisionRecords.delete(sliceRevisionId));
   return load;
+}
+
+/** D21: a revision's own log, by its id, so it stays readable after its
+ *  operation is gone. `log` is `null` for an external revision, which has
+ *  none. Revisions are immutable, but a log can be large, so it isn't
+ *  cached. */
+export async function loadSliceRevisionLog(sliceRevisionId: string): Promise<SliceRevisionLog> {
+  if (desktopAvailable()) return command("get_slice_revision_log", { sliceRevisionId });
+  const fixture = await requireWebFixture();
+  const record = fixture.revisionRecords[sliceRevisionId];
+  if (!record || removedRevisions.has(sliceRevisionId)) throw notFound(sliceRevisionId);
+  if (record.kind === "external") return { log: null };
+  const log = fixture.revisionLogs[sliceRevisionId];
+  return { log: log ? clone(log) : { text: "", truncated: false, noiseLines: [] } };
 }
 
 /** D16. Sends one `operationId` (generated unless given) and retries a

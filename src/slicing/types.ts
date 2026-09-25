@@ -10,6 +10,7 @@ export type { CreateExternalSliceRevisionFacts } from "../generated/contracts/co
 export type { PresetSourceKind } from "../generated/contracts/command/PresetSourceKind";
 export type { ReloadPreparationData } from "../generated/contracts/command/ReloadPreparationData";
 export type { SliceOperationLog } from "../generated/contracts/command/SliceOperationLog";
+export type { SliceRevisionLog } from "../generated/contracts/command/SliceRevisionLog";
 export type { StartSliceData } from "../generated/contracts/command/StartSliceData";
 export type { BedShape } from "../generated/contracts/domain/BedShape";
 export type { BoundsMm } from "../generated/contracts/domain/BoundsMm";

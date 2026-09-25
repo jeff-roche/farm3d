@@ -42,7 +42,7 @@ use common::{a_catalog, a_ref_json, a_stored_printer, invoke, FakeModelFileIo};
 const FAKE_ORCA: &str = env!("CARGO_BIN_EXE_fake-orca");
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// The 20 P5 commands.
+/// The 21 P5 commands.
 const P5_COMMANDS: &[&str] = &[
     "get_slicer_runtime",
     "check_slicer_runtime",
@@ -62,6 +62,7 @@ const P5_COMMANDS: &[&str] = &[
     "get_slice_operation_log",
     "list_slice_revisions",
     "get_slice_revision",
+    "get_slice_revision_log",
     "create_external_slice_revision",
     "delete_slice_revision",
 ];
@@ -161,6 +162,7 @@ impl Running {
                 farm3d_lib::slicing::commands::get_slice_operation_log,
                 farm3d_lib::slicing::commands::list_slice_revisions,
                 farm3d_lib::slicing::commands::get_slice_revision,
+                farm3d_lib::slicing::commands::get_slice_revision_log,
                 farm3d_lib::slicing::commands::create_external_slice_revision,
                 farm3d_lib::slicing::commands::delete_slice_revision,
             ],
@@ -713,6 +715,59 @@ fn a_success_log_is_the_revision_log_with_its_noise_tagged() {
         })
         .unwrap();
     assert_eq!(operation_log, None);
+}
+
+/// D21: a revision's log is read by the revision's own id, so it outlives
+/// its operation (here, deleted with its Preparation). An external
+/// revision has none; an unknown one is NOT_FOUND.
+#[test]
+fn a_revision_log_is_read_by_revision_id_and_external_revisions_have_none() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plate = &plates(&preparation)[0];
+    let id = ids(&running.start("op-revision-log", &preparation, &[plate])).remove(0);
+    let operation = running.wait_state(&id, "succeeded");
+    let revision_id = operation["sliceRevisionId"].as_str().unwrap().to_string();
+    let by_operation = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+
+    running.ok(
+        "delete_preparation",
+        json!({
+            "preparationId": preparation["id"],
+            "expectedRevision": preparation["revision"],
+        }),
+    );
+    let error = running.error("get_slice_operation_log", json!({ "sliceOperationId": id }));
+    assert_eq!(error["code"], "NOT_FOUND", "the operation went with its Preparation");
+
+    let by_revision = running.ok(
+        "get_slice_revision_log",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+    assert_eq!(by_revision["log"], by_operation, "{by_revision}");
+    assert!(by_revision["log"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("fake-orca scenario success"));
+
+    let gcode = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = gcode["currentRevision"]["id"].as_str().unwrap().to_string();
+    let external = running.create_external("ext-log", &source_revision_id, absent_facts());
+    assert_eq!(
+        running.ok(
+            "get_slice_revision_log",
+            json!({ "sliceRevisionId": external["id"] }),
+        ),
+        json!({ "log": null })
+    );
+
+    let error = running.error(
+        "get_slice_revision_log",
+        json!({ "sliceRevisionId": "slr-missing" }),
+    );
+    assert_eq!(error["code"], "NOT_FOUND", "{error}");
 }
 
 #[test]

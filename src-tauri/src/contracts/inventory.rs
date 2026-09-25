@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 78] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 79] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -325,6 +325,11 @@ contracts![
         "GetSliceRevisionResult"
     ),
     (
+        "get_slice_revision_log",
+        "GetSliceRevisionLogRequest",
+        "GetSliceRevisionLogResult"
+    ),
+    (
         "create_external_slice_revision",
         "CreateExternalSliceRevisionRequest",
         "CreateExternalSliceRevisionResult"
@@ -336,7 +341,7 @@ contracts![
     ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 78] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 79] {
     &COMMAND_CONTRACTS
 }
 
@@ -511,6 +516,8 @@ export type ListSliceRevisionsRequest = ContractRequest & { modelId: string };
 export type ListSliceRevisionsResult = CommandSuccess<SliceRevisionSummary[]>;
 export type GetSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
 export type GetSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
+export type GetSliceRevisionLogRequest = ContractRequest & { sliceRevisionId: string };
+export type GetSliceRevisionLogResult = CommandSuccess<SliceRevisionLog>;
 export type CreateExternalSliceRevisionRequest = ContractRequest & { operationId: string; sourceRevisionId: string; facts: CreateExternalSliceRevisionFacts };
 export type CreateExternalSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
 export type DeleteSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
@@ -598,6 +605,7 @@ export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_str
         visitor.visit::<crate::slicing::commands::StartSliceData>();
         visitor.visit::<crate::slicing::SliceOperationRecord>();
         visitor.visit::<crate::slicing::commands::SliceOperationLog>();
+        visitor.visit::<crate::slicing::commands::SliceRevisionLog>();
         visitor.visit::<crate::slicing::SliceRevisionSummary>();
         visitor.visit::<crate::slicing::SliceRevisionRecord>();
         visitor.visit::<crate::slicing::external::CreateExternalSliceRevisionFacts>();

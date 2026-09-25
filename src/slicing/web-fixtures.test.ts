@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
 import { decodeMeshBuffer } from "./mesh-buffer";
 import type { Fact } from "./types";
-import { buildWebSlicingFixture } from "./web-fixtures";
+import {
+  buildWebSlicingFixture,
+  WEB_SLICING_REVISION_EXTERNAL,
+  WEB_SLICING_REVISION_FARM3D,
+  WEB_SLICING_REVISION_FARM3D_OLDER,
+} from "./web-fixtures";
 
 const NOW = new Date("2026-09-24T12:00:00Z");
 
@@ -42,14 +47,22 @@ describe("buildWebSlicingFixture", () => {
     }
   });
 
-  it("has a farm3d revision built only from farm3d input", () => {
+  it("has farm3d revisions built only from farm3d input, each with its own log", () => {
     const farm3d = fixture.revisions.filter((r) => r.kind === "farm3d");
-    expect(farm3d).toHaveLength(1);
-    const facts = farm3d[0].facts;
-    const all: Fact<unknown>[] = [facts.printerProfile, facts.nozzleDiameterMm, facts.materialFamily, facts.filamentDiameterMm];
-    expect(all.every((f) => f.provenance === "farm3dInput")).toBe(true);
-    expect(farm3d[0].requiresManualPrinterSelection).toBe(false);
+    // The recent one its succeeded operation published, and an older one
+    // (a prerelease engine) whose operation is no longer held.
+    expect(farm3d.map((r) => r.id)).toEqual([WEB_SLICING_REVISION_FARM3D, WEB_SLICING_REVISION_FARM3D_OLDER]);
+    for (const revision of farm3d) {
+      const facts = revision.facts;
+      const all: Fact<unknown>[] = [facts.printerProfile, facts.nozzleDiameterMm, facts.materialFamily, facts.filamentDiameterMm];
+      expect(all.every((f) => f.provenance === "farm3dInput")).toBe(true);
+      expect(revision.requiresManualPrinterSelection).toBe(false);
+      expect(fixture.revisionLogs[revision.id].text.length).toBeGreaterThan(0);
+    }
     expect(farm3d[0].runtime?.engineVersion).toBe("2.4.2");
+    expect(farm3d[1].runtime?.engineChannel).toBe("prerelease");
+    expect(fixture.operations.some((o) => o.sliceRevisionId === WEB_SLICING_REVISION_FARM3D_OLDER)).toBe(false);
+    expect(fixture.revisionLogs[WEB_SLICING_REVISION_EXTERNAL]).toBeUndefined();
   });
 
   it("has an external revision on mdl-web-cube-gcode with materialFamily absent and never farm3dInput", () => {

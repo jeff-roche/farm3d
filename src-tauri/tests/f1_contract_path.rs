@@ -1,7 +1,7 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
-    // P4's 58 plus P5's 20.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 20);
+    // P4's 58 plus P5's 21.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -81,6 +81,7 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
             "get_slice_operation_log",
             "list_slice_revisions",
             "get_slice_revision",
+            "get_slice_revision_log",
             "create_external_slice_revision",
             "delete_slice_revision",
         ]
@@ -213,6 +214,7 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::slicing::commands::get_slice_operation_log,
             farm3d_lib::slicing::commands::list_slice_revisions,
             farm3d_lib::slicing::commands::get_slice_revision,
+            farm3d_lib::slicing::commands::get_slice_revision_log,
             farm3d_lib::slicing::commands::create_external_slice_revision,
             farm3d_lib::slicing::commands::delete_slice_revision,
         ])
@@ -434,6 +436,7 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ("get_slice_operation_log", json!({"sliceOperationId": "s"})),
         ("list_slice_revisions", json!({"modelId": "m"})),
         ("get_slice_revision", json!({"sliceRevisionId": "s"})),
+        ("get_slice_revision_log", json!({"sliceRevisionId": "s"})),
         (
             "create_external_slice_revision",
             json!({

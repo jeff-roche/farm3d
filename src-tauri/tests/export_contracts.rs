@@ -79,7 +79,7 @@ use farm3d_lib::settings::commands::{
     SettingsRecord,
 };
 use farm3d_lib::slicing::commands::{
-    PresetSourceKind, SliceOperationLog, SlicingDeleted, SlicingSnapshot, StartSliceData,
+    PresetSourceKind, SliceOperationLog, SliceRevisionLog, SlicingDeleted, SlicingSnapshot, StartSliceData,
 };
 use farm3d_lib::slicing::events::{
     SliceProgressPayload, SlicingEvent, SlicingEventPayload, SlicingEventType,
@@ -492,6 +492,7 @@ fn export_registry() -> Vec<Export> {
         export::<PresetSourceKind>(),
         export::<StartSliceData>(),
         export::<SliceOperationLog>(),
+        export::<SliceRevisionLog>(),
         export::<SlicingDeleted>(),
         export::<ReloadPreparationData>(),
         export::<ConfirmedFactRequest<f64>>(),

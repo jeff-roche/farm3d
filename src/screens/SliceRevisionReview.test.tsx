@@ -10,9 +10,9 @@ import {
   slicingStoreMock,
 } from "../slicing/slicing-store-mock";
 import {
-  WEB_SLICING_OPERATION_SUCCEEDED,
   WEB_SLICING_REVISION_EXTERNAL,
   WEB_SLICING_REVISION_FARM3D,
+  WEB_SLICING_REVISION_FARM3D_OLDER,
 } from "../slicing/web-fixtures";
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
 
@@ -57,7 +57,8 @@ const SLOW = { timeout: 5000 };
 async function openReview(record: ModelRecord, revision: { open: RegExp; title: string }) {
   renderPanel(record);
   const list = await screen.findByRole("list", { name: "Slice Revisions" }, SLOW);
-  fireEvent.click(within(list).getByRole("button", { name: revision.open }));
+  // Newest first: the first match is the newest revision of that name.
+  fireEvent.click(within(list).getAllByRole("button", { name: revision.open })[0]);
   const heading = await screen.findByRole("heading", { level: 3, name: revision.title }, SLOW);
   await screen.findByRole("button", { name: "Add to Queue…" }, SLOW);
   return heading;
@@ -72,10 +73,14 @@ describe("Model details' Slice Revisions", () => {
     renderPanel(model("mdl-web-enclosure"));
     const list = await screen.findByRole("list", { name: "Slice Revisions" }, SLOW);
     const entries = within(list).getAllByRole("listitem");
-    expect(entries).toHaveLength(1);
+    expect(entries).toHaveLength(2);
     expect(entries[0]).toHaveTextContent("Plate 1: Lid");
     expect(entries[0]).toHaveTextContent("Elegoo Centauri Carbon 0.4 nozzle · 38.6 g");
+    expect(entries[0]).not.toHaveTextContent("Prerelease OrcaSlicer");
     expect(entries[0]).not.toHaveTextContent("Needs manual Printer selection");
+    // The older one was sliced with a prerelease engine.
+    expect(entries[1]).toHaveTextContent("41.2 g");
+    expect(entries[1]).toHaveTextContent("Prerelease OrcaSlicer");
     expect(slicingStoreMock.loadSliceRevisions).toHaveBeenCalledWith("mdl-web-enclosure");
   });
 
@@ -143,25 +148,34 @@ describe("SliceRevisionReview", () => {
     expect(screen.getByText("The Queue arrives in a later version.")).toBeVisible();
   });
 
-  it("shows the read-only log of the slice that made it", async () => {
+  it("shows the read-only log, read by the revision's own id", async () => {
     await openReview(model("mdl-web-enclosure"), LID);
     fireEvent.click(await screen.findByRole("button", { name: "Show log" }));
     const log = await screen.findByLabelText("Log for Plate 1: Lid");
     await waitFor(() => expect(log).toHaveTextContent("[info] Exported out/plate_1.gcode"));
-    expect(slicingStoreMock.loadOperationLog).toHaveBeenCalledWith(WEB_SLICING_OPERATION_SUCCEEDED);
+    expect(slicingStoreMock.loadSliceRevisionLog).toHaveBeenCalledWith(WEB_SLICING_REVISION_FARM3D);
+    expect(slicingStoreMock.loadOperationLog).not.toHaveBeenCalled();
     expect(log.querySelector("[data-noise]")).not.toBeNull();
   });
 
-  it("says the log isn't shown once its slice is no longer recent", async () => {
+  it("shows an older revision's log after its operation has gone", async () => {
     setSlicingState({ operations: [] });
-    await openReview(model("mdl-web-enclosure"), LID);
-    expect(await screen.findByText("This revision's log is kept, but farm3d shows logs only for recent slices.")).toBeInTheDocument();
+    renderPanel(model("mdl-web-enclosure"));
+    const list = await screen.findByRole("list", { name: "Slice Revisions" }, SLOW);
+    const [, older] = within(list).getAllByRole("button", { name: /^Open Plate 1: Lid/ });
+    fireEvent.click(older);
+    await screen.findByText("Engine 2.5.0-dev (prerelease) · presets 2.4.2", undefined, SLOW);
+    expect(screen.getByText("The engine and its presets were different versions when this was sliced.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show log" }));
+    const log = await screen.findByLabelText("Log for Plate 1: Lid");
+    await waitFor(() => expect(log).toHaveTextContent("[info] OrcaSlicer 2.5.0-dev (prerelease)"));
+    expect(slicingStoreMock.loadSliceRevisionLog).toHaveBeenCalledWith(WEB_SLICING_REVISION_FARM3D_OLDER);
   });
 
   it("goes back to the details with focus on the revision's entry", async () => {
     await openReview(model("mdl-web-enclosure"), LID);
     fireEvent.click(await screen.findByRole("button", { name: "Model details" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Open Plate 1: Lid/ })).toHaveFocus());
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /^Open Plate 1: Lid/ })[0]).toHaveFocus());
   });
 
   it("deletes after confirming, and lists what blocks a delete", async () => {

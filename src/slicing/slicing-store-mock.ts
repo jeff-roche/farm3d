@@ -23,6 +23,7 @@ import type {
   SliceOperationRecord,
   SliceOptions,
   SliceProgress,
+  SliceRevisionLog,
   SliceRevisionRecord,
   SliceRevisionSummary,
   SlicerRuntimeStatus,
@@ -120,6 +121,9 @@ export const slicingStoreMock = {
   loadSliceRevision: vi.fn(async (sliceRevisionId: string): Promise<SliceRevisionRecord> => ({
     ...findRevision(sliceRevisionId)!, blobs: [],
   })),
+  loadSliceRevisionLog: vi.fn(async (_sliceRevisionId: string): Promise<SliceRevisionLog> => ({
+    log: { text: "", truncated: false, noiseLines: [] },
+  })),
   createExternalSliceRevision: vi.fn(async (
     sourceRevisionId: string,
     _facts: CreateExternalSliceRevisionFacts,
@@ -157,6 +161,9 @@ export function loadWebSlicingFixture(now?: Date): WebSlicingFixture {
   ));
   slicingStoreMock.loadOperationLog.mockImplementation(async (id) => fixture.logs[id]);
   slicingStoreMock.loadSliceRevision.mockImplementation(async (id) => fixture.revisionRecords[id]);
+  slicingStoreMock.loadSliceRevisionLog.mockImplementation(async (id) => (
+    fixture.revisionRecords[id]?.kind === "external" ? { log: null } : { log: fixture.revisionLogs[id] }
+  ));
   return fixture;
 }
 

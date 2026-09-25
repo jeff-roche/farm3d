@@ -28,7 +28,7 @@ import {
   type FactRow,
 } from "../slicing/revision-presentation";
 import { logSegments } from "../slicing/slice-presentation";
-import { loadOperationLog, loadSliceRevision, slicing } from "../slicing/slicing-store";
+import { loadSliceRevision, loadSliceRevisionLog, slicing } from "../slicing/slicing-store";
 import type { SliceOperationLog, SliceRevisionRecord } from "../slicing/types";
 import { DeleteSliceRevisionDialog } from "./DeleteSliceRevisionDialog";
 import { ProvenanceBadge } from "./ProvenanceBadge";
@@ -291,10 +291,9 @@ type LogState =
   | { status: "failed"; message: string };
 
 /** The read-only log of the slice that made this revision (farm3d
- *  revisions). It is read through that operation, which the store holds
- *  only while it is recent. */
+ *  revisions), read by the revision's own id so it outlives its
+ *  operation. External G-code has none. */
 function RevisionLog(props: { revision: SliceRevisionRecord }) {
-  const operation = () => slicing.operations().find((candidate) => candidate.sliceRevisionId === props.revision.id);
   const [open, setOpen] = createSignal(false);
   const [log, setLog] = createSignal<LogState>({ status: "idle" });
   const logId = createUniqueId();
@@ -304,12 +303,12 @@ function RevisionLog(props: { revision: SliceRevisionRecord }) {
   const toggle = async () => {
     const next = !open();
     setOpen(next);
-    const held = operation();
-    if (!next || !held || log().status === "loaded" || log().status === "loading") return;
+    if (!next || log().status === "loaded" || log().status === "loading") return;
     setLog({ status: "loading" });
     try {
-      const loaded = await loadOperationLog(held.id);
-      if (!disposed) setLog({ status: "loaded", log: loaded });
+      const loaded = (await loadSliceRevisionLog(props.revision.id)).log;
+      if (disposed) return;
+      setLog(loaded ? { status: "loaded", log: loaded } : { status: "failed", message: "This revision has no log." });
     } catch (error) {
       if (!disposed) setLog({ status: "failed", message: isCommandError(error) ? error.message : "The log couldn't be loaded." });
     }
@@ -333,48 +332,43 @@ function RevisionLog(props: { revision: SliceRevisionRecord }) {
       when={props.revision.kind === "farm3d"}
       fallback={<p class={styles.note}>External G-code has no slicing log: farm3d didn't slice it.</p>}
     >
-      <Show
-        when={operation()}
-        fallback={<p class={styles.note}>This revision's log is kept, but farm3d shows logs only for recent slices.</p>}
-      >
-        <div class={styles.actions}>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-expanded={open()}
-            aria-controls={open() ? logId : undefined}
-            onClick={() => void toggle()}
-          >
-            {open() ? "Hide log" : "Show log"}
-          </Button>
-        </div>
-        <Show when={open()}>
-          <Show when={logFailure()}>{(message) => <p class={styles.note}>{message()}</p>}</Show>
-          <Show when={loadedLog()?.text === ""}>
-            <p class={styles.note}>This slice left no log.</p>
-          </Show>
-          <Show when={loadedLog()?.truncated}>
-            <p class={styles.note}>The middle of this log was left out because it was too long.</p>
-          </Show>
-          <Show when={(loadedLog()?.noiseLines.length ?? 0) > 0}>
-            <p class={styles.note}>Dimmed lines are known, harmless messages.</p>
-          </Show>
-          <pre
-            id={logId}
-            class={styles.log}
-            tabIndex={0}
-            aria-label={`Log for ${revisionTitle(props.revision)}`}
-            aria-busy={log().status === "loading"}
-          >
-            <Show when={log().status === "loaded"} fallback={log().status === "loading" ? "Loading the log…" : ""}>
-              <For each={segments()}>
-                {(segment) => (segment.noise
-                  ? <span class={styles.noise} data-noise="">{segment.text}</span>
-                  : segment.text)}
-              </For>
-            </Show>
-          </pre>
+      <div class={styles.actions}>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open()}
+          aria-controls={open() ? logId : undefined}
+          onClick={() => void toggle()}
+        >
+          {open() ? "Hide log" : "Show log"}
+        </Button>
+      </div>
+      <Show when={open()}>
+        <Show when={logFailure()}>{(message) => <p class={styles.note}>{message()}</p>}</Show>
+        <Show when={loadedLog()?.text === ""}>
+          <p class={styles.note}>This slice left no log.</p>
         </Show>
+        <Show when={loadedLog()?.truncated}>
+          <p class={styles.note}>The middle of this log was left out because it was too long.</p>
+        </Show>
+        <Show when={(loadedLog()?.noiseLines.length ?? 0) > 0}>
+          <p class={styles.note}>Dimmed lines are known, harmless messages.</p>
+        </Show>
+        <pre
+          id={logId}
+          class={styles.log}
+          tabIndex={0}
+          aria-label={`Log for ${revisionTitle(props.revision)}`}
+          aria-busy={log().status === "loading"}
+        >
+          <Show when={log().status === "loaded"} fallback={log().status === "loading" ? "Loading the log…" : ""}>
+            <For each={segments()}>
+              {(segment) => (segment.noise
+                ? <span class={styles.noise} data-noise="">{segment.text}</span>
+                : segment.text)}
+            </For>
+          </Show>
+        </pre>
       </Show>
     </Show>
   );

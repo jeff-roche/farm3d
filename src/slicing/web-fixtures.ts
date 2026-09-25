@@ -39,6 +39,8 @@ export interface WebSlicingFixture {
   revisionRecords: Record<string, SliceRevisionRecord>;
   /** Keyed by slice operation id. */
   logs: Record<string, SliceOperationLog>;
+  /** Keyed by slice revision id: each farm3d revision's own `log` blob. */
+  revisionLogs: Record<string, SliceOperationLog>;
   /** Keyed by Model Source Revision id. */
   geometry: Record<string, RevisionGeometry>;
   /** D6 `F3DM` buffers, keyed by Model Source Revision id, then object key. */
@@ -52,6 +54,9 @@ export const WEB_SLICING_OPERATION_SUCCEEDED = "sop-web-enclosure-lid";
 export const WEB_SLICING_OPERATION_FAILED = "sop-web-enclosure-latch";
 export const WEB_SLICING_REVISION_FARM3D = "slr-web-enclosure-lid";
 export const WEB_SLICING_REVISION_EXTERNAL = "slr-web-cube-gcode";
+/** An older slice of the Lid, whose operation is no longer recent: its log
+ *  is reachable only by revision id. Sliced with a prerelease engine. */
+export const WEB_SLICING_REVISION_FARM3D_OLDER = "slr-web-enclosure-lid-older";
 
 const MINUTE_MS = 60 * 1000;
 
@@ -369,6 +374,40 @@ function farm3dRevision(at: (minutesAgo: number) => string): SliceRevisionRecord
   };
 }
 
+function olderFarm3dRevision(at: (minutesAgo: number) => string): SliceRevisionRecord {
+  const revision = farm3dRevision(at);
+  return {
+    ...revision,
+    id: WEB_SLICING_REVISION_FARM3D_OLDER,
+    estimates: {
+      printSeconds: 6_180, filamentGrams: 41.2, filamentMm: 13_812, layerCount: 20, maxZMm: 4, source: "farm3dSlice",
+    },
+    runtime: { engineVersion: "2.5.0-dev", engineChannel: "prerelease", presetSourceVersion: "2.4.2", presetSourceChannel: "release" },
+    // 3 days ago: long enough that its operation left the recent list.
+    createdAt: at(3 * 24 * 60),
+    target: { ...revision.target!, controls: { layerHeightMm: 0.2, infillDensityPercent: 20, wallLoops: 3 } },
+  };
+}
+
+function revisionLogs(): Record<string, SliceOperationLog> {
+  const operationLogs = logs();
+  return {
+    [WEB_SLICING_REVISION_FARM3D]: operationLogs[WEB_SLICING_OPERATION_SUCCEEDED],
+    [WEB_SLICING_REVISION_FARM3D_OLDER]: {
+      text: [
+        "[info] OrcaSlicer 2.5.0-dev (prerelease)",
+        "[info] Loading plate 1 of 1",
+        "[info] Slicing: 1%",
+        "[info] Generating G-code: 90%",
+        "[info] Exported out/plate_1.gcode",
+        "return_code 0",
+      ].join("\n"),
+      truncated: false,
+      noiseLines: [],
+    },
+  };
+}
+
 /** The operator confirmed the printer, nozzle and filament diameter from
  *  the file's claims but left the material absent, so this revision needs
  *  a Printer chosen by hand. */
@@ -401,7 +440,7 @@ function externalRevision(at: (minutesAgo: number) => string): SliceRevisionReco
 
 export function buildWebSlicingFixture(now: Date = new Date()): WebSlicingFixture {
   const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * MINUTE_MS).toISOString();
-  const records = [farm3dRevision(at), externalRevision(at)];
+  const records = [farm3dRevision(at), olderFarm3dRevision(at), externalRevision(at)];
   const revisionRecords: Record<string, SliceRevisionRecord> = {};
   for (const record of records) revisionRecords[record.id] = record;
   const revisions = records
@@ -428,6 +467,7 @@ export function buildWebSlicingFixture(now: Date = new Date()): WebSlicingFixtur
     revisions,
     revisionRecords,
     logs: logs(),
+    revisionLogs: revisionLogs(),
     geometry,
     meshes,
     sliceOptions: sliceOptions(),

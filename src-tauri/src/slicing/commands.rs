@@ -110,6 +110,16 @@ pub struct SliceOperationLog {
     pub noise_lines: Vec<u32>,
 }
 
+/// `get_slice_revision_log`: a Slice Revision's own stored log (D13, D21).
+/// `log` is `null` for an external revision, which farm3d never sliced and
+/// so has no log.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "command/SliceRevisionLog.ts")]
+pub struct SliceRevisionLog {
+    pub log: Option<SliceOperationLog>,
+}
+
 /// `{}` for `delete_preparation` and `delete_slice_revision`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
 #[ts(export_to = "command/SlicingDeleted.ts")]
@@ -522,18 +532,76 @@ pub async fn get_slice_operation_log<R: tauri::Runtime>(
                 noise_lines: Vec::new(),
             });
         };
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(
-            &mut services.library.content.open_verified(&sha256)?,
-            &mut bytes,
-        )
+        read_stored_log(&services.library.content, &sha256)
+    })
+    .await
+    .map(CommandSuccess::new)
+}
+
+/// Reads a stored log blob, verified, as the UI shows it.
+fn read_stored_log(
+    content: &crate::library::content::ContentStore,
+    sha256: &str,
+) -> Result<SliceOperationLog, CommandError> {
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut content.open_verified(sha256)?, &mut bytes)
         .map_err(ContentError::from)?;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        Ok(SliceOperationLog {
-            truncated: operations::log_was_truncated(&text),
-            noise_lines: operations::noise_lines(&text),
-            text,
-        })
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(SliceOperationLog {
+        truncated: operations::log_was_truncated(&text),
+        noise_lines: operations::noise_lines(&text),
+        text,
+    })
+}
+
+/// D21: a Slice Revision's read-only log, by the revision's own id, so it
+/// stays readable after its operation leaves the recent list or goes with
+/// its Preparation. A farm3d revision reads its `log` blob (an empty log
+/// if it has none); an external revision has no log, so `log` is `null`.
+/// An unknown revision is `NOT_FOUND`.
+#[tauri::command]
+pub async fn get_slice_revision_log<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    slice_revision_id: String,
+) -> Result<CommandSuccess<SliceRevisionLog>, CommandError> {
+    let services = ready(&app, &bootstrap, contract_version)?;
+    blocking(move || {
+        let (kind, sha256) = services
+            .storage
+            .read(|connection| {
+                let kind: Option<String> =
+                    rusqlite::OptionalExtension::optional(connection.query_row(
+                        "SELECT kind FROM slice_revisions WHERE id = ?1",
+                        [&slice_revision_id],
+                        |row| row.get(0),
+                    ))?;
+                let sha256: Option<String> =
+                    rusqlite::OptionalExtension::optional(connection.query_row(
+                        "SELECT sha256 FROM slice_revision_blobs
+                         WHERE revision_id = ?1 AND role = 'log'",
+                        [&slice_revision_id],
+                        |row| row.get(0),
+                    ))?;
+                Ok((kind, sha256))
+            })
+            .map_err(storage_error)?;
+        let Some(kind) = kind else {
+            return Err(CommandError::not_found(slice_revision_id));
+        };
+        if kind == "external" {
+            return Ok(SliceRevisionLog { log: None });
+        }
+        let log = match sha256 {
+            Some(sha256) => read_stored_log(&services.library.content, &sha256)?,
+            None => SliceOperationLog {
+                text: String::new(),
+                truncated: false,
+                noise_lines: Vec::new(),
+            },
+        };
+        Ok(SliceRevisionLog { log: Some(log) })
     })
     .await
     .map(CommandSuccess::new)

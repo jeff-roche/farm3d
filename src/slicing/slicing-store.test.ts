@@ -543,6 +543,14 @@ describe("actions (desktop)", () => {
     expect(tauriMock.invoke.mock.calls.filter(([name]) => name === "get_slice_revision")).toHaveLength(0);
   });
 
+  it("loadSliceRevisionLog reads a revision's log by its id", async () => {
+    const log = { text: "[info] done", truncated: false, noiseLines: [] };
+    responders.get_slice_revision_log = () => ({ log });
+    const { loadSliceRevisionLog } = await startedStore();
+    await expect(loadSliceRevisionLog("slr-1")).resolves.toEqual({ log });
+    expect(tauriMock.invoke).toHaveBeenCalledWith("get_slice_revision_log", { contractVersion: 1, sliceRevisionId: "slr-1" });
+  });
+
   it("deleteSliceRevision drops the revision; LIFECYCLE_BLOCKED passes through and keeps it", async () => {
     responders.list_slicing = () => slicingSnapshot(0, { revisions: [sliceRevision({ id: "slr-1" }), sliceRevision({ id: "slr-2" })] });
     const blocked = commandError("LIFECYCLE_BLOCKED", "In use.");
@@ -636,6 +644,11 @@ describe("web mode", () => {
     await expect(store.loadMesh("msr-web-enclosure-1", 9)).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(store.loadOperationLog("sop-web-enclosure-latch")).resolves.toMatchObject({ truncated: false });
     await expect(store.loadSliceRevision("slr-web-cube-gcode")).resolves.toMatchObject({ kind: "external", blobs: [] });
+    await expect(store.loadSliceRevisionLog("slr-web-cube-gcode")).resolves.toEqual({ log: null });
+    await expect(store.loadSliceRevisionLog("slr-web-enclosure-lid-older")).resolves.toMatchObject({
+      log: { text: expect.stringContaining("2.5.0-dev") },
+    });
+    await expect(store.loadSliceRevisionLog("slr-missing")).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(store.listSliceOptions({ kind: "printer", printerId: "prn-web-cc-1" })).resolves.toMatchObject({
       defaults: { processPreset: expect.any(String) },
     });

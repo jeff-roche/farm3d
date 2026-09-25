@@ -36,7 +36,7 @@ use settings::commands::{export_settings, import_settings, load_settings, save_s
 use slicing::commands::{
     cancel_slice_operation, check_slicer_runtime, create_external_slice_revision,
     create_preparation, delete_preparation, delete_slice_revision, get_revision_geometry,
-    get_revision_mesh, get_slice_operation_log, get_slice_revision, get_slicer_runtime,
+    get_revision_mesh, get_slice_operation_log, get_slice_revision, get_slice_revision_log, get_slicer_runtime,
     list_slice_options, list_slice_revisions, list_slicing, pick_preset_source, pick_slicer_engine,
     reload_preparation, reset_slicer_runtime, start_slice, update_preparation,
 };
@@ -123,7 +123,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 78] = [
+pub const COMMAND_NAMES: [&str; 79] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -200,6 +200,7 @@ pub const COMMAND_NAMES: [&str; 78] = [
     "get_slice_operation_log",
     "list_slice_revisions",
     "get_slice_revision",
+    "get_slice_revision_log",
     "create_external_slice_revision",
     "delete_slice_revision",
 ];
@@ -624,6 +625,7 @@ pub fn run() {
             get_slice_operation_log,
             list_slice_revisions,
             get_slice_revision,
+            get_slice_revision_log,
             create_external_slice_revision,
             delete_slice_revision,
             #[cfg(debug_assertions)]
