@@ -45,6 +45,17 @@
   height: 11rem;
 }
 
+.fill {
+  flex: 1;
+  min-height: 0;
+}
+
+.fill .stage {
+  flex: 1;
+  height: auto;
+  min-height: 12rem;
+}
+
 .canvas {
   display: block;
   width: 100%;

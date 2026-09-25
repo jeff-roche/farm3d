@@ -16,6 +16,7 @@ import { describePlate, type ViewportInstance } from "../slicing/viewport/plate-
 import type {
   BuildVolume,
   CameraView,
+  PickResult,
   RenderedInstance,
   ViewportOverlays,
   ViewportRenderer,
@@ -59,12 +60,17 @@ export interface PlateViewportProps {
   selectedInstanceKey?: string | null;
   /** When set, `[`/`]`, their buttons, and clicking select objects. */
   onSelect?: (instanceKey: string | null) => void;
+  /** When set, a click reports the surface point under the pointer here
+   *  instead of selecting (the Preparation's **Measure** mode). */
+  onPick?: (pick: PickResult | null) => void;
   tools?: ViewportTool[];
   overlays?: ViewportOverlays;
   /** Further sentences for the description. */
   notes?: string[];
   /** A shorter canvas, for the Model details inspector. */
   compact?: boolean;
+  /** The canvas grows to fill its container (the Preparation workspace). */
+  fill?: boolean;
 }
 
 /** The accessibility description settles for this long before it is
@@ -229,10 +235,12 @@ export function PlateViewport(props: PlateViewportProps) {
   const onPointerUp = (event: PointerEvent) => {
     const start = down;
     down = undefined;
-    if (!start || !props.onSelect) return;
+    if (!start || !(props.onPick ?? props.onSelect)) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP_PX) return;
     const box = canvas!.getBoundingClientRect();
-    props.onSelect(renderer()?.pick(event.clientX - box.left, event.clientY - box.top)?.instanceKey ?? null);
+    const picked = renderer()?.pick(event.clientX - box.left, event.clientY - box.top) ?? null;
+    if (props.onPick) props.onPick(picked);
+    else props.onSelect?.(picked?.instanceKey ?? null);
   };
 
   // The live region repeats the description only once it settles.
@@ -249,7 +257,7 @@ export function PlateViewport(props: PlateViewportProps) {
   }, { defer: true }));
 
   return (
-    <div ref={root} class={styles.viewport} classList={{ [styles.compact]: props.compact }}>
+    <div ref={root} class={styles.viewport} classList={{ [styles.compact]: props.compact, [styles.fill]: props.fill }}>
       <div ref={toolbar} class={styles.toolbar} role="group" aria-label="Viewport">
         <For each={VIEWS}>
           {(entry) => (

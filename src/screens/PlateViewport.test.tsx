@@ -187,6 +187,21 @@ describe("PlateViewport", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("reports the picked surface point instead of selecting while picking", async () => {
+    const onSelect = vi.fn();
+    const onPick = vi.fn();
+    const renderer = await mountViewport({ onSelect, onPick });
+    renderer.pickResult = { instanceKey: "a", pointMm: [1, 2, 3] };
+    fireEvent.pointerDown(canvas(), { button: 0, clientX: 50, clientY: 60 });
+    fireEvent.pointerUp(canvas(), { button: 0, clientX: 50, clientY: 60 });
+    expect(onPick).toHaveBeenCalledWith({ instanceKey: "a", pointMm: [1, 2, 3] });
+    expect(onSelect).not.toHaveBeenCalled();
+    renderer.pickResult = null;
+    fireEvent.pointerDown(canvas(), { button: 0, clientX: 5, clientY: 5 });
+    fireEvent.pointerUp(canvas(), { button: 0, clientX: 5, clientY: 5 });
+    expect(onPick).toHaveBeenLastCalledWith(null);
+  });
+
   it("refits the camera only when the plate changes, not on selection or instance changes", async () => {
     const [selected, setSelected] = createSignal<string | null>(null);
     const [shown, setShown] = createSignal(instances);
