@@ -22,7 +22,8 @@ export const IDENTITY_TRANSFORM: InstanceTransform = {
   scale: [1, 1, 1],
 };
 
-type Matrix3 = [Vec3, Vec3, Vec3];
+/** A rotation as `r[world][local]` (column-vector form). */
+export type Matrix3 = [Vec3, Vec3, Vec3];
 
 function multiply(a: Matrix3, b: Matrix3): Matrix3 {
   const out: Matrix3 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
@@ -32,6 +33,45 @@ function multiply(a: Matrix3, b: Matrix3): Matrix3 {
     }
   }
   return out;
+}
+
+/** D5's rotation: about X, then Y, then Z (extrinsic), so
+ *  `world = Rz · Ry · Rx · local`. */
+export function rotationMatrix(rotateDeg: readonly number[]): Matrix3 {
+  const [ax, ay, az] = rotateDeg.map((degrees) => degrees * (Math.PI / 180));
+  const [sinX, cosX] = [Math.sin(ax), Math.cos(ax)];
+  const [sinY, cosY] = [Math.sin(ay), Math.cos(ay)];
+  const [sinZ, cosZ] = [Math.sin(az), Math.cos(az)];
+  const rotateX: Matrix3 = [[1, 0, 0], [0, cosX, -sinX], [0, sinX, cosX]];
+  const rotateY: Matrix3 = [[cosY, 0, sinY], [0, 1, 0], [-sinY, 0, cosY]];
+  const rotateZ: Matrix3 = [[cosZ, -sinZ, 0], [sinZ, cosZ, 0], [0, 0, 1]];
+  return multiply(rotateZ, multiply(rotateY, rotateX));
+}
+
+/** The X→Y→Z extrinsic angles, in degrees, of a proper rotation. At
+ *  gimbal lock (Y = ±90°) the X rotation is folded into Z. */
+export function eulerFromRotation(r: Matrix3): Vec3 {
+  const y = Math.asin(Math.min(1, Math.max(-1, -r[2][0])));
+  const [x, z] = Math.abs(Math.cos(y)) > 1e-9
+    ? [Math.atan2(r[2][1], r[2][2]), Math.atan2(r[1][0], r[0][0])]
+    : [0, Math.atan2(-r[0][1], r[1][1])];
+  return [x, y, z].map((radians) => (radians * 180) / Math.PI) as Vec3;
+}
+
+/** The first nine numbers of the 3MF transform: scale, then rotation, with
+ *  no translation (row-vector form, as {@link Transform3mf}). */
+export function linearPart(transform: InstanceTransform): number[] {
+  const r = rotationMatrix(transform.rotateDeg);
+  const scales = transform.scale;
+  // Column-vector form is world = R · S · local; the 3MF attribute holds
+  // the transpose (row-vector form).
+  const m = new Array<number>(9).fill(0);
+  for (let local = 0; local < 3; local += 1) {
+    for (let world = 0; world < 3; world += 1) {
+      m[local * 3 + world] = r[world][local] * scales[local];
+    }
+  }
+  return m;
 }
 
 /** The Z translation that puts the lowest *vertex* (not a bounding-box
@@ -50,26 +90,8 @@ export function restingZ(m: Transform3mf, positions: Positions): number {
  *  are `positions`. The mesh is scaled, rotated about X, then Y, then Z
  *  (extrinsic), and translated on XY; Z is derived so it rests on the bed. */
 export function composeTransform(transform: InstanceTransform, positions: Positions): number[] {
-  const [sx, sy, sz] = transform.scale;
-  const [ax, ay, az] = transform.rotateDeg.map((degrees) => degrees * (Math.PI / 180));
-  const [sinX, cosX] = [Math.sin(ax), Math.cos(ax)];
-  const [sinY, cosY] = [Math.sin(ay), Math.cos(ay)];
-  const [sinZ, cosZ] = [Math.sin(az), Math.cos(az)];
-  const rotateX: Matrix3 = [[1, 0, 0], [0, cosX, -sinX], [0, sinX, cosX]];
-  const rotateY: Matrix3 = [[cosY, 0, sinY], [0, 1, 0], [-sinY, 0, cosY]];
-  const rotateZ: Matrix3 = [[cosZ, -sinZ, 0], [sinZ, cosZ, 0], [0, 0, 1]];
-  // Column-vector form: world = Rz · Ry · Rx · S · local.
-  const r = multiply(rotateZ, multiply(rotateY, rotateX));
-  const scales = [sx, sy, sz];
-  // The 3MF attribute holds the transpose (row-vector form).
-  const m = new Array<number>(12).fill(0);
-  for (let local = 0; local < 3; local += 1) {
-    for (let world = 0; world < 3; world += 1) {
-      m[local * 3 + world] = r[world][local] * scales[local];
-    }
-  }
-  m[9] = transform.translateMm[0];
-  m[10] = transform.translateMm[1];
+  const m = linearPart(transform);
+  m.push(transform.translateMm[0], transform.translateMm[1], 0);
   m[11] = restingZ(m, positions);
   return m;
 }
@@ -121,13 +143,51 @@ export function instanceTransformFrom3mf(m: Transform3mf): InstanceTransform {
   let rotateDeg: Vec3 = [0, 0, 0];
   if (determinant > 0 && lengths.every((factor) => factor > 0)) {
     // r[world][local], with each local axis normalised.
-    const r = (world: number, local: number) => columns[local][world] / lengths[local];
-    const y = Math.asin(Math.min(1, Math.max(-1, -r(2, 0))));
-    const [x, z] = Math.abs(Math.cos(y)) > 1e-9
-      ? [Math.atan2(r(2, 1), r(2, 2)), Math.atan2(r(1, 0), r(0, 0))]
-      // Gimbal lock: fold the X rotation into Z.
-      : [0, Math.atan2(-r(0, 1), r(1, 1))];
-    rotateDeg = [x, y, z].map((radians) => tidy((radians * 180) / Math.PI)) as Vec3;
+    const r = [0, 1, 2].map((world) => [0, 1, 2].map((local) => columns[local][world] / lengths[local])) as Matrix3;
+    rotateDeg = eulerFromRotation(r).map(tidy) as Vec3;
   }
   return { translateMm: [tidy(m[9]), tidy(m[10])], rotateDeg, scale };
+}
+
+// --- Edits (D19's tools) --------------------------------------------------------
+
+/** An angle in (-180°, 180°]. */
+export function normalizeDegrees(degrees: number): number {
+  const wrapped = ((degrees % 360) + 360) % 360;
+  const folded = wrapped > 180 ? wrapped - 360 : wrapped;
+  return folded === 0 ? 0 : tidy(folded);
+}
+
+/** A scale factor within D5's 0.01–100; 1 for a non-number. */
+export function clampScale(factor: number): number {
+  if (!Number.isFinite(factor)) return 1;
+  return tidy(Math.min(MAX_SCALE, Math.max(MIN_SCALE, factor)));
+}
+
+/** Turns about world Z by `degrees`. Z is the last extrinsic rotation, so
+ *  this only adds to the Z angle. */
+export function rotateZBy(transform: InstanceTransform, degrees: number): InstanceTransform {
+  const [x, y, z] = transform.rotateDeg;
+  return { ...transform, rotateDeg: [x, y, normalizeDegrees(z + degrees)] };
+}
+
+/** Multiplies every axis's scale by `factor`, each kept within D5's
+ *  limits. */
+export function scaleBy(transform: InstanceTransform, factor: number): InstanceTransform {
+  return { ...transform, scale: transform.scale.map((axis) => clampScale(axis * factor)) as Vec3 };
+}
+
+/** `after`, moved on XY so the local point `localCentre` (usually the
+ *  object's bounds centre) stays where `before` placed it: a turn, a scale
+ *  or a lay-flat happens about the object, not about its local origin. */
+export function keepCentre(before: InstanceTransform, after: InstanceTransform, localCentre: Vec3): InstanceTransform {
+  const place = (transform: InstanceTransform) => {
+    const m = linearPart(transform);
+    const [x, y, z] = localCentre;
+    return [x * m[0] + y * m[3] + z * m[6], x * m[1] + y * m[4] + z * m[7]];
+  };
+  const [bx, by] = place(before);
+  const [ax, ay] = place(after);
+  const [tx, ty] = before.translateMm;
+  return { ...after, translateMm: [tidy(tx + bx - ax), tidy(ty + by - ay)] };
 }
