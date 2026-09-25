@@ -13,6 +13,10 @@ default-run = "farm3d"
 [features]
 default = []
 catalog-generator = []
+# Builds `fake-orca`, the OrcaSlicer CLI double the slicing tests drive
+# (spec D23). Never enabled for packaging; `scripts/assert-package-contents.sh`
+# fails if the binary shows up in a bundle.
+test-support = []
 
 [[bin]]
 name = "farm3d"
@@ -22,6 +26,17 @@ path = "src/main.rs"
 name = "gen-catalog"
 path = "src/bin/gen-catalog.rs"
 required-features = ["catalog-generator"]
+
+[[bin]]
+name = "fake-orca"
+path = "src/bin/fake-orca.rs"
+required-features = ["test-support"]
+
+# Drives the `fake-orca` binary, so it needs the feature that builds it.
+[[test]]
+name = "p5_process"
+path = "tests/p5_process.rs"
+required-features = ["test-support"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

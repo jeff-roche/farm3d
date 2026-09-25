@@ -10,9 +10,22 @@ install:
 install-rust:
     cargo fetch --manifest-path src-tauri/Cargo.toml
 
-# Run the Tauri backend's Rust test suite
+# Run the Tauri backend's Rust test suite (with the fake-orca test double)
 test-rust:
-    cargo test --manifest-path src-tauri/Cargo.toml
+    cargo test --manifest-path src-tauri/Cargo.toml --features test-support
+
+# Run the ignored real-OrcaSlicer tests; FARM3D_ORCA names the engine (e.g. the v2.4.2 AppImage), FARM3D_ORCA_PRESETS optionally a preset source
+test-orca:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_ORCA:-}" ]; then
+        echo "error: set FARM3D_ORCA to an OrcaSlicer engine, e.g. FARM3D_ORCA=~/Downloads/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage just test-orca" >&2
+        exit 1
+    fi
+    # One at a time: the cancel twin counts AppImage mounts.
+    cargo test --manifest-path src-tauri/Cargo.toml --features test-support \
+        --test p5_runtime_presets --test p5_geometry --test p5_process \
+        real_orca -- --ignored --test-threads=1
 
 # Regenerate TypeScript contracts from the Rust wire types
 gen-contracts:
