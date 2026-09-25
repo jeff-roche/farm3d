@@ -6,6 +6,7 @@ import { createGeometryCache } from "../slicing/geometry-cache";
 import type { MeshBuffer } from "../slicing/mesh-buffer";
 import { loadGeometry, loadMesh } from "../slicing/slicing-store";
 import { sourceLayout } from "../slicing/source-plates";
+import { InspectorPlaceholder } from "./InspectorPlaceholder";
 import styles from "./ModelPlateInspector.module.css";
 import { PlateViewport } from "./PlateViewport";
 
@@ -35,8 +36,11 @@ export function ModelPlateInspector(props: ModelPlateInspectorProps) {
     );
     return { geometry, meshes };
   });
-  // Reading an errored resource throws, so check the error first.
-  const loaded = () => (source.error ? undefined : source());
+  // Only a settled load is shown: reading a pending resource would
+  // suspend the Suspense boundary around this lazy component, and a
+  // refreshing one still holds the previous revision's data. Reading an
+  // errored resource throws, so the state is checked first.
+  const loaded = () => (source.state === "ready" ? source() : undefined);
   const layout = createMemo(() => {
     const data = loaded();
     return data && sourceLayout(data.geometry, props.plates, (key) => data.meshes.get(key)?.positions);
@@ -66,9 +70,9 @@ export function ModelPlateInspector(props: ModelPlateInspectorProps) {
       <Show
         when={plate()}
         fallback={
-          <p class={styles.placeholder} role="status">
+          <InspectorPlaceholder>
             {source.error ? "The 3D view could not load." : "Loading the 3D view…"}
-          </p>
+          </InspectorPlaceholder>
         }
       >
         {(current) => (

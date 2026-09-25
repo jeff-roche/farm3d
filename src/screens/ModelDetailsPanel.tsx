@@ -10,6 +10,7 @@ import {
   on,
   onCleanup,
   Show,
+  Suspense,
   Switch,
 } from "solid-js";
 import { Button, Chip, Combobox, SeverityMarker, TextField, Timeline, type TimelineItem } from "../design-system";
@@ -37,6 +38,7 @@ import {
   sourceStateMarker,
 } from "./library-presentation";
 import styles from "./ModelDetailsPanel.module.css";
+import { InspectorPlaceholder } from "./InspectorPlaceholder";
 import { ModelThumbnail } from "./ModelGrid";
 
 // The 3D inspector (and the viewport it builds on) loads on first use, to
@@ -105,8 +107,11 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
   // Reading an errored resource throws, so check the error first.
   const currentInspection = (): Inspection | undefined =>
     revisions.error ? undefined : revisions()?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
+  // The inspector sits in a Suspense boundary (for its lazy chunk), so its
+  // props must not read a pending resource, which would suspend it again.
   const sourcePlates = () => {
-    const inspection = currentInspection();
+    if (revisions.state !== "ready" && revisions.state !== "refreshing") return [];
+    const inspection = revisions.latest?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
     return inspection?.format === "3mf" ? inspection.plates : [];
   };
 
@@ -116,7 +121,9 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
         when={props.model.format !== "gcode"}
         fallback={<div class={styles.thumbnail}><ModelThumbnail model={props.model} /></div>}
       >
-        <ModelPlateInspector model={props.model} plates={sourcePlates()} />
+        <Suspense fallback={<InspectorPlaceholder>Loading the 3D view…</InspectorPlaceholder>}>
+          <ModelPlateInspector model={props.model} plates={sourcePlates()} />
+        </Suspense>
       </Show>
       <NameField model={props.model} />
       <ProjectMembership
