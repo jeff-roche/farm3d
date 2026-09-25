@@ -364,9 +364,11 @@ deleted.
 - **Operation-log retention.** Resolved in the cleanup round (`368a518`):
   each Preparation keeps the logs of only its 5 most recent failed or
   cancelled operations. See [Cleanup round](#cleanup-round).
-- **Focus after the P4 import dialog.** After **Done**, focus returns to
-  the start of the document, not to **Import…** (see "Other observations"
-  below). This is still open.
+- **Focus after the P4 import dialog.** Resolved (`70e1724`): the
+  design-system `Dialog`'s `returnFocus` prop is now threaded through
+  `ImportDialog` to the **Import…** button, and through
+  `CreateProjectDialog` to **New Project** (see "Other observations"
+  below).
 
 ## Cleanup round
 
@@ -616,6 +618,12 @@ redone.
   overlay still covers the object fields.
 - **Focus after the import dialog.** After **Done** in the import dialog
   (P4), focus returns to the start of the document, not to **Import…**.
+  *Fixed (`70e1724`):* `ImportDialog` and `CreateProjectDialog` now pass
+  the design-system `Dialog`'s `returnFocus` prop, pointing back at
+  LibraryWorkspace's **Import…** and **New Project** buttons. The tests
+  are "returns focus to Import… after Done/Escape closes the import
+  dialog" and "returns focus to New Project after Cancel closes its
+  dialog" (`LibraryWorkspace.test.tsx`). Not re-checked natively.
 - **Lay flat on a sphere.** The UV sphere's lay-flat list shows eight faces
   of "0 mm²". *Fixed in Task 16c (`cb834c8`):* areas below 10 mm² now keep
   two significant figures (for example "0.042 mm²"), and larger areas are
