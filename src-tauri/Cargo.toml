@@ -74,7 +74,14 @@ quick-xml = "0.42"
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    # D9: the Job Object that contains an OrcaSlicer process tree.
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
