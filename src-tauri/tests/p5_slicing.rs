@@ -1834,3 +1834,139 @@ fn real_orca_slices_a_cube_through_the_commands() {
         status["engine"]["version"]
     );
 }
+
+/// Waits for a real OrcaSlicer slice to finish, allowing two minutes, and
+/// panics with its log unless it succeeded.
+fn wait_for_real_success(running: &Running, id: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let operation = loop {
+        let operation = running.operation(id);
+        if operation["state"] != "queued" && operation["state"] != "running" {
+            break operation;
+        }
+        assert!(Instant::now() < deadline, "the slice took over 2 minutes");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    if operation["state"] != "succeeded" {
+        let log = running.ok("get_slice_operation_log", json!({ "sliceOperationId": id }));
+        panic!("{operation}\n{}", log["text"]);
+    }
+    operation
+}
+
+/// The `; key = value` claims of a G-code's `CONFIG_BLOCK`.
+fn config_claims(gcode: &[u8]) -> std::collections::BTreeMap<String, String> {
+    String::from_utf8_lossy(gcode)
+        .lines()
+        .skip_while(|line| line.trim() != "; CONFIG_BLOCK_START")
+        .take_while(|line| line.trim() != "; CONFIG_BLOCK_END")
+        .filter_map(|line| {
+            let (key, value) = line.strip_prefix("; ")?.split_once(" = ")?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// Spec AC3: writing each mapped farm3d control changes the G-code's header
+/// claim for its OrcaSlicer key, against a real OrcaSlicer (spec D23). One
+/// baseline slice with no controls, then one slice per control, each with a
+/// value the TestVendor preset does not have. Run with `just test-orca`.
+#[test]
+#[ignore = "needs a real OrcaSlicer: set FARM3D_ORCA (just test-orca)"]
+fn real_orca_each_mapped_control_changes_its_gcode_header_claim() {
+    use farm3d_lib::slicing::mapping::CONTROL_MAPPINGS;
+
+    // Each control, the value written, and the header claim expected for
+    // each OrcaSlicer key it maps to.
+    let cases: [(&str, Value, &[(&str, &str)]); 11] = [
+        ("layerHeightMm", json!(0.12), &[("layer_height", "0.12")]),
+        ("wallLoops", json!(5), &[("wall_loops", "5")]),
+        ("topShellLayers", json!(6), &[("top_shell_layers", "6")]),
+        (
+            "bottomShellLayers",
+            json!(5),
+            &[("bottom_shell_layers", "5")],
+        ),
+        (
+            "infillDensityPercent",
+            json!(35),
+            &[("sparse_infill_density", "35%")],
+        ),
+        (
+            "infillPattern",
+            json!("gyroid"),
+            &[("sparse_infill_pattern", "gyroid")],
+        ),
+        (
+            "supports",
+            json!("tree(auto)"),
+            &[("enable_support", "1"), ("support_type", "tree(auto)")],
+        ),
+        (
+            "supportThresholdAngleDeg",
+            json!(45),
+            &[("support_threshold_angle", "45")],
+        ),
+        (
+            "brimType",
+            json!("outer_only"),
+            &[("brim_type", "outer_only")],
+        ),
+        ("brimWidthMm", json!(3), &[("brim_width", "3")]),
+        ("skirtLoops", json!(2), &[("skirt_loops", "2")]),
+    ];
+    // Every mapped control, and every key it writes, has a case.
+    for (control, keys) in CONTROL_MAPPINGS {
+        let case = cases
+            .iter()
+            .find(|(name, _, _)| *name == control)
+            .unwrap_or_else(|| panic!("no case for {control}"));
+        let mut expected: Vec<&str> = case.2.iter().map(|(key, _)| *key).collect();
+        expected.sort_unstable();
+        let mut mapped = keys.to_vec();
+        mapped.sort_unstable();
+        assert_eq!(expected, mapped, "{control}");
+    }
+
+    let farm = Farm::with_real_orca();
+    let running = farm.start();
+    let status = running.ok("check_slicer_runtime", json!({}));
+    assert_eq!(status["canSlice"], true, "{status}");
+    let model = running.import(&farm.source("cube-binary.stl", "cube.stl"), "managed");
+    let mut preparation = running.prepare(model["id"].as_str().unwrap());
+
+    let mut slice_with = |label: &str, controls: Value| {
+        let mut document = preparation["document"].clone();
+        document["controls"] = controls;
+        preparation = running.ok(
+            "update_preparation",
+            json!({
+                "preparationId": preparation["id"],
+                "expectedRevision": preparation["revision"],
+                "document": document,
+            }),
+        );
+        let plate = &plates(&preparation)[0];
+        let id = ids(&running.start(&format!("op-real-{label}"), &preparation, &[plate])).remove(0);
+        let operation = wait_for_real_success(&running, &id);
+        let revision = operation["sliceRevisionId"].as_str().unwrap();
+        config_claims(&running.blob(&running.gcode_sha256(revision)))
+    };
+
+    let baseline = slice_with("baseline", json!({}));
+    assert!(!baseline.is_empty(), "the G-code has no CONFIG_BLOCK");
+    for (control, value, claims) in &cases {
+        let header = slice_with(control, json!({ *control: value }));
+        for (key, expected) in *claims {
+            let before = baseline.get(*key).map(String::as_str);
+            let after = header.get(*key).map(String::as_str);
+            eprintln!("{control} = {value}: {key} {before:?} -> {after:?}");
+            assert_eq!(
+                after,
+                Some(*expected),
+                "{control}: the header claim of {key}"
+            );
+            assert_ne!(before, after, "{control}: {key} did not change");
+        }
+    }
+}
