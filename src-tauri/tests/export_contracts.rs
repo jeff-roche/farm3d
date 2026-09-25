@@ -700,6 +700,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::FilamentIncompatible,
         ErrorCode::UnmappedProfileOverride,
         ErrorCode::UnsupportedSettingForRuntime,
+        ErrorCode::PreparationInvalid,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -725,7 +726,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "SELECTION_EXPIRED", "SOURCE_CONTENT_DIFFERS", "SOURCE_UNAVAILABLE",
                 "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
                 "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
-                "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME"
+                "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
+                "PREPARATION_INVALID"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

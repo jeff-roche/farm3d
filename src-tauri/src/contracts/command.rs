@@ -321,6 +321,9 @@ pub enum ErrorCode {
     UnmappedProfileOverride,
     /// P5 D4: a mapped key is unknown to the preset source.
     UnsupportedSettingForRuntime,
+    /// P5 D7: a plate can't be sliced as it stands (for example, it is
+    /// empty).
+    PreparationInvalid,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -813,6 +816,13 @@ impl CommandError {
             false,
         )
         .with_string_details(&[("key", key), ("presetSourceVersion", preset_source_version)])
+    }
+
+    /// P5 D7: the plate `plate_key` can't be written for OrcaSlicer.
+    /// `reason` is `empty`, `unknownObject`, or `invalidTransform`.
+    pub fn preparation_invalid(plate_key: &str, reason: &str, message: &str) -> Self {
+        Self::typed(ErrorCode::PreparationInvalid, message, vec![], false)
+            .with_string_details(&[("plateKey", plate_key), ("reason", reason)])
     }
 
     /// D7: an action (a Printer's archive/delete, or a Spool's archive/
