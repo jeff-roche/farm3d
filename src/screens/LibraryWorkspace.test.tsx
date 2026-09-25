@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryWorkspace } from "./LibraryWorkspace";
 import { buildWebLibraryFixture } from "../library/web-fixtures";
@@ -57,6 +58,36 @@ const SELECTION: ImportSelectionSummary = {
   purpose: "import",
   files: [{ fileIndex: 0, fileName: "hook.stl", sizeBytes: 684 }],
 };
+
+// `importSelection` is App's state, cleared on `onImportClose` in the real
+// app; the plain `renderWorkspace` above never updates it once rendered, so
+// the dialog never actually leaves the document. This wires it up as a
+// signal, the way App does, for tests that need the dialog to really close.
+function renderWorkspaceWithImportControl(initial: ImportSelectionSummary | null = SELECTION) {
+  const onImport = vi.fn();
+  const [selection, setSelection] = createSignal<ImportSelectionSummary | null>(initial);
+  render(() => (
+    <LibraryWorkspace
+      navigate={navigate}
+      onImport={onImport}
+      importSelection={selection()}
+      onImportClose={() => setSelection(null)}
+    />
+  ));
+  return { onImport, setSelection };
+}
+
+function readyInspection(selectionId: string) {
+  return {
+    selectionId,
+    items: [{
+      status: "ready" as const, fileIndex: 0, fileName: "hook.stl", format: "stl" as const, sizeBytes: 684,
+      sha256: "e".repeat(64),
+      summary: { format: "stl" as const, triangleCount: 12, boundsMm: { min: [0, 0, 0] as [number, number, number], max: [1, 1, 1] as [number, number, number] }, unitsAssumed: true as const },
+      unsupported: [], warnings: [], duplicates: [],
+    }],
+  };
+}
 
 function sidebarEntry(name: RegExp): HTMLElement {
   return within(screen.getByRole("navigation", { name: "Library" })).getByRole("button", { name });
@@ -405,6 +436,46 @@ async function openProjectMenu(name: string, item: string) {
   await fireEvent.pointerDown(screen.getByLabelText(`Actions for ${name}`), { pointerType: "mouse", button: 0 });
   await fireEvent.pointerUp(await screen.findByText(item), { pointerType: "mouse", button: 0 });
 }
+
+describe("LibraryWorkspace focus return", () => {
+  it("returns focus to Import… after Done closes the import dialog", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => readyInspection(selectionId));
+    libraryStoreMock.importModels.mockImplementation(async () => ({
+      items: [{ fileIndex: 0, outcome: "imported", model: fixture.models[1]!, errors: [], warnings: [] }],
+    }));
+    renderWorkspaceWithImportControl();
+    const importButton = screen.getByRole("button", { name: "Import…" });
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Models" })).toBeNull());
+    await waitFor(() => expect(importButton).toHaveFocus());
+  });
+
+  it("returns focus to Import… after Escape closes the import dialog", async () => {
+    desktop.available = true;
+    libraryStoreMock.inspectSelection.mockImplementation(async (selectionId: string) => readyInspection(selectionId));
+    renderWorkspaceWithImportControl();
+    const importButton = screen.getByRole("button", { name: "Import…" });
+
+    const dialog = await screen.findByRole("dialog", { name: "Import Models" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Models" })).toBeNull());
+    await waitFor(() => expect(importButton).toHaveFocus());
+  });
+
+  it("returns focus to New Project after Cancel closes its dialog", async () => {
+    renderWorkspace();
+    const newProjectButton = screen.getByRole("button", { name: "New Project" });
+    await fireEvent.click(newProjectButton);
+    const dialog = await screen.findByRole("dialog", { name: "New Project" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New Project" })).toBeNull());
+    await waitFor(() => expect(newProjectButton).toHaveFocus());
+  });
+});
 
 describe("LibraryWorkspace recovery", () => {
   it("Locate source… opens the dialog; a successful locate closes it and the panel shows the source OK", async () => {

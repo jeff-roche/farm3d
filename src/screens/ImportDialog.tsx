@@ -67,6 +67,10 @@ export interface ImportDialogProps {
   onChooseAgain: () => void;
   /** A window drop arrived while this import was open and was refused. */
   dropRefused?: boolean;
+  /** Where focus goes when the dialog closes (Done, Cancel, Escape, or the
+   *  close button) — the **Import…** button that opened it, while it's
+   *  still in the document. See `Dialog`'s `returnFocus`. */
+  returnFocus?: () => HTMLElement | null | undefined;
 }
 
 const COMMITTED: ReadonlySet<ImportItemResult["outcome"]> = new Set(["imported", "revisionAdded", "reusedExisting"]);
@@ -165,6 +169,7 @@ export function ImportDialog(props: ImportDialogProps) {
       onOpenChange={(open) => {
         if (!open) dismiss();
       }}
+      returnFocus={props.returnFocus}
     >
       <Show when={props.selection} keyed>
         {(selection) => (

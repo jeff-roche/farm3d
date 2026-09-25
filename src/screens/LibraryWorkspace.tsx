@@ -230,6 +230,13 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
     if (model && !modelsFor(activeView(), [model], now()).length) setView(ALL_MODELS);
   }));
 
+  // The toolbar's Import… and New Project buttons: where focus returns once
+  // their dialogs close (they render with no Kobalte trigger of their own).
+  let importButton: HTMLButtonElement | undefined;
+  let newProjectButton: HTMLButtonElement | undefined;
+  const returnFocusTo = (button: () => HTMLButtonElement | undefined) => () =>
+    button()?.isConnected ? button() : undefined;
+
   // The collection pane, remade each time preparing ends.
   let content: HTMLDivElement | undefined;
   /** **Back to Library**: the collection returns, with focus on the card
@@ -367,6 +374,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
       </Show>
       <div class={styles.toolbar}>
         <Button
+          ref={importButton}
           variant="primary"
           disabled={!desktopAvailable()}
           aria-describedby={desktopAvailable() ? undefined : importReasonId}
@@ -374,7 +382,9 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
         >
           Import…
         </Button>
-        <Button variant="secondary" onClick={() => setDialog({ kind: "createProject" })}>New Project</Button>
+        <Button ref={newProjectButton} variant="secondary" onClick={() => setDialog({ kind: "createProject" })}>
+          New Project
+        </Button>
         <TextField
           type="search"
           aria-label="Search Models"
@@ -552,6 +562,7 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
               onDone={finishImport}
               onChooseAgain={() => props.onImport?.()}
               dropRefused={props.dropRefused ?? false}
+              returnFocus={returnFocusTo(() => importButton)}
             />
           )}
         </Show>
@@ -566,7 +577,11 @@ export function LibraryWorkspace(props: LibraryWorkspaceProps) {
             {(model) => <DeleteModelDialog model={model()} onClose={closeDialog} onDeleted={modelDeleted} />}
           </Match>
           <Match when={dialog()?.kind === "createProject"}>
-            <CreateProjectDialog onClose={closeDialog} onCreated={projectCreated} />
+            <CreateProjectDialog
+              onClose={closeDialog}
+              onCreated={projectCreated}
+              returnFocus={returnFocusTo(() => newProjectButton)}
+            />
           </Match>
           <Match when={dialogProject("renameProject")}>
             {(project) => <RenameProjectDialog project={project()} onClose={closeDialog} />}

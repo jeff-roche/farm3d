@@ -26,6 +26,7 @@ function ProjectNameDialog(props: {
   initialName: string;
   save: (name: string) => Promise<void>;
   onClose: () => void;
+  returnFocus?: () => HTMLElement | null | undefined;
 }) {
   const [name, setName] = createSignal(props.initialName);
   const [failure, setFailure] = createSignal<NameFailure>({});
@@ -53,6 +54,7 @@ function ProjectNameDialog(props: {
       onOpenChange={(open) => {
         if (!open) requestClose();
       }}
+      returnFocus={props.returnFocus}
     >
       <form class={styles.body} onSubmit={submit}>
         <TextField label="Name" value={name()} onChange={setName} error={failure().field} />
@@ -70,6 +72,7 @@ export function CreateProjectDialog(props: {
   onClose: () => void;
   /** The Project was created; the caller closes the dialog. */
   onCreated: (project: ProjectRecord) => void;
+  returnFocus?: () => HTMLElement | null | undefined;
 }) {
   return (
     <ProjectNameDialog
@@ -78,6 +81,7 @@ export function CreateProjectDialog(props: {
       initialName=""
       save={async (name) => props.onCreated(await createProject(name))}
       onClose={props.onClose}
+      returnFocus={props.returnFocus}
     />
   );
 }
