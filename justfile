@@ -27,6 +27,16 @@ test-orca:
         --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing --test p5_tracer \
         real_orca -- --ignored --test-threads=1
 
+# Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
+test-octoprint-live:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_OCTOPRINT_HOST:-}" ]; then
+        echo "error: set FARM3D_OCTOPRINT_HOST (and FARM3D_OCTOPRINT_API_KEY unless access control is off), e.g. FARM3D_OCTOPRINT_HOST=octopi.local just test-octoprint-live" >&2
+        exit 1
+    fi
+    cargo test --manifest-path src-tauri/Cargo.toml --test a0_octoprint_live -- --ignored --nocapture --test-threads=1
+
 # Type-check the backend for Windows from Linux (no mingw needed; nothing is linked). `just check-windows clippy` lints instead
 check-windows mode="check":
     scripts/check-windows.sh {{mode}}

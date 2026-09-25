@@ -8,6 +8,8 @@
 //! Each test crate uses a different subset, hence the `dead_code` allow.
 #![allow(dead_code)]
 
+pub mod octoprint;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

@@ -13,7 +13,7 @@ use crate::catalog::resolve::resolve_catalog_ref;
 use crate::connections::commands::{credential_coordinator, retry_pending_credential_cleanup};
 use crate::connections::credentials::CredentialStoreKind;
 use crate::connections::supervisor::ConnectionManager;
-use crate::connections::{ConnectionConfig, ConnectionError, ProbeResult, MOONRAKER_KIND};
+use crate::connections::{ConnectionConfig, ConnectionError, ProbeResult};
 use crate::contracts::command::{
     CommandError, CommandSuccess, ErrorCode, IncomingContractVersion, JsonValue, RecoveryCode,
 };
@@ -294,7 +294,7 @@ pub async fn create_printer_with<R: tauri::Runtime>(
     let mut connection_config: Option<ConnectionConfig> = None;
     let mut submitted_secret: Option<Zeroizing<String>> = None;
     if let Some((config, secret)) = options.connection {
-        if config.kind != MOONRAKER_KIND {
+        if !crate::connections::is_supported_kind(&config.kind) {
             return Err(CommandError::unsupported_adapter(config.kind));
         }
         if config.host.is_empty() {
