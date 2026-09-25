@@ -70,8 +70,8 @@ _Avoid_: Preset, config
 **Connection**:
 The channel farm3d uses to communicate with a Printer — either a network
 print-server API (Moonraker/OctoPrint/ElegooLink-style) or a direct USB/serial
-link. Moonraker is the only adapter implemented today; OctoPrint and
-ElegooLink are planned (see ADR-0002).
+link. Moonraker and OctoPrint (status-only monitoring) are implemented;
+ElegooLink is planned (see ADR-0002).
 _Avoid_: Link, interface
 
 **Connection Supervisor**:

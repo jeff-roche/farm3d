@@ -1,6 +1,6 @@
 //! A0.2: opt-in checks against a REAL OctoPrint instance. Ignored by
 //! default; run with `just test-octoprint-live` (see
-//! `docs/verification/a0-2-octoprint-live-validation.md` for the whole
+//! `docs/verification/2026-09-25-a0-2-octoprint.md` for the whole
 //! procedure, which also covers the app-level checks these cannot).
 //!
 //! Environment:

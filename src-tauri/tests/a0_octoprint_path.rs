@@ -10,7 +10,7 @@
 //!
 //! This is supporting evidence only. Issue #10's completion gate is a live
 //! OctoPrint instance; see `a0_octoprint_live.rs` and
-//! `docs/verification/a0-2-octoprint-live-validation.md`.
+//! `docs/verification/2026-09-25-a0-2-octoprint.md`.
 
 mod common;
 
