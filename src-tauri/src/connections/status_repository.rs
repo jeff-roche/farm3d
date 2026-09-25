@@ -40,6 +40,31 @@ pub struct PrinterTelemetry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub print_duration_s: Option<f64>,
+    /// Every tool of a multi-tool printer, in index order. Empty (and
+    /// omitted on the wire) for a single-tool printer, whose one nozzle is
+    /// `nozzle_temp_c`/`nozzle_target_c`. On a multi-tool printer those two
+    /// fields still carry tool 0, so views that show one nozzle keep working.
+    /// Adapter-neutral: Moonraker's `extruder`, `extruder1`, ... and
+    /// OctoPrint's `tool0`, `tool1`, ... both map to an `index`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ToolTemperature>>")]
+    pub tools: Vec<ToolTemperature>,
+}
+
+/// One tool's temperature reading. A reading the host did not report is
+/// absent, never zero.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase", export_to = "domain/ToolTemperature.ts")]
+pub struct ToolTemperature {
+    /// Zero-based tool number: T0, T1, ...
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub temp_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_c: Option<f64>,
 }
 
 /// A reconstructable last-known telemetry observation for one Printer.
@@ -228,6 +253,21 @@ fn canonical_utc_timestamp(value: &str) -> Result<String, ()> {
         .to_rfc3339_opts(SecondsFormat::AutoSi, true))
 }
 
+/// More tools than any real printer has; a cap keeps a malformed host from
+/// growing a cached row without bound.
+pub const MAX_TOOLS: u32 = 64;
+
+/// Tools are listed once each, in index order, with finite readings.
+fn valid_tools(tools: &[ToolTemperature]) -> bool {
+    tools.len() <= MAX_TOOLS as usize
+        && tools.windows(2).all(|pair| pair[0].index < pair[1].index)
+        && tools
+            .iter()
+            .flat_map(|tool| [tool.temp_c, tool.target_c])
+            .flatten()
+            .all(f64::is_finite)
+}
+
 fn validate_telemetry(telemetry: &PrinterTelemetry) -> Result<(), StatusCacheError> {
     if telemetry
         .progress
@@ -250,6 +290,7 @@ fn validate_telemetry(telemetry: &PrinterTelemetry) -> Result<(), StatusCacheErr
         .into_iter()
         .flatten()
         .any(|value| value.is_empty() || value.len() > 512 || value.chars().any(char::is_control))
+        || !valid_tools(&telemetry.tools)
     {
         Err(StatusCacheError::InvalidTelemetry)
     } else {
@@ -270,7 +311,7 @@ mod tests {
 
     use super::{
         PrinterTelemetry, SnapshotWrite, StatusCacheError, StatusRepository,
-        StoredTelemetrySnapshot,
+        StoredTelemetrySnapshot, ToolTemperature, MAX_TOOLS,
     };
 
     fn storage() -> (
@@ -308,6 +349,7 @@ mod tests {
                 bed_temp_c: Some(60.0),
                 bed_target_c: Some(60.0),
                 print_duration_s: Some(120.0),
+                tools: Vec::new(),
             },
             last_observed_at: at(second).to_rfc3339_opts(SecondsFormat::Secs, true),
         }
@@ -549,5 +591,55 @@ mod tests {
             repository.save_if_due(&snapshot, SnapshotWrite::Periodic),
             Err(StatusCacheError::InvalidTelemetry)
         ));
+    }
+
+    fn tool(index: u32, temp_c: Option<f64>, target_c: Option<f64>) -> ToolTemperature {
+        ToolTemperature {
+            index,
+            temp_c,
+            target_c,
+        }
+    }
+
+    #[test]
+    fn per_tool_temperatures_round_trip_through_the_cache() {
+        // A0.1 (#9), decision B2: a restart shows each tool's last reading.
+        let (_temporary_root, _lease, storage) = storage();
+        let repository = repository_at(storage, Arc::new(Mutex::new(at(0))));
+        let mut snapshot = snapshot_at(0);
+        snapshot.telemetry.tools = vec![
+            tool(0, Some(210.0), Some(215.0)),
+            tool(1, Some(24.0), None),
+            tool(2, None, None),
+        ];
+
+        repository
+            .save_if_due(&snapshot, SnapshotWrite::Periodic)
+            .expect("snapshot with tools");
+        assert_eq!(
+            repository.get("prn-1").expect("cached").expect("exists"),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn invalid_per_tool_temperatures_are_rejected() {
+        let (_temporary_root, _lease, storage) = storage();
+        let repository = repository_at(storage, Arc::new(Mutex::new(at(0))));
+        for tools in [
+            vec![tool(0, Some(f64::INFINITY), None)],
+            vec![tool(0, None, Some(f64::NAN))],
+            vec![tool(1, None, None), tool(1, None, None)],
+            (0..=MAX_TOOLS)
+                .map(|index| tool(index, None, None))
+                .collect(),
+        ] {
+            let mut snapshot = snapshot_at(0);
+            snapshot.telemetry.tools = tools;
+            assert!(matches!(
+                repository.save_if_due(&snapshot, SnapshotWrite::Periodic),
+                Err(StatusCacheError::InvalidTelemetry)
+            ));
+        }
     }
 }

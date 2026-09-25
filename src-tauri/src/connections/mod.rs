@@ -41,6 +41,24 @@ pub fn is_supported_kind(kind: &str) -> bool {
     SUPPORTED_KINDS.contains(&kind)
 }
 
+/// No adapter speaks TLS yet: the WebSocket client is built without a TLS
+/// backend (A0.1, #9, decision B4). Every entry point that accepts a
+/// Connection rejects `useTls` with this message, so a user sees why rather
+/// than a Connection that can only ever be "unreachable".
+pub const TLS_UNSUPPORTED_MESSAGE: &str = "TLS connections are not supported yet.";
+
+/// Rejects a TLS Connection as a validation error at `useTls`.
+pub fn reject_tls(use_tls: bool) -> Result<(), crate::contracts::command::CommandError> {
+    if use_tls {
+        Err(crate::contracts::command::CommandError::validation_at(
+            "useTls",
+            TLS_UNSUPPORTED_MESSAGE,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/ConnectionConfig.ts")]
@@ -136,6 +154,7 @@ impl PrinterStatus {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             },
             last_observed_at: None,
             fresh_until: None,

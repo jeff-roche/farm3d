@@ -41,14 +41,21 @@ fn live() -> Option<Live> {
     let host = std::env::var("FARM3D_OCTOPRINT_HOST").ok()?;
     let port = std::env::var("FARM3D_OCTOPRINT_PORT")
         .ok()
-        .map(|port| port.parse().expect("FARM3D_OCTOPRINT_PORT must be a port number"))
+        .map(|port| {
+            port.parse()
+                .expect("FARM3D_OCTOPRINT_PORT must be a port number")
+        })
         .unwrap_or(80);
     let api_key = std::env::var("FARM3D_OCTOPRINT_API_KEY")
         .ok()
         .filter(|key| !key.is_empty());
     let poll_seconds = std::env::var("FARM3D_OCTOPRINT_POLL_SECONDS")
         .ok()
-        .map(|seconds| seconds.parse().expect("FARM3D_OCTOPRINT_POLL_SECONDS must be a number"))
+        .map(|seconds| {
+            seconds
+                .parse()
+                .expect("FARM3D_OCTOPRINT_POLL_SECONDS must be a number")
+        })
         .unwrap_or(10);
     Some(Live {
         config: ConnectionConfig {
@@ -79,14 +86,21 @@ async fn live_octoprint_probe_and_status_poll() {
         "target: http://{}:{} (API key {})",
         live.config.host,
         live.config.port,
-        if live.api_key.is_some() { "supplied" } else { "not supplied" }
+        if live.api_key.is_some() {
+            "supplied"
+        } else {
+            "not supplied"
+        }
     );
 
     let connection = OctoPrintConnection::new(live.config.clone(), live.api_key.clone());
     let probe = connection.probe().await.expect("probe");
     println!("probe: {}", serde_json::to_string_pretty(&probe).unwrap());
     assert_eq!(probe.kind, OCTOPRINT_KIND);
-    assert!(!probe.host_software.is_empty(), "OctoPrint reported no server version");
+    assert!(
+        !probe.host_software.is_empty(),
+        "OctoPrint reported no server version"
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let task = tokio::spawn(async move { connection.subscribe(tx).await });
@@ -212,7 +226,10 @@ fn live_octoprint_setup_supervision_and_restart_through_ipc() {
         }),
     )
     .expect("create_printer");
-    let id = created["data"]["printer"]["id"].as_str().unwrap().to_string();
+    let id = created["data"]["printer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     println!(
         "created: setupGaps={} connection={}",
         created["data"]["printer"]["setupGaps"], created["data"]["printer"]["connection"]
@@ -255,7 +272,8 @@ fn live_octoprint_setup_supervision_and_restart_through_ipc() {
         || restart_manager.statuses().get(&id).cloned(),
         |status| {
             status.last_observed_at.is_some()
-                && status.last_observed_at != hydrated.as_ref().and_then(|h| h.last_observed_at.clone())
+                && status.last_observed_at
+                    != hydrated.as_ref().and_then(|h| h.last_observed_at.clone())
         },
     );
     println!("resumed: {}", serde_json::to_string(&resumed).unwrap());
@@ -264,8 +282,14 @@ fn live_octoprint_setup_supervision_and_restart_through_ipc() {
 
     if let Some(key) = live.api_key.as_deref() {
         let mut scanned = vec![
-            ("probe_connection".to_string(), probe.to_string().into_bytes()),
-            ("create_printer".to_string(), created.to_string().into_bytes()),
+            (
+                "probe_connection".to_string(),
+                probe.to_string().into_bytes(),
+            ),
+            (
+                "create_printer".to_string(),
+                created.to_string().into_bytes(),
+            ),
         ];
         scanned.extend(
             events
@@ -285,13 +309,18 @@ fn live_octoprint_setup_supervision_and_restart_through_ipc() {
                 if path.is_dir() {
                     pending.push(path);
                 } else {
-                    scanned.push((path.display().to_string(), std::fs::read(&path).unwrap_or_default()));
+                    scanned.push((
+                        path.display().to_string(),
+                        std::fs::read(&path).unwrap_or_default(),
+                    ));
                 }
             }
         }
         for (label, bytes) in &scanned {
             assert!(
-                !bytes.windows(key.len()).any(|window| window == key.as_bytes()),
+                !bytes
+                    .windows(key.len())
+                    .any(|window| window == key.as_bytes()),
                 "{label} contains the API key"
             );
         }

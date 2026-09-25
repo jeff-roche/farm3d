@@ -125,9 +125,15 @@ fn octoprint_monitoring_is_set_up_supervised_and_resumed_after_restart() {
         }),
     )
     .unwrap();
-    let id = created["data"]["printer"]["id"].as_str().unwrap().to_string();
+    let id = created["data"]["printer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(created["data"]["printer"]["setupGaps"], json!([]));
-    assert_eq!(created["data"]["printer"]["connection"]["kind"], "octoprint");
+    assert_eq!(
+        created["data"]["printer"]["connection"]["kind"],
+        "octoprint"
+    );
     assert!(created["data"]["printer"]["connection"]["credentialRef"].is_string());
 
     // --- 4. Live status in the shared vocabulary, percentage converted ----
@@ -152,7 +158,10 @@ fn octoprint_monitoring_is_set_up_supervised_and_resumed_after_restart() {
         |status| status.connection_state == ConnectionState::Offline,
     );
     assert_eq!(offline.telemetry.nozzle_temp_c, None);
-    assert_eq!(offline.telemetry.host_activity_name.as_deref(), Some("Offline"));
+    assert_eq!(
+        offline.telemetry.host_activity_name.as_deref(),
+        Some("Offline")
+    );
     assert!(offline.error.is_none(), "a 409 is not a connection error");
     stub.state.lock().unwrap().printer_attached = true;
     wait_for(
@@ -214,7 +223,10 @@ fn octoprint_monitoring_is_set_up_supervised_and_resumed_after_restart() {
         assert_no_key(&path, &std::fs::read(&path).unwrap_or_default());
     }
     for entry in walk(temp.path()) {
-        assert_no_key(&entry.display().to_string(), &std::fs::read(&entry).unwrap_or_default());
+        assert_no_key(
+            &entry.display().to_string(),
+            &std::fs::read(&entry).unwrap_or_default(),
+        );
     }
 
     tauri::async_runtime::block_on(restart_manager.stop(&id));

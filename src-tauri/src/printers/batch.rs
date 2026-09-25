@@ -580,6 +580,12 @@ impl PlanState<'_> {
                 "The port must be positive.",
             )));
         }
+        if connection.use_tls {
+            return Ok(Err(validation_error(
+                path("useTls"),
+                crate::connections::TLS_UNSUPPORTED_MESSAGE,
+            )));
+        }
         let secret = match &connection.credential {
             BatchCredentialSource::None => None,
             BatchCredentialSource::Shared => match self.shared_secret {

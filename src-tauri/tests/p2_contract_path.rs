@@ -794,3 +794,61 @@ fn update_printer_clears_location_with_null_and_persists_start_safety() {
         json!("unattended")
     );
 }
+
+// --- A0.1 (#9), decision B4: TLS is refused before any connection ---------
+
+#[test]
+fn every_connection_entry_point_rejects_tls_as_a_validation_error_at_use_tls() {
+    let (_temp, _lease, storage) = storage();
+    let credentials_dir = tempfile::tempdir().unwrap();
+    let (factory, calls) = recording_factory(Arc::clone(&storage));
+    let (_app, webview, _manager, _services) = runtime(
+        Arc::clone(&storage),
+        Arc::new(a_catalog()),
+        credentials_dir.path().to_path_buf(),
+        factory,
+    );
+    let printer = PrinterRepository::new(Arc::clone(&storage))
+        .create(a_stored_printer("printer-tls"))
+        .unwrap();
+    let tls = json!({"kind": "moonraker", "host": "ok.local", "port": 7125, "useTls": true});
+
+    for (command, body) in [
+        (
+            "probe_connection",
+            json!({"contractVersion": 1, "submission": tls}),
+        ),
+        (
+            "create_printer",
+            json!({"contractVersion": 1, "name": "TLS Printer", "catalogRef": a_ref_json(), "connection": tls}),
+        ),
+        (
+            "set_printer_connection",
+            json!({"contractVersion": 1, "id": printer.id, "expectedRevision": printer.revision, "submission": tls}),
+        ),
+        (
+            "test_printer_connection",
+            json!({"contractVersion": 1, "id": printer.id, "submission": tls}),
+        ),
+    ] {
+        let error = invoke(&webview, command, body).unwrap_err();
+        assert_eq!(error["code"], "VALIDATION", "{command}");
+        assert_eq!(error["details"]["fieldPath"], json!("useTls"), "{command}");
+        assert_eq!(
+            error["message"],
+            json!("TLS connections are not supported yet."),
+            "{command}"
+        );
+    }
+    assert!(
+        calls.try_recv().is_err(),
+        "no Connection may be built for a TLS submission"
+    );
+    assert_eq!(
+        PrinterRepository::new(Arc::clone(&storage))
+            .list()
+            .unwrap()
+            .len(),
+        1
+    );
+}

@@ -33,6 +33,17 @@ describe("PrinterCompactRow", () => {
     expect(onSelect).toHaveBeenCalledWith("prn-1");
   });
 
+  it("shows each tool of a multi-tool printer in place of the single Nozzle reading", () => {
+    // A0.1 (#9), decision B2.
+    render(() => <PrinterCompactRow printer={{
+      ...printer, hasMissingReadings: true,
+      readings: { nozzleTempC: 24, nozzleTargetC: 0, bedTempC: 22, bedTargetC: 0, tools: [{ index: 0, tempC: 24, targetC: 0 }, { index: 1 }] },
+    }} onSelect={vi.fn()} />);
+    const row = screen.getByRole("button", { name: /North Bay/ });
+    expect(row).toHaveTextContent("T0 24 °C / 0 °C · T1 — / — · Bed 22 °C / 0 °C");
+    expect(row).not.toHaveTextContent("Nozzle");
+  });
+
   it("renders progress only for fresh printing telemetry", () => {
     render(() => <PrinterCompactRow printer={{
       ...printer, operationalState: "printing", freshness: "fresh",

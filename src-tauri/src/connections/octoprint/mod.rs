@@ -77,7 +77,11 @@ impl OctoPrintConnection {
         self
     }
 
-    fn request(&self, client: &Client, path: &str) -> Result<reqwest::RequestBuilder, ConnectionError> {
+    fn request(
+        &self,
+        client: &Client,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, ConnectionError> {
         let mut request = client.get(format!("{}{path}", base_url(&self.config)));
         if let Some(key) = api_key_header(self.api_key.as_ref().map(|key| key.as_str()))? {
             request = request.header(API_KEY_HEADER, key);
@@ -320,7 +324,9 @@ mod tests {
             (
                 "/api/version",
                 200,
-                json(serde_json::json!({"api": "0.1", "server": "1.10.3", "text": "OctoPrint 1.10.3"})),
+                json(
+                    serde_json::json!({"api": "0.1", "server": "1.10.3", "text": "OctoPrint 1.10.3"}),
+                ),
             ),
             (
                 "/api/connection",
@@ -409,7 +415,10 @@ mod tests {
             ["/api/version", "/api/connection", "/api/printerprofiles"]
         );
         for request in &seen {
-            assert_eq!(request.headers.get("x-api-key").map(String::as_str), Some(KEY));
+            assert_eq!(
+                request.headers.get("x-api-key").map(String::as_str),
+                Some(KEY)
+            );
             // The key travels only as a header, never in the URL.
             assert!(!request.path.contains(KEY));
         }
@@ -433,13 +442,11 @@ mod tests {
     async fn a_403_or_401_is_a_credential_error_not_a_reachability_one() {
         for status in [403, 401] {
             let (port, _) = serve(vec![("/api/version", status, String::new())]);
-            let error = OctoPrintConnection::new(
-                config("127.0.0.1", port, false),
-                Some(KEY.to_string()),
-            )
-            .probe()
-            .await
-            .unwrap_err();
+            let error =
+                OctoPrintConnection::new(config("127.0.0.1", port, false), Some(KEY.to_string()))
+                    .probe()
+                    .await
+                    .unwrap_err();
             assert_eq!(error, ConnectionError::Auth(format!("HTTP {status}")));
             assert!(!error.to_string().contains(KEY));
         }
@@ -458,14 +465,15 @@ mod tests {
     #[tokio::test]
     async fn a_redirect_is_not_followed_so_the_key_cannot_leave_the_host() {
         let (port, seen) = serve(vec![("/api/version", 302, String::new())]);
-        let error = OctoPrintConnection::new(
-            config("127.0.0.1", port, false),
-            Some(KEY.to_string()),
-        )
-        .probe()
-        .await
-        .unwrap_err();
-        assert_eq!(error, ConnectionError::Protocol("unexpected HTTP 302".into()));
+        let error =
+            OctoPrintConnection::new(config("127.0.0.1", port, false), Some(KEY.to_string()))
+                .probe()
+                .await
+                .unwrap_err();
+        assert_eq!(
+            error,
+            ConnectionError::Protocol("unexpected HTTP 302".into())
+        );
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
@@ -481,7 +489,10 @@ mod tests {
             .probe()
             .await
             .unwrap_err();
-        assert!(matches!(error, ConnectionError::Unreachable(_)), "{error:?}");
+        assert!(
+            matches!(error, ConnectionError::Unreachable(_)),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -492,16 +503,15 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error,
-            ConnectionError::Unreachable("HTTPS connections are not supported by this build".into())
+            ConnectionError::Unreachable(
+                "HTTPS connections are not supported by this build".into()
+            )
         );
     }
 
     async fn first_two(
         connection: OctoPrintConnection,
-    ) -> (
-        Vec<ConnectionObservation>,
-        Result<(), ConnectionError>,
-    ) {
+    ) -> (Vec<ConnectionObservation>, Result<(), ConnectionError>) {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let task = tokio::spawn(async move { connection.subscribe(tx).await });
         let mut observations = Vec::new();
@@ -519,7 +529,11 @@ mod tests {
     #[tokio::test]
     async fn a_poll_sends_converted_telemetry_then_health() {
         let (port, seen) = serve(vec![
-            ("/api/job", 200, job_body("Printing", serde_json::json!(42.5))),
+            (
+                "/api/job",
+                200,
+                job_body("Printing", serde_json::json!(42.5)),
+            ),
             (PRINTER_PATH, 200, printer_body()),
         ]);
         let connection =
@@ -542,17 +556,21 @@ mod tests {
                 ..
             }
         ));
-        assert!(seen
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.headers.get("x-api-key").map(String::as_str) == Some(KEY)));
+        assert!(seen.lock().unwrap().iter().all(|request| request
+            .headers
+            .get("x-api-key")
+            .map(String::as_str)
+            == Some(KEY)));
     }
 
     #[tokio::test]
     async fn a_409_from_api_printer_keeps_polling_with_no_temperatures() {
         let (port, _) = serve(vec![
-            ("/api/job", 200, job_body("Offline", serde_json::Value::Null)),
+            (
+                "/api/job",
+                200,
+                job_body("Offline", serde_json::Value::Null),
+            ),
             (PRINTER_PATH, 409, "Printer is not operational".into()),
         ]);
         let connection = OctoPrintConnection::new(config("127.0.0.1", port, false), None)

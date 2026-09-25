@@ -56,7 +56,9 @@ impl OctoPrintStub {
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { return };
-                    let Ok(clone) = stream.try_clone() else { continue };
+                    let Ok(clone) = stream.try_clone() else {
+                        continue;
+                    };
                     let mut reader = BufReader::new(clone);
                     let mut request_line = String::new();
                     if reader.read_line(&mut request_line).is_err() {

@@ -143,6 +143,9 @@ pub fn telemetry_from(job: &Value, printer: Option<&Value>) -> PrinterTelemetry 
         // a normal state, not a missing reading to warn about.
         bed_temp_c: reading("bed", "actual"),
         bed_target_c: reading("bed", "target"),
+        // Multi-tool OctoPrint (tool1..toolN) is a follow-up; tool0 is
+        // reported through the nozzle fields above.
+        tools: Vec::new(),
         print_duration_s: job["progress"]["printTime"].as_f64(),
     }
 }
@@ -205,12 +208,7 @@ mod tests {
     }
 
     fn idle() -> Value {
-        job(
-            "Operational",
-            Value::Null,
-            Value::Null,
-            Value::Null,
-        )
+        job("Operational", Value::Null, Value::Null, Value::Null)
     }
 
     fn printer_with_both_heaters() -> Value {
@@ -269,7 +267,10 @@ mod tests {
             ("Closed", ConnectionState::Offline),
             ("Offline after error", ConnectionState::Error),
             ("Error", ConnectionState::Error),
-            ("Error: Too many consecutive timeouts", ConnectionState::Error),
+            (
+                "Error: Too many consecutive timeouts",
+                ConnectionState::Error,
+            ),
             ("Opening serial connection", ConnectionState::Connecting),
             ("Detecting serial connection", ConnectionState::Connecting),
             ("Connecting", ConnectionState::Connecting),
@@ -353,7 +354,8 @@ mod tests {
 
     #[test]
     fn a_profile_with_no_heated_bed_reports_no_bed_temperature() {
-        let printer = serde_json::json!({"temperature": {"tool0": {"actual": 200.0, "target": 200.0}}});
+        let printer =
+            serde_json::json!({"temperature": {"tool0": {"actual": 200.0, "target": 200.0}}});
         let telemetry = telemetry_from(&printing(5.0), Some(&printer));
         assert_eq!(telemetry.nozzle_temp_c, Some(200.0));
         assert_eq!(telemetry.bed_temp_c, None);

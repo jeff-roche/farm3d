@@ -325,6 +325,7 @@ fn empty_telemetry() -> PrinterTelemetry {
         bed_temp_c: None,
         bed_target_c: None,
         print_duration_s: None,
+        tools: Vec::new(),
     }
 }
 
@@ -1001,6 +1002,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
             false,
@@ -1028,6 +1030,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
             false,
@@ -1128,6 +1131,7 @@ mod tests {
             bed_temp_c: None,
             bed_target_c: None,
             print_duration_s: None,
+            tools: Vec::new(),
         };
         let live = merge_status(
             None,
@@ -1168,6 +1172,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
             false,
@@ -1213,6 +1218,7 @@ mod tests {
                         bed_temp_c: None,
                         bed_target_c: None,
                         print_duration_s: None,
+                        tools: Vec::new(),
                     },
                     last_observed_at: "2026-09-18T12:00:00Z".to_string(),
                 },
@@ -1284,6 +1290,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1317,6 +1324,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1353,6 +1361,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1473,6 +1482,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1493,6 +1503,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1564,6 +1575,7 @@ mod tests {
                 bed_temp_c: None,
                 bed_target_c: None,
                 print_duration_s: None,
+                tools: Vec::new(),
             }),
             PrinterSetupFacts::complete(),
         );
@@ -1602,6 +1614,7 @@ mod tests {
                         bed_temp_c: None,
                         bed_target_c: None,
                         print_duration_s: None,
+                        tools: Vec::new(),
                     },
                     last_observed_at: "2026-09-18T12:00:00Z".to_string(),
                 },

@@ -127,6 +127,45 @@ describe("Monitor store", () => {
     expect(view.accessibleSummary).toBe("North Bay; Printing; Host print: Calibration cube · 42%");
   });
 
+  it.each([
+    ["finished", "complete", "Finished", "bedNeedsClearing", "Bed needs clearing"],
+    ["cancelled", "cancelled", "Cancelled", "bedNeedsClearing", "Bed needs clearing"],
+    ["failed", "error", "Print failed", "printFailed", "Check the printer"],
+  ] as const)("presents an ended %s job as a distinct non-ready state", (state, hostName, label, reason, summary) => {
+    // A0.1 (#9), decision B1.
+    const store = monitor([printer({
+      name: "North Bay",
+      runtimeStatus: status({
+        telemetry: { hostActivity: state, hostActivityName: hostName },
+        operationalState: state,
+        readiness: { state: "notReady", reason },
+        freshness: "fresh",
+      }),
+    })]);
+
+    const [view] = store.visiblePrinters();
+    expect(view.operationalLabel).toBe(label);
+    expect(view.statusSummary).toBe(summary);
+    expect(view.accessibleSummary).toBe(`North Bay; ${label}; ${summary}`);
+    store.setFilter("ready");
+    expect(store.visiblePrinters()).toHaveLength(0);
+  });
+
+  it("carries every tool's reading and counts an absent tool reading as missing", () => {
+    // A0.1 (#9), decision B2.
+    const complete = { nozzleTempC: 24, nozzleTargetC: 0, bedTempC: 22, bedTargetC: 0 };
+    const tools = [{ index: 0, tempC: 24, targetC: 0 }, { index: 1, tempC: 25, targetC: 0 }];
+    const store = monitor([
+      printer({ id: "a", name: "A", runtimeStatus: status({ telemetry: { hostActivity: "idle", ...complete, tools } }) }),
+      printer({ id: "b", name: "B", runtimeStatus: status({ telemetry: { hostActivity: "idle", ...complete, tools: [...tools, { index: 2 }] } }) }),
+    ]);
+
+    const [a, b] = store.visiblePrinters();
+    expect(a.readings.tools).toEqual(tools);
+    expect(a.hasMissingReadings).toBe(false);
+    expect(b.hasMissingReadings).toBe(true);
+  });
+
   it("exposes every durable Printer name to the add flow without leaking durable records into the Dashboard", () => {
     const store = monitor([printer({ id: "a", name: "North Bay" }), printer({ id: "b", name: "South Bay" })]);
 

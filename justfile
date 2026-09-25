@@ -27,6 +27,27 @@ test-orca:
         --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing --test p5_tracer \
         real_orca -- --ignored --test-threads=1
 
+# Run the ignored A0.1 Moonraker live checks: probe (read-only), watch (read-only), or drive (sends M112/FIRMWARE_RESTART). FARM3D_MOONRAKER_HOST names the instance
+moonraker-live mode="probe":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_MOONRAKER_HOST:-}" ]; then
+        echo "error: set FARM3D_MOONRAKER_HOST, e.g. FARM3D_MOONRAKER_HOST=192.0.2.10 just moonraker-live probe" >&2
+        exit 1
+    fi
+    case "{{ mode }}" in
+        probe) test=live_probe ;;
+        watch) test=live_watch ;;
+        drive) test=live_lifecycle_drive ;;
+        *) echo "error: mode must be probe, watch, or drive" >&2; exit 2 ;;
+    esac
+    cargo test --manifest-path src-tauri/Cargo.toml --test a0_moonraker_live "$test" \
+        -- --ignored --exact --nocapture
+
+# Manage the local Klipper + Moonraker simulator (build, up [trusted|apikey], down, status, restart klipper, ...)
+moonraker-sim *args:
+    scripts/moonraker-sim/sim.sh {{ args }}
+
 # Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
 test-octoprint-live:
     #!/usr/bin/env bash
