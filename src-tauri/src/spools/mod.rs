@@ -324,8 +324,10 @@ fn validate_len(
 /// D2: `materialOther` must be present and 1-32 chars when the family is
 /// `Other`; forbidden for every other family. Assumes the caller has
 /// already normalized (trimmed, blank-to-`None`) `materialOther` — see
-/// [`SpoolFields::normalize`].
-fn validate_material_other(
+/// [`SpoolFields::normalize`]. `pub(crate)` so `slicing::external` (D16)
+/// can reuse the same rule for an external Slice Revision's confirmed
+/// `materialOther` fact, rather than duplicating it.
+pub(crate) fn validate_material_other(
     family: MaterialFamily,
     material_other: &Option<String>,
 ) -> Result<(), RepositoryError> {

@@ -565,14 +565,19 @@ fn storage_error(error: crate::persistence::StorageError) -> CommandError {
 
 /// Resolves `target`: a Printer through the Printer store and
 /// `catalog::resolve`, a catalog profile through `resolve_catalog_ref`. A
-/// missing Printer or catalog entry is `NOT_FOUND`. P5 slices with exactly
-/// one nozzle (D4), so a multi-nozzle profile is `VALIDATION`.
-pub fn resolve_target(
+/// missing Printer or catalog entry is `NOT_FOUND`; a Printer profile the
+/// catalog doesn't recognize (and that has no last-known-good fallback) is
+/// `VALIDATION` on `field_path`. Shared by [`resolve_target`] (slicing's
+/// single-nozzle rule applies after this returns) and
+/// [`resolve_printer_profile_fact`] (D16's external revisions, which have
+/// no such rule).
+fn resolve_profile(
     storage: &Arc<Storage>,
     catalog: &Catalog,
     target: &SliceTarget,
+    field_path: &str,
 ) -> Result<ResolvedTarget, CommandError> {
-    let resolved = match target {
+    match target {
         SliceTarget::Printer { printer_id } => {
             let stored = PrinterRepository::new(Arc::clone(storage))
                 .get(printer_id)
@@ -586,7 +591,7 @@ pub fn resolve_target(
             );
             if !catalog_found && stored.last_known_good.is_none() {
                 return Err(CommandError::validation_at(
-                    "target",
+                    field_path,
                     "This Printer's profile is not in the printer catalog.",
                 ));
             }
@@ -596,20 +601,20 @@ pub fn resolve_target(
                 .0
                 .and_then(|variant| catalog_ref_for(catalog, variant))
                 .unwrap_or(stored.catalog_ref);
-            ResolvedTarget {
+            Ok(ResolvedTarget {
                 printer_id: Some(stored.id),
                 catalog_ref,
                 machine_preset: resolution.variant_label,
                 profile: resolution.profile,
                 overridden_fields: resolution.overridden_fields,
                 unknown_override_keys: resolution.unknown_override_keys,
-            }
+            })
         }
         SliceTarget::Profile { catalog_ref } => {
             let (variant, _) = resolve_catalog_ref(catalog, catalog_ref);
             let variant =
                 variant.ok_or_else(|| CommandError::not_found(catalog_ref.variant.clone()))?;
-            ResolvedTarget {
+            Ok(ResolvedTarget {
                 printer_id: None,
                 catalog_ref: catalog_ref_for(catalog, variant)
                     .unwrap_or_else(|| catalog_ref.clone()),
@@ -617,9 +622,20 @@ pub fn resolve_target(
                 profile: PrinterProfile::from(variant),
                 overridden_fields: Vec::new(),
                 unknown_override_keys: Vec::new(),
-            }
+            })
         }
-    };
+    }
+}
+
+/// Resolves `target` for slicing: [`resolve_profile`], then P5's D4 rule
+/// that farm3d slices only for printers with exactly one nozzle (a
+/// multi-nozzle profile is `VALIDATION` on `target`).
+pub fn resolve_target(
+    storage: &Arc<Storage>,
+    catalog: &Catalog,
+    target: &SliceTarget,
+) -> Result<ResolvedTarget, CommandError> {
+    let resolved = resolve_profile(storage, catalog, target, "target")?;
     if resolved.profile.nozzle_diameter_mm.len() != 1 {
         return Err(CommandError::validation_at(
             "target",
@@ -627,6 +643,19 @@ pub fn resolve_target(
         ));
     }
     Ok(resolved)
+}
+
+/// D16: resolves an external Slice Revision's confirmed Printer Profile
+/// fact (`facts.printerProfile`) to a profile snapshot at creation. Unlike
+/// [`resolve_target`], there is no single-nozzle rule — nothing is sliced —
+/// so a multi-nozzle profile is accepted. Resolution errors are reported on
+/// `facts.printerProfile`, not `target`.
+pub fn resolve_printer_profile_fact(
+    storage: &Arc<Storage>,
+    catalog: &Catalog,
+    target: &SliceTarget,
+) -> Result<ResolvedTarget, CommandError> {
+    resolve_profile(storage, catalog, target, "facts.printerProfile")
 }
 
 /// The catalog reference that names `variant` itself: its model's vendor,
@@ -748,7 +777,8 @@ pub fn list_slice_options(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::contracts::command::ErrorCode;
+    use crate::contracts::command::{ErrorCode, JsonValue};
+    use crate::printers::StoredPrinter;
     use serde_json::json;
 
     pub(crate) fn fixtures_dir() -> PathBuf {
@@ -1127,6 +1157,123 @@ pub(crate) mod tests {
         assert_eq!(
             material_family_for("OTHER"),
             (MaterialFamily::Other, Some("OTHER".to_string()))
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // D16: `resolve_target` vs `resolve_printer_profile_fact`
+    // -----------------------------------------------------------------
+
+    fn a_multi_nozzle_catalog() -> Catalog {
+        use crate::catalog::{BedShape, CatalogModel};
+        Catalog {
+            generated_at: "2026-09-24T00:00:00Z".to_string(),
+            source_tag: "v-test".to_string(),
+            notice: "test".to_string(),
+            models: vec![CatalogModel {
+                model_id: "TestVendor-MN".to_string(),
+                vendor: "TestVendor".to_string(),
+                model: "Multi Nozzle Printer".to_string(),
+                variants: vec![CatalogVariant {
+                    variant: "Multi Nozzle 0.4/0.6".to_string(),
+                    printer_variant: "0.4/0.6".to_string(),
+                    bed_shape: BedShape::Rectangular {
+                        width_mm: 256.0,
+                        depth_mm: 256.0,
+                        origin_x_mm: 0.0,
+                        origin_y_mm: 0.0,
+                    },
+                    printable_height_mm: 256.0,
+                    bed_exclude_areas: vec![],
+                    default_bed_type: "4".to_string(),
+                    nozzle_diameter_mm: vec![0.4, 0.6],
+                    nozzle_type: "hardened_steel".to_string(),
+                    gcode_flavor: "klipper".to_string(),
+                    has_auxiliary_fan: true,
+                    supports_air_filtration: true,
+                    supports_multi_filament: false,
+                    suggested_host_type: None,
+                }],
+            }],
+        }
+    }
+
+    fn a_multi_nozzle_ref() -> CatalogRef {
+        CatalogRef {
+            vendor: "TestVendor".to_string(),
+            model: "Multi Nozzle Printer".to_string(),
+            variant: "Multi Nozzle 0.4/0.6".to_string(),
+            model_id: "TestVendor-MN".to_string(),
+            printer_variant: "0.4/0.6".to_string(),
+        }
+    }
+
+    /// D4's single-nozzle rule is slicing-only: `resolve_target` still
+    /// rejects a multi-nozzle profile, but D16's
+    /// `resolve_printer_profile_fact` accepts the very same profile,
+    /// because an external revision's confirmed Printer Profile is never
+    /// sliced.
+    #[test]
+    fn the_single_nozzle_rule_applies_to_slicing_only() {
+        let catalog = a_multi_nozzle_catalog();
+        let target = SliceTarget::Profile {
+            catalog_ref: a_multi_nozzle_ref(),
+        };
+        let (_temp, _lease, storage) = crate::test_storage();
+
+        let error = resolve_target(&storage, &catalog, &target).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Validation);
+        assert_eq!(
+            error.details.unwrap()["fieldPath"],
+            JsonValue::String("target".to_string())
+        );
+
+        let resolved = resolve_printer_profile_fact(&storage, &catalog, &target)
+            .expect("a multi-nozzle profile is accepted for an external revision");
+        assert_eq!(resolved.profile.nozzle_diameter_mm, vec![0.4, 0.6]);
+    }
+
+    /// The same "Printer profile not in catalog" resolution failure is
+    /// reported on different field paths depending on which caller asked:
+    /// `target` for slicing, `facts.printerProfile` for D16's external
+    /// revisions.
+    #[test]
+    fn resolution_errors_land_on_different_field_paths() {
+        // Any catalog will do: the Printer's own `catalogRef` names a
+        // vendor/model this catalog doesn't have, so resolution fails
+        // regardless of what else is in it.
+        let catalog = a_multi_nozzle_catalog();
+        let (_temp, _lease, storage) = crate::test_storage();
+        let printer = PrinterRepository::new(Arc::clone(&storage))
+            .create(StoredPrinter {
+                id: "printer-unresolvable".to_string(),
+                name: "Unresolvable".to_string(),
+                catalog_ref: CatalogRef {
+                    vendor: "Nope".to_string(),
+                    model: "Nope".to_string(),
+                    variant: "Nope".to_string(),
+                    model_id: "Nope-Nope".to_string(),
+                    printer_variant: "0.4".to_string(),
+                },
+                ..Default::default()
+            })
+            .expect("create printer");
+        let target = SliceTarget::Printer {
+            printer_id: printer.id.clone(),
+        };
+
+        let slicing_error = resolve_target(&storage, &catalog, &target).unwrap_err();
+        assert_eq!(slicing_error.code, ErrorCode::Validation);
+        assert_eq!(
+            slicing_error.details.unwrap()["fieldPath"],
+            JsonValue::String("target".to_string())
+        );
+
+        let external_error = resolve_printer_profile_fact(&storage, &catalog, &target).unwrap_err();
+        assert_eq!(external_error.code, ErrorCode::Validation);
+        assert_eq!(
+            external_error.details.unwrap()["fieldPath"],
+            JsonValue::String("facts.printerProfile".to_string())
         );
     }
 }

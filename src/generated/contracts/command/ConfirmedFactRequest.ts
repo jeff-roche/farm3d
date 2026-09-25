@@ -3,7 +3,7 @@
 /**
  * D16: one fact of `create_external_slice_revision`'s request — the
  * operator either confirms a value or leaves it absent. There is no way
- * to say `farm3dInput` here, matching [`super::facts::ConfirmedFact`],
- * which this converts to.
+ * to say `farm3dInput` here, matching the domain's `ConfirmedFact`, which
+ * this converts to.
  */
 export type ConfirmedFactRequest<T> = { "kind": "confirmed", value: T, } | { "kind": "absent" };

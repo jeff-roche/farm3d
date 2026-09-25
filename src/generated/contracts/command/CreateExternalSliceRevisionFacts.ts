@@ -5,8 +5,9 @@ import type { ConfirmedFactRequest } from "./ConfirmedFactRequest";
 
 /**
  * D16 `create_external_slice_revision`'s `facts`. The Printer Profile is
- * confirmed as a [`SliceTarget`] (a Printer or a catalog profile),
- * resolved to a [`super::ProfileSnapshot`] at creation; the other three
- * facts are confirmed directly.
+ * confirmed as a SliceTarget (a Printer or a catalog profile), resolved to
+ * a profile snapshot at creation; the other three facts are confirmed
+ * directly. Confirmed diameters and materialOther are validated (D16)
+ * before the request is ever claimed.
  */
 export type CreateExternalSliceRevisionFacts = { printerProfile: ConfirmedFactRequest<SliceTarget>, nozzleDiameterMm: ConfirmedFactRequest<number>, materialFamily: ConfirmedFactRequest<MaterialFamily>, materialOther?: string, filamentDiameterMm: ConfirmedFactRequest<number>, };

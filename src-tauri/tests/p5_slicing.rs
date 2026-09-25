@@ -37,7 +37,7 @@ use tauri::test::{MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
 use tauri::Listener;
 
-use common::{a_catalog, a_ref_json, invoke, FakeModelFileIo};
+use common::{a_catalog, a_ref_json, a_stored_printer, invoke, FakeModelFileIo};
 
 const FAKE_ORCA: &str = env!("CARGO_BIN_EXE_fake-orca");
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -142,6 +142,7 @@ impl Running {
                 farm3d_lib::library::commands::check_linked_sources,
                 farm3d_lib::library::commands::delete_model,
                 farm3d_lib::library::commands::list_library,
+                farm3d_lib::library::commands::list_model_revisions,
                 farm3d_lib::slicing::commands::get_slicer_runtime,
                 farm3d_lib::slicing::commands::check_slicer_runtime,
                 farm3d_lib::slicing::commands::pick_slicer_engine,
@@ -389,6 +390,21 @@ impl Running {
             .collect()
     }
 
+    /// The `gcode_sha256` a Slice Revision row was stored with (there is no
+    /// IPC command that exposes it directly).
+    fn gcode_sha256(&self, revision_id: &str) -> String {
+        self.services
+            .storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT gcode_sha256 FROM slice_revisions WHERE id = ?1",
+                    [revision_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap()
+    }
+
     fn blob(&self, sha256: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         self.services
@@ -492,16 +508,20 @@ fn absent_facts() -> Value {
 
 /// D16: `create_external_slice_revision`'s `facts` with every fact
 /// confirmed to a fixed, arbitrary value, regardless of what the source
-/// G-code itself claims.
+/// G-code itself claims. The numbers (0.6, 2.85) and family (PETG) are
+/// deliberately values none of the G-code library fixtures claim (they
+/// only ever claim `nozzle_diameter = 0.4`, `filament_type = PLA`), so a
+/// claim-to-fact leak would show up as a mismatch rather than an
+/// accidental match.
 fn confirmed_facts() -> Value {
     json!({
         "printerProfile": {
             "kind": "confirmed",
             "value": { "kind": "profile", "catalogRef": a_ref_json() },
         },
-        "nozzleDiameterMm": { "kind": "confirmed", "value": 0.4 },
+        "nozzleDiameterMm": { "kind": "confirmed", "value": 0.6 },
         "materialFamily": { "kind": "confirmed", "value": "PETG" },
-        "filamentDiameterMm": { "kind": "confirmed", "value": 1.75 },
+        "filamentDiameterMm": { "kind": "confirmed", "value": 2.85 },
     })
 }
 
@@ -1532,9 +1552,9 @@ fn an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_sour
             "{fact}: {confirmed}"
         );
     }
-    assert_eq!(confirmed["facts"]["nozzleDiameterMm"]["value"], 0.4);
+    assert_eq!(confirmed["facts"]["nozzleDiameterMm"]["value"], 0.6);
     assert_eq!(confirmed["facts"]["materialFamily"]["value"], "PETG");
-    assert_eq!(confirmed["facts"]["filamentDiameterMm"]["value"], 1.75);
+    assert_eq!(confirmed["facts"]["filamentDiameterMm"]["value"], 2.85);
     assert_eq!(
         confirmed["facts"]["printerProfile"]["value"]["catalogRef"],
         a_ref_json()
@@ -1554,6 +1574,14 @@ fn an_external_revision_takes_only_confirmed_or_absent_facts_and_reuses_the_sour
     assert_eq!(blobs_after_external, blobs_after_import);
     assert_eq!(revision_count, 2);
     assert_eq!(running.blob(&source_sha256), source_bytes);
+
+    // M2: each external revision's `gcode_sha256` is the source revision's
+    // own sha256, fetched via IPC (`model["currentRevision"]["sha256"]`) —
+    // not merely a byte-for-byte-equal but separately-identified blob.
+    for revision in [&absent, &confirmed] {
+        let revision_id = revision["id"].as_str().unwrap();
+        assert_eq!(running.gcode_sha256(revision_id), source_sha256);
+    }
 
     let events = running.events.lock().unwrap().clone();
     for revision in [&absent, &confirmed] {
@@ -1580,6 +1608,15 @@ fn external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture() {
     gcode_fixtures.sort();
     assert!(!gcode_fixtures.is_empty());
 
+    // The confirmed constants below (0.6 mm, ABS, 2.85 mm) are chosen so no
+    // fixture's own claim equals them, but that's re-checked dynamically
+    // here rather than merely assumed: each fixture's actual parsed claims
+    // (D11) are fetched via `list_model_revisions`, and a confirmed fact is
+    // asserted to never equal the matching claim, whatever it is.
+    const CONFIRMED_NOZZLE_MM: f64 = 0.6;
+    const CONFIRMED_MATERIAL: &str = "ABS";
+    const CONFIRMED_FILAMENT_MM: f64 = 2.85;
+
     for (fixture_index, source) in gcode_fixtures.iter().enumerate() {
         let name = source.file_name().unwrap().to_str().unwrap();
         let model = running.import(
@@ -1587,6 +1624,33 @@ fn external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture() {
             "managed",
         );
         let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+        let revisions = running.ok("list_model_revisions", json!({ "modelId": model["id"] }));
+        let claims = revisions[0]["inspection"]["claims"].as_array().unwrap();
+        let claim = |key: &str| -> Option<String> {
+            claims
+                .iter()
+                .find(|claim| claim["key"] == key)
+                .map(|claim| claim["value"].as_str().unwrap().to_string())
+        };
+        let nozzle_claim_mm: Option<f64> = claim("nozzle_diameter").and_then(|v| v.parse().ok());
+        let material_claim: Option<String> = claim("filament_type");
+        // `filament_diameter` isn't in the G-code inspector's claim
+        // allowlist (`CLAIM_KEYS`), so it can never be claimed at all —
+        // there is nothing for `filamentDiameterMm` to leak from.
+        assert!(claim("filament_diameter").is_none(), "{name}");
+        if let Some(nozzle_claim_mm) = nozzle_claim_mm {
+            assert_ne!(
+                CONFIRMED_NOZZLE_MM, nozzle_claim_mm,
+                "{name}: the confirmed nozzle coincides with the file's own claim"
+            );
+        }
+        if let Some(material_claim) = &material_claim {
+            assert_ne!(
+                CONFIRMED_MATERIAL, material_claim,
+                "{name}: the confirmed material coincides with the file's own claim"
+            );
+        }
 
         for mask in 0u8..16 {
             let bit = |n: u8| mask & (1 << n) != 0;
@@ -1602,9 +1666,9 @@ fn external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture() {
                     bit(0),
                     json!({ "kind": "profile", "catalogRef": a_ref_json() }),
                 ),
-                "nozzleDiameterMm": confirmed_or_absent(bit(1), json!(0.4)),
-                "materialFamily": confirmed_or_absent(bit(2), json!("PLA")),
-                "filamentDiameterMm": confirmed_or_absent(bit(3), json!(1.75)),
+                "nozzleDiameterMm": confirmed_or_absent(bit(1), json!(CONFIRMED_NOZZLE_MM)),
+                "materialFamily": confirmed_or_absent(bit(2), json!(CONFIRMED_MATERIAL)),
+                "filamentDiameterMm": confirmed_or_absent(bit(3), json!(CONFIRMED_FILAMENT_MM)),
             });
             let operation_id = format!("prop-{fixture_index}-{mask}");
             let revision = running.create_external(&operation_id, &source_revision_id, facts);
@@ -1643,13 +1707,22 @@ fn external_facts_never_pick_up_a_files_own_claims_for_every_gcode_fixture() {
                 );
             }
             if bit(1) {
-                assert_eq!(revision["facts"]["nozzleDiameterMm"]["value"], 0.4);
+                assert_eq!(
+                    revision["facts"]["nozzleDiameterMm"]["value"],
+                    CONFIRMED_NOZZLE_MM
+                );
             }
             if bit(2) {
-                assert_eq!(revision["facts"]["materialFamily"]["value"], "PLA");
+                assert_eq!(
+                    revision["facts"]["materialFamily"]["value"],
+                    CONFIRMED_MATERIAL
+                );
             }
             if bit(3) {
-                assert_eq!(revision["facts"]["filamentDiameterMm"]["value"], 1.75);
+                assert_eq!(
+                    revision["facts"]["filamentDiameterMm"]["value"],
+                    CONFIRMED_FILAMENT_MM
+                );
             }
             assert_eq!(
                 revision["requiresManualPrinterSelection"],
@@ -1678,6 +1751,20 @@ fn a_non_gcode_source_is_rejected_and_the_operation_id_can_be_reused() {
     assert_eq!(error["code"], "VALIDATION", "{error}");
     assert_eq!(error["details"]["fieldPath"], "sourceRevisionId");
     assert_eq!(running.slicing()["revisions"], json!([]));
+    // M1: a rejection emits no revision event (the startup runtime probe's
+    // own `slicing.runtime.changed` is unrelated background noise).
+    assert!(
+        !running
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("slicing.revision.")),
+        "a rejected create_external_slice_revision must emit no slicing.revision.* event"
+    );
 
     // No dangling ledger claim: the same `operationId` works for a real
     // (G-code) source afterward.
@@ -1713,6 +1800,17 @@ fn an_idempotent_retry_returns_the_same_revision_and_creates_nothing_new() {
             .len(),
         1
     );
+    // M1: the replay emits no second `slicing.revision.created`.
+    let revision_id = first["id"].as_str().unwrap();
+    let created_count = running
+        .events_of(revision_id)
+        .into_iter()
+        .filter(|event| event["type"] == "slicing.revision.created")
+        .count();
+    assert_eq!(
+        created_count, 1,
+        "a replay must not emit a second slicing.revision.created"
+    );
 
     // The same id with a DIFFERENT request is refused, and burns nothing.
     let error = running.error(
@@ -1727,6 +1825,14 @@ fn an_idempotent_retry_returns_the_same_revision_and_creates_nothing_new() {
     assert_eq!(error["details"]["fieldPath"], "operationId");
     let (_, revision_count_after_conflict) = running.stored_counts();
     assert_eq!(revision_count_after_conflict, revision_count_after_second);
+    // M1: the rejected conflict emits nothing (still just the one
+    // `slicing.revision.created` from the original creation).
+    let created_count_after_conflict = running
+        .events_of(revision_id)
+        .into_iter()
+        .filter(|event| event["type"] == "slicing.revision.created")
+        .count();
+    assert_eq!(created_count_after_conflict, 1);
 }
 
 #[test]
@@ -1734,21 +1840,17 @@ fn an_external_revision_is_unchanged_after_a_restart() {
     let farm = Farm::new();
     let first = farm.start();
     let model = first.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_sha256 = model["currentRevision"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
     let revision_before =
         first.create_external("ext-restart", &source_revision_id, confirmed_facts());
     let revision_id = revision_before["id"].as_str().unwrap().to_string();
-    let gcode_sha256: String = first
-        .services
-        .storage
-        .read(|connection| {
-            connection.query_row(
-                "SELECT gcode_sha256 FROM slice_revisions WHERE id = ?1",
-                [&revision_id],
-                |row| row.get(0),
-            )
-        })
-        .unwrap();
+    let gcode_sha256 = first.gcode_sha256(&revision_id);
+    // M2: the revision's stored hash is the source revision's own sha256.
+    assert_eq!(gcode_sha256, source_sha256);
     let gcode_before = first.blob(&gcode_sha256);
     drop(first);
 
@@ -1758,7 +1860,244 @@ fn an_external_revision_is_unchanged_after_a_restart() {
         json!({ "sliceRevisionId": revision_id }),
     );
     assert_eq!(revision_before, revision_after);
+    // M2, after restart: still the source revision's sha256, unchanged.
+    assert_eq!(second.gcode_sha256(&revision_id), source_sha256);
     assert_eq!(second.blob(&gcode_sha256), gcode_before);
+}
+
+/// Asserts that `body` is rejected as `VALIDATION` at `field_path`, and
+/// that the attempt left no ledger claim: the same `operationId` works
+/// afterward for a request that would otherwise be a legitimate first use.
+fn assert_validation_rejection_leaves_no_claim(
+    running: &Running,
+    operation_id: &str,
+    field_path: &str,
+    bad_facts: Value,
+    good_facts: Value,
+    source_revision_id: &str,
+) {
+    let error = running.error(
+        "create_external_slice_revision",
+        json!({
+            "operationId": operation_id,
+            "sourceRevisionId": source_revision_id,
+            "facts": bad_facts,
+        }),
+    );
+    assert_eq!(error["code"], "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], field_path, "{error}");
+
+    let revision = running.create_external(operation_id, source_revision_id, good_facts);
+    assert_eq!(revision["kind"], "external");
+}
+
+#[test]
+fn confirmed_diameters_out_of_range_are_rejected_before_any_claim() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    // NaN and infinity have no JSON representation (`serde_json` encodes
+    // them as `null`, which fails to deserialize as `f64` before this
+    // command ever runs), so only finite-but-out-of-range values are
+    // reachable over the wire; `validate_diameter_mm`'s `is_finite` check
+    // is unit-tested directly in `slicing::external` instead (see below).
+    for (bad_nozzle, label) in [(0.0, "zero"), (-0.4, "negative"), (5.1, "over 5mm")] {
+        let mut facts = absent_facts();
+        facts["nozzleDiameterMm"] = json!({ "kind": "confirmed", "value": bad_nozzle });
+        assert_validation_rejection_leaves_no_claim(
+            &running,
+            &format!("ext-bad-nozzle-{label}"),
+            "facts.nozzleDiameterMm",
+            facts,
+            absent_facts(),
+            &source_revision_id,
+        );
+    }
+
+    for (bad_filament, label) in [(0.0, "zero"), (-1.75, "negative"), (5.5, "over 5mm")] {
+        let mut facts = absent_facts();
+        facts["filamentDiameterMm"] = json!({ "kind": "confirmed", "value": bad_filament });
+        assert_validation_rejection_leaves_no_claim(
+            &running,
+            &format!("ext-bad-filament-{label}"),
+            "facts.filamentDiameterMm",
+            facts,
+            absent_facts(),
+            &source_revision_id,
+        );
+    }
+}
+
+#[test]
+fn confirmed_material_other_follows_the_spool_rule() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    // OTHER with no materialOther.
+    let mut facts = absent_facts();
+    facts["materialFamily"] = json!({ "kind": "confirmed", "value": "OTHER" });
+    assert_validation_rejection_leaves_no_claim(
+        &running,
+        "ext-other-missing",
+        "facts.materialOther",
+        facts,
+        absent_facts(),
+        &source_revision_id,
+    );
+
+    // OTHER with a materialOther that's too long (33 characters).
+    let mut facts = absent_facts();
+    facts["materialFamily"] = json!({ "kind": "confirmed", "value": "OTHER" });
+    facts["materialOther"] = json!("x".repeat(33));
+    assert_validation_rejection_leaves_no_claim(
+        &running,
+        "ext-other-too-long",
+        "facts.materialOther",
+        facts,
+        absent_facts(),
+        &source_revision_id,
+    );
+
+    // A non-OTHER family with a materialOther forbids one.
+    let mut facts = absent_facts();
+    facts["materialFamily"] = json!({ "kind": "confirmed", "value": "PLA" });
+    facts["materialOther"] = json!("Wood-filled PLA");
+    assert_validation_rejection_leaves_no_claim(
+        &running,
+        "ext-pla-with-other",
+        "facts.materialOther",
+        facts,
+        absent_facts(),
+        &source_revision_id,
+    );
+
+    // A valid OTHER + materialOther is accepted.
+    let mut facts = absent_facts();
+    facts["materialFamily"] = json!({ "kind": "confirmed", "value": "OTHER" });
+    facts["materialOther"] = json!("Wood-filled PLA");
+    let revision = running.create_external("ext-other-ok", &source_revision_id, facts);
+    assert_eq!(revision["facts"]["materialFamily"]["value"], "OTHER");
+}
+
+// ---------------------------------------------------------------------------
+// D16: the `{kind:"printer", printerId}` branch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_seeded_printer_gives_an_operator_confirmed_printer_profile_fact() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let printer = farm3d_lib::printers::repository::PrinterRepository::new(Arc::clone(
+        &running.services.storage,
+    ))
+    .create(a_stored_printer("printer-external"))
+    .expect("create printer");
+
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    let mut facts = absent_facts();
+    facts["printerProfile"] = json!({
+        "kind": "confirmed",
+        "value": { "kind": "printer", "printerId": printer.id },
+    });
+    let revision = running.create_external("ext-printer", &source_revision_id, facts);
+    assert_eq!(
+        revision["facts"]["printerProfile"]["provenance"],
+        "operatorConfirmed"
+    );
+    assert_eq!(
+        revision["facts"]["printerProfile"]["value"]["catalogRef"],
+        a_ref_json()
+    );
+}
+
+#[test]
+fn an_unknown_printer_id_is_not_found_and_leaves_no_claim() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+
+    let mut facts = absent_facts();
+    facts["printerProfile"] = json!({
+        "kind": "confirmed",
+        "value": { "kind": "printer", "printerId": "no-such-printer" },
+    });
+    let error = running.error(
+        "create_external_slice_revision",
+        json!({
+            "operationId": "ext-unknown-printer",
+            "sourceRevisionId": source_revision_id,
+            "facts": facts.clone(),
+        }),
+    );
+    assert_eq!(error["code"], "NOT_FOUND", "{error}");
+
+    // No dangling claim: the same operationId succeeds for a good request.
+    let revision =
+        running.create_external("ext-unknown-printer", &source_revision_id, absent_facts());
+    assert_eq!(revision["kind"], "external");
+}
+
+// ---------------------------------------------------------------------------
+// M3: a Model with an external Slice Revision can't be deleted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_model_with_an_external_revision_blocks_delete_model() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+    running.create_external("ext-blocks-delete", &source_revision_id, absent_facts());
+
+    let error = running.error(
+        "delete_model",
+        json!({ "id": model["id"], "expectedRevision": model["revision"] }),
+    );
+    assert_eq!(error["code"], "LIFECYCLE_BLOCKED", "{error}");
+    assert_eq!(
+        error["details"]["blockers"][0]["code"],
+        "SLICE_REVISIONS_EXIST"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M4: replaying a create after its revision was deleted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn replaying_after_the_revision_was_deleted_is_not_found() {
+    let farm = Farm::new();
+    let running = farm.start();
+    let model = running.import(&farm.source("orca-cube.gcode", "cube.gcode"), "managed");
+    let source_revision_id = model["currentRevision"]["id"].as_str().unwrap().to_string();
+    let revision = running.create_external(
+        "ext-replay-after-delete",
+        &source_revision_id,
+        absent_facts(),
+    );
+    let revision_id = revision["id"].as_str().unwrap().to_string();
+
+    running.ok(
+        "delete_slice_revision",
+        json!({ "sliceRevisionId": revision_id }),
+    );
+
+    let error = running.error(
+        "create_external_slice_revision",
+        json!({
+            "operationId": "ext-replay-after-delete",
+            "sourceRevisionId": source_revision_id,
+            "facts": absent_facts(),
+        }),
+    );
+    assert_eq!(error["code"], "NOT_FOUND", "{error}");
 }
 
 /// The same IPC path against a real OrcaSlicer (spec D23): `FARM3D_ORCA`
