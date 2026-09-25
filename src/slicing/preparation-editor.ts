@@ -41,7 +41,9 @@ export interface PreparationEditor {
   saving(): boolean;
   notice(): EditorNotice | undefined;
   dismissNotice(): void;
-  /** Saves what is pending without waiting (leaving the workspace). */
+  /** Saves what is pending without waiting (leaving the workspace),
+   *  after any save in flight. A save refused after this is reported
+   *  with `console.warn`, since no notice can show it. */
   dispose(): void;
 }
 
@@ -67,6 +69,8 @@ export function createPreparationEditor(options: PreparationEditorOptions): Prep
   const [notice, setNotice] = createSignal<EditorNotice | undefined>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> | undefined;
+  // Left the workspace: nothing shows the notice any more.
+  let disposed = false;
 
   const clearTimer = () => {
     if (timer !== undefined) clearTimeout(timer);
@@ -78,6 +82,14 @@ export function createPreparationEditor(options: PreparationEditorOptions): Prep
   };
   const drop = (reason: EditorNotice) => {
     clearTimer();
+    if (disposed) {
+      // The app has no notice surface outside the workspace, so say it
+      // where it can still be found rather than lose it silently.
+      console.warn(
+        "Preparation edits made before leaving were not saved:",
+        reason.kind === "conflict" ? "the Preparation was changed elsewhere." : reason.message,
+      );
+    }
     batch(() => {
       setPending(null);
       setNotice(reason);
@@ -121,7 +133,7 @@ export function createPreparationEditor(options: PreparationEditorOptions): Prep
     await inFlight;
     // Edits made while that save was in flight go next, after the usual
     // pause.
-    if (untrack(pending) && timer === undefined) schedule();
+    if (untrack(pending) && timer === undefined && !disposed) schedule();
   }
 
   return {
@@ -145,6 +157,7 @@ export function createPreparationEditor(options: PreparationEditorOptions): Prep
     notice,
     dismissNotice: () => setNotice(undefined),
     dispose() {
+      disposed = true;
       if (untrack(pending)) void flush();
       else clearTimer();
     },

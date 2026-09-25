@@ -66,9 +66,11 @@ export function addPlate(document: PreparationDocument, plateKey: string): Prepa
   return { ...document, plates: [...document.plates, { plateKey, instances: [] }] };
 }
 
-/** A blank name clears it (the plate shows its position instead). */
+/** A blank name clears it (the plate shows its position instead). A long
+ *  one is cut at {@link MAX_PLATE_NAME_CHARS} code points, as the backend
+ *  counts them, so an emoji is never split in half. */
 export function renamePlate(document: PreparationDocument, plateKey: string, name: string): PreparationDocument {
-  const trimmed = name.trim().slice(0, MAX_PLATE_NAME_CHARS);
+  const trimmed = Array.from(name.trim()).slice(0, MAX_PLATE_NAME_CHARS).join("");
   return mapPlates(document, (plate) => {
     if (plate.plateKey !== plateKey || (plate.name ?? "") === trimmed) return plate;
     const { name: _old, ...rest } = plate;

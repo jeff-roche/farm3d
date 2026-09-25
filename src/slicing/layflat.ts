@@ -51,16 +51,22 @@ function multiply(a: Matrix3, b: Matrix3): Matrix3 {
   ))) as Matrix3;
 }
 
-/** `transform` turned so `face` points straight down (−Z), keeping its
- *  turn about Z, its scale, and its XY translation (callers keep the
- *  object's centre with `keepCentre`). Under a non-uniform scale a face's
- *  placed normal is `S⁻¹·n`, so that is what is turned down. A face with no
- *  usable normal leaves the transform as it is. */
+/** `transform` turned so `face` points straight down (−Z). The new
+ *  rotation is the smallest turn that puts the face down (from the
+ *  object's own axes; the old X and Y turns are replaced), followed by the
+ *  transform's old turn about Z. Its Euler angles are then re-derived from
+ *  that matrix, so the X/Y/Z angles shown afterwards can all differ from
+ *  before, Z included, even though the old Z turn was applied. Scale and XY
+ *  translation are kept (callers keep the object's centre with
+ *  `keepCentre`). Under a non-uniform scale a face's placed normal is
+ *  `S⁻¹·n`, so that is what is turned down. A face with no usable normal
+ *  leaves the transform as it is. */
 export function layFlat(transform: InstanceTransform, face: LayFlatFace): InstanceTransform {
   const scaled = normalize(face.normal.map((component, axis) => component / transform.scale[axis]));
   if (!scaled) return transform;
   const align = rotationBetween(scaled, DOWN);
-  // Keep the heading: a turn about world Z leaves "down" where it is.
+  // Apply the old Z turn last: a turn about world Z leaves "down" where it
+  // is, so the face stays down.
   const heading = rotationMatrix([0, 0, transform.rotateDeg[2]]);
   const rotateDeg = eulerFromRotation(multiply(heading, align)).map(normalizeDegrees) as Vec3;
   return { ...transform, rotateDeg };

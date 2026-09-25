@@ -3,10 +3,11 @@
  *  editing, and what disables **Slice** with a reason. Pure.
  *
  *  It computes the issues the frontend has the data for. Two of D20's
- *  issues are not computed here, because nothing on the wire carries what
- *  they need: `nozzleMismatch` (the machine preset's nozzle) and
- *  `unsupportedSetting` (the runtime's known keys). They arrive only as
- *  `start_slice` errors. */
+ *  issues are deliberately left out and must not be added here:
+ *  `nozzleMismatch` and `unsupportedSetting` come only from the backend,
+ *  as `start_slice` errors, and are shown as slice errors (Task 13). The
+ *  frontend has neither the machine preset's nozzle nor the runtime's
+ *  known setting keys to check them against. */
 import { checkPlacement, type Footprint, type PlacementCheck } from "./bounds";
 import type { InstanceDoc, PreparationDocument, SlicerRuntimeStatus, SliceOptions } from "./types";
 import type { BuildVolume } from "./viewport/renderer";

@@ -48,6 +48,8 @@ describe("plate edits", () => {
     expect(renamePlate(doc(), "p2", "  Knobs ").plates[1].name).toBe("Knobs");
     expect(renamePlate(doc(), "p1", "   ").plates[0]).not.toHaveProperty("name");
     expect(renamePlate(doc(), "p1", "x".repeat(200)).plates[0].name).toHaveLength(128);
+    // Cut by code point: 127 letters and one whole emoji, not half of one.
+    expect(renamePlate(doc(), "p1", `${"x".repeat(127)}😀😀`).plates[0].name).toBe(`${"x".repeat(127)}😀`);
     const same = doc();
     expect(renamePlate(same, "p1", "Lid")).toBe(same);
   });

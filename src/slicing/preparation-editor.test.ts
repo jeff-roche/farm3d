@@ -146,4 +146,49 @@ describe("createPreparationEditor", () => {
     expect(h.saves).toHaveLength(2);
     expect(h.record()!.document.plates[0].name).toBe("Leaving");
   });
+
+  it("on dispose during a save, saves the newer edits after it, in order, losing nothing", async () => {
+    const h = harness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const settleSave = h.save.getMockImplementation()!;
+    h.save.mockImplementationOnce(async (id, document) => {
+      await gate;
+      return settleSave(id, document);
+    });
+    h.editor.edit(named("First"));
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    await settle();
+    expect(h.save).toHaveBeenCalledTimes(1);
+    // A newer edit while the first save is in flight, then leaving.
+    h.editor.edit(named("Second"));
+    h.editor.dispose();
+    await settle();
+    expect(h.save).toHaveBeenCalledTimes(1);
+    release();
+    await settle();
+    expect(h.saves.map((saved) => [saved.document.plates[0].name, saved.expectedRevision])).toEqual([
+      ["First", 1],
+      ["Second", 2],
+    ]);
+    expect(h.record()!.document.plates[0].name).toBe("Second");
+    // Nothing more is scheduled once disposed.
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS * 4);
+    await settle();
+    expect(h.save).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a save refused after dispose with a warning, since nothing shows the notice", async () => {
+    const h = harness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    h.save.mockRejectedValueOnce(commandError("VALIDATION", "A plate name is at most 128 characters."));
+    h.editor.edit(named("Bad"));
+    h.editor.dispose();
+    await settle();
+    expect(warn).toHaveBeenCalledWith(
+      "Preparation edits made before leaving were not saved:",
+      "A plate name is at most 128 characters.",
+    );
+    warn.mockRestore();
+  });
 });
