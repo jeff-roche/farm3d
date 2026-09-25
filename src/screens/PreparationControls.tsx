@@ -1,10 +1,13 @@
 import { Collapsible } from "@kobalte/core/collapsible";
 import { IconChevronRight } from "@tabler/icons-solidjs";
-import { createEffect, createMemo, createSignal, on, Show, type JSX } from "solid-js";
-import { PrinterRoster, Select, type SelectGroup } from "../design-system";
+import { createEffect, createMemo, on, Show, type JSX } from "solid-js";
+import { PrinterRoster, Select } from "../design-system";
 import { printers } from "../printers/printer-store";
 import {
+  BRIM_TYPE_LABELS,
   CONTROL_LIMITS,
+  INFILL_PATTERN_LABELS,
+  SUPPORT_MODE_LABELS,
   clampControl,
   layerHeightMax,
   type NumericControl,
@@ -12,17 +15,13 @@ import {
 } from "../slicing/slice-presentation";
 import { operationalLabel } from "../monitor/monitor-store";
 import type {
-  BrimType,
-  CatalogRef,
   FilamentPresetOption,
-  InfillPattern,
   PreparationDocument,
   SliceControls,
   SliceTarget,
-  SupportMode,
 } from "../slicing/types";
 import { CommitNumberField } from "./CommitNumberField";
-import { TargetProfileDialog } from "./TargetProfileDialog";
+import { SliceTargetSelect } from "./SliceTargetSelect";
 import type { PreparationSession } from "./preparation-session";
 import styles from "./PreparationPanel.module.css";
 
@@ -46,47 +45,14 @@ interface Choice<T> {
 
 const fromPreset = <T,>(): Choice<T> => ({ value: undefined, label: "Preset's choice" });
 
-const INFILL_PATTERNS: Choice<InfillPattern>[] = [
+const choicesOf = <T extends string>(labels: Record<T, string>): Choice<T>[] => [
   fromPreset(),
-  { value: "rectilinear", label: "Rectilinear" },
-  { value: "grid", label: "Grid" },
-  { value: "line", label: "Line" },
-  { value: "cubic", label: "Cubic" },
-  { value: "gyroid", label: "Gyroid" },
-  { value: "honeycomb", label: "Honeycomb" },
-  { value: "lightning", label: "Lightning" },
+  ...(Object.entries(labels) as [T, string][]).map(([value, label]) => ({ value, label })),
 ];
 
-const SUPPORT_MODES: Choice<SupportMode>[] = [
-  fromPreset(),
-  { value: "off", label: "Off" },
-  { value: "normal(auto)", label: "Normal (auto)" },
-  { value: "tree(auto)", label: "Tree (auto)" },
-];
-
-const BRIM_TYPES: Choice<BrimType>[] = [
-  fromPreset(),
-  { value: "no_brim", label: "No brim" },
-  { value: "outer_only", label: "Outer only" },
-  { value: "auto_brim", label: "Auto" },
-];
-
-interface TargetEntry {
-  key: string;
-  label: string;
-  target: SliceTarget;
-}
-
-/** The entry that opens the catalog, rather than being a target itself. */
-const OTHER_PROFILE = "other-profile";
-
-function profileKey(ref: CatalogRef): string {
-  return `profile:${ref.vendor}|${ref.model}|${ref.variant}`;
-}
-
-function targetKey(target: SliceTarget): string {
-  return target.kind === "printer" ? `printer:${target.printerId}` : profileKey(target.catalogRef);
-}
+const INFILL_PATTERNS = choicesOf(INFILL_PATTERN_LABELS);
+const SUPPORT_MODES = choicesOf(SUPPORT_MODE_LABELS);
+const BRIM_TYPES = choicesOf(BRIM_TYPE_LABELS);
 
 function filamentLabel(option: FilamentPresetOption): string {
   const family = option.materialFamily ?? option.filamentType;
@@ -118,52 +84,14 @@ export function PreparationControls(props: PreparationControlsProps) {
 
   // --- Target ------------------------------------------------------------------
   const activePrinters = createMemo(() => printers().filter((printer) => !printer.archivedAt));
-  const targetGroups = createMemo((): SelectGroup<TargetEntry>[] => {
-    const current = props.document.target;
-    const printerEntries: TargetEntry[] = activePrinters().map((printer) => ({
-      key: `printer:${printer.id}`,
-      label: printer.name,
-      target: { kind: "printer", printerId: printer.id },
-    }));
-    if (current.kind === "printer" && !printerEntries.some((entry) => entry.key === targetKey(current))) {
-      printerEntries.push({ key: targetKey(current), label: "A Printer that is no longer here", target: current });
-    }
-    const profiles = new Map<string, TargetEntry>();
-    const addProfile = (ref: CatalogRef) => {
-      const key = profileKey(ref);
-      if (!profiles.has(key)) profiles.set(key, { key, label: ref.variant, target: { kind: "profile", catalogRef: { ...ref } } });
-    };
-    if (current.kind === "profile") addProfile(current.catalogRef);
-    for (const printer of activePrinters()) addProfile(printer.catalogRef);
-    const groups: SelectGroup<TargetEntry>[] = [];
-    if (printerEntries.length > 0) groups.push({ label: "Printers", options: printerEntries });
-    groups.push({
-      label: "Printer profiles",
-      // Any other catalog profile is one pick away.
-      options: [...[...profiles.values()].sort((a, b) => a.label.localeCompare(b.label)), {
-        key: OTHER_PROFILE, label: "Other printer profile…", target: current,
-      }],
-    });
-    return groups;
-  });
-  const chosenTarget = () => {
-    const key = targetKey(props.document.target);
-    return targetGroups().flatMap((group) => group.options).find((entry) => entry.key === key) ?? null;
-  };
 
   // A new target may not offer the chosen presets: once its options load,
   // presets it doesn't offer become its defaults (D3). Only after the user
   // changed the target here, never behind their back.
   let retargeted = false;
-  const [otherOpen, setOtherOpen] = createSignal(false);
-  const chooseTarget = (entry: TargetEntry) => {
-    if (entry.key === OTHER_PROFILE) {
-      setOtherOpen(true);
-      return;
-    }
-    if (entry.key === targetKey(props.document.target)) return;
+  const chooseTarget = (target: SliceTarget) => {
     retargeted = true;
-    edit((document) => ({ ...document, target: entry.target }));
+    edit((document) => ({ ...document, target }));
   };
   createEffect(on(() => session.options(), (options) => {
     if (!options || !retargeted) return;
@@ -265,24 +193,13 @@ export function PreparationControls(props: PreparationControlsProps) {
       <section class={styles.section} aria-labelledby="preparation-target">
         <h3 id="preparation-target" class={styles.heading}>Target</h3>
         <div data-panel-field="target" tabIndex={-1}>
-          <Select<TargetEntry>
+          <SliceTargetSelect
             label="Slice for"
-            groups={targetGroups()}
-            optionValue={(entry) => entry.key}
-            optionLabel={(entry) => entry.label}
-            value={chosenTarget()}
+            value={props.document.target}
             placeholder="Choose a Printer or profile"
             onChange={chooseTarget}
           />
         </div>
-        <TargetProfileDialog
-          open={otherOpen()}
-          onOpenChange={setOtherOpen}
-          onPick={(catalogRef) => {
-            setOtherOpen(false);
-            chooseTarget({ key: profileKey(catalogRef), label: catalogRef.variant, target: { kind: "profile", catalogRef } });
-          }}
-        />
         <Show when={session.options()}>
           {(options) => (
             <div class={styles.targetFacts}>

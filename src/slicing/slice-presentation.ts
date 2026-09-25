@@ -4,11 +4,14 @@
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import { isCommandError } from "../ipc/client";
 import type {
+  BrimType,
   EngineCandidate,
+  InfillPattern,
   SliceControls,
   SliceFailure,
   SliceOperationState,
   SlicerRuntimeStatus,
+  SupportMode,
 } from "./types";
 
 // --- Controls (D4) ------------------------------------------------------------------
@@ -100,6 +103,30 @@ export const FIELD_LABELS: Record<PanelField, string> = {
   brimType: "Brim",
   brimWidthMm: "Brim width",
   skirtLoops: "Skirt loops",
+};
+
+/** The names of D4's choices, shown by the panel's Selects and the Slice
+ *  Revision review. */
+export const INFILL_PATTERN_LABELS: Record<InfillPattern, string> = {
+  rectilinear: "Rectilinear",
+  grid: "Grid",
+  line: "Line",
+  cubic: "Cubic",
+  gyroid: "Gyroid",
+  honeycomb: "Honeycomb",
+  lightning: "Lightning",
+};
+
+export const SUPPORT_MODE_LABELS: Record<SupportMode, string> = {
+  off: "Off",
+  "normal(auto)": "Normal (auto)",
+  "tree(auto)": "Tree (auto)",
+};
+
+export const BRIM_TYPE_LABELS: Record<BrimType, string> = {
+  no_brim: "No brim",
+  outer_only: "Outer only",
+  auto_brim: "Auto",
 };
 
 // --- Operations (D10, D11) ------------------------------------------------------------
