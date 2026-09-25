@@ -117,3 +117,7 @@
   color: var(--f3d-color-info);
   font-size: var(--f3d-type-body-small-size);
 }
+
+.thumbnail {
+  max-width: 16rem;
+}

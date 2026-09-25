@@ -28,9 +28,7 @@ import type {
   ModelSourceRevisionSummary,
   ProjectRecord,
 } from "../library/types";
-import { BuildPlate } from "./BuildPlate";
 import {
-  approximateSize,
   formatBytes,
   formatLabel,
   originLabel,
@@ -38,6 +36,8 @@ import {
   sourceStateMarker,
 } from "./library-presentation";
 import styles from "./ModelDetailsPanel.module.css";
+import { ModelThumbnail } from "./ModelGrid";
+import { ModelPlateInspector } from "./ModelPlateInspector";
 
 export interface ModelDetailsPanelProps {
   model: ModelRecord;
@@ -101,10 +101,19 @@ export function ModelDetailsPanel(props: ModelDetailsPanelProps) {
   // Reading an errored resource throws, so check the error first.
   const currentInspection = (): Inspection | undefined =>
     revisions.error ? undefined : revisions()?.find((revision) => revision.id === props.model.currentRevision.id)?.inspection;
+  const sourcePlates = () => {
+    const inspection = currentInspection();
+    return inspection?.format === "3mf" ? inspection.plates : [];
+  };
 
   return (
     <div class={styles.panel}>
-      <BuildPlate modelName={props.model.name} approximateSize={approximateSize(props.model)} />
+      <Show
+        when={props.model.format !== "gcode"}
+        fallback={<div class={styles.thumbnail}><ModelThumbnail model={props.model} /></div>}
+      >
+        <ModelPlateInspector model={props.model} plates={sourcePlates()} />
+      </Show>
       <NameField model={props.model} />
       <ProjectMembership
         model={props.model}

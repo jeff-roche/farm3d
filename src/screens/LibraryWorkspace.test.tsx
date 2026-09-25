@@ -7,6 +7,7 @@ import { navigation, type NavigationTarget } from "../navigation/navigation-stor
 import type { ImportSelectionSummary, ModelRecord } from "../library/types";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
+vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 
 const desktop = vi.hoisted(() => ({ available: false }));
 vi.mock("../ipc/client", async (importOriginal) => ({
