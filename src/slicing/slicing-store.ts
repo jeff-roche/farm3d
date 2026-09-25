@@ -63,6 +63,11 @@ interface SlicingState {
   progress: { [operationId: string]: SliceProgress | undefined };
   status: SlicingStatus;
   syncState: SlicingSyncState;
+  /** The user's **Continue with revision M** choice per stale Preparation,
+   *  by Preparation id: the pinned `sourceRevisionId` to send as
+   *  `continueWithSourceRevision`. Session-only (never persisted, kept
+   *  across backfills); it lapses once the Preparation is reloaded. */
+  continueWith: { [preparationId: string]: string | undefined };
 }
 
 const [state, setState] = createStore<SlicingState>({
@@ -73,6 +78,7 @@ const [state, setState] = createStore<SlicingState>({
   progress: {},
   status: "idle",
   syncState: "current",
+  continueWith: {},
 });
 
 export const slicing = {
@@ -90,6 +96,16 @@ export const slicing = {
   progress: (operationId: string): SliceProgress | undefined => state.progress[operationId],
   status: (): SlicingStatus => state.status,
   syncState: (): SlicingSyncState => state.syncState,
+  /** D5's deliberate choice to slice a stale Preparation on the revision it
+   *  is pinned to: the revision id to pass to `startSlice` as
+   *  `continueWithSourceRevision`, or `undefined`. It applies only while
+   *  the held Preparation is stale and still pinned to that revision. */
+  continueWithSourceRevision: (preparationId: string): string | undefined => {
+    const chosen = state.continueWith[preparationId];
+    if (!chosen) return undefined;
+    const held = Object.values(state.preparations).find((p) => p?.id === preparationId);
+    return held?.stale && held.sourceRevisionId === chosen ? chosen : undefined;
+  },
 };
 
 /** A deep copy that also reads through Solid store proxies. Only for JSON
@@ -497,6 +513,13 @@ export async function deletePreparation(preparationId: string): Promise<void> {
     await withConflictRefresh(() => command("delete_preparation", { preparationId, expectedRevision }));
   }
   dropPreparation(preparationId);
+}
+
+/** Records (or with `null`, withdraws) **Continue with revision M** for a
+ *  stale Preparation: `sourceRevisionId` is the revision it is pinned to.
+ *  Read it back with `slicing.continueWithSourceRevision`. */
+export function chooseContinueWithSourceRevision(preparationId: string, sourceRevisionId: string | null): void {
+  setState("continueWith", preparationId, sourceRevisionId ?? undefined);
 }
 
 // --- Slice operations (D9, D10) ---------------------------------------------------------

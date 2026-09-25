@@ -417,6 +417,30 @@ describe("settling", () => {
   });
 });
 
+describe("continue with the pinned revision", () => {
+  it("holds the choice only while the Preparation is stale and pinned to that revision", async () => {
+    responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ revision: 1, stale: true })] });
+    const { slicing, chooseContinueWithSourceRevision } = await startedStore();
+    expect(slicing.continueWithSourceRevision("prp-1")).toBeUndefined();
+    chooseContinueWithSourceRevision("prp-1", "msr-1");
+    expect(slicing.continueWithSourceRevision("prp-1")).toBe("msr-1");
+    // A backfill keeps it.
+    emit(envelope(1, "slicing.preparation.changed", preparation({ revision: 2, stale: true }), "prp-1"));
+    expect(slicing.continueWithSourceRevision("prp-1")).toBe("msr-1");
+    // A reload re-pins the Preparation, so the choice lapses.
+    emit(envelope(2, "slicing.preparation.changed", preparation({ revision: 3, stale: false, sourceRevisionId: "msr-2" }), "prp-1"));
+    expect(slicing.continueWithSourceRevision("prp-1")).toBeUndefined();
+  });
+
+  it("can be withdrawn", async () => {
+    responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ stale: true })] });
+    const { slicing, chooseContinueWithSourceRevision } = await startedStore();
+    chooseContinueWithSourceRevision("prp-1", "msr-1");
+    chooseContinueWithSourceRevision("prp-1", null);
+    expect(slicing.continueWithSourceRevision("prp-1")).toBeUndefined();
+  });
+});
+
 describe("actions (desktop)", () => {
   it("startSlice sends the held revision and one operationId, retries a transport failure with the same id, and settles the operations", async () => {
     responders.list_slicing = () => slicingSnapshot(0, { preparations: [preparation({ revision: 5 })] });

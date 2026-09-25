@@ -38,6 +38,7 @@ interface MockSlicingState {
   progress: { [operationId: string]: SliceProgress | undefined };
   status: "idle" | "loading" | "ready" | "error";
   syncState: "syncing" | "current" | "uncertain";
+  continueWith: { [preparationId: string]: string | undefined };
 }
 
 const initialState = (): MockSlicingState => ({
@@ -48,6 +49,7 @@ const initialState = (): MockSlicingState => ({
   progress: {},
   status: "ready",
   syncState: "current",
+  continueWith: {},
 });
 
 const [state, setState] = createStore<MockSlicingState>(initialState());
@@ -69,6 +71,11 @@ export const slicingStoreMock = {
     progress: (operationId: string) => state.progress[operationId],
     status: () => state.status,
     syncState: () => state.syncState,
+    continueWithSourceRevision: (preparationId: string) => {
+      const chosen = state.continueWith[preparationId];
+      const held = Object.values(state.preparations).find((p) => p?.id === preparationId);
+      return chosen && held?.stale && held.sourceRevisionId === chosen ? chosen : undefined;
+    },
   },
   startSlicing: vi.fn(async (): Promise<() => void> => () => {}),
   refreshSlicing: vi.fn(),
@@ -92,6 +99,9 @@ export const slicingStoreMock = {
     addedObjectKeys: [],
   })),
   deletePreparation: vi.fn(async (_preparationId: string) => {}),
+  chooseContinueWithSourceRevision: vi.fn((preparationId: string, sourceRevisionId: string | null) => {
+    setState("continueWith", preparationId, sourceRevisionId ?? undefined);
+  }),
   startSlice: vi.fn(async (
     _preparationId: string,
     _plateKeys: string[],
