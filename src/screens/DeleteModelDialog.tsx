@@ -17,9 +17,20 @@ interface DeleteFailure {
   message: string;
   /** `LIFECYCLE_BLOCKED`'s reasons, one per blocker. */
   blockers: string[];
+  /** Where to go about it, when farm3d knows. */
+  hint?: string;
 }
 
-function blockerMessages(details: Record<string, unknown> | undefined): string[] {
+/** P5 D14: a Model's Slice Revisions block its deletion. */
+const SLICE_REVISIONS_HINT = "Open each one under Slice Revisions in this Model's details to delete it.";
+
+function hasBlocker(details: Record<string, unknown> | undefined, code: string): boolean {
+  const blockers = details?.blockers;
+  return Array.isArray(blockers) && blockers.some((blocker) =>
+    typeof blocker === "object" && blocker !== null && (blocker as { code?: unknown }).code === code);
+}
+
+export function blockerMessages(details: Record<string, unknown> | undefined): string[] {
   const blockers = details?.blockers;
   if (!Array.isArray(blockers)) return [];
   return blockers.flatMap((blocker) =>
@@ -54,7 +65,11 @@ export function DeleteModelDialog(props: DeleteModelDialogProps) {
       props.onDeleted(id);
     } catch (error) {
       if (isCommandError(error) && error.code === "LIFECYCLE_BLOCKED") {
-        setFailure({ message: `${name} can't be deleted yet.`, blockers: blockerMessages(error.details) });
+        setFailure({
+          message: `${name} can't be deleted yet.`,
+          blockers: blockerMessages(error.details),
+          hint: hasBlocker(error.details, "SLICE_REVISIONS_EXIST") ? SLICE_REVISIONS_HINT : undefined,
+        });
       } else {
         setFailure({ message: isCommandError(error) ? error.message : "The Model could not be deleted.", blockers: [] });
       }
@@ -84,6 +99,7 @@ export function DeleteModelDialog(props: DeleteModelDialogProps) {
                   <For each={current().blockers}>{(blocker) => <li>{blocker}</li>}</For>
                 </ul>
               </Show>
+              <Show when={current().hint}>{(hint) => <p>{hint()}</p>}</Show>
             </div>
           )}
         </Show>

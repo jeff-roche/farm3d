@@ -44,6 +44,24 @@ describe("DeleteModelDialog", () => {
     expect(onDeleted).not.toHaveBeenCalled();
   });
 
+  it("says where to delete the Slice Revisions that block a delete", async () => {
+    libraryStoreMock.deleteModel.mockRejectedValueOnce({
+      contractVersion: 1, code: "LIFECYCLE_BLOCKED", recovery: [], retryable: false,
+      message: "This action is blocked: Delete this Model's 2 Slice Revisions first.",
+      details: {
+        blockers: [
+          { action: "delete", code: "SLICE_REVISIONS_EXIST", message: "Delete this Model's 2 Slice Revisions first." },
+        ],
+      },
+    });
+    render(() => <DeleteModelDialog model={CUBE} onClose={vi.fn()} onDeleted={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("listitem")).toHaveTextContent("Delete this Model's 2 Slice Revisions first.");
+    expect(alert).toHaveTextContent("Open each one under Slice Revisions in this Model's details to delete it.");
+  });
+
   it("shows any other failure's message inline", async () => {
     libraryStoreMock.deleteModel.mockRejectedValueOnce({
       contractVersion: 1, code: "CONFLICT", message: "This Model changed. Try again.", recovery: [], retryable: false,
