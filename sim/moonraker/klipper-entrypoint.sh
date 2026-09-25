@@ -37,7 +37,7 @@ base="/farm3d-sim/${FARM3D_SIM_PRINTER_CFG:-printer.cfg}"
 # `sim/simctl variant moonraker no-bed` writes this marker into the
 # writable `run` volume (never a tracked file); "no-bed" strips
 # [heater_bed] so Moonraker reports it as a missing object, not a zeroed
-# one. Same awk rule the retired scripts/moonraker-sim/sim.sh used.
+# one. Same awk rule the retired sim.sh used.
 mode="$(cat "$data/run/variant" 2>/dev/null || true)"
 rendered="$data/run/printer.rendered.cfg"
 if [ "$mode" = no-bed ]; then

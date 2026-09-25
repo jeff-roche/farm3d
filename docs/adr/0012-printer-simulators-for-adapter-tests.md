@@ -104,9 +104,10 @@ ElegooLink fake needs no container, so its tests run in the normal suite.
   the Klipper container. Evidence that depends on real heating, motion,
   or a specific vendor firmware still needs a real host, through the
   read-only tier or by hand.
-- The simulator's Moonraker trusts loopback clients, so API-key handling
-  is not covered by the Moonraker simulator yet. OctoPrint's is, through a
-  fixed fixture key.
+- The simulator's Moonraker trusts loopback clients by default, but
+  `sim/simctl variant moonraker apikey` switches it to enforce an API key
+  instead, so that path is covered too. OctoPrint's is, through a fixed
+  fixture key.
 - The ElegooLink fake can only ever be as complete as #8's captures. A
   command farm3d needs but no capture shows stays unsupported.
 - Test plans that assumed a hand-written fake with failure injection for
