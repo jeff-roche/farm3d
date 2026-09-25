@@ -15,8 +15,8 @@ use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
 };
 use connections::commands::{
-    clear_printer_connection, credential_store_info, discover_printers, printer_statuses,
-    set_printer_connection, test_printer_connection,
+    adapter_capability_matrix, clear_printer_connection, credential_store_info, discover_printers,
+    printer_capabilities, printer_statuses, set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
 use library::commands::{
@@ -124,7 +124,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 79] = [
+pub const COMMAND_NAMES: [&str; 81] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -204,6 +204,8 @@ pub const COMMAND_NAMES: [&str; 79] = [
     "get_slice_revision_log",
     "create_external_slice_revision",
     "delete_slice_revision",
+    "printer_capabilities",
+    "adapter_capability_matrix",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -632,6 +634,8 @@ pub fn run() {
             get_slice_revision_log,
             create_external_slice_revision,
             delete_slice_revision,
+            printer_capabilities,
+            adapter_capability_matrix,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

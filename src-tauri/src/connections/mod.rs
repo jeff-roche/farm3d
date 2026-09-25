@@ -8,6 +8,7 @@
 //! adapter and a polling adapter fit the same shape.
 
 pub mod adapters;
+pub mod capabilities;
 pub mod commands;
 pub mod credentials;
 pub mod discovery;
@@ -34,7 +35,7 @@ pub const DEFAULT_OCTOPRINT_PORT: u16 = 80;
 
 /// Every Connection kind this build can construct, probe, and supervise.
 /// The one place the setup, batch, and connection-edit paths ask "can this
-/// build speak `kind`?" — `supervisor::build` is the matching constructor,
+/// build speak `kind`?" — `adapters::descriptor` is the matching lookup,
 /// and a test there keeps the two in step.
 pub const SUPPORTED_KINDS: &[&str] = &[MOONRAKER_KIND, OCTOPRINT_KIND];
 

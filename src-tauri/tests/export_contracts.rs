@@ -7,6 +7,10 @@ use farm3d_lib::catalog::resolve::{
     CatalogStatus, ProfileDrift, ProfileResolution, ResolvedPrinter,
 };
 use farm3d_lib::catalog::{BedShape, PointMm, PrinterProfile};
+use farm3d_lib::connections::capabilities::{
+    AdapterCapabilityRow, CapabilityEvidence, CapabilityKey, CapabilityState, EvidenceTier,
+    HostFacts, PrinterCapabilities, UnsupportedReason,
+};
 use farm3d_lib::connections::commands::{ConnectionSubmission, CredentialStoreInfo};
 use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
@@ -348,6 +352,14 @@ fn export_registry() -> Vec<Export> {
         export::<CredentialStoreKind>(),
         export::<CredentialStoreInfo>(),
         export::<DiscoveredPrinter>(),
+        export::<CapabilityKey>(),
+        export::<EvidenceTier>(),
+        export::<CapabilityEvidence>(),
+        export::<UnsupportedReason>(),
+        export::<CapabilityState>(),
+        export::<HostFacts>(),
+        export::<PrinterCapabilities>(),
+        export::<AdapterCapabilityRow>(),
         export::<OperationWarningCode>(),
         export::<OperationWarning>(),
         export::<PrinterMutationResult>(),

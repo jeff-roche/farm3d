@@ -1,9 +1,16 @@
 //! The adapter registry: the one place a `kind` string becomes an
-//! observe-connection builder, so `connections::is_supported_kind` and
-//! `supervisor::build_connection` share a single source of truth. Task 5
-//! adds capability builders (`staging`, `control`, `host_state`, `camera`,
-//! `evidence`) to `AdapterDescriptor`.
+//! observe-connection builder and its capability builders, so
+//! `connections::is_supported_kind` and `supervisor::build_connection`
+//! share a single source of truth. Moonraker and OctoPrint have no
+//! capability builders yet (Task 8 adds Moonraker's) and no evidence rows
+//! (Task 12 adds those), so `capabilities::capabilities_for` and
+//! `capabilities::adapter_capability_matrix` report every capability
+//! `notVerified` for both today.
 
+use super::capabilities::{
+    ArtifactStaging, CameraDiscovery, CapabilityEvidence, CapabilityKey, HostStateQuery,
+    PrintControl,
+};
 use super::moonraker::MoonrakerConnection;
 use super::octoprint::OctoPrintConnection;
 use super::{ConnectionConfig, PrinterConnection, MOONRAKER_KIND, OCTOPRINT_KIND};
@@ -14,10 +21,25 @@ use super::{ConnectionConfig, PrinterConnection, MOONRAKER_KIND, OCTOPRINT_KIND}
 pub type ObserveBuilder =
     fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn PrinterConnection>;
 
+pub type StagingBuilder =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn ArtifactStaging>;
+pub type ControlBuilder =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn PrintControl>;
+pub type HostStateBuilder =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn HostStateQuery>;
+pub type CameraBuilder =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn CameraDiscovery>;
+
 pub struct AdapterDescriptor {
     pub kind: &'static str,
     pub observe: ObserveBuilder,
-    // Task 5 adds: staging, control, host_state, camera, evidence.
+    pub staging: Option<StagingBuilder>,
+    pub control: Option<ControlBuilder>,
+    pub host_state: Option<HostStateBuilder>,
+    pub camera: Option<CameraBuilder>,
+    /// Per-capability evidence (D6) — the UI shows each capability's own
+    /// tier, so this is never one evidence value for the whole adapter.
+    pub evidence: &'static [(CapabilityKey, CapabilityEvidence)],
 }
 
 fn moonraker_observe(
@@ -44,10 +66,20 @@ const REGISTRY: &[AdapterDescriptor] = &[
     AdapterDescriptor {
         kind: MOONRAKER_KIND,
         observe: moonraker_observe,
+        staging: None,
+        control: None,
+        host_state: None,
+        camera: None,
+        evidence: &[],
     },
     AdapterDescriptor {
         kind: OCTOPRINT_KIND,
         observe: octoprint_observe,
+        staging: None,
+        control: None,
+        host_state: None,
+        camera: None,
+        evidence: &[],
     },
 ];
 

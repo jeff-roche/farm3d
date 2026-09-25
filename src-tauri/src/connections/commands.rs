@@ -1,6 +1,7 @@
 //! The `#[tauri::command]` surface for connections. Thin by design — every
 //! decision worth testing lives in a sibling module.
 
+use super::capabilities::{self, AdapterCapabilityRow, PrinterCapabilities};
 use super::credentials::{
     credential_ref_for, CredentialBackend, CredentialStore, CredentialStoreKind,
 };
@@ -653,6 +654,42 @@ pub fn printer_statuses<R: tauri::Runtime>(
     contract_version.validate()?;
     let services = bootstrap.ready()?;
     Ok(CommandSuccess::new(services.manager.status_backfill()))
+}
+
+/// D6. `hostFacts` is always `None` for now: no adapter has a `host_state`
+/// builder yet (Task 8 adds Moonraker's), so no host rule can apply and
+/// every capability comes back `notVerified` at best.
+#[tauri::command]
+pub fn printer_capabilities<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    printer_id: String,
+) -> Result<CommandSuccess<PrinterCapabilities>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let printer = PrinterRepository::new(Arc::clone(&services.storage))
+        .get(&printer_id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(&printer_id))?;
+    Ok(CommandSuccess::new(capabilities::capabilities_for(
+        &printer, None,
+    )))
+}
+
+/// D6 "Rows at the end of P6": the registry's own capabilities, in
+/// registry order, with no Printer or host behind them.
+#[tauri::command]
+pub fn adapter_capability_matrix<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<Vec<AdapterCapabilityRow>>, CommandError> {
+    contract_version.validate()?;
+    let _services = bootstrap.ready()?;
+    Ok(CommandSuccess::new(
+        capabilities::adapter_capability_matrix(),
+    ))
 }
 
 /// Retries cleanup work that is safe to perform automatically. Imported

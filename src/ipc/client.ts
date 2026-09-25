@@ -120,6 +120,11 @@ type CommandMap = {
     Contracts.DeleteSliceRevisionRequest,
     Contracts.DeleteSliceRevisionResult,
   ];
+  printer_capabilities: [Contracts.PrinterCapabilitiesRequest, Contracts.PrinterCapabilitiesResult];
+  adapter_capability_matrix: [
+    Contracts.AdapterCapabilityMatrixRequest,
+    Contracts.AdapterCapabilityMatrixResult,
+  ];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

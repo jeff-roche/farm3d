@@ -1,7 +1,7 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
-    // P4's 58 plus P5's 21.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
+    // P4's 58 plus P5's 21 plus P6 Task 5's 2.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -84,6 +84,8 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
             "get_slice_revision_log",
             "create_external_slice_revision",
             "delete_slice_revision",
+            "printer_capabilities",
+            "adapter_capability_matrix",
         ]
     );
 }
@@ -217,6 +219,8 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::slicing::commands::get_slice_revision_log,
             farm3d_lib::slicing::commands::create_external_slice_revision,
             farm3d_lib::slicing::commands::delete_slice_revision,
+            farm3d_lib::connections::commands::printer_capabilities,
+            farm3d_lib::connections::commands::adapter_capability_matrix,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -451,6 +455,8 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             }),
         ),
         ("delete_slice_revision", json!({"sliceRevisionId": "s"})),
+        ("printer_capabilities", json!({"printerId": "p"})),
+        ("adapter_capability_matrix", json!({})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

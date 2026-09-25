@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 79] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 81] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -339,9 +339,19 @@ contracts![
         "DeleteSliceRevisionRequest",
         "DeleteSliceRevisionResult"
     ),
+    (
+        "printer_capabilities",
+        "PrinterCapabilitiesRequest",
+        "PrinterCapabilitiesResult"
+    ),
+    (
+        "adapter_capability_matrix",
+        "AdapterCapabilityMatrixRequest",
+        "AdapterCapabilityMatrixResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 79] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 81] {
     &COMMAND_CONTRACTS
 }
 
@@ -521,7 +531,11 @@ export type GetSliceRevisionLogResult = CommandSuccess<SliceRevisionLog>;
 export type CreateExternalSliceRevisionRequest = ContractRequest & { operationId: string; sourceRevisionId: string; facts: CreateExternalSliceRevisionFacts };
 export type CreateExternalSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
 export type DeleteSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
-export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_string()
+export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;
+export type PrinterCapabilitiesRequest = ContractRequest & { printerId: string };
+export type PrinterCapabilitiesResult = CommandSuccess<PrinterCapabilities>;
+export type AdapterCapabilityMatrixRequest = NoArgsRequest;
+export type AdapterCapabilityMatrixResult = CommandSuccess<AdapterCapabilityRow[]>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -609,6 +623,8 @@ export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_str
         visitor.visit::<crate::slicing::SliceRevisionSummary>();
         visitor.visit::<crate::slicing::SliceRevisionRecord>();
         visitor.visit::<crate::slicing::external::CreateExternalSliceRevisionFacts>();
+        visitor.visit::<crate::connections::capabilities::PrinterCapabilities>();
+        visitor.visit::<crate::connections::capabilities::AdapterCapabilityRow>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {
