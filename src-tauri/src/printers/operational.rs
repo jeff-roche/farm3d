@@ -63,9 +63,13 @@ pub enum ReadinessReason {
     Refreshing,
     StaleTelemetry,
     PrinterBusy,
-    /// The last job ended (finished, cancelled, or failed) and may have left
-    /// something on the bed.
+    /// The last job finished or was cancelled and may have left a part on
+    /// the bed.
     BedNeedsClearing,
+    /// The last job stopped on an error. Kept apart from `BedNeedsClearing`
+    /// because clearing the bed alone does not make the printer safe to
+    /// start again.
+    PrintFailed,
     UnknownState,
     /// An archived Printer has no live status at all, so nothing in this
     /// policy ever produces this variant today. It exists so P7's
@@ -174,7 +178,7 @@ pub fn evaluate_operational_status(
             ),
             HostActivity::Failed => (
                 OperationalState::Failed,
-                Some(ReadinessReason::BedNeedsClearing),
+                Some(ReadinessReason::PrintFailed),
             ),
             HostActivity::Idle => (OperationalState::Ready, None),
         }
@@ -319,19 +323,31 @@ mod tests {
     fn an_ended_job_is_never_ready_and_says_how_it_ended() {
         // A0.1 (#9), decision B1: a finished, cancelled, or failed job can
         // leave a part on the bed, so the Start-safety rule forbids Ready.
+        // P6 will let a person acknowledge a clear bed after a finished or
+        // cancelled job, but not after a failed one, so the failure carries
+        // its own reason.
         let now = Utc.with_ymd_and_hms(2026, 9, 18, 12, 0, 30).unwrap();
-        for (activity, operational_state) in [
-            (HostActivity::Finished, OperationalState::Finished),
-            (HostActivity::Cancelled, OperationalState::Cancelled),
-            (HostActivity::Failed, OperationalState::Failed),
+        for (activity, operational_state, reason) in [
+            (
+                HostActivity::Finished,
+                OperationalState::Finished,
+                ReadinessReason::BedNeedsClearing,
+            ),
+            (
+                HostActivity::Cancelled,
+                OperationalState::Cancelled,
+                ReadinessReason::BedNeedsClearing,
+            ),
+            (
+                HostActivity::Failed,
+                OperationalState::Failed,
+                ReadinessReason::PrintFailed,
+            ),
         ] {
             let result = evaluate_operational_status(&input(activity), now);
             assert_eq!(result.operational_state, operational_state);
             assert_eq!(result.readiness.state, ReadinessState::NotReady);
-            assert_eq!(
-                result.readiness.reason,
-                Some(ReadinessReason::BedNeedsClearing)
-            );
+            assert_eq!(result.readiness.reason, Some(reason));
         }
     }
 

@@ -128,25 +128,25 @@ describe("Monitor store", () => {
   });
 
   it.each([
-    ["finished", "complete", "Finished"],
-    ["cancelled", "cancelled", "Cancelled"],
-    ["failed", "error", "Print failed"],
-  ] as const)("presents an ended %s job as a non-ready state that asks for the bed to be cleared", (state, hostName, label) => {
+    ["finished", "complete", "Finished", "bedNeedsClearing", "Bed needs clearing"],
+    ["cancelled", "cancelled", "Cancelled", "bedNeedsClearing", "Bed needs clearing"],
+    ["failed", "error", "Print failed", "printFailed", "Check the printer"],
+  ] as const)("presents an ended %s job as a distinct non-ready state", (state, hostName, label, reason, summary) => {
     // A0.1 (#9), decision B1.
     const store = monitor([printer({
       name: "North Bay",
       runtimeStatus: status({
         telemetry: { hostActivity: state, hostActivityName: hostName },
         operationalState: state,
-        readiness: { state: "notReady", reason: "bedNeedsClearing" },
+        readiness: { state: "notReady", reason },
         freshness: "fresh",
       }),
     })]);
 
     const [view] = store.visiblePrinters();
     expect(view.operationalLabel).toBe(label);
-    expect(view.statusSummary).toBe("Bed needs clearing");
-    expect(view.accessibleSummary).toBe(`North Bay; ${label}; Bed needs clearing`);
+    expect(view.statusSummary).toBe(summary);
+    expect(view.accessibleSummary).toBe(`North Bay; ${label}; ${summary}`);
     store.setFilter("ready");
     expect(store.visiblePrinters()).toHaveLength(0);
   });

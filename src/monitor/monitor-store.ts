@@ -133,6 +133,7 @@ const readinessLabels = {
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
   bedNeedsClearing: "Bed needs clearing",
+  printFailed: "Check the printer",
   unknownState: "Unknown state",
   archived: "Archived",
 } as const;
@@ -147,7 +148,9 @@ function statusSummary(status: PrinterStatus | undefined): string {
   if (!status || status.freshness === "unavailable") return "Telemetry unavailable";
   // An ended job's host name ("complete", "error") says less than the action
   // it calls for.
-  if (status.readiness.reason === "bedNeedsClearing") return readinessLabels.bedNeedsClearing;
+  if (status.readiness.reason === "bedNeedsClearing" || status.readiness.reason === "printFailed") {
+    return readinessLabels[status.readiness.reason];
+  }
   const telemetry = status.telemetry;
   const activity = telemetry.hostActivity === "printing" ? "Host print" : "Host activity";
   const detail = telemetry.hostActivityName

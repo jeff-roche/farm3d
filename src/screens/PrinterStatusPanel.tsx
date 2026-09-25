@@ -21,6 +21,7 @@ const readinessLabels = {
   staleTelemetry: "Stale telemetry",
   printerBusy: "Printer busy",
   bedNeedsClearing: "Bed needs clearing",
+  printFailed: "Check the printer",
   unknownState: "Unknown state",
   archived: "Archived",
 } as const;
