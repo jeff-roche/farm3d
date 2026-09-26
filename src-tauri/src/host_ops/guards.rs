@@ -29,12 +29,14 @@ use crate::slicing::blockers::SliceRevisionDeletionBlocker;
 use super::repository;
 
 /// A [`repository`] error inside a `StorageError`-typed transaction (the
-/// blocker traits, `PrinterRepository::delete`): its reads and deletes only
-/// ever fail with a storage error.
+/// blocker traits, `PrinterRepository::delete`).
 pub(crate) fn storage_error(error: RepositoryError) -> StorageError {
     match error {
         RepositoryError::Storage(error) => error,
-        _ => StorageError::Database,
+        // The only callers pass `has_unresolved` and
+        // `delete_terminal_for_printer`, which are a single SQL statement
+        // each and only ever fail with `RepositoryError::Storage`.
+        other => unreachable!("a host-ops read or delete returned {other:?}"),
     }
 }
 
@@ -126,8 +128,12 @@ pub fn connection_change_orphans(
 
 /// D7 `CONNECTION_IN_USE`: refuses a Connection change that
 /// [`connection_change_orphans`] while `printer_id` has an unresolved row.
+/// `PrinterRepository::set_connection` runs it inside its write
+/// transaction (authoritative); `set_printer_connection` also runs it on a
+/// read connection first, so a refused change never probes the new host or
+/// writes a provisional secret.
 pub fn check_connection_change(
-    tx: &Transaction<'_>,
+    connection: &Connection,
     printer_id: &str,
     old: Option<&ConnectionConfig>,
     new: Option<&ConnectionConfig>,
@@ -135,7 +141,7 @@ pub fn check_connection_change(
     if !connection_change_orphans(old, new) {
         return Ok(());
     }
-    match repository::list_unresolved(tx, Some(printer_id))?
+    match repository::list_unresolved(connection, Some(printer_id))?
         .into_iter()
         .next()
     {
@@ -149,17 +155,20 @@ pub fn check_connection_change(
 
 /// D7 `HOST_OPERATION_PENDING` for `import_printers`: an import replaces
 /// every Printer, so any unresolved row anywhere rejects the whole import.
+/// `printer_ids[i]` is the Printer of `host_operation_ids[i]`, in row order
+/// (at most one unresolved row per Printer, so neither list repeats).
 pub fn check_import(connection: &Connection) -> Result<(), RepositoryError> {
     let pending = repository::list_unresolved(connection, None)?;
     if pending.is_empty() {
         return Ok(());
     }
-    let mut printer_ids: Vec<String> = pending.iter().map(|row| row.printer_id.clone()).collect();
-    printer_ids.sort();
-    printer_ids.dedup();
+    let (printer_ids, host_operation_ids) = pending
+        .into_iter()
+        .map(|row| (row.printer_id, row.id))
+        .unzip();
     Err(RepositoryError::HostOperationsPending {
         printer_ids,
-        host_operation_ids: pending.into_iter().map(|row| row.id).collect(),
+        host_operation_ids,
     })
 }
 
@@ -364,6 +373,54 @@ mod tests {
                 .expect("the terminal row is kept");
             assert_eq!(kept.slice_revision_id, None);
         }
+    }
+
+    #[test]
+    fn check_import_lists_each_pending_row_with_its_printer_in_row_order() {
+        let (_temp, _lease, storage) = storage_with_printer();
+        PrinterRepository::new(Arc::clone(&storage))
+            .create(StoredPrinter {
+                id: "prn-b".to_string(),
+                name: "Printer B".to_string(),
+                ..Default::default()
+            })
+            .expect("printer b");
+        let first = storage
+            .write_repo(|tx| insert_dispatching(tx, &row(HostOperationKind::Upload, "slr-a")))
+            .expect("first")
+            .id;
+        let second = storage
+            .write_repo(|tx| {
+                insert_dispatching(
+                    tx,
+                    &NewHostOperation {
+                        operation_id: "op-b".to_string(),
+                        printer_id: "prn-b".to_string(),
+                        ..row(HostOperationKind::Upload, "slr-a")
+                    },
+                )
+            })
+            .expect("second")
+            .id;
+
+        let error = storage
+            .read(|connection| Ok(check_import(connection)))
+            .expect("read")
+            .expect_err("pending");
+
+        let RepositoryError::HostOperationsPending {
+            printer_ids,
+            host_operation_ids,
+        } = error
+        else {
+            panic!("expected HostOperationsPending, got {error:?}");
+        };
+        let mut pairs: Vec<_> = printer_ids.into_iter().zip(host_operation_ids).collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![("prn-a".to_string(), first), ("prn-b".to_string(), second)]
+        );
     }
 
     #[test]

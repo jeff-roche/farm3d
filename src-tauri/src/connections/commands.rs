@@ -315,6 +315,37 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
             existing.revision,
         ));
     }
+    // P6 D7: refuse a change that would orphan an unresolved Host
+    // Operation BEFORE probing the new host or writing a provisional
+    // secret. Read-only; `PrinterRepository::set_connection` repeats the
+    // check inside its write transaction, which stays authoritative.
+    let intended = ConnectionConfig {
+        kind: submission.kind.clone(),
+        host: submission.host.clone(),
+        port: submission.port,
+        use_tls: submission.use_tls,
+        credential_ref: match submission.api_key.as_deref() {
+            None => existing
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.credential_ref.clone()),
+            Some("") => None,
+            // Only whether a reference is present matters here.
+            Some(_) => Some(String::new()),
+        },
+    };
+    services
+        .storage
+        .read(|connection| {
+            Ok(crate::host_ops::guards::check_connection_change(
+                connection,
+                &id,
+                existing.connection.as_ref(),
+                Some(&intended),
+            ))
+        })
+        .map_err(storage_command_error)?
+        .map_err(CommandError::from_repository)?;
     // D3: reject a host another active Printer owns BEFORE probing or
     // writing any secret (same precheck as `create_printer_with`). An
     // archived Printer holds no host (D6), so it is not checked here; the

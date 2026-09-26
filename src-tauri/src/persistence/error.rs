@@ -155,7 +155,8 @@ pub enum RepositoryError {
         host_operation_id: String,
     },
     /// P6 D7: a Printers import while these Printers have these unresolved
-    /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`.
+    /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`. The
+    /// two lists are aligned: `printer_ids[i]` owns `host_operation_ids[i]`.
     HostOperationsPending {
         printer_ids: Vec<String>,
         host_operation_ids: Vec<String>,

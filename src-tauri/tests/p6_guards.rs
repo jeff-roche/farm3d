@@ -11,7 +11,10 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 
-use common::{a_catalog, a_stored_printer, invoke, FakeConnection};
+use common::{
+    a_catalog, a_stored_printer, credentials_dir_snapshot, invoke, pending_cleanup_count,
+    FakeConnection,
+};
 use farm3d_lib::connections::capabilities::{HostOperationFailureCode, InconclusiveReason};
 use farm3d_lib::connections::commands::retry_pending_credential_cleanup;
 use farm3d_lib::connections::credentials::CredentialStore;
@@ -22,7 +25,7 @@ use farm3d_lib::host_ops::repository::{self as host_ops, NewHostOperation, Outco
 use farm3d_lib::host_ops::{
     HostOperationEndpoint, HostOperationFailure, HostOperationKind, HostOperationResolution,
 };
-use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage};
+use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StorageError};
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::StoredPrinter;
 use farm3d_lib::spools::operations::OperationKind;
@@ -614,6 +617,39 @@ fn an_endpoint_change_is_allowed_after_a_terminal_host_operation() {
     }
 }
 
+/// Fix round 1: the command refuses before probing the new host or
+/// writing a provisional secret, so an unreachable new host still yields
+/// `CONNECTION_IN_USE`, not the probe's error.
+#[test]
+fn an_endpoint_change_is_refused_before_any_probe_or_secret_write() {
+    for credential in [None, Some("NEW-SECRET")] {
+        let harness = Harness::new();
+        let id = seed_row(&harness.storage, PRINTER, "op-1", RowState::Uncertain);
+        let store_before = credentials_dir_snapshot(harness.credentials_dir.path());
+        let pending_before = pending_cleanup_count(&harness.storage);
+        harness.probed.lock().unwrap().clear();
+        let mut submission =
+            json!({"kind": MOONRAKER_KIND, "host": "down.local", "port": PORT, "useTls": false});
+        if let Some(secret) = credential {
+            submission["credential"] = json!(secret);
+        }
+
+        let error = harness.set_connection(submission).unwrap_err();
+
+        assert_connection_in_use(&error, &id);
+        assert!(
+            harness.probed.lock().unwrap().is_empty(),
+            "no probe ({credential:?})"
+        );
+        assert_eq!(
+            credentials_dir_snapshot(harness.credentials_dir.path()),
+            store_before,
+            "no secret written ({credential:?})"
+        );
+        assert_eq!(pending_cleanup_count(&harness.storage), pending_before);
+    }
+}
+
 // --- Connection: clear -------------------------------------------------------
 
 #[test]
@@ -794,6 +830,58 @@ fn credential_cleanup_never_deletes_a_credential_of_a_printer_with_an_unresolved
     );
 }
 
+/// Fix round 1: re-queueing a displaced credential under another Printer
+/// (a higher-precedence reason) or under no Printer never moves its cleanup
+/// row off the Printer with the unresolved row, so it still survives.
+#[test]
+fn a_requeued_displaced_credential_survives_cleanup_while_unresolved() {
+    let harness = Harness::new();
+    let id = seed_row(&harness.storage, PRINTER, "op-1", RowState::Uncertain);
+    harness
+        .set_connection(json!({
+            "kind": MOONRAKER_KIND, "host": HOST, "port": PORT, "useTls": false,
+            "credential": "NEW-SECRET",
+        }))
+        .unwrap();
+    let repository = PrinterRepository::new(Arc::clone(&harness.storage));
+    repository
+        .enqueue_credential_cleanup(CREDENTIAL_REF, Some(OTHER_PRINTER), "printer_deleted")
+        .unwrap();
+    repository
+        .enqueue_credential_cleanup(CREDENTIAL_REF, None, "import_orphan")
+        .unwrap();
+    let queued_for = || {
+        harness
+            .storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT printer_id FROM pending_credential_cleanup WHERE credential_ref = ?1",
+                    [CREDENTIAL_REF],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+            })
+            .unwrap()
+    };
+    assert_eq!(queued_for().as_deref(), Some(PRINTER));
+
+    retry_pending_credential_cleanup(&harness.storage, &harness.credentials()).unwrap();
+
+    assert_eq!(
+        harness
+            .credentials()
+            .get(CREDENTIAL_REF)
+            .unwrap()
+            .as_deref(),
+        Some(SECRET),
+        "kept while the row is unresolved"
+    );
+
+    resolve_row(&harness.storage, &id);
+    retry_pending_credential_cleanup(&harness.storage, &harness.credentials()).unwrap();
+
+    assert_eq!(harness.credentials().get(CREDENTIAL_REF).unwrap(), None);
+}
+
 // --- Race -------------------------------------------------------------------
 
 /// A write-ahead insert and a permanent delete of the same (archived)
@@ -849,7 +937,9 @@ fn a_concurrent_insert_and_delete_leave_no_orphan_row() {
                 assert_eq!(repository.list().unwrap().len(), 1);
                 assert_eq!(host_operation_rows(&storage, PRINTER), 1);
             }
-            (Err(_), Ok(_)) => {
+            (Err(RepositoryError::Storage(StorageError::Database)), Ok(_)) => {
+                // The insert lost: its `printer_id` foreign key no longer
+                // resolves, which `StorageError::from` reports as `Database`.
                 delete_wins += 1;
                 assert!(repository.list().unwrap().is_empty());
                 assert_eq!(host_operation_rows(&storage, PRINTER), 0);

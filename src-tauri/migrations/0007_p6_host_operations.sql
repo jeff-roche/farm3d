@@ -49,13 +49,17 @@ CREATE INDEX host_operations_printer_created ON host_operations(printer_id, crea
 -- UPDATE, with one exception D2 relies on: the ON DELETE SET NULL actions
 -- may unlink a terminal row from a deleted Slice Revision or source row
 -- (D7: a revision, or a Printer's terminal rows, can be deleted once they
--- are terminal). Every other column must stay exactly as it was, and a
--- link may only ever become NULL.
+-- are terminal). The only accepted update actually unlinks: at least one
+-- non-NULL link becomes NULL, each link either does that or stays as it
+-- was, and every other column stays exactly as it was. Anything else,
+-- including a no-op UPDATE, raises.
 CREATE TRIGGER host_operations_terminal_immutable
 BEFORE UPDATE ON host_operations
 WHEN OLD.state IN ('succeeded','failed','abandoned')
   AND NOT (
-    (NEW.slice_revision_id IS OLD.slice_revision_id OR NEW.slice_revision_id IS NULL)
+    ((OLD.slice_revision_id IS NOT NULL AND NEW.slice_revision_id IS NULL)
+     OR (OLD.source_host_operation_id IS NOT NULL AND NEW.source_host_operation_id IS NULL))
+    AND (NEW.slice_revision_id IS OLD.slice_revision_id OR NEW.slice_revision_id IS NULL)
     AND (NEW.source_host_operation_id IS OLD.source_host_operation_id
          OR NEW.source_host_operation_id IS NULL)
     AND NEW.id IS OLD.id

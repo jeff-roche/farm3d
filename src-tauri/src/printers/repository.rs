@@ -885,6 +885,20 @@ fn enqueue_credential_cleanup(
                     (None, _) => false,
                 });
         if incoming_wins {
+            // P6 D7: `retry_pending_credential_cleanup` keeps a credential
+            // while the Printer its row names has an unresolved Host
+            // Operation, so never move the row off such a Printer (to
+            // another Printer, or to none) until that row is terminal.
+            let keep_printer = match current_printer.as_deref() {
+                Some(current) => crate::host_ops::repository::has_unresolved(transaction, current)
+                    .map_err(crate::host_ops::guards::storage_error)?,
+                None => false,
+            };
+            let printer_id = if keep_printer {
+                current_printer.as_deref()
+            } else {
+                printer_id
+            };
             transaction.execute(
                 "UPDATE pending_credential_cleanup SET reason=?2, printer_id=?3 WHERE credential_ref=?1",
                 params![reference, reason, printer_id],

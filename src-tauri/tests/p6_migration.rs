@@ -80,6 +80,30 @@ fn seed_printer(connection: &rusqlite::Connection, id: &str) {
     );
 }
 
+/// An external Slice Revision `id` (with the blob, Model, and source
+/// revision it needs) for the `slice_revision_id` link.
+fn seed_slice_revision(connection: &rusqlite::Connection, id: &str) {
+    exec(
+        connection,
+        &format!(
+            "INSERT INTO content_blobs(sha256, size_bytes, created_at)
+               VALUES ('{GCODE_HASH}', 200, '{NOW}');
+             INSERT INTO library_models(id, revision, name, format, storage_mode, created_at, updated_at)
+               VALUES ('mdl-a', 1, 'Model', 'gcode', 'managed', '{NOW}', '{NOW}');
+             INSERT INTO model_source_revisions(
+               id, model_id, sequence, content_sha256, size_bytes, format, origin,
+               source_file_name, source_path, captured_at, inspector_version, inspection_json
+             ) VALUES ('msr-a', 'mdl-a', 1, '{GCODE_HASH}', 200, 'gcode', 'import', 'part.gcode',
+                       '/src/part.gcode', '{NOW}', 1, '{{}}');
+             INSERT INTO slice_revisions(id, kind, model_id, source_revision_id, gcode_sha256,
+               gcode_size, target_json, facts_json, requires_manual_printer_selection,
+               estimates_json, created_at)
+             VALUES ('{id}', 'external', 'mdl-a', 'msr-a', '{GCODE_HASH}', 200, '{{}}', '{{}}', 1,
+                     '{{}}', '{NOW}');"
+        ),
+    );
+}
+
 /// A minimal `upload`, `dispatching` row for Printer `printer_id`.
 struct HostOperationRow<'a> {
     id: &'a str,
@@ -500,12 +524,14 @@ fn terminal_rows_reject_every_update_but_non_terminal_rows_accept_one() {
 }
 
 /// 5b. D2/D7: the one update a terminal row accepts is an `ON DELETE SET
-///     NULL` unlinking it from a deleted row. A link can only become NULL,
-///     and nothing else may change alongside it.
+///     NULL` unlinking it from a deleted Slice Revision or source row. A
+///     link can only become NULL, nothing else may change alongside it,
+///     and an update that unlinks nothing (a no-op) raises.
 #[test]
 fn a_terminal_row_can_only_be_unlinked_by_its_set_null_actions() {
     let (_temp, connection) = migrated();
     seed_printer(&connection, "prn-a");
+    seed_slice_revision(&connection, "slr-a");
     insert_host_operation(&connection, &HostOperationRow::upload("hop-up")).expect("upload");
     connection
         .execute(
@@ -525,11 +551,24 @@ fn a_terminal_row_can_only_be_unlinked_by_its_set_null_actions() {
     .expect("start");
     connection
         .execute(
+            "UPDATE host_operations SET slice_revision_id = 'slr-a' WHERE id = 'hop-start'",
+            [],
+        )
+        .expect("link the (still dispatching) start to the revision");
+    connection
+        .execute(
             "UPDATE host_operations SET state = 'succeeded', resolution_json = '{}' WHERE id = 'hop-start'",
             [],
         )
         .expect("resolve start");
 
+    let no_op = connection
+        .execute(
+            "UPDATE host_operations SET slice_revision_id = slice_revision_id WHERE id = 'hop-start'",
+            [],
+        )
+        .expect_err("a no-op update on a terminal row raises");
+    assert!(no_op.to_string().contains("host operation is terminal"));
     let relink = connection
         .execute(
             "UPDATE host_operations SET source_host_operation_id = 'hop-start' WHERE id = 'hop-start'",
@@ -559,6 +598,28 @@ fn a_terminal_row_can_only_be_unlinked_by_its_set_null_actions() {
         )
         .expect("start kept");
     assert_eq!(source, None);
+
+    connection
+        .execute("DELETE FROM slice_revisions WHERE id = 'slr-a'", [])
+        .expect("ON DELETE SET NULL unlinks the terminal start from the revision");
+    let revision: Option<String> = connection
+        .query_row(
+            "SELECT slice_revision_id FROM host_operations WHERE id = 'hop-start'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("start kept");
+    assert_eq!(revision, None);
+
+    let unlinked_no_op = connection
+        .execute(
+            "UPDATE host_operations SET slice_revision_id = NULL WHERE id = 'hop-start'",
+            [],
+        )
+        .expect_err("setting an already-NULL link to NULL unlinks nothing");
+    assert!(unlinked_no_op
+        .to_string()
+        .contains("host operation is terminal"));
 }
 
 /// 6. `RESTRICT`: a Printer with any Host Operation row (even terminal)
