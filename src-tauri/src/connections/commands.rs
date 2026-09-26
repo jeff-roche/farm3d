@@ -687,9 +687,8 @@ pub fn printer_statuses<R: tauri::Runtime>(
     Ok(CommandSuccess::new(services.manager.status_backfill()))
 }
 
-/// D6. `hostFacts` is always `None` for now: no adapter has a `host_state`
-/// builder yet (Task 8 adds Moonraker's), so no host rule can apply and
-/// every capability comes back `notVerified` at best.
+/// D6: the Printer's capability matrix. `hostFacts` is `None`, and no host
+/// rule applies, until the Printer has been Online once.
 #[tauri::command]
 pub fn printer_capabilities<R: tauri::Runtime>(
     _app: AppHandle<R>,

@@ -74,7 +74,8 @@ impl Clock for OffsetClock {
 
 /// Builds Moonraker capabilities with short timings, and treats every
 /// Moonraker capability the registry calls "not verified" as supported
-/// (Task 12 adds the real evidence rows) unless the test switched it off.
+/// unless the test switched it off, so these tests never depend on the
+/// registry's evidence rows.
 #[derive(Default)]
 struct TestFactory {
     unsupported: Mutex<BTreeSet<CapabilityKey>>,
@@ -1813,20 +1814,30 @@ fn an_octoprint_printer_is_capability_unsupported_with_no_row() {
 }
 
 #[test]
-fn the_production_registry_reports_moonraker_writes_unsupported_until_evidence_lands() {
-    // `capabilities_for` over the registry: Task 12 adds the evidence rows.
+fn the_production_registry_reports_moonraker_writes_supported_from_sim_evidence() {
+    // `capabilities_for` over the registry: Task 12's evidence rows.
     let moonraker = descriptor(MOONRAKER_KIND).unwrap();
-    assert!(moonraker.evidence.is_empty());
+    assert_eq!(moonraker.evidence.len(), CapabilityKey::ALL.len());
     let printer = StoredPrinter {
         connection: Some(FakeMoonraker::start().config()),
         ..common::a_stored_printer(PRINTER)
     };
     let factory = host_ops::RegistryCapabilityFactory;
     let capabilities = factory.capabilities(&printer, None);
-    assert!(matches!(
-        capabilities.capabilities[CapabilityKey::Upload],
-        CapabilityState::Unsupported { .. }
-    ));
+    for key in [
+        CapabilityKey::Upload,
+        CapabilityKey::Start,
+        CapabilityKey::Pause,
+        CapabilityKey::Resume,
+        CapabilityKey::Cancel,
+    ] {
+        match &capabilities.capabilities[key] {
+            CapabilityState::Supported { evidence } => {
+                assert_eq!(evidence.tier, EvidenceTier::Sim, "{key:?}")
+            }
+            other => panic!("{key:?}: {other:?}"),
+        }
+    }
 }
 
 #[test]

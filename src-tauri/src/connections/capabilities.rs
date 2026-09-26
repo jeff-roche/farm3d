@@ -955,35 +955,80 @@ mod tests {
     // --- capabilities_for wiring (rules 3-7 via a real, if empty, adapter) --
 
     #[test]
-    fn a_real_adapter_with_no_evidence_is_not_verified_everywhere() {
-        let printer = a_stored_printer(Some(connection(MOONRAKER_KIND, false)));
-        let result = capabilities_for(&printer, None);
+    fn moonraker_is_supported_from_its_sim_evidence_and_octoprint_is_not_verified() {
+        let moonraker = capabilities_for(
+            &a_stored_printer(Some(connection(MOONRAKER_KIND, false))),
+            None,
+        );
+        assert_eq!(moonraker.adapter_kind.as_deref(), Some(MOONRAKER_KIND));
+        for key in CapabilityKey::ALL {
+            match &moonraker.capabilities[key] {
+                CapabilityState::Supported { evidence } => {
+                    assert_eq!(evidence.tier, EvidenceTier::Sim, "{key:?}")
+                }
+                other => panic!("{key:?}: {other:?}"),
+            }
+        }
 
-        assert_eq!(result.adapter_kind.as_deref(), Some(MOONRAKER_KIND));
+        let octoprint = capabilities_for(
+            &a_stored_printer(Some(connection(OCTOPRINT_KIND, false))),
+            None,
+        );
         for key in CapabilityKey::ALL {
             assert_eq!(
-                reason(&result.capabilities[key]),
+                reason(&octoprint.capabilities[key]),
                 UnsupportedReason::NotVerified
             );
+        }
+    }
+
+    /// D6 rule 6 still applies over the evidence: the simulator has no
+    /// webcam, so with its host facts `camera` is a host limit.
+    #[test]
+    fn moonraker_host_rules_apply_over_its_evidence() {
+        let facts = HostFacts {
+            camera_count: 0,
+            ..a_host_facts()
+        };
+        let result = capabilities_for(
+            &a_stored_printer(Some(connection(MOONRAKER_KIND, false))),
+            Some(&facts),
+        );
+        assert_eq!(
+            result.capabilities[CapabilityKey::Camera],
+            CapabilityState::Unsupported {
+                reason: UnsupportedReason::Host,
+                detail: "No camera is configured on this printer.".to_string(),
+            }
+        );
+        for key in CapabilityKey::ALL {
+            if key != CapabilityKey::Camera {
+                assert!(
+                    matches!(result.capabilities[key], CapabilityState::Supported { .. }),
+                    "{key:?}"
+                );
+            }
         }
     }
 
     // --- adapter_capability_matrix -------------------------------------------
 
     #[test]
-    fn the_matrix_lists_the_registry_in_order_with_no_evidence() {
+    fn the_matrix_lists_moonraker_supported_and_octoprint_not_verified() {
         let rows = adapter_capability_matrix();
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].adapter_kind, MOONRAKER_KIND);
         assert_eq!(rows[1].adapter_kind, OCTOPRINT_KIND);
-        for row in &rows {
-            for key in CapabilityKey::ALL {
-                assert_eq!(
-                    reason(&row.capabilities[key]),
-                    UnsupportedReason::NotVerified
-                );
-            }
+        for key in CapabilityKey::ALL {
+            assert!(
+                matches!(rows[0].capabilities[key], CapabilityState::Supported { .. }),
+                "{key:?}"
+            );
+            assert_eq!(
+                reason(&rows[1].capabilities[key]),
+                UnsupportedReason::NotVerified
+            );
         }
     }
 
@@ -1025,8 +1070,8 @@ mod tests {
     /// descriptor has the builder(s) `has_builder` requires for it AND a
     /// `Sim`-tier evidence row — never from a builder alone, an evidence
     /// row alone, or `ReadOnlyHardware` evidence. Runs over the real
-    /// registry (today, vacuously: no adapter has any builder yet) and over
-    /// deliberately inconsistent fixtures, so a future registry entry that
+    /// registry (Moonraker: every builder and a `sim` row for each
+    /// capability) and over deliberately inconsistent fixtures, so a future registry entry that
     /// violates the invariant fails this test rather than shipping a UI
     /// that offers a write the adapter cannot actually perform.
     #[test]

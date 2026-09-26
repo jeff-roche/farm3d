@@ -107,7 +107,7 @@ fn an_unknown_printer_id_is_not_found_over_ipc() {
 }
 
 #[test]
-fn the_adapter_matrix_lists_the_registry_in_order_all_not_verified_over_ipc() {
+fn the_adapter_matrix_lists_moonraker_supported_and_octoprint_not_verified_over_ipc() {
     let (_temp, _lease, storage) = storage();
     let (_app, webview) = runtime(storage);
 
@@ -122,20 +122,26 @@ fn the_adapter_matrix_lists_the_registry_in_order_all_not_verified_over_ipc() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["adapterKind"], MOONRAKER_KIND);
     assert_eq!(rows[1]["adapterKind"], OCTOPRINT_KIND);
-    for row in rows {
-        for key in [
-            "upload",
-            "start",
-            "pause",
-            "resume",
-            "cancel",
-            "hostState",
-            "artifactIdentity",
-            "camera",
-        ] {
-            let state = &row["capabilities"][key];
-            assert_eq!(state["status"], "unsupported", "{key}");
-            assert_eq!(state["reason"], "notVerified", "{key}");
-        }
+    for key in [
+        "upload",
+        "start",
+        "pause",
+        "resume",
+        "cancel",
+        "hostState",
+        "artifactIdentity",
+        "camera",
+    ] {
+        let moonraker = &rows[0]["capabilities"][key];
+        assert_eq!(moonraker["status"], "supported", "{key}");
+        assert_eq!(moonraker["evidence"]["tier"], "sim", "{key}");
+        let source = moonraker["evidence"]["source"].as_str().unwrap();
+        assert!(
+            source.starts_with("sim-runs/") && source.ends_with("/manifest.json"),
+            "{key}: {source}"
+        );
+        let octoprint = &rows[1]["capabilities"][key];
+        assert_eq!(octoprint["status"], "unsupported", "{key}");
+        assert_eq!(octoprint["reason"], "notVerified", "{key}");
     }
 }
