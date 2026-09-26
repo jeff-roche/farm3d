@@ -1043,7 +1043,10 @@ Messages:
 
 - **`src/host-ops/capabilities-store.ts`**: `PrinterCapabilities` per
   Printer from `printer_capabilities`, refetched when that Printer's status
-  changes. `AdapterCapabilityRow[]` loaded once.
+  changes. After an Online transition the backend re-reads the host facts
+  in the background, so the store also refetches on a short, bounded
+  backoff (about 15 s) until a fetch carries facts observed since that
+  transition. `AdapterCapabilityRow[]` loaded once.
 - **`src/host-ops/host-operations-store.ts`**: the only owner of Host
   Operations. Listen-before-backfill over `hostOperations.*` through
   `src/ipc/sequenced-stream.ts`, following `src/slicing/slicing-store.ts`.

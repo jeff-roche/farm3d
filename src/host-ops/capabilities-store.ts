@@ -1,4 +1,4 @@
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, onCleanup } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable } from "../ipc/client";
 import { notFound } from "../ipc/local-errors";
@@ -84,28 +84,93 @@ function statusKey(status: PrinterStatus | undefined): string {
   return status ? `${status.connectionState}/${status.operationalState}` : "none";
 }
 
+/** How long after an Online transition to refetch again while the
+ *  backend's host-facts refresh hasn't landed (about 15 s in all, which
+ *  covers the host read's connect and query timeouts). */
+const HOST_FACTS_RETRY_MS = [500, 1_000, 2_000, 4_000, 8_000];
+/** `observedAt` has one-second precision, and the backend saw the Online
+ *  transition before this frontend did. */
+const OBSERVED_AT_SLACK_MS = 2_000;
+
+/** Whether `result` carries host facts read since the Printer came Online
+ *  at `onlineAt` (a `Date.now()` value). */
+function hasFactsSince(result: PrinterCapabilities, onlineAt: number): boolean {
+  if (!result.hostFacts || !result.observedAt) return false;
+  const observedAt = Date.parse(result.observedAt);
+  return Number.isFinite(observedAt) && observedAt >= onlineAt - OBSERVED_AT_SLACK_MS;
+}
+
 /** Keeps every listed Printer's capabilities loaded: fetches each once,
  *  refetches one whenever its status changes (spec "Events": there is no
  *  capability event), and forgets a Printer that leaves the list. A failed
- *  fetch keeps what was held; the next status change tries again. Returns
- *  a disposer. */
+ *  fetch keeps what was held; the next status change tries again.
+ *
+ *  When a Printer comes Online (or is first seen Online) the backend
+ *  re-reads its host facts in the background (D6), so the refetch that the
+ *  status change triggers can land first and see no facts, or the previous
+ *  Online's. Until a fetch carries facts observed since that transition,
+ *  this refetches on a short, bounded backoff; any later status change
+ *  supersedes it. Returns a disposer. */
 export function syncCapabilities(
   list: () => ReadonlyArray<{ id: string; runtimeStatus?: PrinterStatus }>,
 ): () => void {
   return createRoot((dispose) => {
     const seen = new Map<string, string>();
+    /** Bumped on every refetch a status change starts, so an older
+     *  Online's retries stop. */
+    const generation = new Map<string, number>();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    let disposed = false;
+    onCleanup(() => {
+      disposed = true;
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    });
+
+    const current = (id: string, token: number) => !disposed && generation.get(id) === token;
+
+    function untilFactsLand(id: string, token: number, onlineAt: number, attempt = 0): void {
+      const retry = () => {
+        const delay = HOST_FACTS_RETRY_MS[attempt];
+        if (delay === undefined || !current(id, token)) return;
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          if (current(id, token)) untilFactsLand(id, token, onlineAt, attempt + 1);
+        }, delay);
+        timers.add(timer);
+      };
+      loadCapabilities(id).then(
+        (result) => {
+          if (!hasFactsSince(result, onlineAt)) retry();
+        },
+        retry,
+      );
+    }
+
     createEffect(() => {
-      const current = new Set<string>();
+      const present = new Set<string>();
       for (const printer of list()) {
-        current.add(printer.id);
+        present.add(printer.id);
         const key = statusKey(printer.runtimeStatus);
-        if (seen.get(printer.id) === key) continue;
+        const previous = seen.get(printer.id);
+        if (previous === key) continue;
         seen.set(printer.id, key);
-        loadCapabilities(printer.id).catch(() => {});
+        const token = (generation.get(printer.id) ?? 0) + 1;
+        generation.set(printer.id, token);
+        const cameOnline =
+          printer.runtimeStatus?.connectionState === "online" && !previous?.startsWith("online/");
+        if (cameOnline && desktopAvailable()) {
+          untilFactsLand(printer.id, token, Date.now());
+        } else {
+          loadCapabilities(printer.id).catch(() => {});
+        }
       }
       for (const id of [...seen.keys()]) {
-        if (current.has(id)) continue;
+        if (present.has(id)) continue;
         seen.delete(id);
+        // Bumped, not deleted: a Printer that comes back starts past any
+        // retry still pending from before.
+        generation.set(id, (generation.get(id) ?? 0) + 1);
         setState("byPrinter", produce((byPrinter) => { delete byPrinter[id]; }));
       }
     });

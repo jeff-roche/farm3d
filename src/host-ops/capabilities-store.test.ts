@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "solid-js/store";
 import { printerCapabilities, printerStatus } from "./test-records";
-import type { PrinterStatus } from "./types";
+import type { PrinterCapabilities, PrinterStatus } from "./types";
 
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => tauriMock);
@@ -110,7 +110,7 @@ describe("syncCapabilities", () => {
     const requested: string[] = [];
     responders.printer_capabilities = (args) => {
       requested.push(args.printerId as string);
-      return printerCapabilities({ printerId: args.printerId as string });
+      return printerCapabilities({ printerId: args.printerId as string, observedAt: new Date().toISOString() });
     };
     const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
       { id: "prn-1", runtimeStatus: printerStatus("ready") },
@@ -145,7 +145,7 @@ describe("syncCapabilities", () => {
     let fail = false;
     responders.printer_capabilities = (args) => {
       if (fail) throw { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "busy", recovery: [], retryable: true };
-      return printerCapabilities({ printerId: args.printerId as string });
+      return printerCapabilities({ printerId: args.printerId as string, observedAt: new Date().toISOString() });
     };
     const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
       { id: "prn-1", runtimeStatus: printerStatus("ready") },
@@ -162,5 +162,77 @@ describe("syncCapabilities", () => {
     setList((current) => current.filter((printer) => printer.id !== "prn-2"));
     await flush();
     expect(capabilities.forPrinter("prn-2")).toBeUndefined();
+  });
+
+  describe("after the Printer comes Online", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("refetches until the backend's host-facts refresh has landed, then stops", async () => {
+      // The backend re-reads the host facts in the background after Online
+      // (D6), so the first refetch sees none, then the previous Online's.
+      const answers: Array<() => PrinterCapabilities> = [
+        () => printerCapabilities({ hostFacts: null, observedAt: null }), // while Offline
+        () => printerCapabilities({ hostFacts: null, observedAt: null }),
+        () => printerCapabilities({ observedAt: new Date(Date.now() - 60_000).toISOString() }),
+        () => printerCapabilities({ observedAt: new Date().toISOString() }),
+      ];
+      let calls = 0;
+      responders.printer_capabilities = () => {
+        const answer = answers[Math.min(calls, answers.length - 1)];
+        calls += 1;
+        return answer();
+      };
+      const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+        { id: "prn-1", runtimeStatus: printerStatus("offline", "fresh", { connectionState: "offline" }) },
+      ]);
+      const { capabilities, syncCapabilities } = await import("./capabilities-store");
+      const stop = syncCapabilities(() => list);
+      await flush();
+      expect(calls).toBe(1);
+
+      setList(0, "runtimeStatus", printerStatus("ready"));
+      await flush();
+      expect(calls).toBe(2);
+      expect(capabilities.forPrinter("prn-1")?.hostFacts).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+      expect(calls).toBe(4);
+      expect(capabilities.forPrinter("prn-1")?.hostFacts).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(calls).toBe(4);
+      stop();
+    });
+
+    it("gives up after a bounded number of refetches, and a disposed sync schedules none", async () => {
+      let calls = 0;
+      responders.printer_capabilities = () => {
+        calls += 1;
+        return printerCapabilities({ hostFacts: null, observedAt: null });
+      };
+      const [list] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+        { id: "prn-1", runtimeStatus: printerStatus("ready") },
+      ]);
+      const { syncCapabilities } = await import("./capabilities-store");
+      const stop = syncCapabilities(() => list);
+      await flush();
+      await vi.advanceTimersByTimeAsync(120_000);
+      const bounded = calls;
+      expect(bounded).toBeGreaterThan(1);
+      expect(bounded).toBeLessThanOrEqual(8);
+
+      calls = 0;
+      const [other] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+        { id: "prn-2", runtimeStatus: printerStatus("ready") },
+      ]);
+      const stopOther = syncCapabilities(() => other);
+      await flush();
+      stopOther();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(calls).toBe(1);
+      stop();
+    });
   });
 });
