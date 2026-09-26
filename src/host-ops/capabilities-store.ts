@@ -1,8 +1,9 @@
-import { createStore } from "solid-js/store";
+import { createEffect, createRoot } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import { command, desktopAvailable } from "../ipc/client";
 import { notFound } from "../ipc/local-errors";
 import type { WebHostOpsFixture } from "./web-fixtures";
-import type { AdapterCapabilityRow, PrinterCapabilities } from "./types";
+import type { AdapterCapabilityRow, PrinterCapabilities, PrinterStatus } from "./types";
 
 /** `PrinterCapabilities` per Printer, from `printer_capabilities`; and the
  *  registry's `AdapterCapabilityRow[]`, loaded once (spec "Frontend
@@ -73,4 +74,41 @@ export async function loadAdapterCapabilityMatrix(force = false): Promise<Adapte
   const rows = await command("adapter_capability_matrix");
   setState({ adapterMatrix: rows, adapterMatrixLoaded: true });
   return rows;
+}
+
+/** What counts as "the Printer's status changed" for capabilities: its
+ *  connection (host facts are re-read on each Online transition, spec D6)
+ *  or its operational state. Telemetry-only updates (temperatures,
+ *  progress) don't refetch. */
+function statusKey(status: PrinterStatus | undefined): string {
+  return status ? `${status.connectionState}/${status.operationalState}` : "none";
+}
+
+/** Keeps every listed Printer's capabilities loaded: fetches each once,
+ *  refetches one whenever its status changes (spec "Events": there is no
+ *  capability event), and forgets a Printer that leaves the list. A failed
+ *  fetch keeps what was held; the next status change tries again. Returns
+ *  a disposer. */
+export function syncCapabilities(
+  list: () => ReadonlyArray<{ id: string; runtimeStatus?: PrinterStatus }>,
+): () => void {
+  return createRoot((dispose) => {
+    const seen = new Map<string, string>();
+    createEffect(() => {
+      const current = new Set<string>();
+      for (const printer of list()) {
+        current.add(printer.id);
+        const key = statusKey(printer.runtimeStatus);
+        if (seen.get(printer.id) === key) continue;
+        seen.set(printer.id, key);
+        loadCapabilities(printer.id).catch(() => {});
+      }
+      for (const id of [...seen.keys()]) {
+        if (current.has(id)) continue;
+        seen.delete(id);
+        setState("byPrinter", produce((byPrinter) => { delete byPrinter[id]; }));
+      }
+    });
+    return dispose;
+  });
 }

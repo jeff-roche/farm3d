@@ -231,3 +231,143 @@ describe("derived views", () => {
     expect(hostOperations.recentFor("prn-1").map((o) => o.id)).toEqual(["hop-1"]);
   });
 });
+
+describe("write actions (desktop)", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const invoked = (name: string) => tauriMock.invoke.mock.calls.filter(([called]) => called === name).map(([, args]) => args as Record<string, unknown>);
+
+  it("each wrapper sends a fresh operationId per user action and exactly the spec's arguments", async () => {
+    const row = hostOperation({ id: "hop-w" });
+    for (const name of ["stage_slice_revision", "start_staged_artifact", "pause_host_print", "resume_host_print", "cancel_host_print", "reconcile_host_operation", "abandon_host_operation"]) {
+      responders[name] = () => row;
+    }
+    const store = await startedStore();
+    await store.stageSliceRevision("prn-1", "slr-1");
+    await store.stageSliceRevision("prn-1", "slr-1");
+    await store.startStagedArtifact("prn-1", "hop-up", "finished");
+    await store.pauseHostPrint("prn-1");
+    await store.resumeHostPrint("prn-1");
+    await store.cancelHostPrint("prn-1");
+    await store.reconcileHostOperation("hop-u");
+    await store.abandonHostOperation("hop-u", "  checked by hand  ");
+
+    const [firstStage, secondStage] = invoked("stage_slice_revision");
+    expect(firstStage).toEqual({ contractVersion: 1, operationId: expect.stringMatching(UUID), printerId: "prn-1", sliceRevisionId: "slr-1" });
+    expect(secondStage.operationId).not.toBe(firstStage.operationId);
+    expect(invoked("start_staged_artifact")).toEqual([
+      { contractVersion: 1, operationId: expect.stringMatching(UUID), printerId: "prn-1", hostOperationId: "hop-up", priorState: "finished" },
+    ]);
+    for (const verb of ["pause_host_print", "resume_host_print", "cancel_host_print"]) {
+      expect(invoked(verb)).toEqual([{ contractVersion: 1, operationId: expect.stringMatching(UUID), printerId: "prn-1" }]);
+    }
+    expect(invoked("reconcile_host_operation")).toEqual([{ contractVersion: 1, hostOperationId: "hop-u" }]);
+    expect(invoked("abandon_host_operation")).toEqual([
+      { contractVersion: 1, operationId: expect.stringMatching(UUID), hostOperationId: "hop-u", acknowledgement: "hostStateUnknown", note: "checked by hand" },
+    ]);
+    const ids = tauriMock.invoke.mock.calls.map(([, args]) => (args as { operationId?: string }).operationId).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("an empty abandon note is left out", async () => {
+    responders.abandon_host_operation = () => hostOperation({ id: "hop-u", state: "abandoned" });
+    const store = await startedStore();
+    await store.abandonHostOperation("hop-u", "   ");
+    expect(invoked("abandon_host_operation")[0]).not.toHaveProperty("note");
+  });
+
+  it("retries a transport failure once with the same operationId, never a CommandError", async () => {
+    let calls = 0;
+    responders.pause_host_print = () => {
+      calls += 1;
+      if (calls === 1) throw new Error("socket closed");
+      return hostOperation({ id: "hop-p", kind: "pause" });
+    };
+    responders.cancel_host_print = () => { throw commandError("CONTROL_NOT_ALLOWED", "The printer isn't in a state to cancel now: it is ready."); };
+    const store = await startedStore();
+    await store.pauseHostPrint("prn-1");
+    const [first, second] = invoked("pause_host_print");
+    expect(second.operationId).toBe(first.operationId);
+    await expect(store.cancelHostPrint("prn-1")).rejects.toMatchObject({ code: "CONTROL_NOT_ALLOWED" });
+    expect(invoked("cancel_host_print")).toHaveLength(1);
+  });
+
+  it("adds the returned row when the stream hasn't delivered it yet, and never regresses a newer one", async () => {
+    responders.stage_slice_revision = () => hostOperation({ id: "hop-new", state: "dispatching" });
+    responders.pause_host_print = () => hostOperation({ id: "hop-1", kind: "pause", state: "dispatching" });
+    responders.list_host_operations = () => hostOperationsSnapshot(0, { operations: [hostOperation({ id: "hop-1", kind: "pause", state: "succeeded" })] });
+    const store = await startedStore();
+    await store.stageSliceRevision("prn-1", "slr-1");
+    expect(store.hostOperations.operation("hop-new")?.state).toBe("dispatching");
+    await store.pauseHostPrint("prn-1");
+    expect(store.hostOperations.operation("hop-1")?.state).toBe("succeeded");
+  });
+
+  it("never sends a credential: a Printer's credentialRef appears in no request", async () => {
+    const SECRET = "cred-ref-SEEDED-SECRET-9f2c";
+    responders.list_printers = () => [{
+      id: "prn-1", revision: 1, name: "Bay 1", notes: "", overrides: {},
+      catalogRef: { vendor: "V", model: "M", variant: "M 0.4", modelId: "m", printerVariant: "0.4" },
+      connection: { kind: "moonraker", host: "192.0.2.10", port: 7125, useTls: false, credentialRef: SECRET },
+      profileResolution: { catalogStatus: "ok", modelLabel: "M", variantLabel: "M", profile: {}, overriddenFields: [], inherited: {}, profileDrift: [], unknownOverrideKeys: [] },
+      startSafety: "confirmBedClear", materialSlots: [], setupGaps: [], createdAt: "", updatedAt: "",
+    }];
+    for (const name of ["stage_slice_revision", "start_staged_artifact", "pause_host_print", "resume_host_print", "cancel_host_print", "reconcile_host_operation", "abandon_host_operation"]) {
+      responders[name] = () => hostOperation({ id: "hop-s" });
+    }
+    const { loadPrinters } = await import("../printers/printer-store");
+    await loadPrinters();
+    const store = await startedStore();
+    await store.stageSliceRevision("prn-1", "slr-1");
+    await store.startStagedArtifact("prn-1", "hop-up", "ready");
+    await store.pauseHostPrint("prn-1");
+    await store.resumeHostPrint("prn-1");
+    await store.cancelHostPrint("prn-1");
+    await store.reconcileHostOperation("hop-u");
+    await store.abandonHostOperation("hop-u");
+    const writes = tauriMock.invoke.mock.calls.filter(([name]) => name !== "list_printers" && name !== "list_host_operations");
+    expect(writes).toHaveLength(7);
+    expect(JSON.stringify(writes)).not.toContain(SECRET);
+    expect(JSON.stringify(store.hostOperations.operations())).not.toContain(SECRET);
+  });
+});
+
+describe("write actions (web)", () => {
+  it("refuses every write with a needs-the-desktop error and invokes nothing", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const store = await import("./host-operations-store");
+    await expect(store.stageSliceRevision("prn-1", "slr-1")).rejects.toMatchObject({ code: "PERSISTENCE_UNAVAILABLE" });
+    await expect(store.startStagedArtifact("prn-1", "hop-1", "ready")).rejects.toMatchObject({ code: "PERSISTENCE_UNAVAILABLE" });
+    await expect(store.abandonHostOperation("hop-1")).rejects.toMatchObject({ code: "PERSISTENCE_UNAVAILABLE" });
+    expect(tauriMock.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("rows of Printers that no longer exist", () => {
+  it("are dropped once the Printers have loaded, including after a Printer is deleted", async () => {
+    const record = (id: string) => ({
+      id, revision: 1, name: id, notes: "", overrides: {},
+      catalogRef: { vendor: "V", model: "M", variant: "M 0.4", modelId: "m", printerVariant: "0.4" },
+      profileResolution: { catalogStatus: "ok", modelLabel: "M", variantLabel: "M", profile: {}, overriddenFields: [], inherited: {}, profileDrift: [], unknownOverrideKeys: [] },
+      startSafety: "confirmBedClear", materialSlots: [], setupGaps: [], createdAt: "", updatedAt: "",
+    });
+    responders.list_printers = () => [record("prn-1"), record("prn-2")];
+    responders.delete_printer = () => ({});
+    responders.list_host_operations = () => hostOperationsSnapshot(0, {
+      operations: [
+        hostOperation({ id: "hop-1", printerId: "prn-1", state: "succeeded" }),
+        hostOperation({ id: "hop-2", printerId: "prn-2", state: "failed" }),
+        hostOperation({ id: "hop-gone", printerId: "prn-gone", state: "uncertain" }),
+      ],
+    });
+    const { loadPrinters, removePrinter } = await import("../printers/printer-store");
+    await loadPrinters();
+    const { hostOperations } = await startedStore();
+    expect(hostOperations.operations().map((o) => o.id).sort()).toEqual(["hop-1", "hop-2"]);
+    expect(hostOperations.unresolvedFor("prn-gone")).toBeUndefined();
+    expect(hostOperations.operation("hop-gone")).toBeUndefined();
+
+    await removePrinter("prn-2");
+    expect(hostOperations.operations().map((o) => o.id)).toEqual(["hop-1"]);
+    expect(hostOperations.recentFor("prn-2")).toEqual([]);
+  });
+});

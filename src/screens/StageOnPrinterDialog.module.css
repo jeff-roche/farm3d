@@ -1,0 +1,31 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(26rem, 80vw);
+}
+
+.text,
+.muted {
+  margin: 0;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.text {
+  color: var(--f3d-color-text);
+}
+
+.muted {
+  color: var(--f3d-color-text-muted);
+}
+
+.strong {
+  font-weight: var(--f3d-type-label-weight);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

@@ -52,13 +52,21 @@
 .item {
   composes: focusRing from "./shared.module.css";
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
   padding: 0.375rem 0.5rem;
   border-radius: var(--f3d-radius-sm);
   color: var(--f3d-color-text);
   font-family: var(--f3d-type-body-font);
   font-size: var(--f3d-type-body-size);
   cursor: pointer;
+}
+
+.itemDescription {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
 }
 
 .item[data-disabled] {

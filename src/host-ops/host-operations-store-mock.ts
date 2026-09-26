@@ -11,7 +11,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { vi } from "vitest";
 import { buildWebHostOpsFixture, type WebHostOpsFixture } from "./web-fixtures";
 import { isTerminalHostOperationState } from "./types";
-import type { HostOperation } from "./types";
+import type { HostOperation, PriorState } from "./types";
 
 interface MockHostOperationsState {
   operations: HostOperation[];
@@ -49,7 +49,47 @@ export const hostOperationsStoreMock = {
   },
   startHostOperations: vi.fn(async (): Promise<() => void> => () => {}),
   refreshHostOperations: vi.fn(),
+  stageSliceRevision: vi.fn(async (printerId: string, sliceRevisionId: string): Promise<HostOperation> =>
+    mockRow({ printerId, sliceRevisionId, kind: "upload" })),
+  startStagedArtifact: vi.fn(async (printerId: string, _hostOperationId: string, _priorState: PriorState): Promise<HostOperation> =>
+    mockRow({ printerId, kind: "start" })),
+  pauseHostPrint: vi.fn(async (printerId: string): Promise<HostOperation> => mockRow({ printerId, kind: "pause" })),
+  resumeHostPrint: vi.fn(async (printerId: string): Promise<HostOperation> => mockRow({ printerId, kind: "resume" })),
+  cancelHostPrint: vi.fn(async (printerId: string): Promise<HostOperation> => mockRow({ printerId, kind: "cancel" })),
+  reconcileHostOperation: vi.fn(async (hostOperationId: string): Promise<HostOperation> =>
+    state.operations.find((o) => o.id === hostOperationId) ?? mockRow({ id: hostOperationId })),
+  abandonHostOperation: vi.fn(async (hostOperationId: string, _note?: string): Promise<HostOperation> =>
+    mockRow({ ...state.operations.find((o) => o.id === hostOperationId), id: hostOperationId, state: "abandoned" })),
 };
+
+/** The row a mocked write resolves with: a `dispatching` stand-in (the
+ *  real command's write-ahead row), not added to the store. */
+function mockRow(overrides: Partial<HostOperation>): HostOperation {
+  return {
+    id: "hop-mock",
+    printerId: "prn-mock",
+    kind: "upload",
+    state: "dispatching",
+    sliceRevisionId: null,
+    sourceHostOperationId: null,
+    gcodeSha256: null,
+    gcodeSize: null,
+    hostPath: "farm3d/mock.gcode",
+    endpoint: { kind: "moonraker", host: "192.0.2.10", port: 7125 },
+    failure: null,
+    resolution: null,
+    attempts: 0,
+    lastAttempt: null,
+    noLongerPending: false,
+    abandonedAt: null,
+    abandonNote: null,
+    createdAt: "2026-09-25T00:00:00Z",
+    dispatchedAt: null,
+    uncertainSince: null,
+    resolvedAt: null,
+    ...overrides,
+  };
+}
 
 /** Replaces the mock's operations, as an event settling into the real
  *  store would. */
@@ -67,4 +107,7 @@ export function loadWebHostOperationsFixture(): WebHostOpsFixture {
 
 export function resetHostOperationsStoreMock(): void {
   setState(initialState());
+  for (const action of Object.values(hostOperationsStoreMock)) {
+    if (typeof action === "function" && "mockClear" in action) action.mockClear();
+  }
 }

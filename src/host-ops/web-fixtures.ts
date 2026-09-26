@@ -1,11 +1,14 @@
 import { WEB_SLICING_REVISION_FARM3D } from "../slicing/web-fixtures";
+import type { ConnectionConfig } from "../printers/types";
 import type {
   AdapterCapabilityRow,
   CapabilityEvidence,
   CapabilityKey,
   CapabilityState,
   HostOperation,
+  OperationalState,
   PrinterCapabilities,
+  PrinterStatus,
 } from "./types";
 
 /** `just web`'s host-ops seed data (spec "Frontend architecture", State):
@@ -33,6 +36,101 @@ export const WEB_HOST_OPS_PRINTER_OCTOPRINT = "prn-web-hostops-octoprint";
 export const WEB_HOST_OPS_PRINTER_FINISHED = "prn-web-hostops-finished";
 export const WEB_HOST_OPS_PRINTER_FAILED = "prn-web-hostops-failed";
 export const WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD = "prn-web-hostops-uncertain-upload";
+
+/** The six Printers themselves, which `printer-store.ts` joins onto its
+ *  own web-mode Printers so `just web` shows them in the Printer list and
+ *  the Job tab. Catalog refs resolve against the bundled catalog the same
+ *  way `printer-store.ts`'s own seeds do; the status is what the
+ *  supervisor would push. No credential: none of them has one. */
+export interface WebHostOpsPrinter {
+  id: string;
+  name: string;
+  vendor: string;
+  model: string;
+  printerVariant: string;
+  connection: ConnectionConfig;
+  status: PrinterStatus;
+}
+
+function webStatus(state: OperationalState, telemetry: Partial<PrinterStatus["telemetry"]> = {}): PrinterStatus {
+  const ready = state === "ready";
+  return {
+    connectionState: "online",
+    telemetry: {
+      hostActivity: state === "printing" || state === "paused" || state === "finished" || state === "cancelled" || state === "failed" ? state : "idle",
+      nozzleTempC: 24,
+      nozzleTargetC: 0,
+      bedTempC: 23,
+      bedTargetC: 0,
+      ...telemetry,
+    },
+    lastObservedAt: "2026-09-24T12:00:00Z",
+    operationalState: state,
+    readiness: ready
+      ? { state: "ready", reason: null }
+      : { state: "notReady", reason: state === "failed" ? "printFailed" : state === "printing" ? "printerBusy" : "bedNeedsClearing" },
+    freshness: "fresh",
+    cacheWarnings: [],
+    updatedAt: "2026-09-24T12:00:00Z",
+  };
+}
+
+function moonrakerConnection(host: string): ConnectionConfig {
+  return { kind: "moonraker", host, port: 7125, useTls: false };
+}
+
+export const WEB_HOST_OPS_PRINTERS: WebHostOpsPrinter[] = [
+  {
+    id: WEB_HOST_OPS_PRINTER_READY_SINGLE, name: "Moonraker — Bay 4",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
+    connection: moonrakerConnection("192.0.2.21"),
+    status: webStatus("ready"),
+  },
+  {
+    id: WEB_HOST_OPS_PRINTER_READY_MULTI, name: "Four-tool — Bay 5",
+    vendor: "Snapmaker", model: "Snapmaker U1", printerVariant: "0.4",
+    connection: moonrakerConnection("192.0.2.22"),
+    status: webStatus("printing", {
+      jobName: "farm3d/bracket-set.gcode",
+      progress: 0.42,
+      printDurationS: 2_730,
+      nozzleTempC: 220,
+      nozzleTargetC: 220,
+      bedTempC: 60,
+      bedTargetC: 60,
+      tools: [
+        { index: 0, tempC: 220, targetC: 220 },
+        { index: 1, tempC: 150, targetC: 150 },
+        { index: 2, tempC: 24, targetC: 0 },
+        { index: 3, tempC: 25, targetC: 0 },
+      ],
+    }),
+  },
+  {
+    id: WEB_HOST_OPS_PRINTER_OCTOPRINT, name: "OctoPrint — Bay 6",
+    vendor: "Prusa", model: "Prusa MK4", printerVariant: "0.4",
+    connection: { kind: "octoprint", host: "192.0.2.23", port: 80, useTls: false },
+    status: webStatus("ready"),
+  },
+  {
+    id: WEB_HOST_OPS_PRINTER_FINISHED, name: "Finished — Bay 7",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
+    connection: moonrakerConnection("192.0.2.24"),
+    status: webStatus("finished", { jobName: "farm3d/enclosure-lid.gcode", progress: 1 }),
+  },
+  {
+    id: WEB_HOST_OPS_PRINTER_FAILED, name: "Failed — Bay 8",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
+    connection: moonrakerConnection("192.0.2.25"),
+    status: webStatus("failed", { jobName: "farm3d/enclosure-lid.gcode", progress: 0.08 }),
+  },
+  {
+    id: WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD, name: "Uncertain upload — Bay 9",
+    vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
+    connection: moonrakerConnection("192.0.2.26"),
+    status: webStatus("ready"),
+  },
+];
 
 export const WEB_HOST_OPS_STAGED_OPERATION = "hop-web-finished-staged";
 export const WEB_HOST_OPS_FAILED_OPERATION = "hop-web-failed-start";

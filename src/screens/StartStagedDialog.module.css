@@ -1,0 +1,45 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(28rem, 80vw);
+}
+
+.lead,
+.reason,
+.progress {
+  margin: 0;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.lead,
+.progress {
+  color: var(--f3d-color-text);
+}
+
+.reason {
+  color: var(--f3d-color-text-muted);
+}
+
+.file {
+  font-family: var(--f3d-type-mono-font);
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.footer .reason {
+  margin-right: auto;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}

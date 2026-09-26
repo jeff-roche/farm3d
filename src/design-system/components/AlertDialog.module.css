@@ -1,0 +1,18 @@
+.overlay {
+  composes: overlay from "./Dialog.module.css";
+}
+
+.content {
+  composes: content from "./Dialog.module.css";
+  max-width: min(32rem, 90vw);
+}
+
+.title {
+  composes: title from "./Dialog.module.css";
+  margin: 0;
+}
+
+.description {
+  composes: description from "./Dialog.module.css";
+  margin: 0;
+}

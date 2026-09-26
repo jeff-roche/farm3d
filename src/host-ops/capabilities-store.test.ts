@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { printerCapabilities } from "./test-records";
+import { createStore } from "solid-js/store";
+import { printerCapabilities, printerStatus } from "./test-records";
+import type { PrinterStatus } from "./types";
 
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => tauriMock);
@@ -96,5 +98,69 @@ describe("capabilities-store (web)", () => {
   it("rejects an unknown Printer id with NOT_FOUND", async () => {
     const { loadCapabilities } = await import("./capabilities-store");
     await expect(loadCapabilities("prn-unknown")).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("syncCapabilities", () => {
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  }
+
+  it("loads each Printer's capabilities, refetches when its status changes, and not on a telemetry-only update", async () => {
+    const requested: string[] = [];
+    responders.printer_capabilities = (args) => {
+      requested.push(args.printerId as string);
+      return printerCapabilities({ printerId: args.printerId as string });
+    };
+    const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+      { id: "prn-1", runtimeStatus: printerStatus("ready") },
+      { id: "prn-2" },
+    ]);
+    const { capabilities, syncCapabilities } = await import("./capabilities-store");
+    const stop = syncCapabilities(() => list);
+    await flush();
+    expect(requested.sort()).toEqual(["prn-1", "prn-2"]);
+    expect(capabilities.forPrinter("prn-1")).toBeDefined();
+
+    requested.length = 0;
+    setList(0, "runtimeStatus", printerStatus("ready", "fresh", { telemetry: { hostActivity: "idle", nozzleTempC: 210 } }));
+    await flush();
+    expect(requested).toEqual([]);
+
+    setList(0, "runtimeStatus", printerStatus("offline", "fresh", { connectionState: "offline" }));
+    await flush();
+    expect(requested).toEqual(["prn-1"]);
+
+    setList(1, "runtimeStatus", printerStatus("ready"));
+    await flush();
+    expect(requested).toEqual(["prn-1", "prn-2"]);
+
+    stop();
+    setList(1, "runtimeStatus", printerStatus("printing"));
+    await flush();
+    expect(requested).toEqual(["prn-1", "prn-2"]);
+  });
+
+  it("forgets a Printer that is gone, and keeps the last capabilities when a refetch fails", async () => {
+    let fail = false;
+    responders.printer_capabilities = (args) => {
+      if (fail) throw { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "busy", recovery: [], retryable: true };
+      return printerCapabilities({ printerId: args.printerId as string });
+    };
+    const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+      { id: "prn-1", runtimeStatus: printerStatus("ready") },
+      { id: "prn-2", runtimeStatus: printerStatus("ready") },
+    ]);
+    const { capabilities, syncCapabilities } = await import("./capabilities-store");
+    syncCapabilities(() => list);
+    await flush();
+    fail = true;
+    setList(0, "runtimeStatus", printerStatus("printing"));
+    await flush();
+    expect(capabilities.forPrinter("prn-1")?.printerId).toBe("prn-1");
+
+    setList((current) => current.filter((printer) => printer.id !== "prn-2"));
+    await flush();
+    expect(capabilities.forPrinter("prn-2")).toBeUndefined();
   });
 });

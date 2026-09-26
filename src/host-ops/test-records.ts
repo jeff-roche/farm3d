@@ -1,5 +1,6 @@
-/** Record builders shared by the host-ops tests. Test-only: nothing
- *  outside a test imports this module. */
+/** Record builders shared by the host-ops tests (and the screens built on
+ *  them). Test-only: nothing outside a test imports this module. */
+import type { ResolvedPrinter } from "../printers/types";
 import type {
   HostOperation,
   HostOperationsSnapshot,
@@ -97,6 +98,41 @@ export function printerCapabilities(overrides: Partial<PrinterCapabilities> = {}
       apiVersion: "1.5.0",
     },
     observedAt: "2026-09-25T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** A Printer as the printer store holds it: a Moonraker Connection, no
+ *  credential, and the given live status. */
+export function resolvedPrinter(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
+  return {
+    id: "prn-1",
+    revision: 1,
+    name: "Bay 1",
+    notes: "",
+    overrides: {},
+    catalogRef: { vendor: "Elegoo", model: "Elegoo Centauri Carbon", variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4" },
+    catalogStatus: "ok",
+    modelLabel: "Elegoo Centauri Carbon",
+    variantLabel: "Elegoo Centauri Carbon 0.4 nozzle",
+    profile: {
+      bedShape: { kind: "rectangular", widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
+      printableHeightMm: 256, bedExcludeAreas: [], defaultBedType: "4",
+      nozzleDiameterMm: [0.4], nozzleType: "hardened_steel", gcodeFlavor: "klipper",
+      hasAuxiliaryFan: true, supportsAirFiltration: true, supportsMultiFilament: true,
+      suggestedHostType: "moonraker",
+    },
+    overriddenFields: [],
+    inherited: {},
+    profileDrift: [],
+    unknownOverrideKeys: [],
+    startSafety: "confirmBedClear",
+    materialSlots: [{ id: "slt-1", position: 0, name: "Main" }],
+    setupGaps: [],
+    connection: { kind: "moonraker", host: "192.0.2.10", port: 7125, useTls: false },
+    runtimeStatus: printerStatus("ready"),
+    createdAt: "",
+    updatedAt: "",
     ...overrides,
   };
 }

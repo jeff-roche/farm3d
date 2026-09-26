@@ -184,3 +184,24 @@ it("never lets an unsupported capability and a failed Host Operation share copy 
   }
   expect(hostOperationLabel({ kind: "upload", state: "failed", resolution: null }).severity).toBe("error");
 });
+
+describe("capabilityName", () => {
+  it("names every CapabilityKey", async () => {
+    const { capabilityName, CAPABILITY_KEYS } = await import("./presentation");
+    expect(CAPABILITY_KEYS.map(capabilityName)).toEqual([
+      "Upload", "Start", "Pause", "Resume", "Cancel", "Read print state", "Verify staged files", "Camera",
+    ]);
+  });
+});
+
+describe("capabilityRefusalText", () => {
+  it("names the capability and why it is unavailable, with a host detail", async () => {
+    const { capabilityRefusalText } = await import("./presentation");
+    expect(capabilityRefusalText("upload", { status: "unsupported", reason: "notVerified", detail: "x" }, "octoprint"))
+      .toBe("Upload: Not verified yet");
+    expect(capabilityRefusalText("start", { status: "unsupported", reason: "host", detail: "This printer's Moonraker keeps no job history, so farm3d can't confirm a start." }, "moonraker"))
+      .toBe("Start: Not available on this printer. This printer's Moonraker keeps no job history, so farm3d can't confirm a start.");
+    expect(capabilityRefusalText("upload", { status: "unsupported", reason: "adapter", detail: "No Connection" }, null))
+      .toBe("Upload: No Connection");
+  });
+});

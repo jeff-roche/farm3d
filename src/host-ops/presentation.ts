@@ -2,6 +2,7 @@
  *  architecture" section and D11. Nothing here calls a command or touches
  *  a store — components pass in the data they already hold. */
 import type {
+  CapabilityKey,
   CapabilityState,
   EvidenceTier,
   HostOperationFailureCode,
@@ -145,4 +146,33 @@ export function capabilityStateLabel(state: CapabilityState, adapterKind: string
 /** The evidence tier CapabilityList shows next to a supported capability. */
 export function evidenceTierLabel(tier: EvidenceTier): string {
   return tier === "sim" ? "Simulator" : "Read-only hardware";
+}
+
+/** Every `CapabilityKey`, in the order the Setup tab lists them. */
+export const CAPABILITY_KEYS: CapabilityKey[] = [
+  "upload", "start", "pause", "resume", "cancel", "hostState", "artifactIdentity", "camera",
+];
+
+const CAPABILITY_NAMES: Record<CapabilityKey, string> = {
+  upload: "Upload",
+  start: "Start",
+  pause: "Pause",
+  resume: "Resume",
+  cancel: "Cancel",
+  hostState: "Read print state",
+  artifactIdentity: "Verify staged files",
+  camera: "Camera",
+};
+
+/** The name `CapabilityList` shows for a capability. */
+export function capabilityName(key: CapabilityKey): string {
+  return CAPABILITY_NAMES[key];
+}
+
+/** Why a control needing `key` isn't offered, as visible text: the
+ *  capability's name and its label, plus the host's detail when there is
+ *  one. Unsupported is not failed, so this never reads as an error. */
+export function capabilityRefusalText(key: CapabilityKey, state: CapabilityState, adapterKind: string | null): string {
+  const label = capabilityStateLabel(state, adapterKind);
+  return `${capabilityName(key)}: ${label.text}${label.detail ? `. ${label.detail}` : ""}`;
 }

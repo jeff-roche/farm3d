@@ -121,3 +121,29 @@ describe("controlOffer", () => {
     });
   });
 });
+
+describe("offer reason copy", () => {
+  it("startRefusalText reads a state label as the backend's START_NOT_ALLOWED message, and keeps the fixed sentences", async () => {
+    const { startRefusalText } = await import("./start-rule");
+    expect(startRefusalText("it is printing")).toBe("The printer can't start a print now: it is printing.");
+    expect(startRefusalText("Clear the error on the printer first.")).toBe("Clear the error on the printer first.");
+    expect(startRefusalText("A printer operation is pending.")).toBe("A printer operation is pending.");
+  });
+
+  it("controlRefusalText reads a state label as the backend's CONTROL_NOT_ALLOWED message", async () => {
+    const { controlRefusalText } = await import("./start-rule");
+    expect(controlRefusalText("pause", "it is ready")).toBe("The printer isn't in a state to pause now: it is ready.");
+    expect(controlRefusalText("cancel", "A printer operation is pending. You can still pause or cancel on the printer itself."))
+      .toBe("A printer operation is pending. You can still pause or cancel on the printer itself.");
+  });
+});
+
+describe("statusOrUnknown", () => {
+  it("refuses Start and controls for a Printer with no live status", async () => {
+    const { statusOrUnknown } = await import("./start-rule");
+    expect(startOffer(statusOrUnknown(undefined), false)).toEqual({ offered: false, reason: "its state is unknown" });
+    expect(controlOffer(statusOrUnknown(undefined), "pause", false)).toEqual({ offered: false, reason: "its state is unknown" });
+    const live = printerStatus("ready");
+    expect(statusOrUnknown(live)).toBe(live);
+  });
+});

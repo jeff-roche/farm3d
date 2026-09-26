@@ -18,6 +18,8 @@ import {
 } from "./library/library-store";
 import type { ImportSelectionSummary } from "./library/types";
 import { startSlicing } from "./slicing/slicing-store";
+import { startHostOperations } from "./host-ops/host-operations-store";
+import { syncCapabilities } from "./host-ops/capabilities-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -170,6 +172,8 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposeLibrary: (() => void) | undefined;
     let disposeSlicing: (() => void) | undefined;
+    let disposeHostOperations: (() => void) | undefined;
+    let stopCapabilitySync: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -217,14 +221,26 @@ function App() {
           reconcileNavigation();
         });
         // Slicing follows the Library (the spec's startup order), with
-        // the same retry and unmount handling.
+        // the same retry and unmount handling; Host Operations follow
+        // slicing (P6).
         void startSlicing().then((dispose) => {
           if (disposed || generation !== startupGeneration) {
             dispose();
             return;
           }
           disposeSlicing = dispose;
+          return startHostOperations().then((disposeOps) => {
+            if (disposed || generation !== startupGeneration) {
+              disposeOps();
+              return;
+            }
+            disposeHostOperations = disposeOps;
+          });
         });
+        // Capabilities have no event: refetch a Printer's whenever its
+        // status changes (spec "Events").
+        stopCapabilitySync?.();
+        stopCapabilitySync = syncCapabilities(printers);
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -252,6 +268,8 @@ function App() {
       unlisten?.();
       disposeLibrary?.();
       disposeSlicing?.();
+      disposeHostOperations?.();
+      stopCapabilitySync?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });

@@ -142,6 +142,10 @@ vi.mock("./library/library-store", async () => {
 });
 
 vi.mock("./slicing/slicing-store", async () => (await import("./slicing/slicing-store-mock")).slicingStoreMock);
+vi.mock("./host-ops/host-operations-store", async () =>
+  (await import("./host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("./host-ops/capabilities-store", async () =>
+  (await import("./host-ops/capabilities-store-mock")).capabilitiesStoreMock);
 
 vi.mock("./screens/SlicerSettingsDialog", () => ({
   SlicerSettingsDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
@@ -235,6 +239,8 @@ beforeEach(async () => {
   // The mocked slicing store outlives `vi.resetModules`; start each test
   // with its default spies.
   vi.mocked(await import("./slicing/slicing-store")).startSlicing.mockReset();
+  vi.mocked(await import("./host-ops/host-operations-store")).startHostOperations.mockReset().mockResolvedValue(() => {});
+  vi.mocked(await import("./host-ops/capabilities-store")).syncCapabilities.mockReset().mockReturnValue(() => {});
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -415,6 +421,36 @@ describe("App", () => {
     await Promise.resolve();
     unmount();
     expect(disposeSlicing).toHaveBeenCalledOnce();
+  });
+
+  it("starts Host Operations after slicing, keeps capabilities synced with the Printers, and disposes both on unmount", async () => {
+    const callOrder: string[] = [];
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    slicingStoreMock.startSlicing.mockImplementation(async () => {
+      callOrder.push("startSlicing");
+      return () => {};
+    });
+    const hostOps = vi.mocked(await import("./host-ops/host-operations-store"));
+    const capabilitiesStore = vi.mocked(await import("./host-ops/capabilities-store"));
+    const disposeHostOps = vi.fn();
+    const stopSync = vi.fn();
+    hostOps.startHostOperations.mockImplementation(async () => {
+      callOrder.push("startHostOperations");
+      return disposeHostOps;
+    });
+    capabilitiesStore.syncCapabilities.mockImplementation(() => stopSync);
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(hostOps.startHostOperations).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["startSlicing", "startHostOperations"]);
+    expect(capabilitiesStore.syncCapabilities).toHaveBeenCalledOnce();
+    const list = capabilitiesStore.syncCapabilities.mock.calls[0][0];
+    expect(list().map((printer) => printer.id)).toEqual([PRINTER.id]);
+    await Promise.resolve();
+    unmount();
+    expect(disposeHostOps).toHaveBeenCalledOnce();
+    expect(stopSync).toHaveBeenCalledOnce();
   });
 
   it("disposes a slicing start that finishes after unmount", async () => {

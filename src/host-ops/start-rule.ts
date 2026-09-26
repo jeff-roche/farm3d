@@ -76,3 +76,32 @@ export function controlOffer(status: PrinterStatus, verb: ControlVerb, hasUnreso
   if (allowed) return { offered: true };
   return { offered: false, reason: stateLabel(state, freshness) };
 }
+
+/** A `startOffer` reason as the text the UI shows. A bare state label
+ *  ("it is printing") becomes the backend's `START_NOT_ALLOWED` sentence,
+ *  so the disabled reason and a rejected command read the same; the fixed
+ *  sentences (`Failed`, an unresolved row) already are whole sentences. */
+export function startRefusalText(reason: string): string {
+  return reason.endsWith(".") ? reason : `The printer can't start a print now: ${reason}.`;
+}
+
+/** A `controlOffer` reason as the text the UI shows, matching the
+ *  backend's `CONTROL_NOT_ALLOWED` sentence (see `startRefusalText`). */
+export function controlRefusalText(verb: ControlVerb, reason: string): string {
+  return reason.endsWith(".") ? reason : `The printer isn't in a state to ${verb} now: ${reason}.`;
+}
+
+/** The status a Printer with no live status yet is judged by: its state
+ *  is unknown, so Start and every control are refused with "its state is
+ *  unknown". */
+export function statusOrUnknown(status: PrinterStatus | undefined): PrinterStatus {
+  return status ?? {
+    connectionState: "connecting",
+    telemetry: { hostActivity: "unknown" },
+    operationalState: "unknown",
+    readiness: { state: "notReady", reason: "unknownState" },
+    freshness: "fresh",
+    cacheWarnings: [],
+    updatedAt: "",
+  };
+}

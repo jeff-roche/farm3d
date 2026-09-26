@@ -16,6 +16,14 @@ vi.mock("./PrinterSetupPanel", () => ({
   PrinterSetupPanel: () => <div>Identity setup</div>,
 }));
 
+vi.mock("./PrinterJobPanel", () => ({
+  PrinterJobPanel: (props: { printer: { name: string } }) => <div>Job panel for {props.printer.name}</div>,
+}));
+
+vi.mock("./CapabilityList", () => ({
+  CapabilityList: (props: { printerId: string }) => <div>Capabilities of {props.printerId}</div>,
+}));
+
 vi.mock("./MaterialSlotsEditor", () => ({
   MATERIAL_SLOTS_ANCHOR_ID: "printer-setup-material-slots",
   MaterialSlotsSection: () => (
@@ -113,7 +121,8 @@ describe("PrinterDetailDock", () => {
     expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Status" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: /Job|Camera/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Status", "Setup", "Job"]);
+    expect(screen.queryByRole("tab", { name: /Camera/ })).not.toBeInTheDocument();
 
     const status = screen.getByRole("tab", { name: "Status" });
     status.focus();
@@ -123,6 +132,29 @@ describe("PrinterDetailDock", () => {
 
     await fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("has a Job tab with the Printer's Job panel, and lists capabilities in Setup", async () => {
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+    expect(screen.getByText("Capabilities of prn-1")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Job" }));
+    expect(screen.getByText("Job panel for North Bay")).toBeInTheDocument();
+  });
+
+  it("opens the Job tab on an OPEN_PRINTER_JOB request for this Printer, and ignores one for another", async () => {
+    const { openPrinterJob, printerJobRequest } = await import("../host-ops/open-printer-job");
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    expect(screen.getByRole("tab", { name: "Status" })).toHaveAttribute("aria-selected", "true");
+
+    openPrinterJob("prn-other");
+    await Promise.resolve();
+    expect(screen.getByRole("tab", { name: "Status" })).toHaveAttribute("aria-selected", "true");
+    expect(printerJobRequest()).toEqual({ printerId: "prn-other" });
+
+    openPrinterJob("prn-1");
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Job" })).toHaveAttribute("aria-selected", "true"));
+    expect(printerJobRequest()).toBeUndefined();
   });
 
   it("renders complementary inline content without dialog semantics", () => {

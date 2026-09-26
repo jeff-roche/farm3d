@@ -9,6 +9,7 @@ import { Select } from "./Select";
 import { Combobox } from "./Combobox";
 import { Tabs } from "./Tabs";
 import { Dialog } from "./Dialog";
+import { AlertDialog } from "./AlertDialog";
 import { Popover } from "./Popover";
 import { DropdownMenu } from "./DropdownMenu";
 import { Chip } from "./Chip";
@@ -166,6 +167,30 @@ describe("Select", () => {
   });
 });
 
+describe("Select with disabled options", () => {
+  it("lists a disabled option with its reason and never selects it", async () => {
+    const onChange = vi.fn();
+    const reasons: Record<string, string> = { Banana: "Out of season" };
+    render(() => (
+      <Select
+        label="Fruit"
+        options={["Apple", "Banana"]}
+        optionDisabled={(option) => option in reasons}
+        optionDescription={(option) => reasons[option]}
+        onChange={onChange}
+      />
+    ));
+    await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
+    const banana = await screen.findByRole("option", { name: /Banana/ });
+    expect(banana).toHaveAttribute("aria-disabled", "true");
+    expect(banana).toHaveTextContent("Out of season");
+    await fireEvent.pointerUp(banana, { pointerType: "mouse", button: 0 });
+    expect(onChange).not.toHaveBeenCalled();
+    await fireEvent.pointerUp(screen.getByRole("option", { name: "Apple" }), { pointerType: "mouse", button: 0 });
+    expect(onChange).toHaveBeenCalledWith("Apple");
+  });
+});
+
 describe("Select groups and an empty controlled value", () => {
   it("lists options under their group headings and selects one", async () => {
     const onChange = vi.fn();
@@ -316,6 +341,30 @@ describe("Tabs", () => {
     expect(screen.getByText("Content A")).toBeInTheDocument();
     await fireEvent.click(screen.getByText("Tab B"));
     await waitFor(() => expect(screen.getByText("Content B")).toBeInTheDocument());
+  });
+});
+
+describe("AlertDialog", () => {
+  it("renders an alertdialog with its title and description, driven by `open`", async () => {
+    const [open, setOpen] = createSignal(true);
+    const { unmount } = render(() => (
+      <AlertDialog title="Cancel this print?" description="The printer stops now." open={open()} onOpenChange={setOpen}>
+        <button onClick={() => setOpen(false)}>Keep printing</button>
+      </AlertDialog>
+    ));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveAccessibleName("Cancel this print?");
+    expect(dialog).toHaveAccessibleDescription("The printer stops now.");
+    await fireEvent.click(screen.getByText("Keep printing"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    unmount();
+  });
+
+  it("leaves an ordinary Dialog a dialog (Kobalte's own alert-dialog module would turn it into an alertdialog)", async () => {
+    const { unmount } = render(() => <Dialog title="Plain" open>Plain body</Dialog>);
+    expect(await screen.findByRole("dialog")).toHaveAccessibleName("Plain");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    unmount();
   });
 });
 

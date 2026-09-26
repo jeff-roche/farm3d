@@ -1,8 +1,9 @@
 import { createStore, reconcile } from "solid-js/store";
-import { command, desktopAvailable } from "../ipc/client";
+import { command, desktopAvailable, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
+import { printers, printerStoreStatus } from "../printers/printer-store";
 import { isHostOperationsEvent, isTerminalHostOperationState } from "./types";
-import type { HostOperation, HostOperationsEvent, HostOperationsSnapshot } from "./types";
+import type { HostOperation, HostOperationsEvent, HostOperationsSnapshot, PriorState } from "./types";
 
 /** The only owner of Host Operations (spec "Frontend architecture", State).
  *  Listen-before-backfill over `hostOperations.*`, copying
@@ -40,16 +41,26 @@ function newestByHostPath(uploads: HostOperation[]): HostOperation[] {
   return [...newestFor.values()];
 }
 
+/** Spec "State": the store drops rows whose Printer no longer exists
+ *  (there is no `removed` event; a deleted Printer's rows just stop
+ *  mattering). Until the Printers have loaded nothing is known to be gone,
+ *  so every row is kept. */
+function livingOperations(): HostOperation[] {
+  if (printerStoreStatus() !== "ready") return state.operations;
+  const known = new Set(printers().map((printer) => printer.id));
+  return state.operations.filter((o) => known.has(o.printerId));
+}
+
 export const hostOperations = {
-  operations: (): HostOperation[] => state.operations,
-  operation: (id: string): HostOperation | undefined => state.operations.find((o) => o.id === id),
+  operations: (): HostOperation[] => livingOperations(),
+  operation: (id: string): HostOperation | undefined => livingOperations().find((o) => o.id === id),
   /** At most one unresolved row per Printer (owner decision 2). */
   unresolvedFor: (printerId: string): HostOperation | undefined =>
-    state.operations.find((o) => o.printerId === printerId && !isTerminalHostOperationState(o.state)),
+    livingOperations().find((o) => o.printerId === printerId && !isTerminalHostOperationState(o.state)),
   stagedFor: (printerId: string): HostOperation[] =>
-    newestByHostPath(state.operations.filter((o) => o.printerId === printerId && o.kind === "upload" && o.state === "succeeded")),
+    newestByHostPath(livingOperations().filter((o) => o.printerId === printerId && o.kind === "upload" && o.state === "succeeded")),
   recentFor: (printerId: string): HostOperation[] =>
-    state.operations.filter((o) => o.printerId === printerId && isTerminalHostOperationState(o.state)),
+    livingOperations().filter((o) => o.printerId === printerId && isTerminalHostOperationState(o.state)),
   status: (): HostOperationsStatus => state.status,
   syncState: (): HostOperationsSyncState => state.syncState,
 };
@@ -137,4 +148,72 @@ export async function startHostOperations(): Promise<() => void> {
  *  no stream to refresh. */
 export function refreshHostOperations(): void {
   activeStream?.resync();
+}
+
+/** A command's returned row, when the stream hasn't delivered that row
+ *  yet. The command returns right after its write-ahead commit and the
+ *  stream's event for it can arrive first, followed by later transitions,
+ *  so a row the store already holds is never overwritten by this older
+ *  copy. */
+function adoptReturned(record: HostOperation): HostOperation {
+  if (!state.operations.some((o) => o.id === record.id)) upsertOperation(record);
+  return record;
+}
+
+/** Runs one user-initiated write. Each call is one user action, so it
+ *  gets a fresh client `operationId`; a transport failure is retried once
+ *  with that same id, so the backend replays a committed first try instead
+ *  of writing twice (never a `CommandError`, which is the backend's
+ *  answer). Rejects with the `CommandError` for the caller to render
+ *  inline. Web mode has no printer to write to and refuses. Only ids go
+ *  over the wire: a credential is never sent or held here. */
+async function write(action: string, send: (operationId: string) => Promise<HostOperation>): Promise<HostOperation> {
+  if (!desktopAvailable()) throw needsDesktopError(action);
+  const operationId = crypto.randomUUID();
+  return adoptReturned(await retryOnTransportFailure(() => send(operationId)));
+}
+
+/** `stage_slice_revision`: uploads a Slice Revision's G-code to the
+ *  Printer. Never starts a print. */
+export function stageSliceRevision(printerId: string, sliceRevisionId: string): Promise<HostOperation> {
+  return write("Staging on a printer", (operationId) => command("stage_slice_revision", { operationId, printerId, sliceRevisionId }));
+}
+
+/** `start_staged_artifact`, with the `priorState` the operator confirmed
+ *  the bed for (D9). */
+export function startStagedArtifact(printerId: string, hostOperationId: string, priorState: PriorState): Promise<HostOperation> {
+  return write("Starting a print", (operationId) =>
+    command("start_staged_artifact", { operationId, printerId, hostOperationId, priorState }));
+}
+
+export function pauseHostPrint(printerId: string): Promise<HostOperation> {
+  return write("Pausing a print", (operationId) => command("pause_host_print", { operationId, printerId }));
+}
+
+export function resumeHostPrint(printerId: string): Promise<HostOperation> {
+  return write("Resuming a print", (operationId) => command("resume_host_print", { operationId, printerId }));
+}
+
+export function cancelHostPrint(printerId: string): Promise<HostOperation> {
+  return write("Cancelling a print", (operationId) => command("cancel_host_print", { operationId, printerId }));
+}
+
+/** `reconcile_host_operation`: a read-only check of the host, so it has no
+ *  `operationId`. Resolves with the row after the attempt; the stream
+ *  carries the same change to the store. */
+export async function reconcileHostOperation(hostOperationId: string): Promise<HostOperation> {
+  if (!desktopAvailable()) throw needsDesktopError("Checking a printer");
+  return adoptReturned(await retryOnTransportFailure(() => command("reconcile_host_operation", { hostOperationId })));
+}
+
+/** `abandon_host_operation` (D8). The acknowledgement is the one literal
+ *  the backend accepts; the note is trimmed and left out when empty. */
+export function abandonHostOperation(hostOperationId: string, note?: string): Promise<HostOperation> {
+  const trimmed = note?.trim();
+  return write("Abandoning a check", (operationId) => command("abandon_host_operation", {
+    operationId,
+    hostOperationId,
+    acknowledgement: "hostStateUnknown",
+    ...(trimmed ? { note: trimmed } : {}),
+  }));
 }
