@@ -1071,9 +1071,10 @@ mod tests {
     /// `Sim`-tier evidence row — never from a builder alone, an evidence
     /// row alone, or `ReadOnlyHardware` evidence. Runs over the real
     /// registry (Moonraker: every builder and a `sim` row for each
-    /// capability) and over deliberately inconsistent fixtures, so a future registry entry that
-    /// violates the invariant fails this test rather than shipping a UI
-    /// that offers a write the adapter cannot actually perform.
+    /// capability) and over deliberately inconsistent fixtures, so a future
+    /// registry entry that violates the invariant fails this test rather
+    /// than shipping a UI that offers a write the adapter cannot actually
+    /// perform.
     #[test]
     fn registry_never_reports_supported_without_a_builder_and_sim_evidence() {
         fn assert_consistent(descriptor: &AdapterDescriptor) {

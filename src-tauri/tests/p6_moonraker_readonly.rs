@@ -323,6 +323,15 @@ fn is_allowed_http(head: &Head) -> bool {
     if head.method != "GET" || has_body {
         return false;
     }
+    // Path-exact: no dot segments and no encoded dots or slashes that could
+    // step out of a listed prefix.
+    let lowered = path.to_ascii_lowercase();
+    if ["..", "%2e", "%2f", "%5c", "\\"]
+        .iter()
+        .any(|bad| lowered.contains(bad))
+    {
+        return false;
+    }
     if is_upgrade(head) {
         path == WEBSOCKET_PATH
     } else {
@@ -506,6 +515,11 @@ fn inspect_client_frames(from_client: &mut impl Read, host: &mut TcpStream, log:
 struct ReadOnlyMoonraker {
     gate: Gate,
     api_key: Option<String>,
+    /// The read capabilities, held only behind their read traits (and a
+    /// staging object whose `upload` refuses), so no write is callable.
+    host_state: Box<dyn HostStateQuery>,
+    camera: Box<dyn CameraDiscovery>,
+    staging: ReadOnlyStaging,
 }
 
 fn read_timings() -> MoonrakerTimings {
@@ -518,18 +532,27 @@ fn read_timings() -> MoonrakerTimings {
 
 impl ReadOnlyMoonraker {
     fn new(upstream: Upstream, api_key: Option<String>) -> Self {
+        let gate = Gate::start(upstream);
+        let adapter = || {
+            MoonrakerCapabilities::new(
+                &gate.config(),
+                api_key.clone().map(zeroize::Zeroizing::new),
+                read_timings(),
+            )
+        };
+        let host_state: Box<dyn HostStateQuery> = Box::new(adapter());
+        let camera: Box<dyn CameraDiscovery> = Box::new(adapter());
+        let staging = ReadOnlyStaging {
+            inner: adapter(),
+            log: gate.log.clone(),
+        };
         Self {
-            gate: Gate::start(upstream),
+            gate,
             api_key,
+            host_state,
+            camera,
+            staging,
         }
-    }
-
-    fn adapter(&self) -> MoonrakerCapabilities {
-        MoonrakerCapabilities::new(
-            &self.gate.config(),
-            self.api_key.clone().map(zeroize::Zeroizing::new),
-            read_timings(),
-        )
     }
 
     fn observer(&self) -> MoonrakerConnection {
@@ -557,23 +580,23 @@ impl ReadOnlyMoonraker {
     }
 
     async fn host_facts(&self) -> Result<HostFacts, ConnectionError> {
-        self.adapter().host_facts().await
+        self.host_state.host_facts().await
     }
 
     async fn host_job_state(&self) -> Result<HostJobState, ConnectionError> {
-        self.adapter().host_job_state().await
+        self.host_state.host_job_state().await
     }
 
     async fn job_history(&self, query: HistoryQuery) -> Result<Vec<HistoryJob>, ConnectionError> {
-        self.adapter().job_history(query).await
+        self.host_state.job_history(query).await
     }
 
     async fn locate(&self, artifact: &StagedArtifact) -> Result<LocateOutcome, ConnectionError> {
-        self.adapter().locate(artifact).await
+        self.staging.locate(artifact).await
     }
 
     async fn cameras(&self) -> Result<Vec<CameraInfo>, ConnectionError> {
-        self.adapter().cameras().await
+        self.camera.cameras().await
     }
 
     fn seen(&self) -> Vec<Seen> {
@@ -791,6 +814,10 @@ fn the_gate_forwards_reads_and_refuses_every_write_without_forwarding_it() {
         // A GET that is not on the read list is refused too.
         ("GET", "/printer/gcode/script?script=M112"),
         ("GET", "/machine/reboot"),
+        // Nothing may step out of the download prefix.
+        ("GET", "/server/files/gcodes/../../machine/reboot"),
+        ("GET", "/server/files/gcodes/%2e%2e/%2E%2E/machine/reboot"),
+        ("GET", "/server/files/gcodes/farm3d%2F..%2Fx.gcode"),
     ] {
         assert_eq!(
             raw_request(&gate, method, target),
@@ -809,7 +836,7 @@ fn the_gate_forwards_reads_and_refuses_every_write_without_forwarding_it() {
         "only the two reads reached the host"
     );
     let writes = gate.log.writes();
-    assert_eq!(writes.len(), 8, "{writes:?}");
+    assert_eq!(writes.len(), 11, "{writes:?}");
     assert!(writes.iter().all(|seen| matches!(
         seen,
         Seen::Http {
@@ -831,6 +858,7 @@ fn the_gate_stops_the_production_adapters_writes() {
     runtime.block_on(async {
         assert!(adapter.start("farm3d/x.gcode").await.is_err());
         assert!(adapter.pause().await.is_err());
+        assert!(adapter.resume().await.is_err());
         assert!(adapter.cancel().await.is_err());
         let artifact = StagedArtifact {
             host_path: "farm3d/x.gcode".to_string(),
@@ -861,6 +889,7 @@ fn the_gate_stops_the_production_adapters_writes() {
         vec![
             "POST /printer/print/start?filename=farm3d%2Fx.gcode",
             "POST /printer/print/pause",
+            "POST /printer/print/resume",
             "POST /printer/print/cancel",
             "POST /server/files/upload",
         ]
@@ -1318,7 +1347,6 @@ fn readonly_a_blocked_port_keeps_the_row_uncertain_and_abandon_is_local_only() {
     assert_eq!(row.attempts, 1);
     let tried = host.gate.blocked_connections();
     assert!(tried >= 1, "the check tried the blocked port");
-    let seen = host.seen().len();
 
     let row = app.abandon(&id);
     assert_eq!(row.state, HostOperationState::Abandoned, "{row:?}");
@@ -1327,7 +1355,6 @@ fn readonly_a_blocked_port_keeps_the_row_uncertain_and_abandon_is_local_only() {
         tried,
         "abandon opened no connection"
     );
-    assert_eq!(host.seen().len(), seen, "abandon sent nothing");
     host.assert_no_writes();
     assert!(host.seen().is_empty(), "nothing reached the host at all");
 }

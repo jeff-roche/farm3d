@@ -1260,8 +1260,13 @@ fn p6_an_upload_cut_mid_body_settles_then_fails_not_applied() {
     while chrono::Utc::now() < settled_at {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let row = running.reconcile(&id);
-    assert_eq!(row.state, HostOperationState::Failed, "{row:?}");
+    // The automatic retry scheduled for the settle deadline may be holding
+    // the row in `reconciling` right now, in which case `reconcile`
+    // returns it unchanged; wait for whichever attempt commits.
+    running.reconcile(&id);
+    let row = running.wait_for(&id, "the settled upload to fail", |row| {
+        row.state == HostOperationState::Failed
+    });
     assert_eq!(
         failure_code(&row),
         Some(HostOperationFailureCode::NotApplied)
