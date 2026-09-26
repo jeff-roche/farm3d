@@ -12,7 +12,8 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::sync::mpsc::Receiver;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,15 +21,17 @@ use common::fake_moonraker::{FakeJob, FakeMoonraker, Fault, Route, StartTrace};
 use farm3d_lib::connections::adapters::descriptor;
 use farm3d_lib::connections::capabilities::{
     capabilities_for, ArtifactStaging, CapabilityEvidence, CapabilityKey, CapabilityMap,
-    CapabilityState, EvidenceTier, HostFacts, HostOperationFailureCode, HostStateQuery,
-    InconclusiveReason, PrintControl, PrinterCapabilities, UnsupportedReason,
+    CapabilityState, EvidenceTier, HistoryJob, HistoryQuery, HostFacts, HostJobState,
+    HostOperationFailureCode, HostStateQuery, InconclusiveReason, PrintControl,
+    PrinterCapabilities, UnsupportedReason,
 };
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
 use farm3d_lib::connections::status_repository::{PrinterTelemetry, ToolTemperature};
 use farm3d_lib::connections::supervisor::{PrinterSetupFacts, STATUS_EVENT};
 use farm3d_lib::connections::{
-    ConnectionConfig, ConnectionObservation, PrinterConnection, MOONRAKER_KIND, OCTOPRINT_KIND,
+    ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
+    MOONRAKER_KIND, OCTOPRINT_KIND,
 };
 use farm3d_lib::host_ops::repository::{self as host_ops_repo, NewHostOperation, Outcome};
 use farm3d_lib::host_ops::{
@@ -79,11 +82,37 @@ impl Clock for OffsetClock {
 #[derive(Default)]
 struct TestFactory {
     unsupported: Mutex<BTreeSet<CapabilityKey>>,
+    held_facts: Mutex<Option<HeldFacts>>,
+}
+
+/// Holds the next host-facts read from the endpoint on `port` until
+/// `release` is set. `reached` gets a message when the read is held, and
+/// `done` when it has returned.
+struct HeldFacts {
+    port: u16,
+    release: Arc<AtomicBool>,
+    reached: SyncSender<()>,
+    done: SyncSender<()>,
 }
 
 impl TestFactory {
     fn switch_off(&self, key: CapabilityKey) {
         self.unsupported.lock().unwrap().insert(key);
+    }
+
+    /// Holds the next host-facts read from `port`'s endpoint. Returns the
+    /// release flag and the `reached` and `done` receivers.
+    fn hold_facts(&self, port: u16) -> (Arc<AtomicBool>, Receiver<()>, Receiver<()>) {
+        let release = Arc::new(AtomicBool::new(false));
+        let (reached, reached_rx) = std::sync::mpsc::sync_channel(1);
+        let (done, done_rx) = std::sync::mpsc::sync_channel(1);
+        *self.held_facts.lock().unwrap() = Some(HeldFacts {
+            port,
+            release: Arc::clone(&release),
+            reached,
+            done,
+        });
+        (release, reached_rx, done_rx)
     }
 
     fn adapter(
@@ -158,7 +187,40 @@ impl CapabilityFactory for TestFactory {
         config: &ConnectionConfig,
         key: Option<zeroize::Zeroizing<String>>,
     ) -> Option<Box<dyn HostStateQuery>> {
-        Self::adapter(config, key).map(|adapter| Box::new(adapter) as Box<dyn HostStateQuery>)
+        let adapter = Self::adapter(config, key)?;
+        let mut held = self.held_facts.lock().unwrap();
+        if held.as_ref().is_some_and(|held| held.port == config.port) {
+            let held = held.take().unwrap();
+            return Some(Box::new(HeldHostState { adapter, held }));
+        }
+        Some(Box::new(adapter))
+    }
+}
+
+/// A Moonraker host-state reader whose `host_facts` waits for its gate.
+struct HeldHostState {
+    adapter: MoonrakerCapabilities,
+    held: HeldFacts,
+}
+
+#[async_trait::async_trait]
+impl HostStateQuery for HeldHostState {
+    async fn host_facts(&self) -> Result<HostFacts, ConnectionError> {
+        let _ = self.held.reached.try_send(());
+        while !self.held.release.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let facts = self.adapter.host_facts().await;
+        let _ = self.held.done.try_send(());
+        facts
+    }
+
+    async fn host_job_state(&self) -> Result<HostJobState, ConnectionError> {
+        self.adapter.host_job_state().await
+    }
+
+    async fn job_history(&self, query: HistoryQuery) -> Result<Vec<HistoryJob>, ConnectionError> {
+        self.adapter.job_history(query).await
     }
 }
 
@@ -2192,6 +2254,60 @@ fn a_stored_tls_connection_is_never_read_over_plain_http() {
         before,
         "nothing reached the host"
     );
+}
+
+/// A slow host-facts read from the endpoint the Printer used to name
+/// finishes after the new endpoint's read: it is dropped, so the new
+/// endpoint's facts stay.
+#[test]
+fn a_slow_host_facts_read_from_an_old_endpoint_never_replaces_the_new_ones() {
+    let rig = Rig::new();
+    let fake_b = FakeMoonraker::start();
+    fake_b.with_state(|state| state.api_key = Some(SECRET.to_string()));
+    let running = rig.boot();
+
+    // Online on endpoint A, with that read held.
+    let (release, reached, done) = rig.factory.hold_facts(rig.fake.config().port);
+    running.manager.apply_observation(
+        PRINTER,
+        ConnectionObservation::Telemetry(telemetry(HostActivity::Idle)),
+        PrinterSetupFacts::complete(),
+    );
+    reached
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the Online hook read endpoint A");
+
+    // The Connection moves to B, and B's Online read lands first.
+    let b = fake_b.config();
+    replace_connection(&running.storage, |config| {
+        Some(ConnectionConfig {
+            host: b.host.clone(),
+            port: b.port,
+            ..config
+        })
+    });
+    running.manager.apply_observation(
+        PRINTER,
+        ConnectionObservation::Health {
+            state: ConnectionState::Offline,
+            observed_at: chrono::Utc::now().to_rfc3339(),
+        },
+        PrinterSetupFacts::complete(),
+    );
+    running.observe(HostActivity::Idle); // waits for B's facts
+    assert!(printer_capabilities(&running)["hostFacts"].is_object());
+
+    // A's read returns late.
+    release.store(true, Ordering::SeqCst);
+    done.recv_timeout(Duration::from_secs(10))
+        .expect("endpoint A's read returned");
+    std::thread::sleep(Duration::from_millis(200));
+    let after = printer_capabilities(&running);
+    assert!(
+        after["hostFacts"].is_object(),
+        "B's facts were replaced: {after}"
+    );
+    assert!(after["observedAt"].is_string(), "{after}");
 }
 
 // --- replay ---------------------------------------------------------------------------

@@ -221,8 +221,9 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     credentials: OnceLock<Arc<CredentialStore>>,
     started: OnceLock<()>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Keyed by Printer id. Each entry carries the endpoint it was read
-    /// from, and applies only while the Printer still names that endpoint.
+    /// Keyed by Printer id and filtered by endpoint: each entry carries the
+    /// endpoint it was read from, is stored only while the Printer still
+    /// names that endpoint, and applies only while it still does.
     host_facts: Mutex<HashMap<String, CachedHostFacts>>,
     retries: Mutex<HashMap<String, RetryState>>,
     faults: Mutex<Vec<(FaultPoint, FaultAction, SyncSender<()>)>>,
@@ -642,6 +643,13 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
 
     /// Reads and caches the Printer's host facts (never persisted). A read
     /// that fails keeps the previous facts.
+    ///
+    /// The store is a compare-and-set against the Printer's current
+    /// Connection: a read from an endpoint the Printer no longer names (a
+    /// slow read that finished after the Connection changed) is dropped, so
+    /// it can never replace the new endpoint's entry. The check and the
+    /// insert happen under the cache lock, so of two reads that store, the
+    /// later one always saw the later Connection.
     pub(crate) async fn refresh_host_facts(&self, printer_id: &str) {
         let Ok(Some(printer)) = self.load_printer(printer_id) else {
             return;
@@ -653,15 +661,27 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         let Some(host_state) = self.factory.host_state(&config, key) else {
             return;
         };
-        if let Ok(facts) = host_state.host_facts().await {
-            lock(&self.host_facts).insert(
-                printer_id.to_string(),
-                CachedHostFacts {
-                    endpoint: HostOperationEndpoint::of(&config),
-                    facts,
-                    observed_at: format_time(self.clock.now()),
-                },
-            );
+        let Ok(facts) = host_state.host_facts().await else {
+            return;
+        };
+        let endpoint = HostOperationEndpoint::of(&config);
+        let mut cache = lock(&self.host_facts);
+        let current = self
+            .load_printer(printer_id)
+            .ok()
+            .flatten()
+            .and_then(|printer| printer.connection)
+            .map(|connection| HostOperationEndpoint::of(&connection));
+        if current.as_ref() != Some(&endpoint) {
+            return;
         }
+        cache.insert(
+            printer_id.to_string(),
+            CachedHostFacts {
+                endpoint,
+                facts,
+                observed_at: format_time(self.clock.now()),
+            },
+        );
     }
 }
