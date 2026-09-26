@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import { Button, Checkbox, Dialog } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { hostOperations, stageSliceRevision, startStagedArtifact } from "../host-ops/host-operations-store";
@@ -28,7 +28,8 @@ const RECONFIRM_CODES = new Set(["START_PRECONDITION_CHANGED", "START_NOT_ALLOWE
  *  (or a `START_PRECONDITION_CHANGED`/`START_NOT_ALLOWED` rejection)
  *  never carries it over. */
 export function StartStagedDialog(props: StartStagedDialogProps) {
-  const [tickedFor, setTickedFor] = createSignal<PriorState | null>(null);
+  const [ticked, setTicked] = createSignal(false);
+  const [restaged, setRestaged] = createSignal(false);
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<unknown>(null);
   const [staging, setStaging] = createSignal(false);
@@ -39,16 +40,29 @@ export function StartStagedDialog(props: StartStagedDialogProps) {
     const current = offer();
     return current.offered ? current : undefined;
   };
-  const ticked = () => {
-    const current = offered();
-    return current !== undefined && tickedFor() === current.priorState;
+  const refusal = () => {
+    const current = offer();
+    return current.offered ? undefined : current.reason;
   };
 
   createEffect(on(() => props.open, (open) => {
     if (!open) return;
-    setTickedFor(null);
+    setTicked(false);
+    setRestaged(false);
     setError(null);
   }));
+
+  // A tick is never reused (spec D9): any change in what is offered —
+  // including a round trip such as ready → printing → ready, or a stale
+  // blip — clears it, so the bed is confirmed again for what the printer
+  // reports now. Telemetry-only updates leave the offer, and the tick, alone.
+  // A memo, so only a real change of offer (not every status push) clears
+  // the tick: `on` alone reruns whenever its source's dependencies fire.
+  const offerKey = createMemo(() => {
+    const current = offer();
+    return current.offered ? `offered:${current.priorState}` : `refused:${current.reason}`;
+  });
+  createEffect(on(offerKey, () => setTicked(false), { defer: true }));
 
   const errorCode = () => {
     const held = error();
@@ -58,13 +72,14 @@ export function StartStagedDialog(props: StartStagedDialogProps) {
   async function onConfirm() {
     const current = offered();
     if (!current || !ticked() || pending()) return;
+    const priorState: PriorState = current.priorState;
     setPending(true);
     setError(null);
     try {
-      await startStagedArtifact(props.printer.id, props.staged.id, current.priorState);
+      await startStagedArtifact(props.printer.id, props.staged.id, priorState);
       props.onOpenChange(false);
     } catch (e) {
-      if (isCommandError(e) && RECONFIRM_CODES.has(e.code)) setTickedFor(null);
+      if (isCommandError(e) && RECONFIRM_CODES.has(e.code)) setTicked(false);
       setError(e);
     } finally {
       setPending(false);
@@ -77,7 +92,8 @@ export function StartStagedDialog(props: StartStagedDialogProps) {
     setStaging(true);
     try {
       await stageSliceRevision(props.printer.id, sliceRevisionId);
-      props.onOpenChange(false);
+      setError(null);
+      setRestaged(true);
     } catch (e) {
       setError(e);
     } finally {
@@ -93,48 +109,65 @@ export function StartStagedDialog(props: StartStagedDialogProps) {
       returnFocus={props.returnFocus}
     >
       <div class={styles.body}>
-        <p class={styles.lead}>
-          Start <span class={styles.file}>{props.staged.hostPath}</span> on {props.printer.name}.
-        </p>
         <Show
-          when={offered()}
-          fallback={<p class={styles.reason}>{startRefusalText((offer() as { reason: string }).reason)}</p>}
+          when={!restaged()}
+          fallback={
+            <>
+              <p class={styles.lead} role="status">
+                Uploading again to {props.printer.name}. The Job tab shows when the file is staged, then you can start it.
+              </p>
+              <div class={styles.footer}>
+                <div class={styles.actions}>
+                  <Button variant="primary" onClick={() => props.onOpenChange(false)}>Done</Button>
+                </div>
+              </div>
+            </>
+          }
         >
-          {(current) => (
-            <Checkbox
-              checked={ticked()}
-              disabled={pending()}
-              onChange={(checked) => setTickedFor(checked ? current().priorState : null)}
+            <p class={styles.lead}>
+              Start <span class={styles.file}>{props.staged.hostPath}</span> on {props.printer.name}.
+            </p>
+            <Show
+              when={offered()}
+              fallback={<p class={styles.reason}>{startRefusalText(refusal() ?? "")}</p>}
             >
-              {current().confirmLabel}
-            </Checkbox>
-          )}
-        </Show>
-        <Show when={pending()}>
-          <p class={styles.progress} role="status">Checking the file on the printer…</p>
-        </Show>
-        <Show when={error()}>
-          {(held) => (
-            <HostOperationAlert error={held()} fallback="The print could not be started." printerId={props.printer.id} onOpenJob={() => props.onOpenChange(false)}>
-              <Show when={errorCode() === "STAGED_ARTIFACT_INVALID" && props.staged.sliceRevisionId}>
-                <Button variant="secondary" size="sm" disabled={staging()} onClick={() => void onStageAgain()}>
-                  Stage again
-                </Button>
+              {(current) => (
+                <Checkbox checked={ticked()} disabled={pending()} onChange={setTicked}>
+                  {current().confirmLabel}
+                </Checkbox>
+              )}
+            </Show>
+            <Show when={pending()}>
+              <p class={styles.progress} role="status">Checking the file on the printer…</p>
+            </Show>
+            <Show when={error()}>
+              {(held) => (
+                <HostOperationAlert error={held()} fallback="The print could not be started." printerId={props.printer.id} onOpenJob={() => props.onOpenChange(false)}>
+                  <Show when={errorCode() === "STAGED_ARTIFACT_INVALID"}>
+                    <Show
+                      when={props.staged.sliceRevisionId}
+                      fallback={<span class={styles.reason}>Its Slice Revision was deleted, so farm3d can't stage it again.</span>}
+                    >
+                      <Button variant="secondary" size="sm" disabled={staging()} onClick={() => void onStageAgain()}>
+                        Stage again
+                      </Button>
+                    </Show>
+                  </Show>
+                </HostOperationAlert>
+              )}
+            </Show>
+            <div class={styles.footer}>
+              <Show when={offered() && !ticked() && !pending()}>
+                <p class={styles.reason}>Tick the confirmation to start.</p>
               </Show>
-            </HostOperationAlert>
-          )}
+              <div class={styles.actions}>
+                <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>
+                <Button variant="primary" disabled={!ticked() || pending()} onClick={() => void onConfirm()}>
+                  Start print
+                </Button>
+              </div>
+            </div>
         </Show>
-        <div class={styles.footer}>
-          <Show when={offered() && !ticked() && !pending()}>
-            <p class={styles.reason}>Tick the confirmation to start.</p>
-          </Show>
-          <div class={styles.actions}>
-            <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>
-            <Button variant="primary" disabled={!ticked() || pending()} onClick={() => void onConfirm()}>
-              Start print
-            </Button>
-          </div>
-        </div>
       </div>
     </Dialog>
   );

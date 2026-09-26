@@ -1,8 +1,9 @@
-import { Show, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import { Button } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { refreshHostOperations } from "../host-ops/host-operations-store";
 import { openPrinterJob } from "../host-ops/open-printer-job";
+import { printers } from "../printers/printer-store";
 import styles from "./HostOperationAlert.module.css";
 
 export interface HostOperationAlertProps {
@@ -25,14 +26,15 @@ export interface HostOperationAlertProps {
   children?: JSX.Element;
 }
 
-/** The Printer an error's `details` name: `CONNECTION_IN_USE` carries
- *  `printerId`, `HOST_OPERATION_PENDING` carries `printerIds`. */
-function detailsPrinterId(error: unknown): string | undefined {
-  if (!isCommandError(error)) return undefined;
+/** The Printers an error's `details` name: `CONNECTION_IN_USE` carries
+ *  `printerId`, `HOST_OPERATION_PENDING` carries `printerIds` (several for
+ *  a refused import). */
+function detailsPrinterIds(error: unknown): string[] {
+  if (!isCommandError(error)) return [];
   const details = error.details ?? {};
-  if (typeof details.printerId === "string") return details.printerId;
+  if (typeof details.printerId === "string") return [details.printerId];
   const ids = details.printerIds;
-  return Array.isArray(ids) && typeof ids[0] === "string" ? ids[0] : undefined;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
 }
 
 /** A Host Operation command's failure, inline (`role="alert"`), with its
@@ -43,26 +45,37 @@ function detailsPrinterId(error: unknown): string | undefined {
 export function HostOperationAlert(props: HostOperationAlertProps) {
   const recovery = () => (isCommandError(props.error) ? props.error.recovery : []);
   const message = () => (isCommandError(props.error) ? props.error.message : props.fallback);
-  const jobPrinterId = () => detailsPrinterId(props.error) ?? props.printerId;
+  const jobPrinterIds = () => {
+    const named = detailsPrinterIds(props.error);
+    return named.length > 0 ? named : props.printerId ? [props.printerId] : [];
+  };
+  /** One Printer: "Open the Job tab". Several: one link each, by name. */
+  const jobLabel = (printerId: string) => {
+    if (jobPrinterIds().length === 1) return "Open the Job tab";
+    const name = printers().find((printer) => printer.id === printerId)?.name ?? printerId;
+    return `Open ${name}'s Job tab`;
+  };
   const retryable = () => !isCommandError(props.error) || props.error.retryable;
 
   return (
     <div class={styles.alert} role="alert">
       <p class={styles.message}>{message()}</p>
       <div class={styles.actions}>
-        <Show when={recovery().includes("OPEN_PRINTER_JOB") && jobPrinterId()}>
-          {(printerId) => (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                openPrinterJob(printerId());
-                props.onOpenJob?.();
-              }}
-            >
-              Open the Job tab
-            </Button>
-          )}
+        <Show when={recovery().includes("OPEN_PRINTER_JOB")}>
+          <For each={jobPrinterIds()}>
+            {(printerId) => (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  openPrinterJob(printerId);
+                  props.onOpenJob?.();
+                }}
+              >
+                {jobLabel(printerId)}
+              </Button>
+            )}
+          </For>
         </Show>
         <Show when={recovery().includes("RELOAD")}>
           <Button

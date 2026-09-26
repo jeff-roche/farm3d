@@ -52,15 +52,21 @@
 .item {
   composes: focusRing from "./shared.module.css";
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.125rem;
+  align-items: center;
   padding: 0.375rem 0.5rem;
   border-radius: var(--f3d-radius-sm);
   color: var(--f3d-color-text);
   font-family: var(--f3d-type-body-font);
   font-size: var(--f3d-type-body-size);
   cursor: pointer;
+}
+
+/* Only a Select with option descriptions stacks label and description;
+   every other Select keeps the single-row item. */
+.itemDescribed {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
 }
 
 .itemDescription {

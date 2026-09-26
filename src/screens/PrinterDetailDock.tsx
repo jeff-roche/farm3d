@@ -5,7 +5,7 @@ import { isCommandError } from "../ipc/client";
 import { archivePrinter, lifecycleEligibility, printers, reportError, unarchivePrinter } from "../printers/printer-store";
 import type { LifecycleEligibility, ResolvedPrinter } from "../printers/types";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
-import { clearPrinterJobRequest, printerJobRequest } from "../host-ops/open-printer-job";
+import { clearPrinterJobRequest, openPrinterJob, printerJobRequest } from "../host-ops/open-printer-job";
 import { ArchivePrinterDialog } from "./ArchivePrinterDialog";
 import { CapabilityList } from "./CapabilityList";
 import { DeletePrinterDialog } from "./DeletePrinterDialog";
@@ -318,7 +318,19 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                     {(message) => <p class={styles.error} role="alert">{message()}</p>}
                   </Show>
                   <For each={visibleBlockers()}>
-                    {(blocker) => <p class={styles.blocker}>{blocker.message}</p>}
+                    {(blocker) => (
+                      <Show
+                        when={blocker.code === "HOST_OPERATION_UNRESOLVED"}
+                        fallback={<p class={styles.blocker}>{blocker.message}</p>}
+                      >
+                        <div class={styles.eligibilityError}>
+                          <p class={styles.blocker}>{blocker.message}</p>
+                          <Button variant="secondary" size="sm" onClick={() => openPrinterJob(props.printer.id)}>
+                            Open the Job tab
+                          </Button>
+                        </div>
+                      </Show>
+                    )}
                   </For>
                 </div>
               </div>

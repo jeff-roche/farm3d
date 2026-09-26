@@ -124,6 +124,36 @@ describe("StartStagedDialog: re-rendering for the live status", () => {
     expect(confirmButton()).toBeDisabled();
   });
 
+  for (const [label, blip] of [
+    ["ready → printing → ready", printerStatus("printing")],
+    ["ready → stale → ready", printerStatus("ready", "stale")],
+  ] as const) {
+    it(`${label}: the earlier tick is gone, and Start waits for a new one`, async () => {
+      const [printer, setPrinter] = createSignal(resolvedPrinter({ runtimeStatus: printerStatus("ready") }));
+      renderDialog(printer);
+      await fireEvent.click(await screen.findByRole("checkbox", { name: "The bed is clear." }));
+      expect(confirmButton()).toBeEnabled();
+
+      setPrinter(resolvedPrinter({ runtimeStatus: blip }));
+      await waitFor(() => expect(screen.queryByRole("checkbox")).not.toBeInTheDocument());
+      setPrinter(resolvedPrinter({ runtimeStatus: printerStatus("ready") }));
+
+      const again = await screen.findByRole("checkbox", { name: "The bed is clear." });
+      expect(again).not.toBeChecked();
+      expect(confirmButton()).toBeDisabled();
+      await fireEvent.click(again);
+      expect(confirmButton()).toBeEnabled();
+    });
+  }
+
+  it("a telemetry-only update keeps the tick", async () => {
+    const [printer, setPrinter] = createSignal(resolvedPrinter({ runtimeStatus: printerStatus("ready") }));
+    renderDialog(printer);
+    await fireEvent.click(await screen.findByRole("checkbox", { name: "The bed is clear." }));
+    setPrinter(resolvedPrinter({ runtimeStatus: printerStatus("ready", "fresh", { telemetry: { hostActivity: "idle", nozzleTempC: 30 } }) }));
+    expect(confirmButton()).toBeEnabled();
+  });
+
   it("START_PRECONDITION_CHANGED clears the tick and shows the message inline", async () => {
     hostOperationsStoreMock.startStagedArtifact.mockRejectedValueOnce(
       commandError("START_PRECONDITION_CHANGED", "The printer's state changed. Confirm the bed again.", ["RELOAD"]),
@@ -174,7 +204,23 @@ describe("StartStagedDialog: re-rendering for the live status", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The staged file is no longer on the printer. Stage it again.");
     await fireEvent.click(screen.getByRole("button", { name: "Stage again" }));
     expect(hostOperationsStoreMock.stageSliceRevision).toHaveBeenCalledWith("prn-1", "slr-7");
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(await screen.findByText("Uploading again to Bay 1. The Job tab shows when the file is staged, then you can start it.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start print" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("STAGED_ARTIFACT_INVALID for a deleted Slice Revision says it can't be staged again", async () => {
+    hostOperationsStoreMock.startStagedArtifact.mockRejectedValueOnce(
+      commandError("STAGED_ARTIFACT_INVALID", "The staged file is no longer on the printer. Stage it again."),
+    );
+    render(() => (
+      <StartStagedDialog open onOpenChange={vi.fn()} printer={resolvedPrinter()} staged={{ ...STAGED, sliceRevisionId: null }} />
+    ));
+    await fireEvent.click(await screen.findByRole("checkbox", { name: "The bed is clear." }));
+    await fireEvent.click(confirmButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Its Slice Revision was deleted, so farm3d can't stage it again.");
+    expect(screen.queryByRole("button", { name: "Stage again" })).not.toBeInTheDocument();
   });
 
   it("HOST_OPERATION_PENDING renders with a link to the Printer's Job tab", async () => {

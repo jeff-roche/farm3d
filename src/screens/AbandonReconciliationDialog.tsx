@@ -14,7 +14,10 @@ export interface AbandonReconciliationDialogProps {
   returnFocus?: () => HTMLElement | null | undefined;
 }
 
-/** D8: the note is optional, trimmed, and at most 500 characters. */
+/** D8: the note is optional, trimmed, and at most 500 characters. The
+ *  limit applies to what is typed (stricter than the backend's trimmed
+ *  count), so the counter moves with every keystroke and never disagrees
+ *  with the error. */
 const NOTE_LIMIT = 500;
 
 /** D8's **Abandon check…**: the operator's recorded decision to stop
@@ -33,7 +36,7 @@ export function AbandonReconciliationDialog(props: AbandonReconciliationDialogPr
     setError(null);
   }));
 
-  const noteTooLong = () => note().trim().length > NOTE_LIMIT;
+  const noteTooLong = () => note().length > NOTE_LIMIT;
   const canConfirm = () => acknowledged() && !noteTooLong() && !pending();
 
   async function onConfirm() {
@@ -77,7 +80,7 @@ export function AbandonReconciliationDialog(props: AbandonReconciliationDialogPr
           value={note()}
           onChange={setNote}
           rows={2}
-          description={`${note().trim().length}/${NOTE_LIMIT}`}
+          description={`${note().length}/${NOTE_LIMIT}`}
           errorMessage={noteTooLong() ? `The note can be at most ${NOTE_LIMIT} characters.` : undefined}
         />
         <Show when={error()}>

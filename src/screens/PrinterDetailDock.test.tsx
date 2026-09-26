@@ -157,6 +157,22 @@ describe("PrinterDetailDock", () => {
     expect(printerJobRequest()).toBeUndefined();
   });
 
+  it("an unresolved Host Operation's Archive blocker links to the Job tab", async () => {
+    lifecycleEligibility.mockResolvedValue({
+      ...ACTIVE_ELIGIBILITY,
+      canArchive: false,
+      blockers: [
+        ...ACTIVE_ELIGIBILITY.blockers,
+        { action: "archive", code: "HOST_OPERATION_UNRESOLVED", message: "Finish or abandon the pending printer operation before archiving." },
+      ],
+    });
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+    expect(await screen.findByText("Finish or abandon the pending printer operation before archiving.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Open the Job tab" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Job" })).toHaveAttribute("aria-selected", "true"));
+  });
+
   it("renders complementary inline content without dialog semantics", () => {
     render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
 

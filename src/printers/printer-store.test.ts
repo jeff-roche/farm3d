@@ -248,6 +248,26 @@ describe("printer-store", () => {
       expect(printerStoreError()).toBe(commandError.message);
     });
 
+    it("keeps the whole CommandError of a failed import, so the banner can offer its recovery", async () => {
+      const pending = {
+        contractVersion: 1,
+        code: "HOST_OPERATION_PENDING",
+        message: "This printer has a pending operation. Finish or abandon it first.",
+        recovery: ["OPEN_PRINTER_JOB"],
+        retryable: false,
+        details: { printerIds: ["prn-1"], hostOperationIds: ["hop-1"] },
+      };
+      tauriMock.isTauri.mockReturnValue(true);
+      tauriMock.invoke.mockRejectedValue(pending);
+      const { importPrinters, printerStoreError, printerStoreCommandError, dismissPrinterStoreError } = await import("./printer-store");
+
+      await importPrinters();
+      expect(printerStoreError()).toBe(pending.message);
+      expect(printerStoreCommandError()).toEqual(pending);
+      dismissPrinterStoreError();
+      expect(printerStoreCommandError()).toBeNull();
+    });
+
     it("keeps live runtimeStatus when a mutation splices in a fresh ResolvedPrinter", async () => {
       // Rust never returns `runtimeStatus` — it is frontend-only live state.
       // A rename must not blank the connection badge and temperatures until

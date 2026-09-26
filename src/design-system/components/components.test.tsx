@@ -191,6 +191,21 @@ describe("Select with disabled options", () => {
   });
 });
 
+describe("Select item layout", () => {
+  it("stacks label and description only in a Select that has descriptions; a plain Select's items are unchanged", async () => {
+    const plain = render(() => <Select label="Plain" options={["Apple"]} />);
+    await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
+    const plainClasses = (await screen.findByRole("option", { name: "Apple" })).className.split(" ");
+    plain.unmount();
+
+    render(() => <Select label="Described" options={["Apple"]} optionDescription={() => "Ripe"} />);
+    await fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse", button: 0 });
+    const describedClasses = (await screen.findByRole("option", { name: /Apple/ })).className.split(" ");
+    expect(describedClasses.length).toBe(plainClasses.length + 1);
+    expect(describedClasses).toEqual(expect.arrayContaining(plainClasses));
+  });
+});
+
 describe("Select groups and an empty controlled value", () => {
   it("lists options under their group headings and selects one", async () => {
     const onChange = vi.fn();

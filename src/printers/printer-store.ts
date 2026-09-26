@@ -86,6 +86,10 @@ interface PrinterStoreState {
   printers: ResolvedPrinter[];
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
+  /** The `CommandError` behind `error`, when there is one, so the banner
+   *  can offer its recovery (e.g. `import_printers`' `HOST_OPERATION_PENDING`
+   *  → open the Printer's Job tab). */
+  commandError: CommandError | null;
   retryable: boolean;
   /** Explains Printers archived automatically for sharing a host (D3). */
   archiveNotice: { message: string; dismissKeys: string[] } | null;
@@ -105,6 +109,7 @@ const [state, setState] = createStore<PrinterStoreState>({
   printers: [],
   status: "idle",
   error: null,
+  commandError: null,
   retryable: false,
   archiveNotice: null,
 });
@@ -116,6 +121,7 @@ export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
+export const printerStoreCommandError = () => state.commandError;
 export const printerArchiveNotice = () => state.archiveNotice?.message ?? null;
 export const printerStatusSyncState = () => {
   statusStoreRevision();
@@ -137,12 +143,13 @@ export const printerStatusSyncState = () => {
 export function reportError(e: unknown): void {
   setState({
     error: isCommandError(e) ? e.message : "The operation could not be completed.",
+    commandError: isCommandError(e) ? e : null,
     retryable: isCommandError(e) && e.retryable,
   });
 }
 
 export function dismissPrinterStoreError(): void {
-  setState({ error: null, retryable: false });
+  setState({ error: null, commandError: null, retryable: false });
 }
 
 const DISMISSED_ARCHIVES_KEY = "farm3d:dismissed-duplicate-host-archives";
@@ -376,18 +383,19 @@ async function buildWebHostOpsPrinters(): Promise<ResolvedPrinter[]> {
 export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
   if (!desktopAvailable()) {
-    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, retryable: false });
+    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, commandError: null, retryable: false });
     webPrintersLoaded?.();
     return;
   }
   try {
     const loaded = (await command("list_printers")).map(resolvePrinterRecord);
-    setState({ printers: loaded, status: "ready", error: null, retryable: false });
+    setState({ printers: loaded, status: "ready", error: null, commandError: null, retryable: false });
     statusStore?.prune();
   } catch (e) {
     setState({
       status: "error",
       error: isCommandError(e) ? e.message : "farm3d could not finish starting.",
+      commandError: isCommandError(e) ? e : null,
       retryable: isCommandError(e) && e.retryable,
     });
   }

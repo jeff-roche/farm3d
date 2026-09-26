@@ -61,6 +61,12 @@ describe("AbandonReconciliationDialog", () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
+  it("counts every character typed, spaces included", async () => {
+    renderDialog();
+    await fireEvent.input(await screen.findByRole("textbox", { name: "Note (optional)" }), { target: { value: "  ok  " } });
+    expect(screen.getByText("6/500")).toBeInTheDocument();
+  });
+
   it("refuses a note over 500 characters", async () => {
     renderDialog();
     await fireEvent.click(await screen.findByRole("checkbox", { name: ACKNOWLEDGEMENT }));

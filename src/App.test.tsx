@@ -17,6 +17,7 @@ const appState = vi.hoisted(() => ({
 
 const [syncState, setSyncState] = createSignal("syncing");
 const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
+const [storeCommandError, setStoreCommandError] = createSignal<Record<string, unknown> | null>(null);
 
 vi.mock("./settings/settings-store", () => ({
   loadSettings: appState.loadSettings,
@@ -32,7 +33,8 @@ vi.mock("./printers/printer-store", () => ({
   importPrinters: appState.importPrinters,
   loadPrinters: appState.loadPrinters,
   printers: () => appState.printers,
-  printerStoreError: () => null,
+  printerStoreError: () => (storeCommandError()?.message as string | undefined) ?? null,
+  printerStoreCommandError: storeCommandError,
   printerStoreRetryable: () => false,
   printerStoreStatus: () => "ready",
   removePrinter: appState.removePrinter,
@@ -239,6 +241,7 @@ beforeEach(async () => {
   // The mocked slicing store outlives `vi.resetModules`; start each test
   // with its default spies.
   vi.mocked(await import("./slicing/slicing-store")).startSlicing.mockReset();
+  setStoreCommandError(null);
   vi.mocked(await import("./host-ops/host-operations-store")).startHostOperations.mockReset().mockResolvedValue(() => {});
   vi.mocked(await import("./host-ops/capabilities-store")).syncCapabilities.mockReset().mockReturnValue(() => {});
   window.localStorage.clear();
@@ -451,6 +454,28 @@ describe("App", () => {
     unmount();
     expect(disposeHostOps).toHaveBeenCalledOnce();
     expect(stopSync).toHaveBeenCalledOnce();
+  });
+
+  it("shows an import's HOST_OPERATION_PENDING in the banner with a link to each named Printer's Job tab", async () => {
+    appState.loadPrinters.mockImplementation(async () => {
+      appState.printers = [PRINTER, { ...PRINTER, id: "prn-2", name: "Second bay" }];
+    });
+    const { default: App } = await import("./App");
+    const { printerJobRequest } = await import("./host-ops/open-printer-job");
+    render(() => <App />);
+    // The mocked Printer list isn't reactive: raise the error once it has loaded.
+    await waitFor(() => expect(appState.printers).toHaveLength(2));
+    setStoreCommandError({
+      contractVersion: 1, code: "HOST_OPERATION_PENDING", recovery: ["OPEN_PRINTER_JOB"], retryable: false,
+      message: "This printer has a pending operation. Finish or abandon it first.",
+      details: { printerIds: [PRINTER.id, "prn-2"], hostOperationIds: ["hop-1", "hop-2"] },
+    });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This printer has a pending operation.");
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second bay's Job tab" }));
+    expect(printerJobRequest()).toEqual({ printerId: "prn-2" });
+    expect(screen.getByRole("button", { name: `Open ${PRINTER.name as string}'s Job tab` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 
   it("disposes a slicing start that finishes after unmount", async () => {

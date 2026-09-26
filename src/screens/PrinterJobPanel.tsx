@@ -156,6 +156,13 @@ function Controls(props: { printer: ResolvedPrinter; record: PrinterCapabilities
     return offer.offered || !offer.reason ? [] : [controlRefusalText(control.verb, offer.reason)];
   }))];
 
+  /** Re-checked while the Cancel confirmation is open: if the print ends
+   *  or a row becomes unresolved meanwhile, the confirmation can't send. */
+  const cancelRefusal = () => {
+    const offer = offerFor("cancel");
+    return offer.offered ? undefined : controlRefusalText("cancel", offer.reason ?? "");
+  };
+
   async function send(verb: ControlVerb) {
     if (pending()) return;
     setPending(true);
@@ -202,11 +209,14 @@ function Controls(props: { printer: ResolvedPrinter; record: PrinterCapabilities
         onOpenChange={setConfirmingCancel}
         returnFocus={() => cancelTrigger}
       >
+        <Show when={cancelRefusal()}>{(reason) => <p class={styles.note}>{reason()}</p>}</Show>
         <div class={styles.dialogActions}>
           <Button variant="secondary" onClick={() => setConfirmingCancel(false)}>Keep printing</Button>
           <Button
             variant="danger"
+            disabled={cancelRefusal() !== undefined || pending()}
             onClick={() => {
+              if (cancelRefusal() !== undefined) return;
               setConfirmingCancel(false);
               void send("cancel");
             }}

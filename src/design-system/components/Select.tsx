@@ -55,7 +55,10 @@ export function Select<T>(props: SelectProps<T>) {
       disabled={props.disabled}
       validationState={props.error ? "invalid" : "valid"}
       itemComponent={(itemProps) => (
-        <KSelect.Item item={itemProps.item} class={styles.item}>
+        <KSelect.Item
+          item={itemProps.item}
+          class={[styles.item, props.optionDescription ? styles.itemDescribed : ""].filter(Boolean).join(" ")}
+        >
           <KSelect.ItemLabel>{toLabel(itemProps.item.rawValue as T)}</KSelect.ItemLabel>
           <Show when={props.optionDescription?.(itemProps.item.rawValue as T)}>
             {(description) => (

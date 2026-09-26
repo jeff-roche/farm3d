@@ -113,6 +113,18 @@ describe("PrinterJobPanel: Pause, Resume, Cancel", () => {
     expect(hostOperationsStoreMock.cancelHostPrint).toHaveBeenCalledWith("prn-1");
   });
 
+  it("the Cancel confirmation can't send once the offer is withdrawn while it is open", async () => {
+    const [printer, setPrinter] = createSignal(printing());
+    renderPanel(printer);
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel print…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    setPrinter(resolvedPrinter({ runtimeStatus: printerStatus("finished") }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel print" })).toBeDisabled());
+    expect(dialog).toHaveTextContent("The printer isn't in a state to cancel now: the last print finished.");
+    await fireEvent.click(within(dialog).getByRole("button", { name: "Cancel print" }));
+    expect(hostOperationsStoreMock.cancelHostPrint).not.toHaveBeenCalled();
+  });
+
   it("an unsupported control is never rendered as a button", () => {
     unsupported("pause", "resume");
     renderPanel(printing());

@@ -29,6 +29,7 @@ import {
   loadPrinters,
   printerArchiveNotice,
   printers,
+  printerStoreCommandError,
   printerStoreError,
   printerStoreRetryable,
   printerStoreStatus,
@@ -36,6 +37,7 @@ import {
   startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
+import { HostOperationAlert } from "./screens/HostOperationAlert";
 import { loadSettings, updateSettings } from "./settings/settings-store";
 import styles from "./App.module.css";
 import {
@@ -285,7 +287,18 @@ function App() {
       lastLiveEventAt={shell().lastLiveEventAt}
       lowSpoolCount={spoolState.spools.filter((spool) => spool.facets.low).length}
     >
-      <Show when={printerStoreError()}>
+      <Show when={printerStoreCommandError()?.code === "HOST_OPERATION_PENDING" ? printerStoreCommandError() : undefined}>
+        {(error) => (
+          <div class={styles.errorBanner}>
+            <HostOperationAlert error={error()} fallback={error().message}>
+              <Button variant="ghost" onClick={dismissPrinterStoreError}>
+                Dismiss
+              </Button>
+            </HostOperationAlert>
+          </div>
+        )}
+      </Show>
+      <Show when={printerStoreCommandError()?.code !== "HOST_OPERATION_PENDING" && printerStoreError()}>
         {(message) => (
           <div class={styles.errorBanner} role="alert">
             <p class={styles.errorMessage}>{message()}</p>
