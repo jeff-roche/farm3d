@@ -5,40 +5,112 @@ import type * as Contracts from "../generated/contracts/command/CommandContracts
 type CommandMap = {
   load_settings: [Contracts.LoadSettingsRequest, Contracts.LoadSettingsResult];
   save_settings: [Contracts.SaveSettingsRequest, Contracts.SaveSettingsResult];
-  export_settings: [Contracts.ExportSettingsRequest, Contracts.ExportSettingsResult];
-  import_settings: [Contracts.ImportSettingsRequest, Contracts.ImportSettingsResult];
+  export_settings: [
+    Contracts.ExportSettingsRequest,
+    Contracts.ExportSettingsResult,
+  ];
+  import_settings: [
+    Contracts.ImportSettingsRequest,
+    Contracts.ImportSettingsResult,
+  ];
   list_printers: [Contracts.ListPrintersRequest, Contracts.ListPrintersResult];
-  create_printer: [Contracts.CreatePrinterRequest, Contracts.CreatePrinterResult];
+  create_printer: [
+    Contracts.CreatePrinterRequest,
+    Contracts.CreatePrinterResult,
+  ];
   set_material_slot_layout: [
     Contracts.SetMaterialSlotLayoutRequest,
     Contracts.SetMaterialSlotLayoutResult,
   ];
-  update_printer: [Contracts.UpdatePrinterRequest, Contracts.UpdatePrinterResult];
-  delete_printer: [Contracts.DeletePrinterRequest, Contracts.DeletePrinterResult];
-  set_printer_override: [Contracts.SetPrinterOverrideRequest, Contracts.SetPrinterOverrideResult];
-  rebind_printer: [Contracts.RebindPrinterRequest, Contracts.RebindPrinterResult];
-  resolve_profile_drift: [Contracts.ResolveProfileDriftRequest, Contracts.ResolveProfileDriftResult];
-  export_printers: [Contracts.ExportPrintersRequest, Contracts.ExportPrintersResult];
-  import_printers: [Contracts.ImportPrintersRequest, Contracts.ImportPrintersResult];
-  list_catalog_models: [Contracts.ListCatalogModelsRequest, Contracts.ListCatalogModelsResult];
-  list_catalog_variants: [Contracts.ListCatalogVariantsRequest, Contracts.ListCatalogVariantsResult];
-  preview_profile: [Contracts.PreviewProfileRequest, Contracts.PreviewProfileResult];
+  update_printer: [
+    Contracts.UpdatePrinterRequest,
+    Contracts.UpdatePrinterResult,
+  ];
+  delete_printer: [
+    Contracts.DeletePrinterRequest,
+    Contracts.DeletePrinterResult,
+  ];
+  set_printer_override: [
+    Contracts.SetPrinterOverrideRequest,
+    Contracts.SetPrinterOverrideResult,
+  ];
+  rebind_printer: [
+    Contracts.RebindPrinterRequest,
+    Contracts.RebindPrinterResult,
+  ];
+  resolve_profile_drift: [
+    Contracts.ResolveProfileDriftRequest,
+    Contracts.ResolveProfileDriftResult,
+  ];
+  export_printers: [
+    Contracts.ExportPrintersRequest,
+    Contracts.ExportPrintersResult,
+  ];
+  import_printers: [
+    Contracts.ImportPrintersRequest,
+    Contracts.ImportPrintersResult,
+  ];
+  list_catalog_models: [
+    Contracts.ListCatalogModelsRequest,
+    Contracts.ListCatalogModelsResult,
+  ];
+  list_catalog_variants: [
+    Contracts.ListCatalogVariantsRequest,
+    Contracts.ListCatalogVariantsResult,
+  ];
+  preview_profile: [
+    Contracts.PreviewProfileRequest,
+    Contracts.PreviewProfileResult,
+  ];
   catalog_info: [Contracts.CatalogInfoRequest, Contracts.CatalogInfoResult];
-  set_printer_connection: [Contracts.SetPrinterConnectionRequest, Contracts.SetPrinterConnectionResult];
-  clear_printer_connection: [Contracts.ClearPrinterConnectionRequest, Contracts.ClearPrinterConnectionResult];
-  test_printer_connection: [Contracts.TestPrinterConnectionRequest, Contracts.TestPrinterConnectionResult];
-  credential_store_info: [Contracts.CredentialStoreInfoRequest, Contracts.CredentialStoreInfoResult];
-  discover_printers: [Contracts.DiscoverPrintersRequest, Contracts.DiscoverPrintersResult];
-  printer_statuses: [Contracts.PrinterStatusesRequest, Contracts.PrinterStatusesResult];
-  probe_connection: [Contracts.ProbeConnectionRequest, Contracts.ProbeConnectionResult];
-  create_printers_batch: [Contracts.CreatePrintersBatchRequest, Contracts.CreatePrintersBatchResult];
-  cancel_printer_batch: [Contracts.CancelPrinterBatchRequest, Contracts.CancelPrinterBatchResult];
+  set_printer_connection: [
+    Contracts.SetPrinterConnectionRequest,
+    Contracts.SetPrinterConnectionResult,
+  ];
+  clear_printer_connection: [
+    Contracts.ClearPrinterConnectionRequest,
+    Contracts.ClearPrinterConnectionResult,
+  ];
+  test_printer_connection: [
+    Contracts.TestPrinterConnectionRequest,
+    Contracts.TestPrinterConnectionResult,
+  ];
+  credential_store_info: [
+    Contracts.CredentialStoreInfoRequest,
+    Contracts.CredentialStoreInfoResult,
+  ];
+  discover_printers: [
+    Contracts.DiscoverPrintersRequest,
+    Contracts.DiscoverPrintersResult,
+  ];
+  printer_statuses: [
+    Contracts.PrinterStatusesRequest,
+    Contracts.PrinterStatusesResult,
+  ];
+  probe_connection: [
+    Contracts.ProbeConnectionRequest,
+    Contracts.ProbeConnectionResult,
+  ];
+  create_printers_batch: [
+    Contracts.CreatePrintersBatchRequest,
+    Contracts.CreatePrintersBatchResult,
+  ];
+  cancel_printer_batch: [
+    Contracts.CancelPrinterBatchRequest,
+    Contracts.CancelPrinterBatchResult,
+  ];
   printer_lifecycle_eligibility: [
     Contracts.PrinterLifecycleEligibilityRequest,
     Contracts.PrinterLifecycleEligibilityResult,
   ];
-  archive_printer: [Contracts.ArchivePrinterRequest, Contracts.ArchivePrinterResult];
-  unarchive_printer: [Contracts.UnarchivePrinterRequest, Contracts.UnarchivePrinterResult];
+  archive_printer: [
+    Contracts.ArchivePrinterRequest,
+    Contracts.ArchivePrinterResult,
+  ];
+  unarchive_printer: [
+    Contracts.UnarchivePrinterRequest,
+    Contracts.UnarchivePrinterResult,
+  ];
   list_duplicate_host_archives: [
     Contracts.ListDuplicateHostArchivesRequest,
     Contracts.ListDuplicateHostArchivesResult,
@@ -47,13 +119,22 @@ type CommandMap = {
   spool_history: [Contracts.SpoolHistoryRequest, Contracts.SpoolHistoryResult];
   create_spool: [Contracts.CreateSpoolRequest, Contracts.CreateSpoolResult];
   update_spool: [Contracts.UpdateSpoolRequest, Contracts.UpdateSpoolResult];
-  record_spool_amount: [Contracts.RecordSpoolAmountRequest, Contracts.RecordSpoolAmountResult];
+  record_spool_amount: [
+    Contracts.RecordSpoolAmountRequest,
+    Contracts.RecordSpoolAmountResult,
+  ];
   move_spool: [Contracts.MoveSpoolRequest, Contracts.MoveSpoolResult];
-  set_spool_lifecycle: [Contracts.SetSpoolLifecycleRequest, Contracts.SetSpoolLifecycleResult];
+  set_spool_lifecycle: [
+    Contracts.SetSpoolLifecycleRequest,
+    Contracts.SetSpoolLifecycleResult,
+  ];
   create_tare: [Contracts.CreateTareRequest, Contracts.CreateTareResult];
   update_tare: [Contracts.UpdateTareRequest, Contracts.UpdateTareResult];
   delete_tare: [Contracts.DeleteTareRequest, Contracts.DeleteTareResult];
-  pick_model_files: [Contracts.PickModelFilesRequest, Contracts.PickModelFilesResult];
+  pick_model_files: [
+    Contracts.PickModelFilesRequest,
+    Contracts.PickModelFilesResult,
+  ];
   inspect_import_selection: [
     Contracts.InspectImportSelectionRequest,
     Contracts.InspectImportSelectionResult,
@@ -64,20 +145,44 @@ type CommandMap = {
   ];
   import_models: [Contracts.ImportModelsRequest, Contracts.ImportModelsResult];
   list_library: [Contracts.ListLibraryRequest, Contracts.ListLibraryResult];
-  create_project: [Contracts.CreateProjectRequest, Contracts.CreateProjectResult];
-  rename_project: [Contracts.RenameProjectRequest, Contracts.RenameProjectResult];
-  delete_project: [Contracts.DeleteProjectRequest, Contracts.DeleteProjectResult];
+  create_project: [
+    Contracts.CreateProjectRequest,
+    Contracts.CreateProjectResult,
+  ];
+  rename_project: [
+    Contracts.RenameProjectRequest,
+    Contracts.RenameProjectResult,
+  ];
+  delete_project: [
+    Contracts.DeleteProjectRequest,
+    Contracts.DeleteProjectResult,
+  ];
   update_model: [Contracts.UpdateModelRequest, Contracts.UpdateModelResult];
-  set_model_projects: [Contracts.SetModelProjectsRequest, Contracts.SetModelProjectsResult];
+  set_model_projects: [
+    Contracts.SetModelProjectsRequest,
+    Contracts.SetModelProjectsResult,
+  ];
   delete_model: [Contracts.DeleteModelRequest, Contracts.DeleteModelResult];
-  list_model_revisions: [Contracts.ListModelRevisionsRequest, Contracts.ListModelRevisionsResult];
+  list_model_revisions: [
+    Contracts.ListModelRevisionsRequest,
+    Contracts.ListModelRevisionsResult,
+  ];
   get_revision_thumbnail: [
     Contracts.GetRevisionThumbnailRequest,
     Contracts.GetRevisionThumbnailResult,
   ];
-  library_content_info: [Contracts.LibraryContentInfoRequest, Contracts.LibraryContentInfoResult];
-  check_linked_sources: [Contracts.CheckLinkedSourcesRequest, Contracts.CheckLinkedSourcesResult];
-  locate_linked_source: [Contracts.LocateLinkedSourceRequest, Contracts.LocateLinkedSourceResult];
+  library_content_info: [
+    Contracts.LibraryContentInfoRequest,
+    Contracts.LibraryContentInfoResult,
+  ];
+  check_linked_sources: [
+    Contracts.CheckLinkedSourcesRequest,
+    Contracts.CheckLinkedSourcesResult,
+  ];
+  locate_linked_source: [
+    Contracts.LocateLinkedSourceRequest,
+    Contracts.LocateLinkedSourceResult,
+  ];
   convert_model_to_managed: [
     Contracts.ConvertModelToManagedRequest,
     Contracts.ConvertModelToManagedResult,
@@ -85,21 +190,51 @@ type CommandMap = {
   // P5. `get_revision_mesh` is deliberately absent: it answers with raw
   // bytes, not the JSON envelope, so `command()` can't carry it. It lives
   // in `BinaryCommandMap`, invoked through `binaryCommand()`.
-  get_slicer_runtime: [Contracts.GetSlicerRuntimeRequest, Contracts.GetSlicerRuntimeResult];
-  check_slicer_runtime: [Contracts.CheckSlicerRuntimeRequest, Contracts.CheckSlicerRuntimeResult];
-  pick_slicer_engine: [Contracts.PickSlicerEngineRequest, Contracts.PickSlicerEngineResult];
-  pick_preset_source: [Contracts.PickPresetSourceRequest, Contracts.PickPresetSourceResult];
-  reset_slicer_runtime: [Contracts.ResetSlicerRuntimeRequest, Contracts.ResetSlicerRuntimeResult];
-  list_slice_options: [Contracts.ListSliceOptionsRequest, Contracts.ListSliceOptionsResult];
+  get_slicer_runtime: [
+    Contracts.GetSlicerRuntimeRequest,
+    Contracts.GetSlicerRuntimeResult,
+  ];
+  check_slicer_runtime: [
+    Contracts.CheckSlicerRuntimeRequest,
+    Contracts.CheckSlicerRuntimeResult,
+  ];
+  pick_slicer_engine: [
+    Contracts.PickSlicerEngineRequest,
+    Contracts.PickSlicerEngineResult,
+  ];
+  pick_preset_source: [
+    Contracts.PickPresetSourceRequest,
+    Contracts.PickPresetSourceResult,
+  ];
+  reset_slicer_runtime: [
+    Contracts.ResetSlicerRuntimeRequest,
+    Contracts.ResetSlicerRuntimeResult,
+  ];
+  list_slice_options: [
+    Contracts.ListSliceOptionsRequest,
+    Contracts.ListSliceOptionsResult,
+  ];
   get_revision_geometry: [
     Contracts.GetRevisionGeometryRequest,
     Contracts.GetRevisionGeometryResult,
   ];
   list_slicing: [Contracts.ListSlicingRequest, Contracts.ListSlicingResult];
-  create_preparation: [Contracts.CreatePreparationRequest, Contracts.CreatePreparationResult];
-  update_preparation: [Contracts.UpdatePreparationRequest, Contracts.UpdatePreparationResult];
-  reload_preparation: [Contracts.ReloadPreparationRequest, Contracts.ReloadPreparationResult];
-  delete_preparation: [Contracts.DeletePreparationRequest, Contracts.DeletePreparationResult];
+  create_preparation: [
+    Contracts.CreatePreparationRequest,
+    Contracts.CreatePreparationResult,
+  ];
+  update_preparation: [
+    Contracts.UpdatePreparationRequest,
+    Contracts.UpdatePreparationResult,
+  ];
+  reload_preparation: [
+    Contracts.ReloadPreparationRequest,
+    Contracts.ReloadPreparationResult,
+  ];
+  delete_preparation: [
+    Contracts.DeletePreparationRequest,
+    Contracts.DeletePreparationResult,
+  ];
   start_slice: [Contracts.StartSliceRequest, Contracts.StartSliceResult];
   cancel_slice_operation: [
     Contracts.CancelSliceOperationRequest,
@@ -109,9 +244,18 @@ type CommandMap = {
     Contracts.GetSliceOperationLogRequest,
     Contracts.GetSliceOperationLogResult,
   ];
-  list_slice_revisions: [Contracts.ListSliceRevisionsRequest, Contracts.ListSliceRevisionsResult];
-  get_slice_revision: [Contracts.GetSliceRevisionRequest, Contracts.GetSliceRevisionResult];
-  get_slice_revision_log: [Contracts.GetSliceRevisionLogRequest, Contracts.GetSliceRevisionLogResult];
+  list_slice_revisions: [
+    Contracts.ListSliceRevisionsRequest,
+    Contracts.ListSliceRevisionsResult,
+  ];
+  get_slice_revision: [
+    Contracts.GetSliceRevisionRequest,
+    Contracts.GetSliceRevisionResult,
+  ];
+  get_slice_revision_log: [
+    Contracts.GetSliceRevisionLogRequest,
+    Contracts.GetSliceRevisionLogResult,
+  ];
   create_external_slice_revision: [
     Contracts.CreateExternalSliceRevisionRequest,
     Contracts.CreateExternalSliceRevisionResult,
@@ -120,23 +264,69 @@ type CommandMap = {
     Contracts.DeleteSliceRevisionRequest,
     Contracts.DeleteSliceRevisionResult,
   ];
-  printer_capabilities: [Contracts.PrinterCapabilitiesRequest, Contracts.PrinterCapabilitiesResult];
+  printer_capabilities: [
+    Contracts.PrinterCapabilitiesRequest,
+    Contracts.PrinterCapabilitiesResult,
+  ];
   adapter_capability_matrix: [
     Contracts.AdapterCapabilityMatrixRequest,
     Contracts.AdapterCapabilityMatrixResult,
+  ];
+  list_host_operations: [
+    Contracts.ListHostOperationsRequest,
+    Contracts.ListHostOperationsResult,
+  ];
+  stage_slice_revision: [
+    Contracts.StageSliceRevisionRequest,
+    Contracts.StageSliceRevisionResult,
+  ];
+  start_staged_artifact: [
+    Contracts.StartStagedArtifactRequest,
+    Contracts.StartStagedArtifactResult,
+  ];
+  pause_host_print: [
+    Contracts.PauseHostPrintRequest,
+    Contracts.PauseHostPrintResult,
+  ];
+  resume_host_print: [
+    Contracts.ResumeHostPrintRequest,
+    Contracts.ResumeHostPrintResult,
+  ];
+  cancel_host_print: [
+    Contracts.CancelHostPrintRequest,
+    Contracts.CancelHostPrintResult,
+  ];
+  reconcile_host_operation: [
+    Contracts.ReconcileHostOperationRequest,
+    Contracts.ReconcileHostOperationResult,
+  ];
+  abandon_host_operation: [
+    Contracts.AbandonHostOperationRequest,
+    Contracts.AbandonHostOperationResult,
   ];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */
 export type BinaryCommandMap = {
-  get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
+  get_revision_mesh: [
+    Contracts.GetRevisionMeshRequest,
+    Contracts.GetRevisionMeshResult,
+  ];
 };
 
-type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;
-type ResultData<K extends keyof CommandMap> = CommandMap[K][1] extends { data: infer T } ? T : never;
-type CommandArguments<K extends keyof CommandMap> = keyof RequestArgs<K> extends never
-  ? [args?: RequestArgs<K>]
-  : [args: RequestArgs<K>];
+type RequestArgs<K extends keyof CommandMap> = Omit<
+  CommandMap[K][0],
+  "contractVersion"
+>;
+type ResultData<K extends keyof CommandMap> = CommandMap[K][1] extends {
+  data: infer T;
+}
+  ? T
+  : never;
+type CommandArguments<K extends keyof CommandMap> =
+  keyof RequestArgs<K> extends never
+    ? [args?: RequestArgs<K>]
+    : [args: RequestArgs<K>];
 
 export function isCommandError(value: unknown): value is CommandError {
   if (!value || typeof value !== "object") return false;
@@ -154,12 +344,14 @@ function incompatible(receivedVersion: unknown): CommandError {
   return {
     contractVersion: 1,
     code: "INCOMPATIBLE_CONTRACT_VERSION",
-    message: "This farm3d command contract is not compatible with the application.",
+    message:
+      "This farm3d command contract is not compatible with the application.",
     recovery: ["UPGRADE_FARM3D"],
     retryable: false,
     details: {
       supportedVersion: 1,
-      receivedVersion: typeof receivedVersion === "number" ? receivedVersion : -1,
+      receivedVersion:
+        typeof receivedVersion === "number" ? receivedVersion : -1,
     },
   };
 }
@@ -169,9 +361,10 @@ function incompatible(receivedVersion: unknown): CommandError {
  *  transport failure) unchanged. */
 function invokeFailure(error: unknown): unknown {
   if (isCommandError(error)) return error;
-  const receivedVersion = error && typeof error === "object" && "contractVersion" in error
-    ? (error as { contractVersion?: unknown }).contractVersion
-    : undefined;
+  const receivedVersion =
+    error && typeof error === "object" && "contractVersion" in error
+      ? (error as { contractVersion?: unknown }).contractVersion
+      : undefined;
   return receivedVersion !== undefined ? incompatible(receivedVersion) : error;
 }
 
@@ -182,21 +375,31 @@ export async function command<K extends keyof CommandMap>(
 ): Promise<ResultData<K>> {
   let response: { contractVersion: number; data: ResultData<K> };
   try {
-    response = await invoke<{ contractVersion: number; data: ResultData<K> }>(name, {
-      contractVersion: 1,
-      ...args,
-    });
+    response = await invoke<{ contractVersion: number; data: ResultData<K> }>(
+      name,
+      {
+        contractVersion: 1,
+        ...args,
+      },
+    );
   } catch (error) {
     throw invokeFailure(error);
   }
-  if (response?.contractVersion !== 1) throw incompatible(response?.contractVersion);
+  if (response?.contractVersion !== 1)
+    throw incompatible(response?.contractVersion);
   return response.data;
 }
 
-type BinaryRequestArgs<K extends keyof BinaryCommandMap> = Omit<BinaryCommandMap[K][0], "contractVersion">;
+type BinaryRequestArgs<K extends keyof BinaryCommandMap> = Omit<
+  BinaryCommandMap[K][0],
+  "contractVersion"
+>;
 
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
-  return value instanceof ArrayBuffer || Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+  return (
+    value instanceof ArrayBuffer ||
+    Object.prototype.toString.call(value) === "[object ArrayBuffer]"
+  );
 }
 
 /** The invoke boundary for commands that answer with raw bytes
@@ -217,9 +420,13 @@ export async function binaryCommand<K extends keyof BinaryCommandMap>(
   if (isArrayBuffer(response)) return response;
   if (ArrayBuffer.isView(response)) {
     const view = response;
-    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice()
+      .buffer;
   }
-  if (Array.isArray(response) && response.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+  if (
+    Array.isArray(response) &&
+    response.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+  ) {
     return Uint8Array.from(response as number[]).buffer;
   }
   throw incompatible(undefined);
@@ -232,7 +439,9 @@ export async function binaryCommand<K extends keyof BinaryCommandMap>(
  *  `operationId` both times, so the backend replays a committed first try
  *  instead of applying it twice. A `CommandError` is the backend's answer
  *  and is never retried. */
-export async function retryOnTransportFailure<T>(attempt: () => Promise<T>): Promise<T> {
+export async function retryOnTransportFailure<T>(
+  attempt: () => Promise<T>,
+): Promise<T> {
   try {
     return await attempt();
   } catch (error) {
@@ -263,9 +472,18 @@ export function needsDesktopError(action: string): CommandError {
  * be checked by hand. The command exists only in debug desktop builds and is
  * deliberately outside `CommandMap` (P3 exposes no reservation command).
  */
-export async function debugSeedReservation(spoolId: string, amountMg: number): Promise<void> {
+export async function debugSeedReservation(
+  spoolId: string,
+  amountMg: number,
+): Promise<void> {
   if (!import.meta.env.DEV) {
-    throw new Error("debugSeedReservation is available only in development builds.");
+    throw new Error(
+      "debugSeedReservation is available only in development builds.",
+    );
   }
-  await invoke("debug_seed_reservation", { contractVersion: 1, spoolId, amountMg });
+  await invoke("debug_seed_reservation", {
+    contractVersion: 1,
+    spoolId,
+    amountMg,
+  });
 }

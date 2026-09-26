@@ -703,9 +703,10 @@ pub fn printer_capabilities<R: tauri::Runtime>(
         .get(&printer_id)
         .map_err(storage_command_error)?
         .ok_or_else(|| CommandError::not_found(&printer_id))?;
-    Ok(CommandSuccess::new(capabilities::capabilities_for(
-        &printer, None,
-    )))
+    // D6: over the host facts cached at the Printer's last Online.
+    Ok(CommandSuccess::new(
+        services.host_ops.capabilities(&printer),
+    ))
 }
 
 /// D6 "Rows at the end of P6": the registry's own capabilities, in

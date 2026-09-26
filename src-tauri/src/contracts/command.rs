@@ -335,6 +335,22 @@ pub enum ErrorCode {
     /// P6 D7: the Connection change would orphan an unresolved Host
     /// Operation.
     ConnectionInUse,
+    /// P6 D6: the Printer's Connection can't do this (or can't reconcile a
+    /// row of this kind).
+    CapabilityUnsupported,
+    /// P6 D8: the row is not `uncertain`, or has had no attempt and can
+    /// still be reconciled.
+    HostOperationNotAbandonable,
+    /// P6 D9: the Printer's state does not allow a start.
+    StartNotAllowed,
+    /// P6 D9: Start is offered, but from another state than the operator
+    /// confirmed.
+    StartPreconditionChanged,
+    /// P6 D9: the Printer's state does not allow this pause, resume, or
+    /// cancel.
+    ControlNotAllowed,
+    /// P6 D9: the staged file is gone from the host or no longer matches.
+    StagedArtifactInvalid,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -701,6 +717,122 @@ impl CommandError {
             ("hostOperationIds".to_string(), strings(host_operation_ids)),
         ]));
         error
+    }
+
+    /// P6 `CAPABILITY_UNSUPPORTED`. The message is the capability's own
+    /// `detail`. `capability` and `reason` are wire spellings.
+    pub fn capability_unsupported(
+        printer_id: &str,
+        capability: &str,
+        reason: &str,
+        detail: &str,
+    ) -> Self {
+        Self::typed(ErrorCode::CapabilityUnsupported, detail, vec![], false).with_string_details(&[
+            ("printerId", printer_id),
+            ("capability", capability),
+            ("reason", reason),
+            ("detail", detail),
+        ])
+    }
+
+    /// P6 D8 `HOST_OPERATION_NOT_ABANDONABLE`. `state` is the wire spelling.
+    pub fn host_operation_not_abandonable(
+        host_operation_id: &str,
+        state: &str,
+        attempts: i64,
+    ) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::HostOperationNotAbandonable,
+            "farm3d can only stop checking an uncertain operation after it has checked at least once.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("hostOperationId", host_operation_id), ("state", state)]);
+        error.details.get_or_insert_with(BTreeMap::new).insert(
+            "attempts".to_string(),
+            JsonValue::Number(
+                JsonNumber::try_from(attempts)
+                    .unwrap_or_else(|_| JsonNumber::try_from(0_i64).expect("constant is safe")),
+            ),
+        );
+        error
+    }
+
+    /// P6 D9 `START_NOT_ALLOWED`. `observed_state`/`freshness` are wire
+    /// spellings; `state_label` is the human one.
+    pub fn start_not_allowed(
+        printer_id: &str,
+        observed_state: &str,
+        freshness: &str,
+        state_label: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::StartNotAllowed,
+            format!("The printer can't start a print now: {state_label}."),
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+        ])
+    }
+
+    /// P6 D9 `START_PRECONDITION_CHANGED`.
+    pub fn start_precondition_changed(
+        printer_id: &str,
+        observed_state: &str,
+        freshness: &str,
+        prior_state: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::StartPreconditionChanged,
+            "The printer's state changed. Confirm the bed again.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+            ("priorState", prior_state),
+        ])
+    }
+
+    /// P6 D9 `CONTROL_NOT_ALLOWED`. `verb` is `pause`, `resume`, or
+    /// `cancel`.
+    pub fn control_not_allowed(
+        printer_id: &str,
+        verb: &str,
+        observed_state: &str,
+        freshness: &str,
+        state_label: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::ControlNotAllowed,
+            format!("The printer isn't in a state to {verb} now: {state_label}."),
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("verb", verb),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+        ])
+    }
+
+    /// P6 D9 `STAGED_ARTIFACT_INVALID`. `reason` is `absent` or `differs`.
+    /// No recovery code: **Stage again** is the Start dialog's own action.
+    pub fn staged_artifact_invalid(host_operation_id: &str, reason: &str) -> Self {
+        let message = if reason == "absent" {
+            "The staged file is no longer on the printer. Stage it again."
+        } else {
+            "The file on the printer no longer matches this Slice Revision. Stage it again."
+        };
+        Self::typed(ErrorCode::StagedArtifactInvalid, message, vec![], false)
+            .with_string_details(&[("hostOperationId", host_operation_id), ("reason", reason)])
     }
 
     pub fn duplicate_host(conflicting_printer_id: &str) -> Self {

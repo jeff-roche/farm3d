@@ -314,6 +314,32 @@ pub fn runtime_with_documents(
     )
 }
 
+/// [`runtime`], with `customize` applied to the services before they are
+/// managed (for example, to swap in test `HostOperationServices`).
+pub fn runtime_with(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    customize: impl FnOnce(&mut RuntimeServices<MockRuntime>),
+) -> MockHarness {
+    runtime_customized(
+        handler,
+        storage,
+        catalog,
+        credentials_dir,
+        factory,
+        customize,
+    )
+}
+
 fn runtime_customized(
     handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
     storage: Arc<Storage>,

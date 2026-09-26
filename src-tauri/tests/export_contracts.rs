@@ -34,6 +34,7 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::host_ops::events::{HostOperationsEvent, HostOperationsEventType};
 use farm3d_lib::host_ops::{
     HostOperation, HostOperationEndpoint, HostOperationFailure, HostOperationKind,
     HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
@@ -531,6 +532,8 @@ fn export_registry() -> Vec<Export> {
         export::<HostOperationLastAttempt>(),
         export::<HostOperation>(),
         export::<HostOperationsSnapshot>(),
+        export::<HostOperationsEventType>(),
+        export::<HostOperationsEvent>(),
     ]
 }
 
@@ -735,7 +738,7 @@ fn command_envelopes_serialize_literal_version_and_structured_error_fields() {
 
 #[test]
 fn error_and_recovery_codes_serialize_with_exact_spellings() {
-    let errors = [
+    let errors = vec![
         ErrorCode::Validation,
         ErrorCode::NotFound,
         ErrorCode::Conflict,
@@ -768,6 +771,12 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::OperationNotCancellable,
         ErrorCode::HostOperationPending,
         ErrorCode::ConnectionInUse,
+        ErrorCode::CapabilityUnsupported,
+        ErrorCode::HostOperationNotAbandonable,
+        ErrorCode::StartNotAllowed,
+        ErrorCode::StartPreconditionChanged,
+        ErrorCode::ControlNotAllowed,
+        ErrorCode::StagedArtifactInvalid,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -799,7 +808,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
                 "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
                 "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE",
-                "HOST_OPERATION_PENDING", "CONNECTION_IN_USE"
+                "HOST_OPERATION_PENDING", "CONNECTION_IN_USE", "CAPABILITY_UNSUPPORTED",
+                "HOST_OPERATION_NOT_ABANDONABLE", "START_NOT_ALLOWED",
+                "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

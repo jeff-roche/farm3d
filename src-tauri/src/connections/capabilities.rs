@@ -331,7 +331,7 @@ pub struct CapabilityMap(BTreeMap<CapabilityKey, CapabilityState>);
 impl CapabilityMap {
     /// Builds a map with `state_for(key)` for every key of
     /// `CapabilityKey::ALL` — never a partial one.
-    fn complete(mut state_for: impl FnMut(CapabilityKey) -> CapabilityState) -> Self {
+    pub fn complete(mut state_for: impl FnMut(CapabilityKey) -> CapabilityState) -> Self {
         CapabilityMap(
             CapabilityKey::ALL
                 .into_iter()

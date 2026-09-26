@@ -136,21 +136,46 @@ impl Default for StatusState {
     }
 }
 
+/// Called with a Printer id each time its status becomes Online (P6 D5:
+/// reconcile its uncertain Host Operation; D6: refresh its host facts). It
+/// runs on the publishing thread, outside the status lock, and must not
+/// block.
+pub type OnlineHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Shared status map. Publication mutates the map before emitting, retaining
 /// listener-before-backfill semantics when an event races a backfill request.
 pub struct StatusMap {
     state: Mutex<StatusState>,
+    online_hook: Mutex<Option<OnlineHook>>,
 }
 
 impl Default for StatusMap {
     fn default() -> Self {
         Self {
             state: Mutex::new(StatusState::default()),
+            online_hook: Mutex::new(None),
         }
     }
 }
 
+/// Whether publishing `next` over `previous` is a transition into Online.
+fn becomes_online(previous: Option<&PrinterStatus>, next: &PrinterStatus) -> bool {
+    next.connection_state == ConnectionState::Online
+        && previous.is_none_or(|status| status.connection_state != ConnectionState::Online)
+}
+
 impl StatusMap {
+    fn set_online_hook(&self, hook: OnlineHook) {
+        *self.online_hook.lock().expect("online hook lock") = Some(hook);
+    }
+
+    fn notify_online(&self, id: &str) {
+        let hook = self.online_hook.lock().expect("online hook lock").clone();
+        if let Some(hook) = hook {
+            hook(id);
+        }
+    }
+
     fn begin_supervision(&self, id: &str) -> u64 {
         let mut state = self.state.lock().expect("status map lock");
         let epoch = state.epochs.entry(id.to_string()).or_default();
@@ -219,11 +244,16 @@ impl StatusMap {
                 status: Box::new(status.clone()),
             },
         );
+        let online = becomes_online(state.values.get(id), &status);
         state.values.insert(id.to_string(), status);
         if hydrated {
             state.hydrated.insert(id.to_string());
         } else {
             state.hydrated.remove(id);
+        }
+        drop(state);
+        if online {
+            self.notify_online(id);
         }
         envelope
     }
@@ -247,11 +277,16 @@ impl StatusMap {
                 status: Box::new(status.clone()),
             },
         );
+        let online = becomes_online(state.values.get(id), &status);
         state.values.insert(id.to_string(), status);
         if hydrated {
             state.hydrated.insert(id.to_string());
         } else {
             state.hydrated.remove(id);
+        }
+        drop(state);
+        if online {
+            self.notify_online(id);
         }
         Some(envelope)
     }
@@ -873,6 +908,13 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             false
         }
     }
+    /// Installs the hook called each time a Printer's status becomes Online
+    /// (P6: `host_ops` reconciles and refreshes host facts). Replaces any
+    /// earlier hook.
+    pub fn set_online_hook(&self, hook: OnlineHook) {
+        self.statuses.set_online_hook(hook);
+    }
+
     pub async fn reconciliation_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.reconciliation.lock().await
     }

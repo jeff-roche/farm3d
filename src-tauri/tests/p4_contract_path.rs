@@ -32,8 +32,9 @@ const PRE_P4: usize = 41;
 /// Commands P5 added after P4 (`tests/p5_slicing.rs` lists them).
 const P5_COMMAND_COUNT: usize = 21;
 
-/// Commands P6 Task 5 added after P5 (`tests/p6_capabilities.rs` lists them).
-const P6_COMMAND_COUNT: usize = 2;
+/// Commands P6 added after P5: Task 5's 2 (`tests/p6_capabilities.rs`
+/// lists them) and Task 9's 8 (`tests/p6_host_ops.rs`).
+const P6_COMMAND_COUNT: usize = 2 + 8;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
