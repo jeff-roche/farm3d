@@ -724,7 +724,10 @@ Every guard runs inside the mutation's own transaction.
 7. **Host re-read**: `host_job_state`. If `klippy_state` is not `Ready`, or
    `print.state` is `printing` or `paused`, → `START_NOT_ALLOWED` with the
    observed state (the live status can lag the host by seconds, and start
-   from Paused is accepted by Klipper, spike 8).
+   from Paused is accepted by Klipper, spike 8). Only a host state that
+   maps to `ready`, `finished`, or `cancelled` goes on: `error` (the last
+   print failed, ruling R21) and, fail-safe, a `print.state` farm3d doesn't
+   know or no `print_stats` at all (`unknown`) are refused the same way.
 8. **High-water mark**: the D5 query (max parsed `job_id` over a 50-job
    page).
 9. **Identity**: `locate` of the staged artifact on the current endpoint.
@@ -799,6 +802,10 @@ the capability builders; the values below are its production defaults
 | `CONTROL_TIMEOUT` | 60 s | `POST /printer/print/{start,pause,resume,cancel}`. Long, because a queued start answered after 15.8 s (Gate E). |
 | `TRANSFER_TIMEOUT(size)` | 60 s + 1 s per started MiB of `gcode_size` | the upload and the `locate` download. LAN cost is unmeasured (Gate C), so the bound is a timeout, never a size limit. |
 | `CONTROL_VERIFY_WINDOW` | 10 s, polled every 500 ms | D5 |
+
+`CONTROL_VERIFY_WINDOW` is not a `MoonrakerTimings` field: the executor
+runs the verification, so it reads the window and poll interval from
+`HostOpsTimings` (`verify_window`, `verify_poll_interval`; ruling R19).
 
 Endpoints (all relative to the gcodes root where a path applies):
 

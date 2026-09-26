@@ -397,6 +397,19 @@ pub fn transition(
     id: &str,
     outcome: Outcome,
 ) -> Result<HostOperation, RepositoryError> {
+    transition_at(tx, id, outcome, &now_rfc3339())
+}
+
+/// [`transition`], stamping `uncertain_since`, `resolved_at`, and the
+/// other times it writes with `now` (RFC 3339). The executor passes its
+/// injected clock, which the settle check compares `uncertain_since`
+/// against, as `recover_after_restart` does.
+pub fn transition_at(
+    tx: &Transaction<'_>,
+    id: &str,
+    outcome: Outcome,
+    now: &str,
+) -> Result<HostOperation, RepositoryError> {
     let current = load(tx, id)?.ok_or_else(|| not_found(id))?;
     let event = event_for(current.state, &outcome);
     if event == state::Event::ProvedNotApplied && current.kind != HostOperationKind::Upload {
@@ -404,7 +417,6 @@ pub fn transition(
     }
     state::transition(current.state, event).map_err(|error| illegal_from(id, error))?;
 
-    let now = now_rfc3339();
     match outcome {
         Outcome::Succeeded { resolution } => tx.execute(
             "UPDATE host_operations SET state = 'succeeded', resolution_json = ?2, resolved_at = ?3

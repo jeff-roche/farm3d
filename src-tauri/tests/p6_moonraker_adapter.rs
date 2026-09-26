@@ -30,7 +30,6 @@ fn short_timings() -> MoonrakerTimings {
         control: Duration::from_millis(300),
         transfer_base: Duration::from_millis(300),
         transfer_per_started_mib: Duration::from_millis(10),
-        ..MoonrakerTimings::default()
     }
 }
 
@@ -1083,8 +1082,6 @@ async fn timings_default_to_the_spec_values() {
     assert_eq!(timings.control, Duration::from_secs(60));
     assert_eq!(timings.transfer_base, Duration::from_secs(60));
     assert_eq!(timings.transfer_per_started_mib, Duration::from_secs(1));
-    assert_eq!(timings.verify_window, Duration::from_secs(10));
-    assert_eq!(timings.verify_poll_interval, Duration::from_millis(500));
     // 60 s plus 1 s per *started* MiB.
     assert_eq!(timings.transfer(0), Duration::from_secs(60));
     assert_eq!(timings.transfer(1), Duration::from_secs(61));

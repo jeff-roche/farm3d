@@ -615,7 +615,6 @@ impl SimFactory {
                 control: Duration::from_secs(20),
                 transfer_base: Duration::from_secs(30),
                 transfer_per_started_mib: Duration::from_millis(250),
-                ..MoonrakerTimings::default()
             }),
             trigger: Trigger::default(),
         }

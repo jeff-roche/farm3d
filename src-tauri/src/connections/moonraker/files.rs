@@ -1191,7 +1191,7 @@ mod tests {
 
     #[test]
     fn parser_errors_never_quote_the_body() {
-        let body = json!({"error": {"message": "secret-ish", "traceback": "/home/someone/x.py"}});
+        let body = json!({"error": {"message": "secret-ish", "traceback": "/opt/klipper/x.py"}});
         for error in [
             parse_server_info(&body).unwrap_err(),
             parse_objects_list(&body).unwrap_err(),
@@ -1201,7 +1201,7 @@ mod tests {
         ] {
             let text = format!("{error} {error:?}");
             assert!(
-                !text.contains("secret-ish") && !text.contains("/home/"),
+                !text.contains("secret-ish") && !text.contains("/opt/klipper"),
                 "{text}"
             );
         }

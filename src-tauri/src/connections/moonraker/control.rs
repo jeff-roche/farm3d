@@ -51,10 +51,6 @@ pub struct MoonrakerTimings {
     /// `transfer_per_started_mib` for each started MiB (see [`Self::transfer`]).
     pub transfer_base: Duration,
     pub transfer_per_started_mib: Duration,
-    /// D5's verification window after a pause, resume, or cancel `ok`, and
-    /// how often it polls `host_job_state`. The executor reads these.
-    pub verify_window: Duration,
-    pub verify_poll_interval: Duration,
 }
 
 impl Default for MoonrakerTimings {
@@ -65,8 +61,6 @@ impl Default for MoonrakerTimings {
             control: Duration::from_secs(60),
             transfer_base: Duration::from_secs(60),
             transfer_per_started_mib: Duration::from_secs(1),
-            verify_window: Duration::from_secs(10),
-            verify_poll_interval: Duration::from_millis(500),
         }
     }
 }

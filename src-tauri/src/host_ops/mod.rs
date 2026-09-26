@@ -101,6 +101,17 @@ pub struct HostOperationEndpoint {
     pub port: u16,
 }
 
+impl HostOperationEndpoint {
+    /// `config`'s endpoint, without its credential reference.
+    pub(crate) fn of(config: &ConnectionConfig) -> Self {
+        Self {
+            kind: config.kind.clone(),
+            host: config.host.clone(),
+            port: config.port,
+        }
+    }
+}
+
 /// D11: a failed row's `failure_json`.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
@@ -440,6 +451,15 @@ struct RetryState {
     step: u32,
 }
 
+/// A Printer's host facts as last read, with the endpoint they came from
+/// and when (`observedAt`).
+#[derive(Clone)]
+struct CachedHostFacts {
+    endpoint: HostOperationEndpoint,
+    facts: HostFacts,
+    observed_at: String,
+}
+
 /// P6's Host Operation services (spec "Module layout"): the repository's
 /// callers, the executor, the reconciler, the `hostOperations` stream, the
 /// host-facts cache, the per-Printer locks, and the clock.
@@ -455,7 +475,9 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     credentials: OnceLock<Arc<CredentialStore>>,
     started: OnceLock<()>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    host_facts: Mutex<HashMap<String, (HostFacts, String)>>,
+    /// Keyed by Printer id. Each entry carries the endpoint it was read
+    /// from, and applies only while the Printer still names that endpoint.
+    host_facts: Mutex<HashMap<String, CachedHostFacts>>,
     retries: Mutex<HashMap<String, RetryState>>,
     faults: Mutex<Vec<(FaultPoint, FaultAction, SyncSender<()>)>>,
     mark_sent_fault: Mutex<Option<(MarkSentFault, SyncSender<()>)>>,
@@ -618,12 +640,18 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
 
     /// D6 over the cached host facts, with their read time.
     pub fn capabilities(&self, printer: &StoredPrinter) -> PrinterCapabilities {
-        let cached = lock(&self.host_facts).get(&printer.id).cloned();
+        // Facts read from another endpoint (the Connection changed since,
+        // or a Printer came back under the same id) describe another host.
+        let endpoint = printer.connection.as_ref().map(HostOperationEndpoint::of);
+        let cached = lock(&self.host_facts)
+            .get(&printer.id)
+            .filter(|cached| Some(&cached.endpoint) == endpoint.as_ref())
+            .cloned();
         let mut capabilities = self
             .factory
-            .capabilities(printer, cached.as_ref().map(|(facts, _)| facts));
+            .capabilities(printer, cached.as_ref().map(|cached| &cached.facts));
         if capabilities.host_facts.is_some() {
-            capabilities.observed_at = cached.map(|(_, observed_at)| observed_at);
+            capabilities.observed_at = cached.map(|cached| cached.observed_at);
         }
         capabilities
     }
@@ -770,10 +798,9 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         id: &str,
         outcome: repository::Outcome,
     ) -> Option<HostOperation> {
-        let row = match self
-            .storage
-            .write_repo(|tx| repository::transition(tx, id, outcome))
-        {
+        let row = match self.storage.write_repo(|tx| {
+            repository::transition_at(tx, id, outcome, &format_time(self.clock.now()))
+        }) {
             Ok(row) => row,
             Err(error) => {
                 log_commit_failure(id, "its dispatch outcome", &error);
@@ -895,7 +922,11 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         if let Ok(facts) = host_state.host_facts().await {
             lock(&self.host_facts).insert(
                 printer_id.to_string(),
-                (facts, format_time(self.clock.now())),
+                CachedHostFacts {
+                    endpoint: HostOperationEndpoint::of(&config),
+                    facts,
+                    observed_at: format_time(self.clock.now()),
+                },
             );
         }
     }

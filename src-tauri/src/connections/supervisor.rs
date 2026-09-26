@@ -16,7 +16,7 @@ use super::status_repository::{
 };
 use super::{
     ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND,
+    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation,
 };
 use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::printers::operational::{evaluate_operational_status, HostActivity, OperationalInput};
@@ -1017,6 +1017,7 @@ pub fn build_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connections::MOONRAKER_KIND;
     use crate::printers::operational::{OperationalState, TelemetryFreshness};
     use crate::printers::repository::PrinterRepository;
     use crate::printers::StoredPrinter;

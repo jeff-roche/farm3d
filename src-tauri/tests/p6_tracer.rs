@@ -190,7 +190,6 @@ fn fake_moonraker_timings() -> MoonrakerTimings {
         control: Duration::from_millis(1500),
         transfer_base: Duration::from_millis(1500),
         transfer_per_started_mib: Duration::from_millis(10),
-        ..MoonrakerTimings::default()
     }
 }
 
@@ -409,7 +408,6 @@ fn sim_moonraker_timings() -> MoonrakerTimings {
         control: Duration::from_secs(20),
         transfer_base: Duration::from_secs(30),
         transfer_per_started_mib: Duration::from_millis(250),
-        ..MoonrakerTimings::default()
     }
 }
 

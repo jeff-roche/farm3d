@@ -182,14 +182,6 @@ fn connection_of(printer: &StoredPrinter) -> Result<&ConnectionConfig, CommandEr
         .ok_or_else(CommandError::internal)
 }
 
-fn endpoint_of(config: &ConnectionConfig) -> HostOperationEndpoint {
-    HostOperationEndpoint {
-        kind: config.kind.clone(),
-        host: config.host.clone(),
-        port: config.port,
-    }
-}
-
 /// A pre-check read that failed: the existing network errors (D9).
 fn network_error(
     error: ConnectionError,
@@ -212,13 +204,6 @@ fn host_state_for<R: tauri::Runtime>(
         .factory
         .host_state(config, key)
         .ok_or_else(|| CommandError::unsupported_adapter(&config.kind))
-}
-
-/// What `write_ahead`'s transaction decided.
-enum WriteAhead {
-    Inserted(HostOperation),
-    /// The Printer's Connection is no longer the one the pre-checks used.
-    ConnectionChanged,
 }
 
 /// The refusal of a stage or control command whose Printer's Connection
@@ -276,7 +261,8 @@ fn write_ahead<R: tauri::Runtime>(
             let current = connection_json
                 .and_then(|json| serde_json::from_str::<ConnectionConfig>(&json).ok());
             if current.as_ref() != Some(checked) {
-                return Ok(WriteAhead::ConnectionChanged);
+                // Nothing written yet: this commits an empty transaction.
+                return Ok(None);
             }
             if let Some(pending) = repository::list_unresolved(tx, Some(&printer_id))?.first() {
                 return Err(RepositoryError::HostOperationsPending {
@@ -299,7 +285,7 @@ fn write_ahead<R: tauri::Runtime>(
                     });
                 }
             }
-            repository::insert_dispatching(tx, &new_operation).map(WriteAhead::Inserted)
+            repository::insert_dispatching(tx, &new_operation).map(Some)
         })
         .map_err(|error| match error {
             RepositoryError::Validation {
@@ -307,9 +293,10 @@ fn write_ahead<R: tauri::Runtime>(
             } => archived_error(),
             other => repository_error(other),
         })?;
-    let row = match outcome {
-        WriteAhead::Inserted(row) => row,
-        WriteAhead::ConnectionChanged => return Err(connection_changed()),
+    // `None`: the Printer's Connection is no longer the one the
+    // pre-checks used.
+    let Some(row) = outcome else {
+        return Err(connection_changed());
     };
     services.publish(std::slice::from_ref(&row));
     executor::spawn(services, row.id.clone());
@@ -395,7 +382,7 @@ pub async fn stage_slice_revision<R: tauri::Runtime>(
             gcode_sha256: Some(gcode_sha256),
             gcode_size: Some(gcode_size),
             history_mark: None,
-            endpoint: endpoint_of(config),
+            endpoint: HostOperationEndpoint::of(config),
         },
         connection_changed_error,
     )?;
@@ -442,6 +429,19 @@ fn host_observed_state(state: &HostJobState) -> OperationalState {
         Some(PrintStatsState::Error) => OperationalState::Failed,
         Some(PrintStatsState::Other(_)) | None => OperationalState::Unknown,
     }
+}
+
+/// D9 step 7: the host re-read states a Start may go ahead from, the
+/// Start table's offered set. Everything else refuses: printing, paused,
+/// Klipper not ready (`error`), the last print failed (ruling R21, owner
+/// decision 13, even if the live status hasn't caught up), and, fail-safe,
+/// a print state farm3d doesn't know or no `print_stats` at all
+/// (`unknown`).
+fn host_allows_start(observed: OperationalState) -> bool {
+    matches!(
+        observed,
+        OperationalState::Ready | OperationalState::Finished | OperationalState::Cancelled
+    )
 }
 
 fn host_start_not_allowed(printer_id: &str, observed: OperationalState) -> CommandError {
@@ -510,16 +510,7 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
     match host_state.host_job_state().await {
         Ok(state) => {
             let observed = host_observed_state(&state);
-            // Ruling R21 (owner decision 13): a host that reports the last
-            // print failed (`print_stats` error) refuses Start too, even if
-            // the live status hasn't caught up.
-            if matches!(
-                observed,
-                OperationalState::Error
-                    | OperationalState::Printing
-                    | OperationalState::Paused
-                    | OperationalState::Failed
-            ) {
+            if !host_allows_start(observed) {
                 return Err(host_start_not_allowed(&printer_id, observed));
             }
         }
@@ -584,7 +575,7 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
             gcode_size: upload.gcode_size,
             host_path: upload.host_path.clone(),
             history_mark: Some(history_mark),
-            endpoint: endpoint_of(config),
+            endpoint: HostOperationEndpoint::of(config),
         },
         || {
             // The bed-clear confirmation named a Printer whose Connection
@@ -706,7 +697,7 @@ async fn control_command<R: tauri::Runtime>(
             gcode_size: None,
             host_path,
             history_mark: None,
-            endpoint: endpoint_of(config),
+            endpoint: HostOperationEndpoint::of(config),
         },
         connection_changed_error,
     )?;
@@ -903,4 +894,35 @@ pub async fn list_host_operations<R: tauri::Runtime>(
         snapshot_sequence,
         operations,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::moonraker::files::not_ready_job_state;
+
+    #[test]
+    fn a_host_reread_without_print_stats_never_allows_a_start() {
+        // Klipper ready, but no `print_stats` in the answer: `Unknown`.
+        let state = not_ready_job_state(KlippyState::Ready);
+        let observed = host_observed_state(&state);
+        assert_eq!(observed, OperationalState::Unknown);
+        assert!(!host_allows_start(observed));
+    }
+
+    #[test]
+    fn only_ready_finished_and_cancelled_hosts_allow_a_start() {
+        for (state, allowed) in [
+            (OperationalState::Ready, true),
+            (OperationalState::Finished, true),
+            (OperationalState::Cancelled, true),
+            (OperationalState::Unknown, false),
+            (OperationalState::Failed, false),
+            (OperationalState::Error, false),
+            (OperationalState::Printing, false),
+            (OperationalState::Paused, false),
+        ] {
+            assert_eq!(host_allows_start(state), allowed, "{state:?}");
+        }
+    }
 }

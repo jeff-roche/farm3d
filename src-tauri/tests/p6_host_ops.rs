@@ -169,7 +169,6 @@ fn short_moonraker_timings() -> MoonrakerTimings {
         control: Duration::from_millis(1500),
         transfer_base: Duration::from_millis(1500),
         transfer_per_started_mib: Duration::from_millis(10),
-        ..MoonrakerTimings::default()
     }
 }
 
@@ -293,6 +292,7 @@ impl Rig {
                 farm3d_lib::host_ops::commands::reconcile_host_operation,
                 farm3d_lib::host_ops::commands::abandon_host_operation,
                 farm3d_lib::printers::commands::archive_printer,
+                farm3d_lib::connections::commands::printer_capabilities,
             ],
             Arc::clone(&storage),
             Arc::new(common::a_catalog()),
@@ -1056,6 +1056,27 @@ fn a_control_ok_with_no_state_change_is_effect_not_observed() {
     assert_eq!(reason(&row), Some(InconclusiveReason::EffectNotObserved));
 }
 
+#[test]
+fn uncertain_since_is_stamped_from_the_injected_clock() {
+    // The settle check compares `uncertain_since` with the injected clock,
+    // so the executor stamps it from that clock too (as startup recovery
+    // does), not from the system clock.
+    let rig = Rig::new();
+    let running = rig.boot();
+    printing(&rig, &running);
+    rig.clock.advance(Duration::from_secs(3 * 3600));
+    rig.fake.fault(Route::Pause, Fault::OkWithoutEffect);
+    let row = running.wait_settled(&id_of(&running.control("pause", "op-pause").unwrap()));
+    assert_eq!(row.state, HostOperationState::Uncertain);
+    let since = chrono::DateTime::parse_from_rfc3339(row.uncertain_since.as_deref().unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert!(
+        since > chrono::Utc::now() + chrono::Duration::hours(2),
+        "uncertain_since {since} is the system clock, not the injected one"
+    );
+}
+
 // --- unreachable, abandon, capability gate ------------------------------------------
 
 /// An `uncertain` row of `kind` whose recorded endpoint has nothing
@@ -1551,10 +1572,14 @@ fn nothing_is_scheduled_while_the_printer_is_not_online() {
 
 #[test]
 fn abandon_cancels_the_pending_retry_timers() {
+    // Step 0 is far longer than this test's own work between `reconcile`
+    // and `abandon` (which may wait on the Online hook's attempt holding
+    // the Printer lock), so a timer that fires is one abandon failed to
+    // cancel, never one that legitimately came due first.
     let rig = Rig::with_timings(HostOpsTimings {
         backoff: |step| {
             if step == 0 {
-                Duration::from_millis(1000)
+                Duration::from_secs(5)
             } else {
                 Duration::from_secs(3600)
             }
@@ -1570,7 +1595,7 @@ fn abandon_cancels_the_pending_retry_timers() {
     running.abandon("op-abandon", &id).unwrap();
     assert_eq!(running.row(&id).state, HostOperationState::Abandoned);
     let attempts = running.row(&id).attempts;
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(Duration::from_millis(5500));
     assert_eq!(running.services.host_ops.retry_attempts_run(), 0);
     assert_eq!(running.row(&id).attempts, attempts);
 }
@@ -1654,6 +1679,24 @@ fn start_is_refused_with_no_row_when_the_host_reread_shows_the_last_print_failed
     let error = running.start("op-start", &upload, "ready").unwrap_err();
     assert_eq!(code(&error), "START_NOT_ALLOWED", "{error}");
     assert_eq!(error["details"]["observedState"], "failed");
+    assert_eq!(running.row_count(), before);
+    assert_eq!(starts(&rig.fake), 0);
+}
+
+#[test]
+fn start_is_refused_with_no_row_when_the_host_reread_shows_an_unknown_print_state() {
+    // Fail-safe: a `print_stats.state` farm3d doesn't know is `unknown`,
+    // which never allows a Start, even while the live status says Idle.
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    rig.fake
+        .with_state(|state| state.print_state = "calibrating".to_string());
+    let before = running.row_count();
+    let error = running.start("op-start", &upload, "ready").unwrap_err();
+    assert_eq!(code(&error), "START_NOT_ALLOWED", "{error}");
+    assert_eq!(error["details"]["observedState"], "unknown");
+    assert_eq!(error["details"]["freshness"], "fresh");
     assert_eq!(running.row_count(), before);
     assert_eq!(starts(&rig.fake), 0);
 }
@@ -2080,6 +2123,47 @@ fn a_slice_revision_deleted_before_the_write_ahead_is_not_found_with_no_row() {
     );
     assert_eq!(code(&error), "NOT_FOUND", "{error}");
     assert_eq!(starts(&rig.fake), 0);
+}
+
+// --- host facts --------------------------------------------------------------------
+
+fn printer_capabilities(running: &Running) -> Value {
+    running
+        .call("printer_capabilities", json!({"printerId": PRINTER}))
+        .expect("printer_capabilities")
+}
+
+#[test]
+fn capabilities_carry_the_host_facts_and_their_observed_at_once_online() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    let before = printer_capabilities(&running);
+    assert!(before["hostFacts"].is_null(), "{before}");
+    assert!(before["observedAt"].is_null(), "{before}");
+
+    running.observe(HostActivity::Idle); // the Online hook reads the facts
+    let after = printer_capabilities(&running);
+    assert!(after["hostFacts"].is_object(), "{after}");
+    let observed_at = after["observedAt"].as_str().expect("observedAt is set");
+    chrono::DateTime::parse_from_rfc3339(observed_at).expect("an RFC 3339 time");
+}
+
+#[test]
+fn host_facts_from_the_previous_endpoint_are_never_applied_to_a_new_one() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    assert!(printer_capabilities(&running)["hostFacts"].is_object());
+
+    replace_connection(&running.storage, |config| {
+        Some(ConnectionConfig {
+            host: "192.0.2.20".to_string(),
+            ..config
+        })
+    });
+    let moved = printer_capabilities(&running);
+    assert!(moved["hostFacts"].is_null(), "{moved}");
+    assert!(moved["observedAt"].is_null(), "{moved}");
 }
 
 // --- replay ---------------------------------------------------------------------------

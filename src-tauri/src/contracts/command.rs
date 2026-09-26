@@ -682,7 +682,6 @@ impl CommandError {
         error
     }
 
-    /// D3: another active Printer already owns this host identity.
     /// P6 D7 `CONNECTION_IN_USE`: `set_printer_connection` or
     /// `clear_printer_connection` would change the endpoint, or clear the
     /// Connection or its credential, while `host_operation_id` is
@@ -835,6 +834,7 @@ impl CommandError {
             .with_string_details(&[("hostOperationId", host_operation_id), ("reason", reason)])
     }
 
+    /// D3: another active Printer already owns this host identity.
     pub fn duplicate_host(conflicting_printer_id: &str) -> Self {
         let mut error = Self::typed(
             ErrorCode::DuplicateHost,
