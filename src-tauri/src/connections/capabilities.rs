@@ -579,8 +579,12 @@ fn is_tool_object(name: &str) -> bool {
 
 /// Combines Moonraker's `server.info` (`components`), `printer.objects.list`
 /// (`objects`), and `server.webcams.list` (`camera_count`) into `HostFacts`.
-/// Pure: the HTTP client that will call this (Task 8) owns the JSON
-/// deserialization.
+/// Pure: the HTTP client that calls this (`moonraker::control`) owns the
+/// JSON deserialization.
+///
+/// `history` is a Moonraker component; `virtual_sdcard`, `pause_resume`, and
+/// `heater_bed` are Klipper objects, which Moonraker never lists among its
+/// components (spike Gate H).
 pub fn derive_host_facts(
     host_software: impl Into<String>,
     api_version: impl Into<String>,
@@ -588,12 +592,12 @@ pub fn derive_host_facts(
     objects: &[String],
     camera_count: usize,
 ) -> HostFacts {
-    let has_component = |name: &str| components.iter().any(|component| component == name);
+    let has_object = |name: &str| objects.iter().any(|object| object == name);
     HostFacts {
-        has_virtual_sdcard: has_component("virtual_sdcard"),
-        has_pause_resume: has_component("pause_resume"),
-        has_history: has_component("history"),
-        has_heater_bed: objects.iter().any(|object| object == "heater_bed"),
+        has_virtual_sdcard: has_object("virtual_sdcard"),
+        has_pause_resume: has_object("pause_resume"),
+        has_history: components.iter().any(|component| component == "history"),
+        has_heater_bed: has_object("heater_bed"),
         tool_count: objects
             .iter()
             .filter(|object| is_tool_object(object))
@@ -1174,13 +1178,34 @@ mod tests {
         let facts = derive_host_facts(
             "Moonraker",
             "1.5.0",
-            vec!["virtual_sdcard".to_string()],
-            &["extruder".to_string(), "heater_bed".to_string()],
+            vec!["history".to_string()],
+            &[
+                "extruder".to_string(),
+                "heater_bed".to_string(),
+                "virtual_sdcard".to_string(),
+            ],
             0,
         );
         assert_eq!(facts.tool_count, 1);
         assert!(facts.has_heater_bed);
         assert!(facts.has_virtual_sdcard);
+        assert!(!facts.has_pause_resume);
+        assert!(facts.has_history);
+    }
+
+    #[test]
+    fn derive_host_facts_reads_klipper_objects_from_objects_not_components() {
+        // A component named like a Klipper object proves nothing, and an
+        // object named like a Moonraker component proves nothing either.
+        let facts = derive_host_facts(
+            "Moonraker",
+            "1.5.0",
+            vec!["virtual_sdcard".to_string(), "pause_resume".to_string()],
+            &["history".to_string()],
+            0,
+        );
+        assert!(!facts.has_virtual_sdcard);
+        assert!(!facts.has_pause_resume);
         assert!(!facts.has_history);
     }
 
