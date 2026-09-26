@@ -429,21 +429,22 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
     }
 
     /// A row's recorded endpoint (D5: never the Printer's current one) with
-    /// the Printer's current credential reference.
+    /// the Printer's current credential reference and `use_tls`. The
+    /// endpoint record carries no TLS flag; taking it from the Connection
+    /// means a TLS Connection (refused everywhere today) is refused by the
+    /// adapter, never spoken to over plain HTTP.
     pub(crate) fn endpoint_config(
         &self,
         endpoint: &HostOperationEndpoint,
         printer: &StoredPrinter,
     ) -> ConnectionConfig {
+        let connection = printer.connection.as_ref();
         ConnectionConfig {
             kind: endpoint.kind.clone(),
             host: endpoint.host.clone(),
             port: endpoint.port,
-            use_tls: false,
-            credential_ref: printer
-                .connection
-                .as_ref()
-                .and_then(|connection| connection.credential_ref.clone()),
+            use_tls: connection.is_some_and(|connection| connection.use_tls),
+            credential_ref: connection.and_then(|connection| connection.credential_ref.clone()),
         }
     }
 

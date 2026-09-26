@@ -2166,6 +2166,34 @@ fn host_facts_from_the_previous_endpoint_are_never_applied_to_a_new_one() {
     assert!(moved["observedAt"].is_null(), "{moved}");
 }
 
+/// The reconciler reads a row's recorded endpoint with the Printer's
+/// Connection's `useTls`, so a stored TLS Connection (every entry point
+/// refuses one today) is refused by the adapter, never read over plain
+/// HTTP.
+#[test]
+fn a_stored_tls_connection_is_never_read_over_plain_http() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    replace_connection(&running.storage, |config| {
+        Some(ConnectionConfig {
+            use_tls: true,
+            ..config
+        })
+    });
+    let id = seed_uncertain_upload_on_fake(&running.storage, &rig);
+    let before = rig.fake.requests().len();
+
+    let row: HostOperation =
+        serde_json::from_value(running.reconcile(&id).expect("reconcile")).expect("a row");
+    assert_eq!(row.state, HostOperationState::Uncertain, "{row:?}");
+    assert_eq!(row.attempts, 1, "{row:?}");
+    assert_eq!(
+        rig.fake.requests().len(),
+        before,
+        "nothing reached the host"
+    );
+}
+
 // --- replay ---------------------------------------------------------------------------
 
 #[test]
