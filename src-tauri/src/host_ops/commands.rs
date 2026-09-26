@@ -5,9 +5,10 @@
 //! supported (`CAPABILITY_UNSUPPORTED`), no unresolved row
 //! (`HOST_OPERATION_PENDING`), then its own pre-checks. Any rejection
 //! writes no row and never burns the operation id. The write-ahead commit
-//! re-checks the Printer and the unresolved row inside its own
-//! transaction, then the command returns the `dispatching` row and the
-//! executor carries on in the background; outcomes arrive as events.
+//! re-checks the Printer, its Connection, the unresolved row, and the
+//! Slice Revision inside its own transaction, then the command returns the
+//! `dispatching` row and the executor carries on in the background;
+//! outcomes arrive as events.
 
 use std::sync::Arc;
 
@@ -213,37 +214,69 @@ fn host_state_for<R: tauri::Runtime>(
         .ok_or_else(|| CommandError::unsupported_adapter(&config.kind))
 }
 
+/// What `write_ahead`'s transaction decided.
+enum WriteAhead {
+    Inserted(HostOperation),
+    /// The Printer's Connection is no longer the one the pre-checks used.
+    ConnectionChanged,
+}
+
+/// The refusal of a stage or control command whose Printer's Connection
+/// changed during its pre-checks (Start refuses with
+/// `START_PRECONDITION_CHANGED` instead).
+fn connection_changed_error() -> CommandError {
+    CommandError::validation_at("printerId", "The Printer's Connection changed. Try again.")
+}
+
 /// D2/D3 write-ahead: re-checks, inside the transaction, that the Printer
-/// still exists, is not archived, and has no unresolved row; then claims
-/// the operation id and inserts the `dispatching` row. After commit it
+/// still exists, is not archived, still has exactly the Connection the
+/// pre-checks used (`kind`, `host`, `port`, `useTls`, and credential
+/// reference; else `connection_changed`), has no unresolved row, and that
+/// the row's Slice Revision still exists (`NOT_FOUND`); then claims the
+/// operation id and inserts the `dispatching` row. After commit it
 /// publishes the row and starts the executor.
+///
+/// The Connection commands don't take the host-ops lock, so a Connection
+/// edit can land while the pre-checks talk to the host. Without the
+/// compare, the row would name the old endpoint while the executor loads
+/// the new credential (D7: never take the endpoint or credential out from
+/// under a write).
 fn write_ahead<R: tauri::Runtime>(
     services: &Arc<HostOperationServices<R>>,
+    checked: &ConnectionConfig,
     new_operation: NewHostOperation,
+    connection_changed: impl FnOnce() -> CommandError,
 ) -> Result<HostOperation, CommandError> {
     let printer_id = new_operation.printer_id.clone();
-    let row = services
+    services.run_before_write_ahead();
+    let outcome = services
         .storage
         .write_repo(|tx| {
-            let archived_at: Option<Option<String>> = tx
+            let printer: Option<(Option<String>, Option<String>)> = tx
                 .query_row(
-                    "SELECT archived_at FROM printers WHERE id = ?1",
+                    "SELECT archived_at, connection_json FROM printers WHERE id = ?1",
                     [&printer_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            match archived_at {
+            let connection_json = match printer {
                 None => {
                     return Err(RepositoryError::NotFound {
                         entity_id: printer_id.clone(),
                     })
                 }
-                Some(Some(_)) => {
+                Some((Some(_), _)) => {
                     return Err(RepositoryError::Validation {
                         field_path: "printerId",
                     })
                 }
-                Some(None) => {}
+                Some((None, connection_json)) => connection_json,
+            };
+            // An unreadable Connection is treated as changed (fail-safe).
+            let current = connection_json
+                .and_then(|json| serde_json::from_str::<ConnectionConfig>(&json).ok());
+            if current.as_ref() != Some(checked) {
+                return Ok(WriteAhead::ConnectionChanged);
             }
             if let Some(pending) = repository::list_unresolved(tx, Some(&printer_id))?.first() {
                 return Err(RepositoryError::HostOperationsPending {
@@ -251,7 +284,22 @@ fn write_ahead<R: tauri::Runtime>(
                     host_operation_ids: vec![pending.id.clone()],
                 });
             }
-            repository::insert_dispatching(tx, &new_operation)
+            if let Some(slice_revision_id) = &new_operation.slice_revision_id {
+                let exists = tx
+                    .query_row(
+                        "SELECT 1 FROM slice_revisions WHERE id = ?1",
+                        [slice_revision_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !exists {
+                    return Err(RepositoryError::NotFound {
+                        entity_id: slice_revision_id.clone(),
+                    });
+                }
+            }
+            repository::insert_dispatching(tx, &new_operation).map(WriteAhead::Inserted)
         })
         .map_err(|error| match error {
             RepositoryError::Validation {
@@ -259,6 +307,10 @@ fn write_ahead<R: tauri::Runtime>(
             } => archived_error(),
             other => repository_error(other),
         })?;
+    let row = match outcome {
+        WriteAhead::Inserted(row) => row,
+        WriteAhead::ConnectionChanged => return Err(connection_changed()),
+    };
     services.publish(std::slice::from_ref(&row));
     executor::spawn(services, row.id.clone());
     Ok(row)
@@ -330,6 +382,7 @@ pub async fn stage_slice_revision<R: tauri::Runtime>(
     }
     let row = write_ahead(
         &services,
+        config,
         NewHostOperation {
             operation_id,
             operation_kind: OperationKind::StageSliceRevision,
@@ -344,6 +397,7 @@ pub async fn stage_slice_revision<R: tauri::Runtime>(
             history_mark: None,
             endpoint: endpoint_of(config),
         },
+        connection_changed_error,
     )?;
     Ok(CommandSuccess::new(row))
 }
@@ -517,11 +571,12 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
     // 11. Write-ahead.
     let row = write_ahead(
         &services,
+        config,
         NewHostOperation {
             operation_id,
             operation_kind: OperationKind::StartStagedArtifact,
             request_digest: digest,
-            printer_id,
+            printer_id: printer_id.clone(),
             kind: HostOperationKind::Start,
             slice_revision_id: upload.slice_revision_id.clone(),
             source_host_operation_id: Some(upload.id.clone()),
@@ -530,6 +585,17 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
             host_path: upload.host_path.clone(),
             history_mark: Some(history_mark),
             endpoint: endpoint_of(config),
+        },
+        || {
+            // The bed-clear confirmation named a Printer whose Connection
+            // is now different: confirm again against the current one.
+            let status = live_status(&services, &printer_id);
+            CommandError::start_precondition_changed(
+                &printer_id,
+                &wire(status.operational_state),
+                &wire(status.freshness),
+                &wire(prior_state),
+            )
         },
     )?;
     Ok(CommandSuccess::new(row))
@@ -627,6 +693,7 @@ async fn control_command<R: tauri::Runtime>(
     };
     let row = write_ahead(
         &services,
+        config,
         NewHostOperation {
             operation_id,
             operation_kind,
@@ -641,6 +708,7 @@ async fn control_command<R: tauri::Runtime>(
             history_mark: None,
             endpoint: endpoint_of(config),
         },
+        connection_changed_error,
     )?;
     Ok(CommandSuccess::new(row))
 }

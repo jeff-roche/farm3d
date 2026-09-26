@@ -1891,6 +1891,197 @@ fn staging_is_refused_with_no_row_while_the_printer_is_not_online() {
     assert_eq!(running.row_count(), 0);
 }
 
+// --- the window between the pre-checks and the write-ahead ---------------------------
+
+/// Replaces the Printer's Connection the way `set_printer_connection`
+/// does (its D7 guard passes: no row exists yet).
+fn replace_connection(
+    storage: &Arc<Storage>,
+    change: impl FnOnce(ConnectionConfig) -> Option<ConnectionConfig>,
+) {
+    let printers = PrinterRepository::new(Arc::clone(storage));
+    let printer = printers.get(PRINTER).unwrap().unwrap();
+    let connection = change(printer.connection.clone().expect("a Connection"));
+    let reason = if connection.is_some() {
+        "replaced"
+    } else {
+        "cleared"
+    };
+    printers
+        .set_connection(PRINTER, printer.revision, connection, None, reason)
+        .expect("the Connection change is allowed: no row exists yet");
+}
+
+fn posts(fake: &FakeMoonraker) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|request| request.method == "POST")
+        .count()
+}
+
+fn ledger_has(storage: &Storage, operation_id: &str) -> bool {
+    storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM operations WHERE id = ?1",
+                [operation_id],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .unwrap()
+        > 0
+}
+
+/// Runs `command` with `change` applied after its pre-checks, then checks
+/// that no row was written, the operation id was not claimed, and nothing
+/// was sent.
+fn refused_in_the_window(
+    rig: &Rig,
+    running: &Running,
+    operation_id: &str,
+    change: impl FnOnce() + Send + 'static,
+    command: impl FnOnce() -> Result<Value, Value>,
+) -> Value {
+    let rows = running.row_count();
+    let sent = posts(&rig.fake);
+    running.services.host_ops.inject_before_write_ahead(change);
+    let error = command().expect_err("the write-ahead refuses");
+    std::thread::sleep(Duration::from_millis(200)); // no executor to wait on
+    assert_eq!(running.row_count(), rows, "no row: {error}");
+    assert!(!ledger_has(&running.storage, operation_id), "{error}");
+    assert_eq!(posts(&rig.fake), sent, "nothing sent: {error}");
+    error
+}
+
+#[test]
+fn an_endpoint_change_before_the_write_ahead_writes_no_row_and_sends_nothing() {
+    // Start: the operator re-points the Printer while the start's host
+    // checks run. The row would name the old host and carry the new key.
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-start",
+        move || {
+            replace_connection(&storage, |config| {
+                Some(ConnectionConfig {
+                    host: "192.0.2.20".to_string(),
+                    ..config
+                })
+            })
+        },
+        || running.start("op-start", &upload, "ready"),
+    );
+    assert_eq!(code(&error), "START_PRECONDITION_CHANGED", "{error}");
+    assert_eq!(error["details"]["priorState"], "ready");
+    assert_eq!(starts(&rig.fake), 0);
+
+    // Stage: only the credential reference changes, endpoint unchanged.
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-stage",
+        move || {
+            replace_connection(&storage, |config| {
+                Some(ConnectionConfig {
+                    credential_ref: Some("farm3d/printer/printer-a/other".to_string()),
+                    ..config
+                })
+            })
+        },
+        || running.stage("op-stage"),
+    );
+    assert_eq!(code(&error), "VALIDATION", "{error}");
+    assert_eq!(error["details"]["fieldPath"], "printerId");
+    assert_eq!(
+        error["message"],
+        "The Printer's Connection changed. Try again."
+    );
+    assert_eq!(uploads(&rig.fake), 0);
+}
+
+#[test]
+fn a_connection_cleared_before_the_write_ahead_writes_no_row_and_sends_nothing() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    printing(&rig, &running);
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-pause",
+        move || replace_connection(&storage, |_| None),
+        || running.control("pause", "op-pause"),
+    );
+    assert_eq!(code(&error), "VALIDATION", "{error}");
+    assert_eq!(
+        error["message"],
+        "The Printer's Connection changed. Try again."
+    );
+    assert_eq!(requests_to(&rig.fake, "POST", "/printer/print/pause"), 0);
+
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-start",
+        move || replace_connection(&storage, |_| None),
+        || running.start("op-start", &upload, "ready"),
+    );
+    assert_eq!(code(&error), "START_PRECONDITION_CHANGED", "{error}");
+    assert_eq!(starts(&rig.fake), 0);
+}
+
+fn delete_slice_revision(storage: &Storage, id: &str) {
+    storage
+        .write_repo(|tx| {
+            tx.execute("DELETE FROM slice_revisions WHERE id = ?1", [id])?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn a_slice_revision_deleted_before_the_write_ahead_is_not_found_with_no_row() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-stage",
+        move || delete_slice_revision(&storage, SLR),
+        || running.stage("op-stage"),
+    );
+    assert_eq!(code(&error), "NOT_FOUND", "{error}");
+    assert_eq!(uploads(&rig.fake), 0);
+
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    let storage = Arc::clone(&running.storage);
+    let error = refused_in_the_window(
+        &rig,
+        &running,
+        "op-start",
+        move || delete_slice_revision(&storage, SLR),
+        || running.start("op-start", &upload, "ready"),
+    );
+    assert_eq!(code(&error), "NOT_FOUND", "{error}");
+    assert_eq!(starts(&rig.fake), 0);
+}
+
 // --- replay ---------------------------------------------------------------------------
 
 #[test]

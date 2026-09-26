@@ -413,6 +413,9 @@ pub enum FaultAction {
     Panic,
 }
 
+/// A test hook run once, just before the next write-ahead transaction.
+type WriteAheadHook = Box<dyn FnOnce() + Send>;
+
 /// Makes the next `mark_sent` fail.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MarkSentFault {
@@ -456,6 +459,7 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     retries: Mutex<HashMap<String, RetryState>>,
     faults: Mutex<Vec<(FaultPoint, FaultAction, SyncSender<()>)>>,
     mark_sent_fault: Mutex<Option<(MarkSentFault, SyncSender<()>)>>,
+    before_write_ahead: Mutex<Option<WriteAheadHook>>,
     /// How many timer-scheduled attempts actually ran (diagnostics, tests).
     retry_attempts_run: AtomicUsize,
     /// How many retry timers were scheduled (diagnostics, tests).
@@ -510,6 +514,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             retries: Mutex::new(HashMap::new()),
             faults: Mutex::new(Vec::new()),
             mark_sent_fault: Mutex::new(None),
+            before_write_ahead: Mutex::new(None),
             retry_attempts_run: AtomicUsize::new(0),
             retry_timers_scheduled: AtomicUsize::new(0),
         }
@@ -734,6 +739,20 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         match action {
             FaultAction::Crash => true,
             FaultAction::Panic => std::panic::resume_unwind(Box::new("injected executor panic")),
+        }
+    }
+
+    /// Test hook: runs `hook` once, after the next write command's
+    /// pre-checks and just before its write-ahead transaction, so a test
+    /// can change the Printer in that window.
+    pub fn inject_before_write_ahead(&self, hook: impl FnOnce() + Send + 'static) {
+        *lock(&self.before_write_ahead) = Some(Box::new(hook));
+    }
+
+    pub(crate) fn run_before_write_ahead(&self) {
+        let hook = lock(&self.before_write_ahead).take();
+        if let Some(hook) = hook {
+            hook();
         }
     }
 

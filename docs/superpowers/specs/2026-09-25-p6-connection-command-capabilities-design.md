@@ -743,6 +743,17 @@ A read failure in steps 7–9 maps through the existing network errors
 (`PRINTER_UNREACHABLE`, `TIMEOUT`, `AUTHENTICATION_FAILED`,
 `PROTOCOL_ERROR`) and writes no row.
 
+**The write-ahead's own re-checks** (every write command). The
+Connection commands don't take the per-Printer lock, so the write-ahead
+transaction re-reads the Printer before it claims the operation id: it
+still exists (`NOT_FOUND`) and is not archived; its Connection (`kind`,
+`host`, `port`, `useTls`, and credential reference) is exactly the one the
+pre-checks used, else no row and `START_PRECONDITION_CHANGED` for start
+or `VALIDATION` on `printerId` ("The Printer's Connection changed. Try
+again.") for stage and control; it has no unresolved row
+(`HOST_OPERATION_PENDING`); and the row's Slice Revision, if any, still
+exists (`NOT_FOUND`). (Final-review fix I1 and m9.)
+
 **Control rule** (spike 9: pause from idle sets `is_paused`):
 
 | Verb | Offered when `OperationalState` is (fresh) | Host re-read must show `print.state` |
