@@ -19,9 +19,14 @@ simulators are live evidence).
 and the tracer on the simulator. Every Moonraker capability is `supported`
 with `tier: sim` evidence that cites a committed manifest copy. A
 read-only pass against the owner's Snapmaker U1 (host withheld) passed
-with zero writes. The installed-package staging pass and the native
-`just dev` pass are **unavailable** (see below). The screenshots come from
-`just web`, so they show fixture states, not live simulator writes.
+with zero writes. `just package` **built** the `.deb`, `.rpm`, and
+`.AppImage` bundles and checked their contents, but **nothing was
+installed**: the installed-`.deb` staging pass (install the package, then
+stage to the simulator from it) is **unavailable**, and so is the native
+`just dev` pass (see [Unavailable checks](#unavailable-checks-ruling-r5)).
+The screenshots come from `just web`, so they show fixture states, not
+live simulator writes. The final whole-branch review's fixes and their
+gate runs are in [Final-review fixes](#final-review-fixes).
 
 `CURRENT_SCHEMA_VERSION` is **7**, applied by
 `0007_p6_host_operations.sql`.
@@ -64,7 +69,11 @@ digests and pins: Moonraker `v0.11.0-1-g1cfb0c4-prind`, Klipper
 
 `MOONRAKER_SIM_MANIFEST` in `src-tauri/src/connections/adapters.rs` now
 names the committed copy (a repository-relative path) instead of
-`sim-runs/…`. Two tests assert the path:
+`sim-runs/…`. That copy's `repoCommit` (`6ef279d`) is the commit that
+added the P6 scenarios, not the tree the branch ships: later commits
+changed the code those scenarios exercise. The two later runs above, and
+the final-review run below, passed the same scenarios on later trees. The
+constant's doc comment says so. Two tests assert the path:
 
 - `adapters.rs`
   `moonraker_has_sim_evidence_for_every_capability_from_the_p6_run`
@@ -232,8 +241,42 @@ All are in `docs/screenshots/`, one per size (`-1440x900.png`,
 exit 0. A release build, then `farm3d_0.1.0_amd64.deb`,
 `farm3d-0.1.0-1.x86_64.rpm`, and `farm3d_0.1.0_amd64.AppImage`.
 `scripts/assert-package-contents.sh` passed on all three. The build
-printed the existing `ts-rs` attribute warnings and the pre-existing
-unused `MOONRAKER_KIND` import warning in `supervisor.rs`.
+printed the existing `ts-rs` attribute warnings and an unused
+`MOONRAKER_KIND` import warning in `supervisor.rs`. That warning was not
+pre-existing, as this record first said: P6 Task 2 introduced it. The
+final review's fix m2 removed it (the import is now test-only).
+
+## Final-review fixes
+
+The final whole-branch review (`eba01b5..3fc6679`) found one Important
+issue and fourteen minors. These were fixed; m5, m12, m13, and the
+`services.rs` split are follow-ups (below).
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| **I1** A Connection edit during a write's pre-checks let the write-ahead commit a row naming the old endpoint while the executor loaded the new credential. | The write-ahead transaction re-reads the Printer's Connection (`kind`, `host`, `port`, `useTls`, credential reference) and refuses unless it equals the one the pre-checks used: `START_PRECONDITION_CHANGED` for start, `VALIDATION` on `printerId` ("The Printer's Connection changed. Try again.") for stage and control. The spec's D9 says so. | `p6_host_ops.rs`: `an_endpoint_change_before_the_write_ahead_writes_no_row_and_sends_nothing`, `a_connection_cleared_before_the_write_ahead_writes_no_row_and_sends_nothing` (no row, no ledger claim, no `POST`) |
+| **m9** A Slice Revision deleted in the same window failed the foreign key as a storage error. | The same transaction re-checks the row's Slice Revision: `NOT_FOUND`. | `a_slice_revision_deleted_before_the_write_ahead_is_not_found_with_no_row` |
+| **m1** | `duplicate_host`'s doc comment is back on it. | — |
+| **m2** | `MOONRAKER_KIND` is imported only in the supervisor's tests; the non-test build no longer warns. | — |
+| **m3** | This record no longer says `observedAt` is always null. | `capabilities_carry_the_host_facts_and_their_observed_at_once_online` |
+| **m4** | The dead `MoonrakerTimings::verify_window`/`verify_poll_interval` are gone; the executor reads `HostOpsTimings` (R19). | `timings_default_to_the_spec_values` |
+| **m6** | The Start host re-read goes on only from `ready`, `finished`, or `cancelled`; an unknown `print_stats` state or none (`unknown`) is refused. No fake or simulator scenario starts from `unknown`. | `start_is_refused_with_no_row_when_the_host_reread_shows_an_unknown_print_state`; unit tests in `host_ops/commands.rs` |
+| **m7** | The host-facts cache records the endpoint it read, and capabilities ignore facts from any other endpoint. | `host_facts_from_the_previous_endpoint_are_never_applied_to_a_new_one` |
+| **m8** | After an Online transition, `syncCapabilities` refetches on a bounded backoff (about 15 s) until a fetch carries facts observed since it. | `capabilities-store.test.ts`: "refetches until the backend's host-facts refresh has landed, then stops", "gives up after a bounded number of refetches…" |
+| **m10** | The redaction test's traceback path is `/opt/klipper/x.py`. | `parser_errors_never_quote_the_body` |
+| **m11** | `abandon_cancels_the_pending_retry_timers` uses a 5 s step 0. | itself |
+| **m14** | The executor stamps `uncertain_since` (and its other times) from the injected clock, as startup recovery does. | `uncertain_since_is_stamped_from_the_injected_clock` |
+
+Gates on the fixed tree:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `just build` | 0 | `tsc` and the Vite build pass. |
+| `just test` | 0 | 102 files, 1325 tests passed. |
+| `just test-rust` | 0 | 1314 passed, 0 failed, 55 ignored. The lib has 786 passed; `p6_host_ops` has 59. |
+| `just gen-contracts`, then `git diff --exit-code src/generated` | 0 | No diff. |
+| `just sim-up && FARM3D_SIM_REQUIRED=1 just test-sim && just sim-down` | 0 | 38 of 38: `p6_tracer` 3, `sim_elegoolink` 7, `sim_moonraker` 21 (228.98 s), `sim_octoprint` 7. The run recorded `sim-runs/20260926T055231Z` (not committed; the evidence rows still cite `20260926T033455Z`). |
+| `FARM3D_PRIVATE_HOSTS="<owner denylist, 4 strings>" just check-hosts` | 0 | Before each commit. |
 
 ## Known limitations
 
@@ -253,9 +296,23 @@ unused `MOONRAKER_KIND` import warning in `supervisor.rs`.
   error's details is missing from the Printer store, the link falls back
   to the raw `printerId`. This is cosmetic (parked in Task 11's
   re-review).
-- **`observedAt` is always `None`/`null`.** `PrinterCapabilities.observedAt`
-  isn't set from a real host-facts read time yet (Tasks 5 and 8 deferred
-  it; it needs a host-facts cache).
+- **Host facts after an Online transition reach the UI within about
+  15 s.** The backend re-reads them in the background, and the frontend
+  refetches on a bounded backoff until it sees facts observed since the
+  transition (final-review fix m8). A host whose facts read takes longer
+  keeps the previous gates in the UI until the next status change. The
+  backend's own gate always uses the fresh facts, so this can only offer
+  an action the backend then refuses with `CAPABILITY_UNSUPPORTED`.
+- **Host-facts cache entries outlive a deleted Printer** in memory. They
+  are keyed by Printer id and endpoint, and never applied to any other
+  endpoint (final-review fix m7), so a re-created Printer on a new host
+  never sees them.
+- **Event order across the executor and a concurrent attempt (final-review
+  m5, not fixed).** Events are numbered at publish time, after the commit
+  and outside the per-Printer lock, so a stalled executor could publish
+  its `uncertain` snapshot after a newer state of the same row. The UI
+  would show the stale state until the next backfill. It needs the
+  executor thread stalled for a whole attempt.
 - **The simulator tests feed Printer status by hand.** In
   `sim_moonraker.rs` and the simulator tracer, the supervisor doesn't
   observe the simulator. `observe_host` feeds the status from the real
@@ -263,11 +320,11 @@ unused `MOONRAKER_KIND` import warning in `supervisor.rs`.
   supervisor-to-host-ops path is covered in process
   (`going_online_triggers_an_attempt` and its neighbours in
   `p6_host_ops.rs`).
-- **A pre-existing `p6_host_ops.rs` flake.**
+- **The `p6_host_ops.rs` flake is fixed (final-review m11).**
   `abandon_cancels_the_pending_retry_timers` failed intermittently (1 run
-  in 3) during the Task 13 review, and it reproduces on the base commit
-  `3280cbd`. It passed in this task's `just test-rust` run. It is parked
-  for the final review.
+  in 3) during the Task 13 review. Its step-0 retry was 1 s, so a slow
+  gap between `reconcile` and `abandon` let the timer fire legitimately.
+  Step 0 is now 5 s.
 - **A start that finishes very quickly** can stay `uncertain` until it is
   abandoned: a file that ends within one status batch leaves no history
   job (spike Gate F), so there's nothing to prove it ran.
@@ -284,7 +341,15 @@ unused `MOONRAKER_KIND` import warning in `supervisor.rs`.
 - A native and installed-package pass by the owner (above).
 - A web fixture that stages a file on the Failed Printer, so the disabled
   Start… is visible in web mode.
-- Set `observedAt` from a real host-facts read.
+- **m5:** publish Host Operation events under the Printer lock, or
+  re-load the row inside `publish`'s emit lock, so a stalled executor
+  can't publish a stale snapshot last.
+- **m12:** make `FakeMoonraker` assert in `Drop` that every scripted fault
+  fired, so a test can't pass without exercising its fault.
+- **m13:** replace `HOST_OPERATION_SELECT.replace("FROM host_operations",
+  …)` with a `COLUMNS` constant and two `format!`s.
+- **Split `host_ops/mod.rs`:** move the services (about 600 lines) out of
+  the wire types into a `services.rs`.
 
 ## Documentation updated in this task
 

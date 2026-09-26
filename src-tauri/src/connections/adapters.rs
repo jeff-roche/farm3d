@@ -102,12 +102,15 @@ fn octoprint_observe(
     ))
 }
 
-/// The P6 simulator run (`just test-sim`) that is Moonraker's evidence,
-/// recorded against the commit that added the P6 scenarios to
-/// `tests/sim_moonraker.rs`. The harness writes the manifest under the
-/// untracked `src-tauri/target/sim-runs/<UTC>/`, so this cites the
-/// committed, redacted copy (repository-relative) that a reviewer on
-/// another machine can open.
+/// The P6 simulator run (`just test-sim`) that is Moonraker's evidence.
+/// Its manifest's `repoCommit` is the commit that added the P6 scenarios
+/// to `tests/sim_moonraker.rs`, not the tree this constant ships in: later
+/// commits changed the code those scenarios exercise, and later runs of the
+/// same scenarios (listed in the P6 verification record) passed too. The
+/// harness writes the manifest under the untracked
+/// `src-tauri/target/sim-runs/<UTC>/`, so this cites the committed,
+/// redacted copy (repository-relative) that a reviewer on another machine
+/// can open.
 pub const MOONRAKER_SIM_MANIFEST: &str =
     "docs/superpowers/baselines/2026-09-26-p6-sim-manifest-20260926T033455Z.json";
 
