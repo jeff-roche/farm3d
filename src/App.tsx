@@ -18,6 +18,8 @@ import {
 } from "./library/library-store";
 import type { ImportSelectionSummary } from "./library/types";
 import { startSlicing } from "./slicing/slicing-store";
+import { startHostOperations } from "./host-ops/host-operations-store";
+import { syncCapabilities } from "./host-ops/capabilities-store";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -27,6 +29,7 @@ import {
   loadPrinters,
   printerArchiveNotice,
   printers,
+  printerStoreCommandError,
   printerStoreError,
   printerStoreRetryable,
   printerStoreStatus,
@@ -34,6 +37,7 @@ import {
   startStatusListener,
 } from "./printers/printer-store";
 import { Button } from "./design-system";
+import { HostOperationAlert } from "./screens/HostOperationAlert";
 import { loadSettings, updateSettings } from "./settings/settings-store";
 import styles from "./App.module.css";
 import {
@@ -170,6 +174,8 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposeLibrary: (() => void) | undefined;
     let disposeSlicing: (() => void) | undefined;
+    let disposeHostOperations: (() => void) | undefined;
+    let stopCapabilitySync: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
       const generation = ++startupGeneration;
@@ -217,14 +223,26 @@ function App() {
           reconcileNavigation();
         });
         // Slicing follows the Library (the spec's startup order), with
-        // the same retry and unmount handling.
+        // the same retry and unmount handling; Host Operations follow
+        // slicing (P6).
         void startSlicing().then((dispose) => {
           if (disposed || generation !== startupGeneration) {
             dispose();
             return;
           }
           disposeSlicing = dispose;
+          return startHostOperations().then((disposeOps) => {
+            if (disposed || generation !== startupGeneration) {
+              disposeOps();
+              return;
+            }
+            disposeHostOperations = disposeOps;
+          });
         });
+        // Capabilities have no event: refetch a Printer's whenever its
+        // status changes (spec "Events").
+        stopCapabilitySync?.();
+        stopCapabilitySync = syncCapabilities(printers);
         try {
           const dispose = await startStatusListener();
           if (disposed || generation !== startupGeneration) dispose();
@@ -252,6 +270,8 @@ function App() {
       unlisten?.();
       disposeLibrary?.();
       disposeSlicing?.();
+      disposeHostOperations?.();
+      stopCapabilitySync?.();
       window.removeEventListener("hashchange", applyFragment);
     });
   });
@@ -267,7 +287,18 @@ function App() {
       lastLiveEventAt={shell().lastLiveEventAt}
       lowSpoolCount={spoolState.spools.filter((spool) => spool.facets.low).length}
     >
-      <Show when={printerStoreError()}>
+      <Show when={printerStoreCommandError()?.code === "HOST_OPERATION_PENDING" ? printerStoreCommandError() : undefined}>
+        {(error) => (
+          <div class={styles.errorBanner}>
+            <HostOperationAlert error={error()} fallback={error().message}>
+              <Button variant="ghost" onClick={dismissPrinterStoreError}>
+                Dismiss
+              </Button>
+            </HostOperationAlert>
+          </div>
+        )}
+      </Show>
+      <Show when={printerStoreCommandError()?.code !== "HOST_OPERATION_PENDING" && printerStoreError()}>
         {(message) => (
           <div class={styles.errorBanner} role="alert">
             <p class={styles.errorMessage}>{message()}</p>

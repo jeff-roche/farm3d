@@ -19,6 +19,10 @@ import { ModelDetailsPanel } from "./ModelDetailsPanel";
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
+vi.mock("../host-ops/host-operations-store", async () =>
+  (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("../host-ops/capabilities-store", async () =>
+  (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
 // The 3D inspector isn't under test here.
 vi.mock("./ModelPlateInspector", () => ({ ModelPlateInspector: () => <p>Inspector</p> }));
 
@@ -146,6 +150,17 @@ describe("SliceRevisionReview", () => {
     expect(queue).toBeDisabled();
     expect(queue).toHaveAccessibleDescription("The Queue arrives in a later version.");
     expect(screen.getByText("The Queue arrives in a later version.")).toBeVisible();
+  });
+
+  it("offers Stage on Printer…, which opens the Stage dialog, while Add to Queue… stays disabled", async () => {
+    await openReview(model("mdl-web-enclosure"), LID);
+    const stage = screen.getByRole("button", { name: "Stage on Printer…" });
+    expect(stage).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add to Queue…" })).toBeDisabled();
+    fireEvent.click(stage);
+    const dialog = await screen.findByRole("dialog", { name: "Stage on Printer" });
+    expect(dialog).toHaveTextContent("Plate 1: Lid");
+    expect(within(dialog).getByRole("button", { name: "Stage" })).toBeDisabled();
   });
 
   it("shows the read-only log, read by the revision's own id", async () => {

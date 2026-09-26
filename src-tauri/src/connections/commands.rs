@@ -1,6 +1,7 @@
 //! The `#[tauri::command]` surface for connections. Thin by design — every
 //! decision worth testing lives in a sibling module.
 
+use super::capabilities::{self, AdapterCapabilityRow, PrinterCapabilities};
 use super::credentials::{
     credential_ref_for, CredentialBackend, CredentialStore, CredentialStoreKind,
 };
@@ -314,6 +315,37 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
             existing.revision,
         ));
     }
+    // P6 D7: refuse a change that would orphan an unresolved Host
+    // Operation BEFORE probing the new host or writing a provisional
+    // secret. Read-only; `PrinterRepository::set_connection` repeats the
+    // check inside its write transaction, which stays authoritative.
+    let intended = ConnectionConfig {
+        kind: submission.kind.clone(),
+        host: submission.host.clone(),
+        port: submission.port,
+        use_tls: submission.use_tls,
+        credential_ref: match submission.api_key.as_deref() {
+            None => existing
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.credential_ref.clone()),
+            Some("") => None,
+            // Only whether a reference is present matters here.
+            Some(_) => Some(String::new()),
+        },
+    };
+    services
+        .storage
+        .read(|connection| {
+            Ok(crate::host_ops::guards::check_connection_change(
+                connection,
+                &id,
+                existing.connection.as_ref(),
+                Some(&intended),
+            ))
+        })
+        .map_err(storage_command_error)?
+        .map_err(CommandError::from_repository)?;
     // D3: reject a host another active Printer owns BEFORE probing or
     // writing any secret (same precheck as `create_printer_with`). An
     // archived Printer holds no host (D6), so it is not checked here; the
@@ -655,6 +687,42 @@ pub fn printer_statuses<R: tauri::Runtime>(
     Ok(CommandSuccess::new(services.manager.status_backfill()))
 }
 
+/// D6: the Printer's capability matrix. `hostFacts` is `None`, and no host
+/// rule applies, until the Printer has been Online once.
+#[tauri::command]
+pub fn printer_capabilities<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+    printer_id: String,
+) -> Result<CommandSuccess<PrinterCapabilities>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let printer = PrinterRepository::new(Arc::clone(&services.storage))
+        .get(&printer_id)
+        .map_err(storage_command_error)?
+        .ok_or_else(|| CommandError::not_found(&printer_id))?;
+    // D6: over the host facts cached at the Printer's last Online.
+    Ok(CommandSuccess::new(
+        services.host_ops.capabilities(&printer),
+    ))
+}
+
+/// D6 "Rows at the end of P6": the registry's own capabilities, in
+/// registry order, with no Printer or host behind them.
+#[tauri::command]
+pub fn adapter_capability_matrix<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: tauri::State<crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<Vec<AdapterCapabilityRow>>, CommandError> {
+    contract_version.validate()?;
+    let _services = bootstrap.ready()?;
+    Ok(CommandSuccess::new(
+        capabilities::adapter_capability_matrix(),
+    ))
+}
+
 /// Retries cleanup work that is safe to perform automatically. Imported
 /// orphan references are deliberately retained until a user resolves them.
 pub fn retry_pending_credential_cleanup(
@@ -683,8 +751,18 @@ fn retry_pending_credential_cleanup_locked(
         })
         .map_err(|error| error.to_string())?;
     for reference in pending {
+        // P6 D7: a credential is kept while any Printer references it, and
+        // also while the Printer it was queued for has an unresolved Host
+        // Operation (the pending write may have been dispatched with it).
+        // It is retried once that row is terminal.
         let reachable = storage.read(|connection| connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM printers WHERE json_extract(connection_json, '$.credentialRef') = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM printers WHERE json_extract(connection_json, '$.credentialRef') = ?1)
+                 OR EXISTS(
+                     SELECT 1 FROM pending_credential_cleanup cleanup
+                     JOIN host_operations operation ON operation.printer_id = cleanup.printer_id
+                     WHERE cleanup.credential_ref = ?1
+                       AND operation.state IN ('dispatching','uncertain','reconciling')
+                 )",
             [&reference], |row| row.get::<_, bool>(0)
         )).map_err(|error| error.to_string())?;
         if reachable {

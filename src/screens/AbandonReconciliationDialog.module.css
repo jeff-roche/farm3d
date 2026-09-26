@@ -1,0 +1,40 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(30rem, 80vw);
+}
+
+.text,
+.reason {
+  margin: 0;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.text {
+  color: var(--f3d-color-text);
+}
+
+.reason {
+  margin-right: auto;
+  color: var(--f3d-color-text-muted);
+}
+
+.file {
+  font-family: var(--f3d-type-mono-font);
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}

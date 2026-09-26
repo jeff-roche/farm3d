@@ -7,6 +7,11 @@ use farm3d_lib::catalog::resolve::{
     CatalogStatus, ProfileDrift, ProfileResolution, ResolvedPrinter,
 };
 use farm3d_lib::catalog::{BedShape, PointMm, PrinterProfile};
+use farm3d_lib::connections::capabilities::{
+    AdapterCapabilityRow, CapabilityEvidence, CapabilityKey, CapabilityState, EvidenceTier,
+    HostFacts, HostOperationFailureCode, InconclusiveReason, PrinterCapabilities,
+    UnsupportedReason,
+};
 use farm3d_lib::connections::commands::{ConnectionSubmission, CredentialStoreInfo};
 use farm3d_lib::connections::credentials::CredentialStoreKind;
 use farm3d_lib::connections::discovery::DiscoveredPrinter;
@@ -29,6 +34,12 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::host_ops::events::{HostOperationsEvent, HostOperationsEventType};
+use farm3d_lib::host_ops::{
+    HostOperation, HostOperationEndpoint, HostOperationFailure, HostOperationKind,
+    HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
+    HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
+};
 use farm3d_lib::library::commands::{
     DeleteModelResult, DeleteProjectResult, LibraryContentInfo, LibrarySnapshot,
     ModelMutationResult, ModelPatch, ProjectMutationResult, RevisionThumbnail,
@@ -348,6 +359,16 @@ fn export_registry() -> Vec<Export> {
         export::<CredentialStoreKind>(),
         export::<CredentialStoreInfo>(),
         export::<DiscoveredPrinter>(),
+        export::<CapabilityKey>(),
+        export::<EvidenceTier>(),
+        export::<CapabilityEvidence>(),
+        export::<UnsupportedReason>(),
+        export::<CapabilityState>(),
+        export::<HostFacts>(),
+        export::<PrinterCapabilities>(),
+        export::<AdapterCapabilityRow>(),
+        export::<HostOperationFailureCode>(),
+        export::<InconclusiveReason>(),
         export::<OperationWarningCode>(),
         export::<OperationWarning>(),
         export::<PrinterMutationResult>(),
@@ -500,6 +521,19 @@ fn export_registry() -> Vec<Export> {
         export::<ReloadPreparationData>(),
         export::<ConfirmedFactRequest<f64>>(),
         export::<CreateExternalSliceRevisionFacts>(),
+        export::<HostOperationKind>(),
+        export::<HostOperationState>(),
+        export::<PriorState>(),
+        export::<HostOperationEndpoint>(),
+        export::<HostOperationFailure>(),
+        export::<StartEvidenceSource>(),
+        export::<HostOperationObservedState>(),
+        export::<HostOperationResolution>(),
+        export::<HostOperationLastAttempt>(),
+        export::<HostOperation>(),
+        export::<HostOperationsSnapshot>(),
+        export::<HostOperationsEventType>(),
+        export::<HostOperationsEvent>(),
     ]
 }
 
@@ -704,7 +738,7 @@ fn command_envelopes_serialize_literal_version_and_structured_error_fields() {
 
 #[test]
 fn error_and_recovery_codes_serialize_with_exact_spellings() {
-    let errors = [
+    let errors = vec![
         ErrorCode::Validation,
         ErrorCode::NotFound,
         ErrorCode::Conflict,
@@ -735,6 +769,14 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::PreparationInvalid,
         ErrorCode::PreparationStale,
         ErrorCode::OperationNotCancellable,
+        ErrorCode::HostOperationPending,
+        ErrorCode::ConnectionInUse,
+        ErrorCode::CapabilityUnsupported,
+        ErrorCode::HostOperationNotAbandonable,
+        ErrorCode::StartNotAllowed,
+        ErrorCode::StartPreconditionChanged,
+        ErrorCode::ControlNotAllowed,
+        ErrorCode::StagedArtifactInvalid,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -749,6 +791,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::OpenSlicerSettings,
         RecoveryCode::ReloadPreparation,
         RecoveryCode::EditPreparation,
+        RecoveryCode::OpenPrinterJob,
     ];
 
     assert_eq!(
@@ -764,13 +807,16 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "UNSUPPORTED_FORMAT", "SLICER_UNAVAILABLE", "PRESET_SOURCE_UNAVAILABLE",
                 "PRESET_NOT_FOUND", "PRESET_INVALID", "FILAMENT_INCOMPATIBLE",
                 "UNMAPPED_PROFILE_OVERRIDE", "UNSUPPORTED_SETTING_FOR_RUNTIME",
-                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE"
+                "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE",
+                "HOST_OPERATION_PENDING", "CONNECTION_IN_USE", "CAPABILITY_UNSUPPORTED",
+                "HOST_OPERATION_NOT_ABANDONABLE", "START_NOT_ALLOWED",
+                "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
                 "CHOOSE_SUPPORTED_ADAPTER", "CHECK_CONNECTION", "CHECK_CREDENTIALS",
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
-                "RELOAD_PREPARATION", "EDIT_PREPARATION"
+                "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB"
             ]
         })
     );

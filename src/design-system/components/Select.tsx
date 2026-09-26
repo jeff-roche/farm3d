@@ -1,4 +1,5 @@
 import { Select as KSelect } from "@kobalte/core/select";
+import { Show } from "solid-js";
 import styles from "./Select.module.css";
 
 export interface SelectGroup<T> {
@@ -21,6 +22,10 @@ export interface SelectProps<T> {
   optionValue?: (option: T) => string;
   /** Defaults to the option itself (for T = string). */
   optionLabel?: (option: T) => string;
+  /** A disabled option is listed but can't be chosen. */
+  optionDisabled?: (option: T) => boolean;
+  /** A second line under an option's label, e.g. why it is disabled. */
+  optionDescription?: (option: T) => string | undefined;
   placeholder?: string;
   disabled?: boolean;
   error?: string;
@@ -40,6 +45,7 @@ export function Select<T>(props: SelectProps<T>) {
       optionGroupChildren={props.groups ? ("options" as never) : undefined}
       optionValue={props.optionValue ? ((o: T) => toValue(o)) as never : undefined}
       optionTextValue={((o: T) => toLabel(o)) as never}
+      optionDisabled={props.optionDisabled ? ((o: T) => props.optionDisabled!(o)) as never : undefined}
       value={props.value as never}
       defaultValue={props.defaultValue}
       onChange={(v: unknown) => {
@@ -49,8 +55,16 @@ export function Select<T>(props: SelectProps<T>) {
       disabled={props.disabled}
       validationState={props.error ? "invalid" : "valid"}
       itemComponent={(itemProps) => (
-        <KSelect.Item item={itemProps.item} class={styles.item}>
+        <KSelect.Item
+          item={itemProps.item}
+          class={[styles.item, props.optionDescription ? styles.itemDescribed : ""].filter(Boolean).join(" ")}
+        >
           <KSelect.ItemLabel>{toLabel(itemProps.item.rawValue as T)}</KSelect.ItemLabel>
+          <Show when={props.optionDescription?.(itemProps.item.rawValue as T)}>
+            {(description) => (
+              <KSelect.ItemDescription class={styles.itemDescription}>{description()}</KSelect.ItemDescription>
+            )}
+          </Show>
         </KSelect.Item>
       )}
       sectionComponent={(sectionProps) => (

@@ -1,0 +1,15 @@
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  white-space: nowrap;
+}
+
+.label[data-severity="info"] { color: var(--f3d-color-accent); }
+.label[data-severity="success"] { color: var(--f3d-color-success); }
+.label[data-severity="warning"] { color: var(--f3d-color-warning); }
+.label[data-severity="error"] { color: var(--f3d-color-danger); }
+.label[data-severity="neutral"] { color: var(--f3d-color-text-muted); }

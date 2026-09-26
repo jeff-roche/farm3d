@@ -8,6 +8,7 @@
 //! Each test crate uses a different subset, hence the `dead_code` allow.
 #![allow(dead_code)]
 
+pub mod fake_moonraker;
 pub mod octoprint;
 
 use std::path::{Path, PathBuf};
@@ -275,6 +276,67 @@ pub fn runtime_with_file_io(
                 file_io,
             ));
         },
+    )
+}
+
+/// What the mock-runtime builders return: the app, its main webview, the
+/// `ConnectionManager`, and the managed `RuntimeServices`.
+pub type MockHarness = (
+    tauri::App<MockRuntime>,
+    tauri::WebviewWindow<MockRuntime>,
+    Arc<ConnectionManager<MockRuntime>>,
+    Arc<RuntimeServices<MockRuntime>>,
+);
+
+/// [`runtime`], with the Printers/Settings document dialogs replaced by
+/// `documents` (for `import_printers`/`export_printers`).
+pub fn runtime_with_documents(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    documents: Arc<dyn DocumentIo>,
+) -> MockHarness {
+    runtime_customized(
+        handler,
+        storage,
+        catalog,
+        credentials_dir,
+        factory,
+        move |services| services.documents = documents,
+    )
+}
+
+/// [`runtime`], with `customize` applied to the services before they are
+/// managed (for example, to swap in test `HostOperationServices`).
+pub fn runtime_with(
+    handler: impl Fn(Invoke<MockRuntime>) -> bool + Send + Sync + 'static,
+    storage: Arc<Storage>,
+    catalog: Arc<Catalog>,
+    credentials_dir: PathBuf,
+    factory: impl Fn(
+            &ConnectionConfig,
+            Option<zeroize::Zeroizing<String>>,
+        ) -> Option<Box<dyn PrinterConnection>>
+        + Send
+        + Sync
+        + 'static,
+    customize: impl FnOnce(&mut RuntimeServices<MockRuntime>),
+) -> MockHarness {
+    runtime_customized(
+        handler,
+        storage,
+        catalog,
+        credentials_dir,
+        factory,
+        customize,
     )
 }
 

@@ -205,7 +205,6 @@ fn fresh_database_records_the_v6_ledger_row_with_a_matching_checksum() {
         .expect("schema state");
 
     assert_eq!(version, CURRENT_SCHEMA_VERSION);
-    assert_eq!(version, 6);
     assert_eq!(name, "0006_p5_slicing");
     let expected_checksum = format!(
         "{:x}",
@@ -335,7 +334,7 @@ fn upgrading_v5_to_v6_keeps_every_existing_row_and_survives_a_restart() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("versions");
-    assert_eq!(versions, (6, 6));
+    assert_eq!(versions, (CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION));
 }
 
 /// 3a. `slicer_runtime_config` is a singleton with a positive revision and

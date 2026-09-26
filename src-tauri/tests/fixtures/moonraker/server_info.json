@@ -1,0 +1,51 @@
+{
+  "result": {
+    "klippy_connected": true,
+    "klippy_state": "ready",
+    "components": [
+      "secrets",
+      "template",
+      "klippy_connection",
+      "jsonrpc",
+      "internal_transport",
+      "application",
+      "websockets",
+      "database",
+      "dbus_manager",
+      "file_manager",
+      "authorization",
+      "klippy_apis",
+      "shell_command",
+      "machine",
+      "data_store",
+      "proc_stats",
+      "job_state",
+      "job_queue",
+      "history",
+      "http_client",
+      "announcements",
+      "webcam",
+      "extensions"
+    ],
+    "failed_components": [],
+    "registered_directories": [
+      "config",
+      "logs",
+      "gcodes"
+    ],
+    "warnings": [
+      "Supplied path (/opt/klipper/config) for (config_examples) is invalid. Make sure<br/>that the path exists and is not the file system root.",
+      "Supplied path (/opt/klipper/docs) for (docs) is invalid. Make sure<br/>that the path exists and is not the file system root.",
+      "file_manager: Klipper configuration file not located in 'config' folder.<br/><br/>Klipper Config Path: /opt/printer_data/run/printer.rendered.cfg<br/><br/>Config Folder: /opt/printer_data/config"
+    ],
+    "websocket_count": 0,
+    "moonraker_version": "v0.11.0-1-g1cfb0c4-prind",
+    "missing_klippy_requirements": [],
+    "api_version": [
+      1,
+      5,
+      0
+    ],
+    "api_version_string": "1.5.0"
+  }
+}

@@ -4,13 +4,13 @@
 //! The adapter under test connects to `FARM3D_SIM_OCTOPRINT`, through the
 //! fault proxy. The harness uses `FARM3D_SIM_OCTOPRINT_CONTROL` directly.
 //!
-//! The OctoPrint adapter (#10) is not on `main` yet, so there is no
-//! `connection()` here. When it lands, add one that builds the production
-//! adapter from [`OctoPrintSim::config`] and [`OctoPrintSim::api_key`], the
-//! same way `MoonrakerSim::connection` does.
+//! [`OctoPrintSim::connection`] builds the production `OctoPrintConnection`
+//! from [`OctoPrintSim::config`] and [`OctoPrintSim::api_key`], the same
+//! way `MoonrakerSim::connection` does.
 
 use std::time::Duration;
 
+use farm3d_lib::connections::octoprint::OctoPrintConnection;
 use farm3d_lib::connections::ConnectionConfig;
 use serde_json::{json, Value};
 
@@ -64,6 +64,12 @@ impl OctoPrintSim {
     /// The simulator's fixed API key: a published fixture, not a secret.
     pub fn api_key(&self) -> &str {
         &self.api_key
+    }
+
+    /// The production adapter, aimed at the simulator through the fault
+    /// proxy, with the simulator's fixed API key.
+    pub fn connection(&self) -> OctoPrintConnection {
+        OctoPrintConnection::new(self.config(), Some(self.api_key.clone()))
     }
 
     fn key_header(&self) -> [(&str, &str); 1] {

@@ -129,6 +129,38 @@ pub enum RepositoryError {
         from: crate::slicing::SliceOperationState,
         to: crate::slicing::SliceOperationState,
     },
+    /// P6 D3: a Host Operation can't move from `from` to `to` (`state.rs`'s
+    /// table says so, or a repository function's own narrower rule, e.g.
+    /// `record_attempt` outside `reconciling`). Nothing was written.
+    IllegalHostOperationTransition {
+        host_operation_id: String,
+        from: crate::host_ops::HostOperationState,
+        to: crate::host_ops::HostOperationState,
+    },
+    /// P6 D3: `mark_sent` was called on a row that isn't `dispatching`, or
+    /// that already has `dispatched_at` set — an executor bug either way
+    /// (`mark_sent` runs exactly once per row, immediately before the
+    /// send). Distinct from `NotFound` so the two can't be confused: this
+    /// means the row exists but is past the point `mark_sent` may touch
+    /// it. Nothing was written.
+    HostOperationAlreadySent {
+        host_operation_id: String,
+    },
+    /// P6 D7: the Connection change would change the endpoint, or clear the
+    /// Connection or its credential, while `printer_id` has the unresolved
+    /// Host Operation `host_operation_id`. Nothing was written.
+    /// `CONNECTION_IN_USE`.
+    ConnectionInUse {
+        printer_id: String,
+        host_operation_id: String,
+    },
+    /// P6 D7: a Printers import while these Printers have these unresolved
+    /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`. The
+    /// two lists are aligned: `printer_ids[i]` owns `host_operation_ids[i]`.
+    HostOperationsPending {
+        printer_ids: Vec<String>,
+        host_operation_ids: Vec<String>,
+    },
     Storage(StorageError),
 }
 

@@ -1,0 +1,40 @@
+{
+  "result": {
+    "eventtime": 284847.46243178,
+    "status": {
+      "webhooks": {
+        "state": "ready",
+        "state_message": "Printer is ready"
+      },
+      "print_stats": {
+        "filename": "farm3d/task8-long.gcode",
+        "total_duration": 53.2954313600203,
+        "print_duration": 0.0,
+        "filament_used": 0.0,
+        "state": "complete",
+        "message": "",
+        "info": {
+          "total_layer": null,
+          "current_layer": null
+        }
+      },
+      "pause_resume": {
+        "is_paused": false
+      },
+      "heater_bed": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0
+      },
+      "extruder": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": true,
+        "pressure_advance": 0.0,
+        "smooth_time": 0.04,
+        "motion_queue": null
+      }
+    }
+  }
+}

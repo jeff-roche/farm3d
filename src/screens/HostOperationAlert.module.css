@@ -1,0 +1,27 @@
+.alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--f3d-color-danger);
+  border-radius: var(--f3d-radius-sm);
+}
+
+.message {
+  flex: 1 1 12rem;
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.actions:empty {
+  display: none;
+}

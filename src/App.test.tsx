@@ -17,6 +17,7 @@ const appState = vi.hoisted(() => ({
 
 const [syncState, setSyncState] = createSignal("syncing");
 const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
+const [storeCommandError, setStoreCommandError] = createSignal<Record<string, unknown> | null>(null);
 
 vi.mock("./settings/settings-store", () => ({
   loadSettings: appState.loadSettings,
@@ -32,7 +33,8 @@ vi.mock("./printers/printer-store", () => ({
   importPrinters: appState.importPrinters,
   loadPrinters: appState.loadPrinters,
   printers: () => appState.printers,
-  printerStoreError: () => null,
+  printerStoreError: () => (storeCommandError()?.message as string | undefined) ?? null,
+  printerStoreCommandError: storeCommandError,
   printerStoreRetryable: () => false,
   printerStoreStatus: () => "ready",
   removePrinter: appState.removePrinter,
@@ -142,6 +144,10 @@ vi.mock("./library/library-store", async () => {
 });
 
 vi.mock("./slicing/slicing-store", async () => (await import("./slicing/slicing-store-mock")).slicingStoreMock);
+vi.mock("./host-ops/host-operations-store", async () =>
+  (await import("./host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("./host-ops/capabilities-store", async () =>
+  (await import("./host-ops/capabilities-store-mock")).capabilitiesStoreMock);
 
 vi.mock("./screens/SlicerSettingsDialog", () => ({
   SlicerSettingsDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
@@ -235,6 +241,9 @@ beforeEach(async () => {
   // The mocked slicing store outlives `vi.resetModules`; start each test
   // with its default spies.
   vi.mocked(await import("./slicing/slicing-store")).startSlicing.mockReset();
+  setStoreCommandError(null);
+  vi.mocked(await import("./host-ops/host-operations-store")).startHostOperations.mockReset().mockResolvedValue(() => {});
+  vi.mocked(await import("./host-ops/capabilities-store")).syncCapabilities.mockReset().mockReturnValue(() => {});
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -415,6 +424,58 @@ describe("App", () => {
     await Promise.resolve();
     unmount();
     expect(disposeSlicing).toHaveBeenCalledOnce();
+  });
+
+  it("starts Host Operations after slicing, keeps capabilities synced with the Printers, and disposes both on unmount", async () => {
+    const callOrder: string[] = [];
+    const slicingStoreMock = vi.mocked(await import("./slicing/slicing-store"));
+    slicingStoreMock.startSlicing.mockImplementation(async () => {
+      callOrder.push("startSlicing");
+      return () => {};
+    });
+    const hostOps = vi.mocked(await import("./host-ops/host-operations-store"));
+    const capabilitiesStore = vi.mocked(await import("./host-ops/capabilities-store"));
+    const disposeHostOps = vi.fn();
+    const stopSync = vi.fn();
+    hostOps.startHostOperations.mockImplementation(async () => {
+      callOrder.push("startHostOperations");
+      return disposeHostOps;
+    });
+    capabilitiesStore.syncCapabilities.mockImplementation(() => stopSync);
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+
+    await waitFor(() => expect(hostOps.startHostOperations).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["startSlicing", "startHostOperations"]);
+    expect(capabilitiesStore.syncCapabilities).toHaveBeenCalledOnce();
+    const list = capabilitiesStore.syncCapabilities.mock.calls[0][0];
+    expect(list().map((printer) => printer.id)).toEqual([PRINTER.id]);
+    await Promise.resolve();
+    unmount();
+    expect(disposeHostOps).toHaveBeenCalledOnce();
+    expect(stopSync).toHaveBeenCalledOnce();
+  });
+
+  it("shows an import's HOST_OPERATION_PENDING in the banner with a link to each named Printer's Job tab", async () => {
+    appState.loadPrinters.mockImplementation(async () => {
+      appState.printers = [PRINTER, { ...PRINTER, id: "prn-2", name: "Second bay" }];
+    });
+    const { default: App } = await import("./App");
+    const { printerJobRequest } = await import("./host-ops/open-printer-job");
+    render(() => <App />);
+    // The mocked Printer list isn't reactive: raise the error once it has loaded.
+    await waitFor(() => expect(appState.printers).toHaveLength(2));
+    setStoreCommandError({
+      contractVersion: 1, code: "HOST_OPERATION_PENDING", recovery: ["OPEN_PRINTER_JOB"], retryable: false,
+      message: "This printer has a pending operation. Finish or abandon it first.",
+      details: { printerIds: [PRINTER.id, "prn-2"], hostOperationIds: ["hop-1", "hop-2"] },
+    });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This printer has a pending operation.");
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second bay's Job tab" }));
+    expect(printerJobRequest()).toEqual({ printerId: "prn-2" });
+    expect(screen.getByRole("button", { name: `Open ${PRINTER.name as string}'s Job tab` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 
   it("disposes a slicing start that finishes after unmount", async () => {

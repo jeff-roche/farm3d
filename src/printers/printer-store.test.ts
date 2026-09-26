@@ -248,6 +248,26 @@ describe("printer-store", () => {
       expect(printerStoreError()).toBe(commandError.message);
     });
 
+    it("keeps the whole CommandError of a failed import, so the banner can offer its recovery", async () => {
+      const pending = {
+        contractVersion: 1,
+        code: "HOST_OPERATION_PENDING",
+        message: "This printer has a pending operation. Finish or abandon it first.",
+        recovery: ["OPEN_PRINTER_JOB"],
+        retryable: false,
+        details: { printerIds: ["prn-1"], hostOperationIds: ["hop-1"] },
+      };
+      tauriMock.isTauri.mockReturnValue(true);
+      tauriMock.invoke.mockRejectedValue(pending);
+      const { importPrinters, printerStoreError, printerStoreCommandError, dismissPrinterStoreError } = await import("./printer-store");
+
+      await importPrinters();
+      expect(printerStoreError()).toBe(pending.message);
+      expect(printerStoreCommandError()).toEqual(pending);
+      dismissPrinterStoreError();
+      expect(printerStoreCommandError()).toBeNull();
+    });
+
     it("keeps live runtimeStatus when a mutation splices in a fresh ResolvedPrinter", async () => {
       // Rust never returns `runtimeStatus` — it is frontend-only live state.
       // A rename must not blank the connection badge and temperatures until
@@ -771,6 +791,19 @@ describe("printer-store", () => {
                   ],
                 },
                 {
+                  modelId: "U1", vendor: "Snapmaker", model: "Snapmaker U1",
+                  variants: [
+                    {
+                      variant: "Snapmaker U1 (0.4 nozzle)", printerVariant: "0.4",
+                      bedShape: { kind: "rectangular", widthMm: 270, depthMm: 270, originXMm: 0, originYMm: 0 },
+                      printableHeightMm: 270, bedExcludeAreas: [], defaultBedType: "Textured PEI Plate",
+                      nozzleDiameterMm: [0.4, 0.4, 0.4, 0.4], nozzleType: "stainless_steel", gcodeFlavor: "klipper",
+                      hasAuxiliaryFan: true, supportsAirFiltration: false, supportsMultiFilament: false,
+                      suggestedHostType: "octoprint",
+                    },
+                  ],
+                },
+                {
                   modelId: "MK4", vendor: "Prusa", model: "Prusa MK4",
                   variants: [
                     {
@@ -794,6 +827,34 @@ describe("printer-store", () => {
       await loadPrinters();
       expect(printers().length).toBeGreaterThan(0);
       expect(tauriMock.invoke).not.toHaveBeenCalled();
+    });
+
+    it("joins the host-ops web fixture's Printers, each with its Connection and live status", async () => {
+      const { loadPrinters, printers } = await import("./printer-store");
+      const fixture = await import("../host-ops/web-fixtures");
+      await loadPrinters();
+
+      const ids = [
+        fixture.WEB_HOST_OPS_PRINTER_READY_SINGLE,
+        fixture.WEB_HOST_OPS_PRINTER_READY_MULTI,
+        fixture.WEB_HOST_OPS_PRINTER_OCTOPRINT,
+        fixture.WEB_HOST_OPS_PRINTER_FINISHED,
+        fixture.WEB_HOST_OPS_PRINTER_FAILED,
+        fixture.WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD,
+      ];
+      const joined = ids.map((id) => printers().find((printer) => printer.id === id));
+      expect(joined.every(Boolean)).toBe(true);
+      for (const printer of joined) {
+        expect(printer!.connection).toBeDefined();
+        expect(printer!.connection).not.toHaveProperty("credentialRef");
+        expect(printer!.setupGaps).toEqual([]);
+        expect(printer!.runtimeStatus?.connectionState).toBe("online");
+      }
+      const byId = (id: string) => printers().find((printer) => printer.id === id)!;
+      expect(byId(fixture.WEB_HOST_OPS_PRINTER_OCTOPRINT).connection?.kind).toBe("octoprint");
+      expect(byId(fixture.WEB_HOST_OPS_PRINTER_FINISHED).runtimeStatus?.operationalState).toBe("finished");
+      expect(byId(fixture.WEB_HOST_OPS_PRINTER_FAILED).runtimeStatus?.operationalState).toBe("failed");
+      expect(byId(fixture.WEB_HOST_OPS_PRINTER_READY_MULTI).runtimeStatus?.telemetry.tools).toHaveLength(4);
     });
 
     it("equips one web fixture Printer (a Centauri Carbon) with a 4-slot layout", async () => {

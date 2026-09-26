@@ -132,20 +132,43 @@ pub fn wait_until<T>(
     }
 }
 
+fn run_simctl(args: &[&str]) -> Result<std::process::Output, String> {
+    let ctl = std::env::var("FARM3D_SIM_CTL")
+        .map_err(|_| "FARM3D_SIM_CTL is not set; run through `just test-sim`".to_string())?;
+    std::process::Command::new(&ctl)
+        .args(args)
+        .output()
+        .map_err(|error| format!("run {ctl}: {error}"))
+}
+
 /// Runs `sim/simctl <args>` for faults that need the container engine
 /// (restarting Klipper). The path comes from `FARM3D_SIM_CTL`.
 pub fn simctl(args: &[&str]) -> Result<(), String> {
-    let ctl = std::env::var("FARM3D_SIM_CTL")
-        .map_err(|_| "FARM3D_SIM_CTL is not set; run through `just test-sim`".to_string())?;
-    let output = std::process::Command::new(&ctl)
-        .args(args)
-        .output()
-        .map_err(|error| format!("run {ctl}: {error}"))?;
+    let output = run_simctl(args)?;
     if output.status.success() {
         Ok(())
     } else {
         Err(format!(
-            "{ctl} {} failed ({}): {}",
+            "{} {} failed ({}): {}",
+            std::env::var("FARM3D_SIM_CTL").unwrap_or_default(),
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+/// Runs `sim/simctl <args>` and returns its stdout, for callers that need
+/// the output (e.g. `env`, which conditionally exports the Moonraker
+/// API-key variable).
+pub fn simctl_capture(args: &[&str]) -> Result<String, String> {
+    let output = run_simctl(args)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(format!(
+            "{} {} failed ({}): {}",
+            std::env::var("FARM3D_SIM_CTL").unwrap_or_default(),
             args.join(" "),
             output.status,
             String::from_utf8_lossy(&output.stderr)

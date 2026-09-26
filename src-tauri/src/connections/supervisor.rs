@@ -10,14 +10,13 @@ use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
 use ts_rs::TS;
 
-use super::moonraker::MoonrakerConnection;
-use super::octoprint::OctoPrintConnection;
+use super::adapters;
 use super::status_repository::{
     PrinterTelemetry, SnapshotWrite, StatusRepository, StoredTelemetrySnapshot,
 };
 use super::{
     ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation, MOONRAKER_KIND, OCTOPRINT_KIND,
+    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation,
 };
 use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::printers::operational::{evaluate_operational_status, HostActivity, OperationalInput};
@@ -137,21 +136,46 @@ impl Default for StatusState {
     }
 }
 
+/// Called with a Printer id each time its status becomes Online (P6 D5:
+/// reconcile its uncertain Host Operation; D6: refresh its host facts). It
+/// runs on the publishing thread, outside the status lock, and must not
+/// block.
+pub type OnlineHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Shared status map. Publication mutates the map before emitting, retaining
 /// listener-before-backfill semantics when an event races a backfill request.
 pub struct StatusMap {
     state: Mutex<StatusState>,
+    online_hook: Mutex<Option<OnlineHook>>,
 }
 
 impl Default for StatusMap {
     fn default() -> Self {
         Self {
             state: Mutex::new(StatusState::default()),
+            online_hook: Mutex::new(None),
         }
     }
 }
 
+/// Whether publishing `next` over `previous` is a transition into Online.
+fn becomes_online(previous: Option<&PrinterStatus>, next: &PrinterStatus) -> bool {
+    next.connection_state == ConnectionState::Online
+        && previous.is_none_or(|status| status.connection_state != ConnectionState::Online)
+}
+
 impl StatusMap {
+    fn set_online_hook(&self, hook: OnlineHook) {
+        *self.online_hook.lock().expect("online hook lock") = Some(hook);
+    }
+
+    fn notify_online(&self, id: &str) {
+        let hook = self.online_hook.lock().expect("online hook lock").clone();
+        if let Some(hook) = hook {
+            hook(id);
+        }
+    }
+
     fn begin_supervision(&self, id: &str) -> u64 {
         let mut state = self.state.lock().expect("status map lock");
         let epoch = state.epochs.entry(id.to_string()).or_default();
@@ -220,11 +244,16 @@ impl StatusMap {
                 status: Box::new(status.clone()),
             },
         );
+        let online = becomes_online(state.values.get(id), &status);
         state.values.insert(id.to_string(), status);
         if hydrated {
             state.hydrated.insert(id.to_string());
         } else {
             state.hydrated.remove(id);
+        }
+        drop(state);
+        if online {
+            self.notify_online(id);
         }
         envelope
     }
@@ -248,11 +277,16 @@ impl StatusMap {
                 status: Box::new(status.clone()),
             },
         );
+        let online = becomes_online(state.values.get(id), &status);
         state.values.insert(id.to_string(), status);
         if hydrated {
             state.hydrated.insert(id.to_string());
         } else {
             state.hydrated.remove(id);
+        }
+        drop(state);
+        if online {
+            self.notify_online(id);
         }
         Some(envelope)
     }
@@ -309,7 +343,10 @@ fn status_message(error: &ConnectionError) -> &'static str {
     match error {
         ConnectionError::Unreachable(_) => "The Printer could not be reached.",
         ConnectionError::Auth(_) => "The Printer rejected authentication.",
-        ConnectionError::Protocol(_) => "The Printer returned an unexpected response.",
+        // The observation adapters never produce `HostNotReady`.
+        ConnectionError::Protocol(_) | ConnectionError::HostNotReady => {
+            "The Printer returned an unexpected response."
+        }
         ConnectionError::Timeout => "The Printer did not respond in time.",
     }
 }
@@ -871,6 +908,14 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             false
         }
     }
+
+    /// Installs the hook called each time a Printer's status becomes Online
+    /// (P6: `host_ops` reconciles and refreshes host facts). Replaces any
+    /// earlier hook.
+    pub fn set_online_hook(&self, hook: OnlineHook) {
+        self.statuses.set_online_hook(hook);
+    }
+
     pub async fn reconciliation_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.reconciliation.lock().await
     }
@@ -959,28 +1004,20 @@ fn apply_error_to<R: tauri::Runtime>(
 }
 
 /// The production connection factory: the one place a `kind` becomes an
-/// adapter. Public so integration tests can drive the real adapters through
-/// a manager built with `with_clock_and_factory`.
+/// adapter, by way of the adapter registry. Public so integration tests can
+/// drive the real adapters through a manager built with
+/// `with_clock_and_factory`.
 pub fn build_connection(
     config: &ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<Box<dyn PrinterConnection>> {
-    match config.kind.as_str() {
-        MOONRAKER_KIND => Some(Box::new(MoonrakerConnection::with_zeroizing_secret(
-            config.clone(),
-            api_key,
-        ))),
-        OCTOPRINT_KIND => Some(Box::new(OctoPrintConnection::with_zeroizing_secret(
-            config.clone(),
-            api_key,
-        ))),
-        _ => None,
-    }
+    adapters::descriptor(&config.kind).map(|d| (d.observe)(config, api_key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connections::MOONRAKER_KIND;
     use crate::printers::operational::{OperationalState, TelemetryFreshness};
     use crate::printers::repository::PrinterRepository;
     use crate::printers::StoredPrinter;
@@ -1642,9 +1679,10 @@ mod tests {
     }
 
     #[test]
-    fn build_constructs_every_supported_kind_and_nothing_else() {
-        // Keeps `SUPPORTED_KINDS` (what the setup paths accept) and `build`
-        // (what the supervisor can actually construct) in step.
+    fn build_connection_delegates_to_the_registry() {
+        // Keeps `SUPPORTED_KINDS` (what the setup paths accept) and
+        // `build_connection` (what the supervisor can actually construct)
+        // in step with the adapter registry.
         let config = |kind: &str| ConnectionConfig {
             kind: kind.to_string(),
             host: "printer.local".to_string(),
