@@ -28,13 +28,12 @@ use crate::connections::capabilities::{
 };
 use crate::connections::ConnectionError;
 use crate::contracts::command::CommandError;
-use crate::persistence::RepositoryError;
 
 use super::repository::{self, Outcome};
 use super::{
-    parse_time, HostOperation, HostOperationFailure, HostOperationKind, HostOperationObservedState,
-    HostOperationResolution, HostOperationServices, HostOperationState, HostOpsTimings,
-    StartEvidenceSource,
+    log_commit_failure, parse_time, repository_error, HostOperation, HostOperationFailure,
+    HostOperationKind, HostOperationObservedState, HostOperationResolution, HostOperationServices,
+    HostOperationState, HostOpsTimings, StartEvidenceSource,
 };
 
 /// What one read of the host proved.
@@ -103,7 +102,10 @@ pub(crate) fn settle_deadline(
     Some(since + chrono(STORED_PRECISION) + chrono(timings.settle_period))
 }
 
-fn staged_artifact(row: &HostOperation) -> Option<StagedArtifact> {
+/// The staged artifact an upload or start row names: its host path, and
+/// the G-code hash and size copied at creation. `None` for a row without
+/// them (pause, resume, cancel).
+pub(crate) fn staged_artifact(row: &HostOperation) -> Option<StagedArtifact> {
     Some(StagedArtifact {
         host_path: row.host_path.clone(),
         sha256: row.gcode_sha256.clone()?,
@@ -294,10 +296,6 @@ pub(crate) async fn observe_control(
     }
 }
 
-fn repository_error(error: RepositoryError) -> CommandError {
-    CommandError::from_repository(error)
-}
-
 /// One attempt on row `id`, under the Printer's lock. A row that is not
 /// `uncertain` is returned unchanged. When the capability the row's kind
 /// needs is unsupported, no attempt runs (`CAPABILITY_UNSUPPORTED`; the
@@ -411,7 +409,12 @@ pub(crate) async fn attempt<R: tauri::Runtime>(
                 repository::record_attempt(tx, id, *reason)
             }
         })
-        .map_err(repository_error)?;
+        .map_err(|error| {
+            // The row stays `reconciling`; startup recovery returns it to
+            // `uncertain` without counting the attempt.
+            log_commit_failure(id, "its reconcile outcome", &error);
+            repository_error(error)
+        })?;
     services.publish(std::slice::from_ref(&committed));
     if committed.state == HostOperationState::Uncertain {
         services.schedule_retry(&committed);

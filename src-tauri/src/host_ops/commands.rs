@@ -18,7 +18,7 @@ use tauri::AppHandle;
 use crate::bootstrap::BootstrapState;
 use crate::connections::capabilities::{
     CapabilityKey, HistoryQuery, HostJobState, HostStateQuery, KlippyState, LocateOutcome,
-    PrintStatsState, StagedArtifact,
+    PrintStatsState,
 };
 use crate::connections::{ConnectionConfig, ConnectionError, ConnectionState, PrinterStatus};
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
@@ -27,14 +27,15 @@ use crate::printers::create::probe_error;
 use crate::printers::operational::{OperationalState, TelemetryFreshness};
 use crate::printers::StoredPrinter;
 use crate::spools::encode_enum;
-use crate::spools::operations::{self, Claim, OperationKind};
+use crate::spools::operations::{self, OperationKind};
 use crate::RuntimeServices;
 
 use super::repository::{self, NewHostOperation, Outcome};
 use super::start_rule::{self, ControlVerb, StartRejection};
 use super::{
-    executor, reconciler, wire, HostOperation, HostOperationEndpoint, HostOperationKind,
-    HostOperationServices, HostOperationState, HostOperationsSnapshot, PriorState,
+    executor, reconciler, repository_error, wire, HostOperation, HostOperationEndpoint,
+    HostOperationKind, HostOperationServices, HostOperationState, HostOperationsSnapshot,
+    PriorState,
 };
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
@@ -53,10 +54,6 @@ fn ready<R: tauri::Runtime>(
     let services = bootstrap.ready()?;
     services.host_ops.attach(app, &services.credentials);
     Ok(Arc::clone(&services.host_ops))
-}
-
-fn repository_error(error: RepositoryError) -> CommandError {
-    CommandError::from_repository(error)
 }
 
 // --- ledger digests (spec "Commands": structs, fields in this order) ------
@@ -448,17 +445,8 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
             "Choose a file staged on this Printer.",
         ));
     }
-    let artifact = StagedArtifact {
-        host_path: upload.host_path.clone(),
-        sha256: upload
-            .gcode_sha256
-            .clone()
-            .ok_or_else(CommandError::internal)?,
-        size: upload
-            .gcode_size
-            .and_then(|size| u64::try_from(size).ok())
-            .ok_or_else(CommandError::internal)?,
-    };
+    // A succeeded upload row always has its hash and size (D2 CHECK).
+    let artifact = reconciler::staged_artifact(&upload).ok_or_else(CommandError::internal)?;
     // 6. The Start rule on the live status.
     start_rule::check(&live_status(&services, &printer_id), prior_state)
         .map_err(|rejection| start_rejection(&printer_id, prior_state, rejection))?;
@@ -468,9 +456,15 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
     match host_state.host_job_state().await {
         Ok(state) => {
             let observed = host_observed_state(&state);
+            // Ruling R21 (owner decision 13): a host that reports the last
+            // print failed (`print_stats` error) refuses Start too, even if
+            // the live status hasn't caught up.
             if matches!(
                 observed,
-                OperationalState::Error | OperationalState::Printing | OperationalState::Paused
+                OperationalState::Error
+                    | OperationalState::Printing
+                    | OperationalState::Paused
+                    | OperationalState::Failed
             ) {
                 return Err(host_start_not_allowed(&printer_id, observed));
             }
@@ -795,21 +789,19 @@ pub async fn abandon_host_operation<R: tauri::Runtime>(
             row.attempts,
         ));
     }
+    // The replay check above ran under this Printer's lock, which every
+    // abandon of this row holds, so the claim here is always fresh; the
+    // claim still guards the ledger, and a replay can't reach this point
+    // to publish.
     let abandoned = services
         .storage
         .write_repo(|tx| {
-            if let Claim::Replay = operations::claim(
+            operations::claim(
                 tx,
                 &operation_id,
                 OperationKind::AbandonHostOperation,
                 &digest,
-            )? {
-                return repository::load(tx, &host_operation_id)?.ok_or_else(|| {
-                    RepositoryError::NotFound {
-                        entity_id: host_operation_id.clone(),
-                    }
-                });
-            }
+            )?;
             repository::transition(
                 tx,
                 &host_operation_id,

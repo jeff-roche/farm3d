@@ -908,6 +908,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             false
         }
     }
+
     /// Installs the hook called each time a Printer's status becomes Online
     /// (P6: `host_ops` reconciles and refreshes host facts). Replaces any
     /// earlier hook.

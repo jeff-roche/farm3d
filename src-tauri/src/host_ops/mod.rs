@@ -16,6 +16,7 @@ pub mod start_rule;
 pub mod state;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -422,8 +423,14 @@ pub enum MarkSentFault {
 }
 
 /// Retry scheduling for one Printer: a newer `generation` cancels every
-/// older timer; `step` is the backoff index, reset by "Check again" and by
-/// the Printer coming Online.
+/// older timer; `step` is the backoff index.
+///
+/// Ruling R20: the spec says the retry comes "after
+/// `supervisor::backoff_delay(attempts)`" and also that "Check again"
+/// (`reconcile_host_operation`) "resets the backoff". The persisted
+/// `attempts` can't be reset (D8 reads it), so the backoff index is this
+/// in-memory per-Printer `step` instead: it counts automatic retries,
+/// and resets to 0 on "Check again" and whenever the Printer comes Online.
 #[derive(Default)]
 struct RetryState {
     generation: u64,
@@ -449,6 +456,23 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     retries: Mutex<HashMap<String, RetryState>>,
     faults: Mutex<Vec<(FaultPoint, FaultAction, SyncSender<()>)>>,
     mark_sent_fault: Mutex<Option<(MarkSentFault, SyncSender<()>)>>,
+    /// How many timer-scheduled attempts actually ran (diagnostics, tests).
+    retry_attempts_run: AtomicUsize,
+    /// How many retry timers were scheduled (diagnostics, tests).
+    retry_timers_scheduled: AtomicUsize,
+}
+
+/// A repository error as the command error every host-ops command returns.
+pub(crate) fn repository_error(error: RepositoryError) -> CommandError {
+    CommandError::from_repository(error)
+}
+
+/// Logs a commit that failed after the host may have been contacted. The
+/// row keeps its last committed state, and startup recovery is the
+/// backstop. Rows and repository errors carry no credential (D2), so
+/// neither does this line.
+pub(crate) fn log_commit_failure(id: &str, what: &str, error: &RepositoryError) {
+    eprintln!("farm3d: host operation {id}: could not commit {what}: {error:?}");
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -486,6 +510,8 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             retries: Mutex::new(HashMap::new()),
             faults: Mutex::new(Vec::new()),
             mark_sent_fault: Mutex::new(None),
+            retry_attempts_run: AtomicUsize::new(0),
+            retry_timers_scheduled: AtomicUsize::new(0),
         }
     }
 
@@ -655,6 +681,16 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         }
     }
 
+    /// How many timer-scheduled retries have run an attempt so far.
+    pub fn retry_attempts_run(&self) -> usize {
+        self.retry_attempts_run.load(Ordering::SeqCst)
+    }
+
+    /// How many retry timers have been scheduled so far.
+    pub fn retry_timers_scheduled(&self) -> usize {
+        self.retry_timers_scheduled.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn is_online(&self, printer_id: &str) -> bool {
         self.manager
             .statuses()
@@ -708,16 +744,23 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
     // --- commits --------------------------------------------------------------
 
     /// Commits `outcome` for row `id`, publishes it, and schedules a retry
-    /// when it left the row `uncertain`. `None` when the commit failed.
+    /// when it left the row `uncertain`. `None` when the commit failed,
+    /// which is logged; the row then waits for startup recovery.
     pub(crate) fn commit_outcome(
         self: &Arc<Self>,
         id: &str,
         outcome: repository::Outcome,
     ) -> Option<HostOperation> {
-        let row = self
+        let row = match self
             .storage
             .write_repo(|tx| repository::transition(tx, id, outcome))
-            .ok()?;
+        {
+            Ok(row) => row,
+            Err(error) => {
+                log_commit_failure(id, "its dispatch outcome", &error);
+                return None;
+            }
+        };
         self.publish(std::slice::from_ref(&row));
         if row.state == HostOperationState::Uncertain {
             self.schedule_retry(&row);
@@ -777,6 +820,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             }
         }
         for delay in delays {
+            self.retry_timers_scheduled.fetch_add(1, Ordering::SeqCst);
             let weak = Arc::downgrade(self);
             let id = row.id.clone();
             let printer_id = row.printer_id.clone();
@@ -788,6 +832,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
                 if services.retry_is_current(&printer_id, generation)
                     && services.is_online(&printer_id)
                 {
+                    services.retry_attempts_run.fetch_add(1, Ordering::SeqCst);
                     let _ = reconciler::attempt(&services, &id).await;
                 }
             });

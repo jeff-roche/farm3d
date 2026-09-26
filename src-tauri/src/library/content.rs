@@ -935,6 +935,15 @@ impl fmt::Display for BlobHashMismatch {
 
 impl std::error::Error for BlobHashMismatch {}
 
+impl VerifiedReader {
+    /// The blob file's size on disk, before any byte is read (P6: the
+    /// executor compares it with the Slice Revision's `gcode_size` before
+    /// it sends anything).
+    pub fn size(&self) -> io::Result<u64> {
+        self.file.metadata().map(|metadata| metadata.len())
+    }
+}
+
 impl Read for VerifiedReader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         match self.state {

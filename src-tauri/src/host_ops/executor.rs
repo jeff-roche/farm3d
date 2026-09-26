@@ -32,7 +32,6 @@ use crate::connections::capabilities::{
     ArtifactStaging, CommandFailure, HostOperationFailureCode, HostStateQuery, InconclusiveReason,
     LocateOutcome, PrintControl, StagedArtifact,
 };
-use crate::library::content::VerifiedReader;
 
 use super::reconciler::{self, Decision};
 use super::repository::{self, Outcome};
@@ -129,16 +128,16 @@ fn prepare<R: tauri::Runtime>(
     match row.kind {
         HostOperationKind::Upload => {
             let staging = services.factory.staging(&config, key)?;
-            let sha256 = row.gcode_sha256.clone()?;
-            let size = u64::try_from(row.gcode_size?).ok()?;
-            let reader = services.content.open_verified(&sha256).ok()?;
+            let artifact = reconciler::staged_artifact(row)?;
+            let reader = services.content.open_verified(&artifact.sha256).ok()?;
+            // A blob of the wrong size can't hash right: refuse it now, as
+            // `neverSent`, instead of sending bytes the host would reject.
+            if reader.size().ok()? != artifact.size {
+                return None;
+            }
             Some(Prepared::Upload {
                 staging,
-                artifact: StagedArtifact {
-                    host_path: row.host_path.clone(),
-                    sha256,
-                    size,
-                },
+                artifact,
                 body: Some(Box::new(ChannelReader::spawn(reader))),
             })
         }
@@ -176,8 +175,10 @@ fn mark_sent<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: &s
             services.publish(std::slice::from_ref(&row));
             true
         }
-        Err(_) => {
-            // If this fails too, startup recovery finds the row unsent.
+        Err(error) => {
+            super::log_commit_failure(id, "`dispatched_at`", &error);
+            // If this fails too (logged), startup recovery finds the row
+            // unsent.
             services.commit_outcome(id, never_sent());
             false
         }
@@ -300,31 +301,35 @@ fn after_panic<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: 
 }
 
 /// The upload body: a thread reads the verified blob and hands chunks over
-/// a channel, so the blob is streamed, never buffered whole. A hash
-/// mismatch at the end arrives as a read error, which aborts the body.
+/// a channel, so the blob is streamed, never buffered whole. The thread
+/// ends the stream with an explicit end marker. A read error (a hash
+/// mismatch at the end) or a thread that stops without the marker (a
+/// panic) reaches the body as an error, which aborts the upload rather
+/// than ending it as if the file were complete.
 struct ChannelReader {
-    chunks: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    chunks: tokio::sync::mpsc::Receiver<std::io::Result<Option<Vec<u8>>>>,
     pending: Vec<u8>,
     offset: usize,
+    finished: bool,
 }
 
 const CHUNK: usize = 64 * 1024;
 
 impl ChannelReader {
-    fn spawn(mut reader: VerifiedReader) -> Self {
+    fn spawn(mut reader: impl Read + Send + 'static) -> Self {
         let (sender, chunks) = tokio::sync::mpsc::channel(4);
         std::thread::spawn(move || loop {
             let mut buffer = vec![0u8; CHUNK];
             let item = match reader.read(&mut buffer) {
-                Ok(0) => return,
+                Ok(0) => Ok(None),
                 Ok(read) => {
                     buffer.truncate(read);
-                    Ok(buffer)
+                    Ok(Some(buffer))
                 }
                 Err(error) => Err(error),
             };
-            let failed = item.is_err();
-            if sender.blocking_send(item).is_err() || failed {
+            let last = !matches!(item, Ok(Some(_)));
+            if sender.blocking_send(item).is_err() || last {
                 return;
             }
         });
@@ -332,6 +337,7 @@ impl ChannelReader {
             chunks,
             pending: Vec::new(),
             offset: 0,
+            finished: false,
         }
     }
 }
@@ -350,15 +356,102 @@ impl AsyncRead for ChannelReader {
                 self.offset += count;
                 return Poll::Ready(Ok(()));
             }
+            if self.finished {
+                return Poll::Ready(Ok(()));
+            }
             match self.chunks.poll_recv(context) {
-                Poll::Ready(Some(Ok(chunk))) => {
+                Poll::Ready(Some(Ok(Some(chunk)))) => {
                     self.pending = chunk;
                     self.offset = 0;
                 }
+                Poll::Ready(Some(Ok(None))) => self.finished = true,
                 Poll::Ready(Some(Err(error))) => return Poll::Ready(Err(error)),
-                Poll::Ready(None) => return Poll::Ready(Ok(())),
+                Poll::Ready(None) => {
+                    return Poll::Ready(Err(std::io::Error::other(
+                        "the upload source stopped before the end of the file",
+                    )))
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reads `reader` to the end through the channel, as reqwest's body
+    /// stream would.
+    fn read_through_channel(reader: impl Read + Send + 'static) -> std::io::Result<Vec<u8>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let mut channel = ChannelReader::spawn(reader);
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0u8; 1000];
+                let mut buffer = ReadBuf::new(&mut chunk);
+                std::future::poll_fn(|context| {
+                    Pin::new(&mut channel).poll_read(context, &mut buffer)
+                })
+                .await?;
+                if buffer.filled().is_empty() {
+                    return Ok(bytes);
+                }
+                bytes.extend_from_slice(buffer.filled());
+            }
+        })
+    }
+
+    /// Gives its `good` bytes, then fails or panics.
+    struct Failing {
+        good: std::io::Cursor<Vec<u8>>,
+        panic: bool,
+    }
+
+    impl Read for Failing {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.good.read(buffer)?;
+            if read > 0 {
+                return Ok(read);
+            }
+            if self.panic {
+                // Without the panic hook, so the test output stays quiet.
+                std::panic::resume_unwind(Box::new("reader panicked"));
+            }
+            Err(std::io::Error::other("hash mismatch"))
+        }
+    }
+
+    #[test]
+    fn a_complete_source_streams_every_byte_then_ends() {
+        let bytes: Vec<u8> = (0..200_000u32).map(|index| index as u8).collect();
+        let read = read_through_channel(std::io::Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(read, bytes);
+    }
+
+    #[test]
+    fn a_source_error_is_a_body_error_not_an_end_of_file() {
+        let error = read_through_channel(Failing {
+            good: std::io::Cursor::new(vec![7; 5000]),
+            panic: false,
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "hash mismatch");
+    }
+
+    #[test]
+    fn a_panicking_source_is_a_body_error_not_an_end_of_file() {
+        let error = read_through_channel(Failing {
+            good: std::io::Cursor::new(vec![7; 5000]),
+            panic: true,
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("stopped before the end"),
+            "{error}"
+        );
     }
 }

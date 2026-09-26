@@ -1387,6 +1387,78 @@ fn a_missing_local_blob_fails_never_sent_before_mark_sent() {
     assert_eq!(uploads(&rig.fake), 0);
 }
 
+#[test]
+fn a_local_blob_whose_size_differs_fails_never_sent_before_mark_sent() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    let sha256: String = running
+        .storage
+        .read(|connection| {
+            connection.query_row(
+                "SELECT gcode_sha256 FROM slice_revisions WHERE id = ?1",
+                [SLR],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    let blob = running
+        .storage
+        .paths()
+        .content_root()
+        .join("blobs/sha256")
+        .join(&sha256[..2])
+        .join(&sha256);
+    let mut bytes = std::fs::read(&blob).unwrap();
+    bytes.extend_from_slice(b"; trailing corruption\n");
+    // Blobs are stored read-only; corruption doesn't care.
+    let mut permissions = std::fs::metadata(&blob).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&blob, permissions).unwrap();
+    std::fs::write(&blob, &bytes).unwrap();
+
+    let id = id_of(&running.stage("op-stage").unwrap());
+    let row = running.wait_settled(&id);
+    assert_eq!(row.state, HostOperationState::Failed);
+    assert_eq!(
+        failure_code(&row),
+        Some(HostOperationFailureCode::NeverSent)
+    );
+    assert!(row.dispatched_at.is_none());
+    assert_eq!(uploads(&rig.fake), 0);
+}
+
+/// Makes every write of `dispatched_at` fail in SQLite itself, so the real
+/// `mark_sent` error path runs (no injected fault).
+fn refuse_mark_sent(rig: &Rig) {
+    rusqlite::Connection::open(rig.paths.database())
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_mark_sent BEFORE UPDATE OF dispatched_at ON host_operations \
+             WHEN NEW.dispatched_at IS NOT NULL \
+             BEGIN SELECT RAISE(ABORT, 'mark_sent refused by the test'); END;",
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_real_mark_sent_error_sends_nothing_and_fails_never_sent() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    refuse_mark_sent(&rig);
+    let id = id_of(&running.stage("op-stage").unwrap());
+    let row = running.wait_settled(&id);
+    assert_eq!(row.state, HostOperationState::Failed);
+    assert_eq!(
+        failure_code(&row),
+        Some(HostOperationFailureCode::NeverSent)
+    );
+    assert!(row.dispatched_at.is_none());
+    assert_eq!(uploads(&rig.fake), 0);
+}
+
 // --- the scheduler ------------------------------------------------------------------
 
 #[test]
@@ -1436,6 +1508,70 @@ fn going_online_triggers_an_attempt() {
         row.resolution,
         Some(HostOperationResolution::ArtifactVerified { reconciled: true })
     );
+}
+
+#[test]
+fn repeated_online_frames_do_not_fire_the_online_hook_again() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    let before = rig.fake.requests().len();
+    running.observe(HostActivity::Idle);
+    running.observe(HostActivity::Idle);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        rig.fake.requests().len(),
+        before,
+        "a frame that keeps the Printer Online read the host again"
+    );
+}
+
+#[test]
+fn nothing_is_scheduled_while_the_printer_is_not_online() {
+    let rig = Rig::with_timings(HostOpsTimings {
+        backoff: |_| Duration::from_millis(50),
+        ..test_timings()
+    });
+    let seed = Arc::new(Storage::open(rig.paths.clone(), &rig.lease).unwrap());
+    // Absent on the host and inside the settle period: `uploadSettling`,
+    // which would schedule both a backoff and a settle-deadline timer.
+    let id = seed_uncertain_upload_on_fake(&seed, &rig);
+    let running = rig.boot(); // never observed: not Online
+    running.wait_for(&id, |row| row.attempts >= 1); // the startup pass
+    let row: HostOperation = serde_json::from_value(running.reconcile(&id).unwrap()).unwrap();
+    assert_eq!(row.state, HostOperationState::Uncertain);
+    assert_eq!(reason(&row), Some(InconclusiveReason::UploadSettling));
+    let attempts = row.attempts;
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(running.services.host_ops.retry_timers_scheduled(), 0);
+    assert_eq!(running.services.host_ops.retry_attempts_run(), 0);
+    assert_eq!(running.row(&id).attempts, attempts);
+}
+
+#[test]
+fn abandon_cancels_the_pending_retry_timers() {
+    let rig = Rig::with_timings(HostOpsTimings {
+        backoff: |step| {
+            if step == 0 {
+                Duration::from_millis(1000)
+            } else {
+                Duration::from_secs(3600)
+            }
+        },
+        ..test_timings()
+    });
+    let seed = Arc::new(Storage::open(rig.paths.clone(), &rig.lease).unwrap());
+    let id = seed_uncertain_upload_on_fake(&seed, &rig);
+    let running = rig.boot();
+    running.observe(HostActivity::Idle); // Online: the hook's attempt schedules
+    running.reconcile(&id).unwrap(); // resets the backoff: step 0 again
+    assert!(running.services.host_ops.retry_timers_scheduled() > 0);
+    running.abandon("op-abandon", &id).unwrap();
+    assert_eq!(running.row(&id).state, HostOperationState::Abandoned);
+    let attempts = running.row(&id).attempts;
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(running.services.host_ops.retry_attempts_run(), 0);
+    assert_eq!(running.row(&id).attempts, attempts);
 }
 
 fn seed_uncertain_upload_on_fake(storage: &Storage, rig: &Rig) -> String {
@@ -1500,6 +1636,38 @@ fn start_is_refused_with_no_row_when_the_host_reread_shows_paused() {
     assert_eq!(code(&error), "START_NOT_ALLOWED", "{error}");
     assert_eq!(error["details"]["observedState"], "paused");
     assert_eq!(error["details"]["freshness"], "fresh");
+    assert_eq!(running.row_count(), before);
+    assert_eq!(starts(&rig.fake), 0);
+}
+
+#[test]
+fn start_is_refused_with_no_row_when_the_host_reread_shows_the_last_print_failed() {
+    // Ruling R21: `print_stats` "error" is `Failed`, which never allows a
+    // Start, even while the live status still says Idle.
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    rig.fake
+        .with_state(|state| state.print_state = "error".to_string());
+    let before = running.row_count();
+    let error = running.start("op-start", &upload, "ready").unwrap_err();
+    assert_eq!(code(&error), "START_NOT_ALLOWED", "{error}");
+    assert_eq!(error["details"]["observedState"], "failed");
+    assert_eq!(running.row_count(), before);
+    assert_eq!(starts(&rig.fake), 0);
+}
+
+#[test]
+fn start_is_capability_unsupported_with_no_row_when_start_is_switched_off() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    let upload = staged_upload(&running, "op-stage");
+    rig.factory.switch_off(CapabilityKey::Start);
+    let before = running.row_count();
+    let error = running.start("op-start", &upload, "ready").unwrap_err();
+    assert_eq!(code(&error), "CAPABILITY_UNSUPPORTED", "{error}");
+    assert_eq!(error["details"]["capability"], "start");
+    assert_eq!(error["details"]["printerId"], PRINTER);
     assert_eq!(running.row_count(), before);
     assert_eq!(starts(&rig.fake), 0);
 }
@@ -1815,6 +1983,37 @@ fn every_committed_change_emits_one_operation_changed_event_in_sequence() {
         })
         .expect("mark_sent emitted");
     assert_eq!(marked["payload"]["state"], "dispatching");
+
+    // An uncertain start and its reconcile: `reconciling` is committed and
+    // emitted before the outcome.
+    let start = start_with(
+        &running,
+        &rig.fake,
+        &upload,
+        Some(Fault::ApplyStartThenDrop(StartTrace::PrintingOnly)),
+    );
+    running.reconcile(&start.id).unwrap();
+    let events = running.events();
+    let states: Vec<&str> = events
+        .iter()
+        .filter(|event| event["subject"]["id"] == start.id.as_str())
+        .map(|event| event["payload"]["state"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        states,
+        [
+            "dispatching",
+            "dispatching",
+            "uncertain",
+            "reconciling",
+            "succeeded"
+        ]
+    );
+    let sequences: Vec<u64> = events
+        .iter()
+        .map(|event| event["sequence"].as_u64().unwrap())
+        .collect();
+    assert!(sequences.windows(2).all(|pair| pair[1] == pair[0] + 1));
 }
 
 #[test]
@@ -1897,13 +2096,22 @@ fn the_seeded_api_key_is_in_no_event_error_or_row() {
         haystack.push_str(&format!("{row:?}"));
     }
     assert!(!haystack.contains(SECRET), "the API key leaked");
-    let database = std::fs::read(rig.paths.database()).unwrap();
-    assert!(
-        !database
-            .windows(SECRET.len())
-            .any(|window| window == SECRET.as_bytes()),
-        "the API key is in the database"
-    );
+    // The main file and its WAL and shared-memory files: uncheckpointed
+    // writes live only in the `-wal` file.
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = rig.paths.database().as_os_str().to_owned();
+        path.push(suffix);
+        let Ok(bytes) = std::fs::read(&path) else {
+            assert_ne!(suffix, "", "the database file is readable");
+            continue;
+        };
+        assert!(
+            !bytes
+                .windows(SECRET.len())
+                .any(|window| window == SECRET.as_bytes()),
+            "the API key is in database{suffix}"
+        );
+    }
     // The key was used: the fake only answers requests that carry it.
     assert!(rig.fake.requests().iter().any(|request| request
         .headers
