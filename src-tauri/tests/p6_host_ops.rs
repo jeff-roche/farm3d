@@ -2446,6 +2446,71 @@ fn every_committed_change_emits_one_operation_changed_event_in_sequence() {
     assert!(sequences.windows(2).all(|pair| pair[1] == pair[0] + 1));
 }
 
+/// The executor's `commit_outcome` commits `uncertain`, and a reconcile
+/// attempt runs before that commit is published. The attempt's events
+/// must still come after the executor's, so the last event for the row is
+/// its final state, never the stale `uncertain`.
+#[test]
+fn an_executor_outcome_is_published_before_a_reconcile_of_the_same_row() {
+    let rig = Rig::new();
+    let running = rig.boot();
+    running.observe(HostActivity::Idle);
+    rig.fake.fault(Route::Upload, Fault::StoreThenDropResponse);
+    let (committed, committed_rx) = std::sync::mpsc::sync_channel(1);
+    let (go, go_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    running
+        .services
+        .host_ops
+        .inject_before_outcome_publish(move || {
+            let _ = committed.send(());
+            let _ = go_rx.recv_timeout(Duration::from_secs(10));
+        });
+    let id = id_of(&running.stage("op-stage").unwrap());
+    committed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the executor committed its outcome");
+    assert_eq!(running.row(&id).state, HostOperationState::Uncertain);
+
+    let webview = running.webview.clone();
+    let host_operation_id = id.clone();
+    let (reconciled, reconciled_rx) = std::sync::mpsc::sync_channel(1);
+    let reconcile = std::thread::spawn(move || {
+        let result = common::invoke(
+            &webview,
+            "reconcile_host_operation",
+            json!({"contractVersion": 1, "hostOperationId": host_operation_id}),
+        );
+        let _ = reconciled.send(());
+        result
+    });
+    // Give the attempt time to run to completion if nothing holds it back;
+    // either way, the executor then publishes.
+    let _ = reconciled_rx.recv_timeout(Duration::from_secs(1));
+    go.send(()).unwrap();
+    let row: HostOperation =
+        serde_json::from_value(reconcile.join().unwrap().expect("reconcile")["data"].clone())
+            .unwrap();
+    assert_eq!(row.state, HostOperationState::Succeeded, "{row:?}");
+
+    let states: Vec<String> = running
+        .events()
+        .iter()
+        .filter(|event| event["subject"]["id"] == id.as_str())
+        .map(|event| event["payload"]["state"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        states,
+        [
+            "dispatching",
+            "dispatching",
+            "uncertain",
+            "reconciling",
+            "succeeded"
+        ],
+        "events must follow commit order"
+    );
+}
+
 #[test]
 fn the_backfill_sequence_is_read_before_its_rows() {
     let rig = Rig::new();

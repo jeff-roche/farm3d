@@ -12,7 +12,8 @@
 //!    { neverSent }`, or, if that commit fails too, leaves the row for
 //!    startup recovery (which also makes it `neverSent`).
 //! 3. The write, then its classification (D5's dispatch table), then one
-//!    commit.
+//!    commit. The commit and its publish hold the Printer's lock, as a
+//!    reconcile attempt's do, so events follow commit order.
 //!
 //! A panic before `mark_sent` commits `failed { neverSent }`; after it,
 //! `uncertain` (`unexpectedResponse`). Which one is decided by the row's
@@ -48,7 +49,7 @@ pub(crate) fn spawn<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>,
             .catch_unwind()
             .await;
         if ran.is_err() {
-            after_panic(&services, &id);
+            after_panic(&services, &id).await;
         }
     });
 }
@@ -95,11 +96,12 @@ async fn dispatch<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, i
     if services.hit(FaultPoint::BeforeMarkSent) {
         return;
     }
+    let printer_id = row.printer_id.as_str();
     let Some(mut prepared) = prepare(services, &row) else {
-        services.commit_outcome(id, never_sent());
+        services.commit_outcome(printer_id, id, never_sent()).await;
         return;
     };
-    if !mark_sent(services, id) {
+    if !mark_sent(services, printer_id, id).await {
         return;
     }
     if services.hit(FaultPoint::AfterMarkSentBeforeSend) {
@@ -113,7 +115,7 @@ async fn dispatch<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, i
     if services.hit(FaultPoint::AfterResponseBeforeCommit) {
         return;
     }
-    services.commit_outcome(id, outcome);
+    services.commit_outcome(printer_id, id, outcome).await;
 }
 
 /// D3's local preconditions. `None` means one failed and nothing may be
@@ -159,10 +161,14 @@ fn prepare<R: tauri::Runtime>(
 /// D3's invariant: `true` only when `dispatched_at` committed. On `false`
 /// the row is `failed { neverSent }` or left `dispatching` for startup
 /// recovery, and nothing may be sent.
-fn mark_sent<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: &str) -> bool {
+async fn mark_sent<R: tauri::Runtime>(
+    services: &Arc<HostOperationServices<R>>,
+    printer_id: &str,
+    id: &str,
+) -> bool {
     if let Some((fault, fired)) = services.take_mark_sent_fault() {
         if fault == MarkSentFault::Fails {
-            services.commit_outcome(id, never_sent());
+            services.commit_outcome(printer_id, id, never_sent()).await;
         }
         let _ = fired.try_send(());
         return false;
@@ -179,7 +185,7 @@ fn mark_sent<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: &s
             super::log_commit_failure(id, "`dispatched_at`", &error);
             // If this fails too (logged), startup recovery finds the row
             // unsent.
-            services.commit_outcome(id, never_sent());
+            services.commit_outcome(printer_id, id, never_sent()).await;
             false
         }
     }
@@ -285,7 +291,7 @@ async fn verify<R: tauri::Runtime>(
 }
 
 /// D5: a panic after `mark_sent` is `uncertain`, before it `neverSent`.
-fn after_panic<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: &str) {
+async fn after_panic<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: &str) {
     let Ok(Some(row)) = services.load(id) else {
         return;
     };
@@ -297,7 +303,7 @@ fn after_panic<R: tauri::Runtime>(services: &Arc<HostOperationServices<R>>, id: 
     } else {
         never_sent()
     };
-    services.commit_outcome(id, outcome);
+    services.commit_outcome(&row.printer_id, id, outcome).await;
 }
 
 /// The upload body: a thread reads the verified blob and hands chunks over

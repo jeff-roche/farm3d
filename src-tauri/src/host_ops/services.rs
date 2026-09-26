@@ -170,8 +170,8 @@ pub enum FaultAction {
     Panic,
 }
 
-/// A test hook run once, just before the next write-ahead transaction.
-type WriteAheadHook = Box<dyn FnOnce() + Send>;
+/// A test hook run once, at a fixed point in a later command or dispatch.
+type TestHook = Box<dyn FnOnce() + Send>;
 
 /// Makes the next `mark_sent` fail.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -228,7 +228,8 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     retries: Mutex<HashMap<String, RetryState>>,
     faults: Mutex<Vec<(FaultPoint, FaultAction, SyncSender<()>)>>,
     mark_sent_fault: Mutex<Option<(MarkSentFault, SyncSender<()>)>>,
-    before_write_ahead: Mutex<Option<WriteAheadHook>>,
+    before_write_ahead: Mutex<Option<TestHook>>,
+    before_outcome_publish: Mutex<Option<TestHook>>,
     /// How many timer-scheduled attempts actually ran (diagnostics, tests).
     retry_attempts_run: AtomicUsize,
     /// How many retry timers were scheduled (diagnostics, tests).
@@ -271,6 +272,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             faults: Mutex::new(Vec::new()),
             mark_sent_fault: Mutex::new(None),
             before_write_ahead: Mutex::new(None),
+            before_outcome_publish: Mutex::new(None),
             retry_attempts_run: AtomicUsize::new(0),
             retry_timers_scheduled: AtomicUsize::new(0),
         }
@@ -512,6 +514,20 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         *lock(&self.before_write_ahead) = Some(Box::new(hook));
     }
 
+    /// Test hook: runs `hook` once, after the executor's next dispatch
+    /// outcome has committed and before it is published, so a test can
+    /// act on the committed row in that window.
+    pub fn inject_before_outcome_publish(&self, hook: impl FnOnce() + Send + 'static) {
+        *lock(&self.before_outcome_publish) = Some(Box::new(hook));
+    }
+
+    fn run_before_outcome_publish(&self) {
+        let hook = lock(&self.before_outcome_publish).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     pub(crate) fn run_before_write_ahead(&self) {
         let hook = lock(&self.before_write_ahead).take();
         if let Some(hook) = hook {
@@ -525,14 +541,24 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
 
     // --- commits --------------------------------------------------------------
 
-    /// Commits `outcome` for row `id`, publishes it, and schedules a retry
-    /// when it left the row `uncertain`. `None` when the commit failed,
-    /// which is logged; the row then waits for startup recovery.
-    pub(crate) fn commit_outcome(
+    /// Commits `outcome` for row `id` of `printer_id`, publishes it, and
+    /// schedules a retry when it left the row `uncertain`. `None` when the
+    /// commit failed, which is logged; the row then waits for startup
+    /// recovery.
+    ///
+    /// The commit and its publish happen under the Printer's lock, which
+    /// every reconcile attempt and abandon holds for its own commits and
+    /// publishes. Events are numbered at publish time, so without the lock
+    /// an attempt that ran between this commit and its publish would
+    /// publish its newer state first, and this stale `uncertain` last.
+    pub(crate) async fn commit_outcome(
         self: &Arc<Self>,
+        printer_id: &str,
         id: &str,
         outcome: repository::Outcome,
     ) -> Option<HostOperation> {
+        let printer_lock = self.printer_lock(printer_id);
+        let _serialized = printer_lock.lock().await;
         let row = match self.storage.write_repo(|tx| {
             repository::transition_at(tx, id, outcome, &format_time(self.clock.now()))
         }) {
@@ -542,6 +568,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
                 return None;
             }
         };
+        self.run_before_outcome_publish();
         self.publish(std::slice::from_ref(&row));
         if row.state == HostOperationState::Uncertain {
             self.schedule_retry(&row);
