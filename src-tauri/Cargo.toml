@@ -79,10 +79,12 @@ chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 keyring = "4.1"
 mdns-sd = "0.21"
-# OctoPrint's REST API. No default features: no TLS backend (matching
-# tokio-tungstenite, so neither adapter speaks TLS yet), no system-proxy
-# lookup, no HTTP/2. Already in the lockfile via Tauri.
-reqwest = { version = "0.13", default-features = false }
+# OctoPrint's REST API and Moonraker's capability adapter. No default
+# features: no TLS backend (matching tokio-tungstenite, so neither adapter
+# speaks TLS yet), no system-proxy lookup, no HTTP/2. `multipart` and
+# `stream` carry the streamed G-code upload (P6 D4). Already in the lockfile
+# via Tauri.
+reqwest = { version = "0.13", default-features = false, features = ["multipart", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }

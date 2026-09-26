@@ -1,0 +1,99 @@
+{
+  "result": {
+    "count": 4,
+    "jobs": [
+      {
+        "job_id": "000004",
+        "user": "_TRUSTED_USER_",
+        "filename": "farm3d/task8-job6.gcode",
+        "status": "completed",
+        "start_time": 1790381446.2650614,
+        "end_time": 1790381455.2864146,
+        "print_duration": 0.0,
+        "total_duration": 8.91114409599686,
+        "filament_used": 0.0,
+        "metadata": {
+          "size": 54,
+          "modified": 1790381446.0256019,
+          "uuid": "2463d08c-a2c7-4f72-ace3-7cd7d382808c",
+          "file_processors": [],
+          "slicer": "Unknown",
+          "slicer_version": "?",
+          "gcode_start_byte": 24,
+          "gcode_end_byte": 54
+        },
+        "auxiliary_data": [],
+        "exists": true
+      },
+      {
+        "job_id": "000003",
+        "user": "_TRUSTED_USER_",
+        "filename": "farm3d/task8-job5.gcode",
+        "status": "completed",
+        "start_time": 1790381435.4882548,
+        "end_time": 1790381444.2597642,
+        "print_duration": 0.0,
+        "total_duration": 8.680599698971491,
+        "filament_used": 0.0,
+        "metadata": {
+          "size": 54,
+          "modified": 1790381435.2486944,
+          "uuid": "eb3e45d7-7f8f-472a-a247-f27aa68b5216",
+          "file_processors": [],
+          "slicer": "Unknown",
+          "slicer_version": "?",
+          "gcode_start_byte": 24,
+          "gcode_end_byte": 54
+        },
+        "auxiliary_data": [],
+        "exists": true
+      },
+      {
+        "job_id": "000002",
+        "user": "_TRUSTED_USER_",
+        "filename": "farm3d/task8-job4.gcode",
+        "status": "completed",
+        "start_time": 1790381427.7215211,
+        "end_time": 1790381433.234163,
+        "print_duration": 0.0,
+        "total_duration": 5.526324392994866,
+        "filament_used": 0.0,
+        "metadata": {
+          "size": 54,
+          "modified": 1790381427.3857224,
+          "uuid": "440c3747-34ff-4cba-bfd7-af5eefb359d4",
+          "file_processors": [],
+          "slicer": "Unknown",
+          "slicer_version": "?",
+          "gcode_start_byte": 24,
+          "gcode_end_byte": 54
+        },
+        "auxiliary_data": [],
+        "exists": true
+      },
+      {
+        "job_id": "000001",
+        "user": "_TRUSTED_USER_",
+        "filename": "farm3d/task8-job1.gcode",
+        "status": "completed",
+        "start_time": 1790381406.9327126,
+        "end_time": 1790381406.9404416,
+        "print_duration": 0.0,
+        "total_duration": 0.0018070109654217958,
+        "filament_used": 0.0,
+        "metadata": {
+          "size": 5517,
+          "modified": 1790381406.4860575,
+          "uuid": "e7037740-8fc5-4d6f-83ed-5c47a6b29747",
+          "file_processors": [],
+          "slicer": "Unknown",
+          "slicer_version": "?",
+          "gcode_start_byte": 24,
+          "gcode_end_byte": 5517
+        },
+        "auxiliary_data": [],
+        "exists": true
+      }
+    ]
+  }
+}

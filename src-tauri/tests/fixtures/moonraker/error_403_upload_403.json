@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Forbidden",
+    "traceback": "Traceback (most recent call last):\n  File \"/opt/moonraker/moonraker/components/file_manager/file_manager.py\", line 903, in _finish_gcode_upload\n...\ntornado.web.HTTPError: HTTP 403: Forbidden (File is loaded, upload not permitted)\n"
+  }
+}

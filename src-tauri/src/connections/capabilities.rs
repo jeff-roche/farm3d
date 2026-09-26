@@ -544,8 +544,8 @@ pub fn capabilities_for(
         adapter_kind: Some(connection.kind.clone()),
         capabilities,
         host_facts: host_facts.cloned(),
-        // Task 8 threads the host-facts cache's real read time through once
-        // an adapter actually has a `host_state` builder; there is none yet.
+        // The host-facts cache (`host_ops`, not built yet) owns the read
+        // time; nothing supplies one here until it exists.
         observed_at: None,
     }
 }
@@ -955,7 +955,7 @@ mod tests {
     // --- capabilities_for wiring (rules 3-7 via a real, if empty, adapter) --
 
     #[test]
-    fn a_real_adapter_with_no_builders_is_not_verified_everywhere() {
+    fn a_real_adapter_with_no_evidence_is_not_verified_everywhere() {
         let printer = a_stored_printer(Some(connection(MOONRAKER_KIND, false)));
         let result = capabilities_for(&printer, None);
 
@@ -971,7 +971,7 @@ mod tests {
     // --- adapter_capability_matrix -------------------------------------------
 
     #[test]
-    fn the_matrix_lists_the_registry_in_order_with_no_builders_or_evidence() {
+    fn the_matrix_lists_the_registry_in_order_with_no_evidence() {
         let rows = adapter_capability_matrix();
 
         assert_eq!(rows.len(), 2);

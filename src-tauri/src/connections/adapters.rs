@@ -1,16 +1,17 @@
 //! The adapter registry: the one place a `kind` string becomes an
 //! observe-connection builder and its capability builders, so
 //! `connections::is_supported_kind` and `supervisor::build_connection`
-//! share a single source of truth. Moonraker and OctoPrint have no
-//! capability builders yet (Task 8 adds Moonraker's) and no evidence rows
-//! (Task 12 adds those), so `capabilities::capabilities_for` and
-//! `capabilities::adapter_capability_matrix` report every capability
+//! share a single source of truth. Moonraker has all four capability
+//! builders (`moonraker::control`); OctoPrint has none. Neither has evidence
+//! rows yet (Task 12 adds Moonraker's), so `capabilities::capabilities_for`
+//! and `capabilities::adapter_capability_matrix` report every capability
 //! `notVerified` for both today.
 
 use super::capabilities::{
     ArtifactStaging, CameraDiscovery, CapabilityEvidence, CapabilityKey, HostStateQuery,
     PrintControl,
 };
+use super::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
 use super::moonraker::MoonrakerConnection;
 use super::octoprint::OctoPrintConnection;
 use super::{ConnectionConfig, PrinterConnection, MOONRAKER_KIND, OCTOPRINT_KIND};
@@ -52,6 +53,43 @@ fn moonraker_observe(
     ))
 }
 
+/// The capability builders all build the same HTTP adapter with the
+/// production timings (D10).
+fn moonraker_capabilities(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> MoonrakerCapabilities {
+    MoonrakerCapabilities::new(config, api_key, MoonrakerTimings::default())
+}
+
+fn moonraker_staging(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> Box<dyn ArtifactStaging> {
+    Box::new(moonraker_capabilities(config, api_key))
+}
+
+fn moonraker_control(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> Box<dyn PrintControl> {
+    Box::new(moonraker_capabilities(config, api_key))
+}
+
+fn moonraker_host_state(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> Box<dyn HostStateQuery> {
+    Box::new(moonraker_capabilities(config, api_key))
+}
+
+fn moonraker_camera(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> Box<dyn CameraDiscovery> {
+    Box::new(moonraker_capabilities(config, api_key))
+}
+
 fn octoprint_observe(
     config: &ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
@@ -66,10 +104,12 @@ const REGISTRY: &[AdapterDescriptor] = &[
     AdapterDescriptor {
         kind: MOONRAKER_KIND,
         observe: moonraker_observe,
-        staging: None,
-        control: None,
-        host_state: None,
-        camera: None,
+        staging: Some(moonraker_staging),
+        control: Some(moonraker_control),
+        host_state: Some(moonraker_host_state),
+        camera: Some(moonraker_camera),
+        // Task 12 adds the simulator evidence; until then every capability
+        // stays `notVerified` (D6 rule 4).
         evidence: &[],
     },
     AdapterDescriptor {
@@ -126,6 +166,26 @@ mod tests {
             // builder runs, not that it can reach a host.
             let _connection = (descriptor.observe)(&config(descriptor.kind), None);
         }
+    }
+
+    #[test]
+    fn moonraker_has_all_four_capability_builders_and_no_evidence_yet() {
+        let moonraker = descriptor(MOONRAKER_KIND).unwrap();
+        let config = config(MOONRAKER_KIND);
+        let _staging = (moonraker.staging.expect("staging"))(&config, None);
+        let _control = (moonraker.control.expect("control"))(&config, None);
+        let _host_state = (moonraker.host_state.expect("host state"))(&config, None);
+        let _camera = (moonraker.camera.expect("camera"))(&config, None);
+        assert!(moonraker.evidence.is_empty());
+    }
+
+    #[test]
+    fn octoprint_has_no_capability_builders() {
+        let octoprint = descriptor(OCTOPRINT_KIND).unwrap();
+        assert!(octoprint.staging.is_none());
+        assert!(octoprint.control.is_none());
+        assert!(octoprint.host_state.is_none());
+        assert!(octoprint.camera.is_none());
     }
 
     #[test]
