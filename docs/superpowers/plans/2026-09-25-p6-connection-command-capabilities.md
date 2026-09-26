@@ -342,11 +342,11 @@ type PrinterCapabilities = {
 
 | Mutation while unresolved | Result |
 |---|---|
-| Archive, delete | `LIFECYCLE_BLOCKED` with blocker code `hostOperationUnresolved` |
+| Archive, delete | `LIFECYCLE_BLOCKED` with blocker code `HOST_OPERATION_UNRESOLVED` |
 | Printer import | `HOST_OPERATION_PENDING`; the whole import is rejected, nothing written |
 | Endpoint change, Connection clear, credential clear | `CONNECTION_IN_USE` |
 | Credential replace, same endpoint | Allowed (probed) |
-| Delete a referenced Slice Revision | `LIFECYCLE_BLOCKED` with blocker code `hostOperationUnresolved` |
+| Delete a referenced Slice Revision | `LIFECYCLE_BLOCKED` with blocker code `HOST_OPERATION_UNRESOLVED` |
 | A new write on the same Printer | `HOST_OPERATION_PENDING` |
 
 Permanent delete removes the Printer's terminal rows in the same

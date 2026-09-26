@@ -560,7 +560,7 @@ Rules that make these exact:
 type CapabilityKey = "upload" | "start" | "pause" | "resume" | "cancel"
   | "hostState" | "artifactIdentity" | "camera";
 type CapabilityEvidence = {
-  source: string;                       // e.g. "sim-runs/<UTC>/manifest.json"
+  source: string;                       // the committed manifest copy, e.g. "docs/superpowers/baselines/<date>-p6-sim-manifest-<UTC>.json"
   tier: "sim" | "readOnlyHardware";
   verifiedHostVersions: string[];       // e.g. ["Moonraker v0.11.0-1 API 1.5.0"]
 };
@@ -644,17 +644,24 @@ Every guard runs inside the mutation's own transaction.
 
 | Mutation while unresolved | Result |
 |---|---|
-| Archive, delete a Printer | `LIFECYCLE_BLOCKED`, blocker code `hostOperationUnresolved`, messages "Finish or abandon the pending printer operation before archiving." / "Finish or abandon the pending printer operation before deleting." |
+| Archive, delete a Printer | `LIFECYCLE_BLOCKED`, blocker code `HOST_OPERATION_UNRESOLVED`, messages "Finish or abandon the pending printer operation before archiving." / "Finish or abandon the pending printer operation before deleting." |
 | Printer import (`import_printers`, `replace_all`) | `HOST_OPERATION_PENDING` for the whole import, nothing written |
 | Change `kind`, `host`, `port`, or `useTls`; clear the Connection; clear the credential reference | `CONNECTION_IN_USE` |
 | Replace the credential reference, endpoint unchanged | Allowed, and still probed (answer 4) |
-| Delete a Slice Revision that an unresolved `upload` or `start` row references | `LIFECYCLE_BLOCKED`, blocker code `hostOperationUnresolved`, message "A printer operation using this Slice Revision is still pending. Finish or abandon it first." |
+| Delete a Slice Revision that an unresolved `upload` or `start` row references | `LIFECYCLE_BLOCKED`, blocker code `HOST_OPERATION_UNRESOLVED`, message "A printer operation using this Slice Revision is still pending. Finish or abandon it first." |
 | A new write on the same Printer | `HOST_OPERATION_PENDING` (D9) |
 
 - `succeeded`, `failed`, and `abandoned` rows never block.
 - Permanent Printer delete removes that Printer's terminal rows in the same
   transaction, after the blocker check (answer 5). The `ON DELETE RESTRICT`
   foreign key backs up the guard.
+- Printer import (`replace_all`) replaces every Printer, so once the
+  import guard passes it deletes the terminal rows of every Printer it
+  replaces, in the same transaction, before the Printers themselves. Their
+  Host Operation history is therefore lost on re-import, even for a
+  Printer the imported file brings back under the same id. (Controller
+  ruling R16; the foreign key is `ON DELETE RESTRICT`, so the rows can't
+  outlive their Printer.)
 - Credential cleanup (`retry_pending_credential_cleanup_locked`) never
   deletes the credential of a Printer with an unresolved row.
 
@@ -914,7 +921,7 @@ type HostOperationsSnapshot = {
 `InconclusiveReason`, `CapabilityKey`, `CapabilityState`,
 `CapabilityEvidence`, `PrinterCapabilities`, `AdapterCapabilityRow`,
 `HostFacts`, `HostOperationsEventType`. Existing types gain:
-`LifecycleBlockerCode::HostOperationUnresolved` (`hostOperationUnresolved`)
+`LifecycleBlockerCode::HostOperationUnresolved` (`HOST_OPERATION_UNRESOLVED` on the wire, matching the enum's existing SCREAMING_SNAKE serialization)
 and the six `OperationKind` variants (D2).
 
 ### Commands
