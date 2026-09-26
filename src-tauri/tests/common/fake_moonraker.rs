@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -315,22 +316,46 @@ impl FakeState {
 pub struct FakeMoonraker {
     pub port: u16,
     state: Arc<Mutex<FakeState>>,
+    /// `true` once [`FakeMoonraker::set_reachable`]`(false)` has been
+    /// called: every new connection is accepted, then dropped unanswered,
+    /// the way a host that has gone away looks to a client (the same
+    /// technique as `p6_moonraker_readonly.rs`'s `Gate::block`).
+    down: Arc<AtomicBool>,
 }
 
 impl FakeMoonraker {
     pub fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind FakeMoonraker");
+        listener.set_nonblocking(true).expect("nonblocking listener");
         let port = listener.local_addr().expect("fake address").port();
         let state = Arc::new(Mutex::new(FakeState::new()));
+        let down = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&state);
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let state = Arc::clone(&shared);
-                std::thread::spawn(move || handle_connection(stream, &state));
+        let down_flag = Arc::clone(&down);
+        std::thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if down_flag.load(Ordering::SeqCst) {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
+                    let state = Arc::clone(&shared);
+                    std::thread::spawn(move || handle_connection(stream, &state));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
             }
         });
-        Self { port, state }
+        Self { port, state, down }
+    }
+
+    /// `false` makes the fake unreachable: every new connection is accepted
+    /// and immediately dropped, unanswered. `true` (the default) restores
+    /// normal service.
+    pub fn set_reachable(&self, reachable: bool) {
+        self.down.store(!reachable, Ordering::SeqCst);
     }
 
     /// A Moonraker `ConnectionConfig` pointing at this fake.

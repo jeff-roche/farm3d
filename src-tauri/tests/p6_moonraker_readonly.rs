@@ -59,7 +59,7 @@ use farm3d_lib::connections::{
 };
 use farm3d_lib::host_ops::repository::{self as host_ops_repo, NewHostOperation, Outcome};
 use farm3d_lib::host_ops::{
-    CapabilityFactory, HostOperation, HostOperationEndpoint, HostOperationKind,
+    self, CapabilityFactory, HostOperation, HostOperationEndpoint, HostOperationKind,
     HostOperationServices, HostOperationState, HostOpsTimings, SystemClock,
 };
 use farm3d_lib::persistence::Storage;
@@ -1149,10 +1149,18 @@ async fn readonly_locate_of_a_never_sent_file_is_absent() {
 
 // --- host_ops against the real host, read-only --------------------------------------
 
-struct ReadOnlyApp {
+/// The roots, credentials, and factory a [`ReadOnlyApp`] is booted over.
+/// Kept apart from the live app so a test can boot more than once over the
+/// same roots: a restart.
+struct ReadOnlyRig {
     _storage_dir: tempfile::TempDir,
-    _lease: farm3d_lib::persistence::MetadataRootLease,
-    _credentials: tempfile::TempDir,
+    lease: farm3d_lib::persistence::MetadataRootLease,
+    paths: farm3d_lib::persistence::StoragePaths,
+    credentials: tempfile::TempDir,
+    factory: Arc<dyn CapabilityFactory>,
+}
+
+struct ReadOnlyApp {
     _app: tauri::App<MockRuntime>,
     webview: tauri::WebviewWindow<MockRuntime>,
     storage: Arc<Storage>,
@@ -1167,12 +1175,12 @@ fn no_observation_factory(
     None
 }
 
-impl ReadOnlyApp {
-    /// A mock app whose `host_ops` builds adapters only through
-    /// [`ReadOnlyFactory`], with the production timings (a 60 s settle
-    /// period), and Printers `printer_ids` whose Connection is the gate.
-    fn boot(host: &ReadOnlyMoonraker, printer_ids: &[&str]) -> Self {
+impl ReadOnlyRig {
+    /// Fresh roots and Printers `printer_ids`, whose Connection is the
+    /// gate, ready to [`ReadOnlyRig::boot`].
+    fn new(host: &ReadOnlyMoonraker, printer_ids: &[&str]) -> Self {
         let (storage_dir, lease, storage, _database) = common::storage();
+        let paths = storage.paths().clone();
         let credentials = tempfile::tempdir().unwrap();
         let mut config = host.gate.config();
         if let Some(key) = &host.api_key {
@@ -1193,6 +1201,23 @@ impl ReadOnlyApp {
         let factory: Arc<dyn CapabilityFactory> = Arc::new(ReadOnlyFactory {
             log: host.gate.log.clone(),
         });
+        Self {
+            _storage_dir: storage_dir,
+            lease,
+            paths,
+            credentials,
+            factory,
+        }
+    }
+
+    /// Opens the roots and boots an app, running startup recovery first as
+    /// `build_runtime_services` does, with `host_ops` building adapters
+    /// only through [`ReadOnlyFactory`] and the production timings (a 60 s
+    /// settle period). Every boot after the first is a restart.
+    fn boot(&self) -> ReadOnlyApp {
+        let storage = Arc::new(Storage::open(self.paths.clone(), &self.lease).unwrap());
+        host_ops::recover_after_restart(&storage, chrono::Utc::now()).unwrap();
+        let factory = Arc::clone(&self.factory);
         let (app, webview, _manager, services) = common::runtime_with(
             tauri::generate_handler![
                 farm3d_lib::host_ops::commands::reconcile_host_operation,
@@ -1200,7 +1225,7 @@ impl ReadOnlyApp {
             ],
             Arc::clone(&storage),
             Arc::new(common::a_catalog()),
-            credentials.path().to_path_buf(),
+            self.credentials.path().to_path_buf(),
             no_observation_factory,
             move |services| {
                 services.host_ops = Arc::new(HostOperationServices::new(
@@ -1214,16 +1239,15 @@ impl ReadOnlyApp {
             },
         );
         farm3d_lib::start_host_ops_runtime(&services, app.handle());
-        Self {
-            _storage_dir: storage_dir,
-            _lease: lease,
-            _credentials: credentials,
+        ReadOnlyApp {
             _app: app,
             webview,
             storage,
         }
     }
+}
 
+impl ReadOnlyApp {
     fn call(&self, command: &str, mut body: Value) -> Result<Value, Value> {
         body["contractVersion"] = json!(1);
         common::invoke(&self.webview, command, body).map(|success| success["data"].clone())
@@ -1310,7 +1334,8 @@ fn readonly_an_old_uncertain_upload_fails_not_applied_and_a_new_one_stays_uncert
     let host = live.read_only();
     // One Printer (a Connection's endpoint is unique), so one unresolved
     // row at a time: the old row first, then the new one.
-    let app = ReadOnlyApp::boot(&host, &["printer-readonly"]);
+    let rig = ReadOnlyRig::new(&host, &["printer-readonly"]);
+    let app = rig.boot();
     let old = app.seed_uncertain_upload("printer-readonly", &host.gate, Duration::from_secs(120));
     let row = app.reconcile(&old);
     assert_eq!(row.state, HostOperationState::Failed, "{row:?}");
@@ -1337,7 +1362,8 @@ fn readonly_an_old_uncertain_upload_fails_not_applied_and_a_new_one_stays_uncert
 fn readonly_a_blocked_port_keeps_the_row_uncertain_and_abandon_is_local_only() {
     let live = Live::from_env();
     let host = live.read_only();
-    let app = ReadOnlyApp::boot(&host, &["printer-blocked"]);
+    let rig = ReadOnlyRig::new(&host, &["printer-blocked"]);
+    let app = rig.boot();
     let id = app.seed_uncertain_upload("printer-blocked", &host.gate, Duration::from_secs(120));
 
     host.gate.block();
@@ -1357,4 +1383,54 @@ fn readonly_a_blocked_port_keeps_the_row_uncertain_and_abandon_is_local_only() {
     );
     host.assert_no_writes();
     assert!(host.seen().is_empty(), "nothing reached the host at all");
+}
+
+/// P6 Task 13: the read-only half of the end-to-end reconciliation tracer.
+/// It never uploads: a seeded `uncertain` row for a path farm3d never sent,
+/// aged past the settle period, restarted over the same roots, reconciles
+/// to `failed { notApplied }` against the real host, and the guard lifts
+/// with zero writes recorded throughout.
+#[test]
+#[ignore = "real hardware, read-only: FARM3D_MOONRAKER_HOST=<host> just p6-readonly"]
+fn readonly_reconciliation_tracer() {
+    let live = Live::from_env();
+    let host = live.read_only();
+    let rig = ReadOnlyRig::new(&host, &["printer-tracer-ro"]);
+
+    // 1. Seed an `uncertain` upload row for a never-sent path, aged past
+    //    the settle period. Nothing is sent to create it.
+    let first = rig.boot();
+    let id =
+        first.seed_uncertain_upload("printer-tracer-ro", &host.gate, Duration::from_secs(120));
+    drop(first);
+
+    // 2. Restart: rebuild the app over the same roots.
+    let restarted = rig.boot();
+
+    // 3. Reconcile against the real host: the file was never sent, so the
+    //    identity check comes back absent and the row fails `notApplied`.
+    let row = restarted.reconcile(&id);
+    assert_eq!(row.state, HostOperationState::Failed, "{row:?}");
+    assert_eq!(
+        row.failure.as_ref().map(|failure| failure.code),
+        Some(HostOperationFailureCode::NotApplied)
+    );
+
+    // 4. The guard lifted: the row is terminal, so it no longer blocks
+    //    anything for `printer-tracer-ro` (D7's own condition, direct from
+    //    the repository rather than through a command this file never
+    //    registers).
+    let unresolved = restarted
+        .storage
+        .read(|connection| Ok(host_ops_repo::has_unresolved(connection, "printer-tracer-ro")))
+        .unwrap()
+        .unwrap();
+    assert!(!unresolved, "the guard lifted once the row is terminal");
+
+    host.assert_no_writes();
+    println!(
+        "P6 read-only: the reconciliation tracer failed notApplied after a restart; \
+         {} reads, 0 writes",
+        host.seen().len()
+    );
 }

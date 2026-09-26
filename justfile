@@ -161,7 +161,7 @@ test-sim:
     sim/simctl manifest >"$out/manifest.json"
     echo "test-sim: recording to $out"
     cargo test --manifest-path src-tauri/Cargo.toml \
-        --test sim_moonraker --test sim_octoprint --test sim_elegoolink \
+        --test sim_moonraker --test sim_octoprint --test sim_elegoolink --test p6_tracer \
         -- --include-ignored --test-threads=1 --nocapture 2>&1 | tee "$out/test.log"
 
 # Fail if a tracked or staged file names one of the owner's private hosts (listed in FARM3D_PRIVATE_HOSTS or an untracked .private-hosts file)
