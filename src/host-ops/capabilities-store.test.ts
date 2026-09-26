@@ -206,6 +206,69 @@ describe("syncCapabilities", () => {
       stop();
     });
 
+    it("keeps refetching through a status change that lands before the host facts do", async () => {
+      // Ready -> Printing inside the retry window supersedes the Online
+      // refetches, but the facts still haven't landed, so the new status's
+      // sync keeps retrying instead of fetching once.
+      const answers: Array<() => PrinterCapabilities> = [
+        () => printerCapabilities({ hostFacts: null, observedAt: null }), // while Offline
+        () => printerCapabilities({ hostFacts: null, observedAt: null }), // Online
+        () => printerCapabilities({ hostFacts: null, observedAt: null }), // Printing
+        () => printerCapabilities({ observedAt: new Date().toISOString() }),
+      ];
+      let calls = 0;
+      responders.printer_capabilities = () => {
+        const answer = answers[Math.min(calls, answers.length - 1)];
+        calls += 1;
+        return answer();
+      };
+      const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+        { id: "prn-1", runtimeStatus: printerStatus("offline", "fresh", { connectionState: "offline" }) },
+      ]);
+      const { capabilities, syncCapabilities } = await import("./capabilities-store");
+      const stop = syncCapabilities(() => list);
+      await flush();
+      setList(0, "runtimeStatus", printerStatus("ready"));
+      await flush();
+      expect(calls).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(100);
+      setList(0, "runtimeStatus", printerStatus("printing"));
+      await flush();
+      expect(calls).toBe(3);
+      expect(capabilities.forPrinter("prn-1")?.hostFacts).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+      expect(calls).toBe(4);
+      expect(capabilities.forPrinter("prn-1")?.hostFacts).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(calls).toBe(4);
+      stop();
+    });
+
+    it("stops the Online refetches once the Printer is no longer Online", async () => {
+      let calls = 0;
+      responders.printer_capabilities = () => {
+        calls += 1;
+        return printerCapabilities({ hostFacts: null, observedAt: null });
+      };
+      const [list, setList] = createStore<{ id: string; runtimeStatus?: PrinterStatus }[]>([
+        { id: "prn-1", runtimeStatus: printerStatus("ready") },
+      ]);
+      const { syncCapabilities } = await import("./capabilities-store");
+      const stop = syncCapabilities(() => list);
+      await flush();
+      expect(calls).toBe(1);
+      setList(0, "runtimeStatus", printerStatus("offline", "fresh", { connectionState: "offline" }));
+      await flush();
+      expect(calls).toBe(2);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(calls).toBe(2);
+      stop();
+    });
+
     it("gives up after a bounded number of refetches, and a disposed sync schedules none", async () => {
       let calls = 0;
       responders.printer_capabilities = () => {

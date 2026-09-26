@@ -109,8 +109,10 @@ function hasFactsSince(result: PrinterCapabilities, onlineAt: number): boolean {
  *  re-reads its host facts in the background (D6), so the refetch that the
  *  status change triggers can land first and see no facts, or the previous
  *  Online's. Until a fetch carries facts observed since that transition,
- *  this refetches on a short, bounded backoff; any later status change
- *  supersedes it. Returns a disposer. */
+ *  this refetches on a short, bounded backoff. A later status change
+ *  supersedes that backoff with its own: while the Printer is still Online
+ *  and the facts still haven't landed, it keeps retrying (against the same
+ *  Online time) instead of fetching once. Returns a disposer. */
 export function syncCapabilities(
   list: () => ReadonlyArray<{ id: string; runtimeStatus?: PrinterStatus }>,
 ): () => void {
@@ -119,6 +121,8 @@ export function syncCapabilities(
     /** Bumped on every refetch a status change starts, so an older
      *  Online's retries stop. */
     const generation = new Map<string, number>();
+    /** When each Printer whose host facts haven't landed yet came Online. */
+    const factsPendingSince = new Map<string, number>();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     let disposed = false;
     onCleanup(() => {
@@ -142,6 +146,7 @@ export function syncCapabilities(
       loadCapabilities(id).then(
         (result) => {
           if (!hasFactsSince(result, onlineAt)) retry();
+          else if (factsPendingSince.get(id) === onlineAt) factsPendingSince.delete(id);
         },
         retry,
       );
@@ -157,10 +162,12 @@ export function syncCapabilities(
         seen.set(printer.id, key);
         const token = (generation.get(printer.id) ?? 0) + 1;
         generation.set(printer.id, token);
-        const cameOnline =
-          printer.runtimeStatus?.connectionState === "online" && !previous?.startsWith("online/");
-        if (cameOnline && desktopAvailable()) {
-          untilFactsLand(printer.id, token, Date.now());
+        const online = printer.runtimeStatus?.connectionState === "online";
+        if (!online) factsPendingSince.delete(printer.id);
+        else if (!previous?.startsWith("online/")) factsPendingSince.set(printer.id, Date.now());
+        const onlineAt = factsPendingSince.get(printer.id);
+        if (onlineAt !== undefined && desktopAvailable()) {
+          untilFactsLand(printer.id, token, onlineAt);
         } else {
           loadCapabilities(printer.id).catch(() => {});
         }
@@ -168,6 +175,7 @@ export function syncCapabilities(
       for (const id of [...seen.keys()]) {
         if (present.has(id)) continue;
         seen.delete(id);
+        factsPendingSince.delete(id);
         // Bumped, not deleted: a Printer that comes back starts past any
         // retry still pending from before.
         generation.set(id, (generation.get(id) ?? 0) + 1);
