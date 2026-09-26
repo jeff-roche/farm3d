@@ -880,7 +880,8 @@ executor result became `uncertain`):
 
 | File | Content |
 |---|---|
-| `mod.rs` | `HostOperationServices` (repository, executor, reconciler, stream, host-facts cache, per-Printer locks, clock) and the ts-rs domain types |
+| `mod.rs` | the ts-rs domain types, re-exporting `services.rs`'s public items |
+| `services.rs` | `HostOperationServices` (repository, executor, reconciler, stream, host-facts cache, per-Printer locks, clock), the clock and timings, the capability factory, and the test fault points |
 | `state.rs` | D3 transition function |
 | `repository.rs` | SQL: `insert_dispatching`, `mark_sent`, `transition`, `record_attempt`, `set_no_longer_pending`, `load`, `load_by_operation_id`, `list_for_printer`, `list_unresolved`, `snapshot`, `recover_after_restart`, `delete_terminal_for_printer`, `has_unresolved(printer_id)` |
 | `executor.rs` | D5 dispatch classification and commit, with injectable fault points: before `mark_sent`, after `mark_sent` but before send, after send, and after the response but before commit |

@@ -250,7 +250,8 @@ final review's fix m2 removed it (the import is now test-only).
 
 The final whole-branch review (`eba01b5..3fc6679`) found one Important
 issue and fourteen minors. These were fixed; m5, m12, m13, and the
-`services.rs` split are follow-ups (below).
+`services.rs` split were deferred, and are now fixed too (see "Follow-ups
+resolved").
 
 | Finding | Fix | Test |
 | --- | --- | --- |
@@ -299,20 +300,18 @@ Gates on the fixed tree:
 - **Host facts after an Online transition reach the UI within about
   15 s.** The backend re-reads them in the background, and the frontend
   refetches on a bounded backoff until it sees facts observed since the
-  transition (final-review fix m8). A host whose facts read takes longer
-  keeps the previous gates in the UI until the next status change. The
-  backend's own gate always uses the fresh facts, so this can only offer
-  an action the backend then refuses with `CAPABILITY_UNSUPPORTED`.
-- **Host-facts cache entries outlive a deleted Printer** in memory. They
-  are keyed by Printer id and endpoint, and never applied to any other
-  endpoint (final-review fix m7), so a re-created Printer on a new host
-  never sees them.
-- **Event order across the executor and a concurrent attempt (final-review
-  m5, not fixed).** Events are numbered at publish time, after the commit
-  and outside the per-Printer lock, so a stalled executor could publish
-  its `uncertain` snapshot after a newer state of the same row. The UI
-  would show the stale state until the next backfill. It needs the
-  executor thread stalled for a whole attempt.
+  transition (final-review fix m8). A status change inside that window
+  runs its own backoff against the same Online time (follow-up F5). A
+  host whose facts read takes longer than every backoff keeps the
+  previous gates in the UI until the next status change. The backend's
+  own gate always uses the fresh facts, so this can only offer an action
+  the backend then refuses with `CAPABILITY_UNSUPPORTED`.
+- **Host-facts cache entries outlive a deleted Printer** in memory. The
+  cache is keyed by Printer id and filtered by endpoint: each entry
+  records the endpoint it was read from, is stored only if the Printer
+  still names that endpoint when the read returns (follow-up F6), and is
+  never applied to any other endpoint (final-review fix m7). So a
+  re-created Printer on a new host never sees an old entry.
 - **The simulator tests feed Printer status by hand.** In
   `sim_moonraker.rs` and the simulator tracer, the supervisor doesn't
   observe the simulator. `observe_host` feeds the status from the real
@@ -341,15 +340,44 @@ Gates on the fixed tree:
 - A native and installed-package pass by the owner (above).
 - A web fixture that stages a file on the Failed Printer, so the disabled
   Start… is visible in web mode.
-- **m5:** publish Host Operation events under the Printer lock, or
-  re-load the row inside `publish`'s emit lock, so a stalled executor
-  can't publish a stale snapshot last.
-- **m12:** make `FakeMoonraker` assert in `Drop` that every scripted fault
-  fired, so a test can't pass without exercising its fault.
-- **m13:** replace `HOST_OPERATION_SELECT.replace("FROM host_operations",
-  …)` with a `COLUMNS` constant and two `format!`s.
-- **Split `host_ops/mod.rs`:** move the services (about 600 lines) out of
-  the wire types into a `services.rs`.
+
+The final review's deferred items (m5, m12, m13, the `services.rs`
+split) and the re-review's two minors are resolved; see below.
+
+## Follow-ups resolved
+
+None of these weakens a fail-safe invariant. Nothing re-uploads or
+re-starts by itself; start, pause, resume, and cancel are never
+`notApplied`; an upload is `notApplied` only after the settle period;
+every write keeps `mark_sent`'s two commits; and the write-ahead still
+re-checks the Connection and Slice Revision in its transaction.
+
+| Item | Fix | Test |
+| --- | --- | --- |
+| **F1 (m5)** Events are numbered at publish time. The executor's `commit_outcome` committed and published without the Printer lock, so a reconcile attempt between its commit and its publish published its newer state first and the stale `uncertain` last. | `commit_outcome` holds the Printer lock across its commit and its publish, as reconcile attempts and abandon already do. Events follow commit order, and each still carries its own commit's state. A test hook (`inject_before_outcome_publish`) opens the window. | `p6_host_ops.rs`: `an_executor_outcome_is_published_before_a_reconcile_of_the_same_row` |
+| **F2 (m12)** A scripted `FakeMoonraker` fault that never fired was dropped silently. | The fake's drop check (skipped while already panicking) fails on any unfired fault; `take_unfired_faults()` is the explicit opt-out. No existing test scripted a fault it never hit. | `p6_moonraker_adapter.rs`: `the_fake_reports_a_scripted_fault_that_never_fired` |
+| **F3 (m13)** `snapshot` built its `ranked_terminal` SELECT with a string `replace` that would silently do nothing if the text changed. | One column list (`host_operation_columns!`) and `concat!` build both SELECTs at compile time. | `repository.rs`: `snapshot_stages_only_the_newest_upload_per_host_path_others_are_still_terminal_rows`, `snapshot_includes_every_unresolved_row_and_caps_other_terminal_rows_at_20` |
+| **F4** `host_ops/mod.rs` mixed the wire types with about 600 lines of services. | A pure move into `host_ops/services.rs`, re-exported so every public path is unchanged. The spec's module layout says so. | the whole suite, unchanged |
+| **F5 (re-review minor 1)** A status change inside the post-Online backoff (Ready → Printing) cancelled it after one fetch, leaving stale capabilities. | `syncCapabilities` remembers when a Printer came Online until its facts land; a status change while it is still Online runs its own bounded backoff against that time. | `capabilities-store.test.ts`: "keeps refetching through a status change that lands before the host facts do", "stops the Online refetches once the Printer is no longer Online" |
+| **F6 (re-review minor 2)** A slow host-facts read from the old endpoint could overwrite the new endpoint's cache entry. | The store is a compare-and-set against the Printer's current Connection, made under the cache lock; a read from an endpoint the Printer no longer names is dropped. | `p6_host_ops.rs`: `a_slow_host_facts_read_from_an_old_endpoint_never_replaces_the_new_ones` |
+| **F7** This record said the cache is "keyed by Printer id and endpoint". | It is keyed by Printer id and filtered by endpoint (Known limitations). | — |
+| **F8** `endpoint_config` hardcoded `use_tls: false`. | It takes `use_tls` from the Printer's Connection, like the credential reference, and the adapter refuses TLS. Every entry point still rejects a TLS Connection, so nothing that can be stored today behaves differently. | `p6_host_ops.rs`: `a_stored_tls_connection_is_never_read_over_plain_http` |
+
+`cargo fmt --check` failed on three test files at `cc21700`
+(`common/fake_moonraker.rs`, `p6_moonraker_readonly.rs`, `p6_tracer.rs`);
+they were formatted in their own commit first.
+
+Gates on the follow-up tree:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `just build` | 0 | `tsc` and the Vite build pass. |
+| `just test` | 0 | 102 files, 1327 tests passed. |
+| `just test-rust` | 0 | 1318 passed, 0 failed, 55 ignored. The lib has 786 passed; `p6_host_ops` has 62, `p6_moonraker_adapter` 40. |
+| `just gen-contracts`, then `git diff --exit-code src/generated` | 0 | No diff. |
+| `cargo fmt --check` (in `src-tauri`) | 0 | Clean. |
+| `just sim-up && FARM3D_SIM_REQUIRED=1 just test-sim && just sim-down` | 0 | 38 of 38: `p6_tracer` 3, `sim_elegoolink` 7, `sim_moonraker` 21 (234.50 s), `sim_octoprint` 7. The run recorded `sim-runs/20260926T085524Z` (not committed). |
+| `FARM3D_PRIVATE_HOSTS="<owner denylist, 4 strings>" just check-hosts` | 0 | Before each commit. |
 
 ## Documentation updated in this task
 
