@@ -45,6 +45,17 @@ moonraker-live mode="probe":
         -- --ignored --exact --nocapture
 
 
+# Run the ignored P6 read-only real-host suite: probe, subscribe, and query only, through a gate that refuses every write. FARM3D_MOONRAKER_HOST (required), FARM3D_MOONRAKER_PORT, FARM3D_MOONRAKER_API_KEY[_FILE]
+p6-readonly:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_MOONRAKER_HOST:-}" ]; then
+        echo "error: set FARM3D_MOONRAKER_HOST, e.g. FARM3D_MOONRAKER_HOST=192.0.2.10 just p6-readonly" >&2
+        exit 1
+    fi
+    cargo test --manifest-path src-tauri/Cargo.toml --test p6_moonraker_readonly \
+        -- --ignored --test-threads=1 --nocapture
+
 # Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
 test-octoprint-live:
     #!/usr/bin/env bash

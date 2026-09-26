@@ -188,7 +188,8 @@ impl MoonrakerSim {
     }
 
     /// Returns the simulator to its baseline: default mode, no faults,
-    /// Klipper ready, every heater target at 0. Klipper's FIRMWARE_RESTART
+    /// Klipper ready, no print running or paused, every heater target at 0.
+    /// Klipper's FIRMWARE_RESTART
     /// cannot reset simulavr's emulated MCU, so a Klipper that is not ready
     /// is recovered by restarting its container.
     pub fn reset(&self) {
@@ -200,6 +201,7 @@ impl MoonrakerSim {
             self.restart_klipper();
         }
         self.wait_ready();
+        self.cancel_any_print();
         for heater in self.heaters() {
             self.gcode(&format!("SET_HEATER_TEMPERATURE HEATER={heater} TARGET=0"));
         }
@@ -294,6 +296,92 @@ impl MoonrakerSim {
             &[],
         )
         .unwrap_or_else(|error| panic!("query {objects}: {error}"))
+    }
+
+    /// The API key the adapter needs in [`Mode::ApiKey`]; `None` otherwise.
+    pub fn api_key(&self) -> Option<String> {
+        self.api_key.borrow().clone()
+    }
+
+    /// `print_stats.state` and `print_stats.filename` (empty maps to `None`).
+    pub fn print_stats(&self) -> (String, Option<String>) {
+        let status = self.query("print_stats");
+        let stats = &status["result"]["status"]["print_stats"];
+        let state = stats["state"].as_str().unwrap_or_default().to_string();
+        let filename = stats["filename"]
+            .as_str()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        (state, filename)
+    }
+
+    /// Every heater's target, e.g. `[("extruder", 0.0), ("heater_bed", 0.0)]`.
+    pub fn heater_targets(&self) -> Vec<(String, f64)> {
+        let heaters = self.heaters();
+        if heaters.is_empty() {
+            return Vec::new();
+        }
+        let status = self.query(&heaters.join("&"));
+        heaters
+            .into_iter()
+            .map(|heater| {
+                let target = status["result"]["status"][heater.as_str()]["target"]
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("{heater} reports no target: {status}"));
+                (heater, target)
+            })
+            .collect()
+    }
+
+    /// `GET /server/history/list?<query>`, straight from Moonraker.
+    pub fn history(&self, query: &str) -> Value {
+        http::get_json(&self.control, &format!("/server/history/list?{query}"), &[])
+            .unwrap_or_else(|error| panic!("history/list?{query}: {error}"))
+    }
+
+    /// Paths (relative to the `gcodes` root) of every file whose path starts
+    /// with `prefix`.
+    pub fn gcode_files(&self, prefix: &str) -> Vec<String> {
+        http::get_json(&self.control, "/server/files/list?root=gcodes", &[])
+            .unwrap_or_else(|error| panic!("files/list: {error}"))["result"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|file| file["path"].as_str())
+            .filter(|path| path.starts_with(prefix))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Cancels whatever print is running or paused (through the control
+    /// path) and waits until `print_stats` leaves `printing`/`paused`, so a
+    /// test never inherits another test's print.
+    pub fn cancel_any_print(&self) {
+        let busy = |state: &str| matches!(state, "printing" | "paused");
+        if !busy(&self.print_stats().0) {
+            return;
+        }
+        let response = http::post_json(&self.control, "/printer/print/cancel", &[], &json!({}))
+            .unwrap_or_else(|error| panic!("cancel: {error}"));
+        assert_eq!(
+            response.status, 200,
+            "cancel answered HTTP {}",
+            response.status
+        );
+        wait_until("the print to stop", Duration::from_secs(60), || {
+            (!busy(&self.print_stats().0)).then_some(())
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// Sends G-code without waiting for it, for a script that holds the
+    /// G-code queue (a `G4` dwell). The answer, or its timeout, is ignored.
+    pub fn gcode_in_background(&self, script: &str) -> std::thread::JoinHandle<()> {
+        let control = self.control.clone();
+        let body = json!({"script": script});
+        std::thread::spawn(move || {
+            let _ = http::post_json(&control, "/printer/gcode/script", &[], &body);
+        })
     }
 
     /// The object names Klipper reports (`printer.objects.list`).
