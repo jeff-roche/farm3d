@@ -17,7 +17,6 @@ use std::task::Poll;
 use std::time::Duration;
 
 use reqwest::header::HeaderValue;
-use reqwest::multipart::{Form, Part};
 use reqwest::{Body, Client, Method, RequestBuilder};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -183,8 +182,9 @@ impl MoonrakerCapabilities {
             .send()
             .await
             .map_err(read_transport_error)?;
-        files::classify_read_status(response.status().as_u16())?;
+        let status = response.status().as_u16();
         let body = response.bytes().await.map_err(read_transport_error)?;
+        files::classify_read_response(status, &body)?;
         serde_json::from_slice(&body)
             .map_err(|_| ConnectionError::Protocol("the response was not JSON".into()))
     }
@@ -256,16 +256,8 @@ impl ArtifactStaging for MoonrakerCapabilities {
         artifact: &StagedArtifact,
         body: Box<dyn AsyncRead + Send + Unpin>,
     ) -> Result<(), CommandFailure> {
-        let form = UploadForm::for_artifact(artifact);
-        let mut multipart = Form::new();
-        for (name, value) in form.text_fields() {
-            multipart = multipart.text(*name, value.clone());
-        }
-        let file = Part::stream_with_length(Body::wrap_stream(upload_stream(body)), artifact.size)
-            .file_name(form.file_name().to_string())
-            .mime_str(files::UPLOAD_FILE_CONTENT_TYPE)
-            .expect("a constant, valid MIME type");
-        multipart = multipart.part(files::UPLOAD_FILE_FIELD, file);
+        let multipart = UploadForm::for_artifact(artifact)
+            .into_multipart(Body::wrap_stream(upload_stream(body)), artifact.size);
         let request = self
             .request(
                 Method::POST,
@@ -300,6 +292,11 @@ impl ArtifactStaging for MoonrakerCapabilities {
         let mut byte_count: u64 = 0;
         while let Some(chunk) = response.chunk().await.map_err(read_transport_error)? {
             byte_count += chunk.len() as u64;
+            // A body longer than the artifact is not ours; stop rather than
+            // read (or wait for) the rest of it.
+            if let Some(outcome) = files::overran_size(artifact, byte_count) {
+                return Ok(outcome);
+            }
             hasher.update(&chunk);
         }
         Ok(files::compare_download(

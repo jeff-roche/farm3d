@@ -308,7 +308,10 @@ fn status_message(error: &ConnectionError) -> &'static str {
     match error {
         ConnectionError::Unreachable(_) => "The Printer could not be reached.",
         ConnectionError::Auth(_) => "The Printer rejected authentication.",
-        ConnectionError::Protocol(_) => "The Printer returned an unexpected response.",
+        // The observation adapters never produce `HostNotReady`.
+        ConnectionError::Protocol(_) | ConnectionError::HostNotReady => {
+            "The Printer returned an unexpected response."
+        }
         ConnectionError::Timeout => "The Printer did not respond in time.",
     }
 }

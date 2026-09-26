@@ -236,6 +236,11 @@ pub enum ConnectionError {
     /// Reached the host; it spoke something we could not parse.
     Protocol(String),
     Timeout,
+    /// Reached Moonraker; it answered 503 because Klipper is not connected
+    /// (`Klippy Host not connected` or `Klippy Disconnected`). P6's capability
+    /// reads report it so reconciliation can tell "Klipper went away" (D5)
+    /// from an unreadable answer. The observation adapters never produce it.
+    HostNotReady,
 }
 
 impl std::fmt::Display for ConnectionError {
@@ -245,6 +250,7 @@ impl std::fmt::Display for ConnectionError {
             ConnectionError::Auth(m) => write!(f, "The printer rejected the credentials: {m}"),
             ConnectionError::Protocol(m) => write!(f, "Unexpected response from the printer: {m}"),
             ConnectionError::Timeout => write!(f, "The printer did not respond in time"),
+            ConnectionError::HostNotReady => write!(f, "Klipper isn't ready on the printer"),
         }
     }
 }

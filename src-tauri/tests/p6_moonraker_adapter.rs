@@ -375,6 +375,47 @@ async fn locate_errors_are_never_absent() {
     ));
 }
 
+#[tokio::test]
+async fn locate_stops_reading_a_chunked_body_once_it_passes_the_size() {
+    // No `Content-Length`, a body far larger than the artifact, and a body
+    // that does not end for 5 s: reading to the end would time out.
+    let fake = FakeMoonraker::start();
+    let bytes = gcode();
+    let mut oversized = bytes.clone();
+    oversized.extend(std::iter::repeat_n(b';', 64 * 1024));
+    fake.put_file(HOST_PATH, &oversized);
+    fake.fault(
+        Route::Download,
+        Fault::ChunkedDownloadThenStall(Duration::from_secs(5)),
+    );
+
+    let started = std::time::Instant::now();
+    let outcome = adapter(&fake).locate(&artifact_for(&bytes)).await;
+
+    match outcome {
+        Ok(LocateOutcome::Differs {
+            reason: DiffersReason::Size { actual },
+        }) => assert!(actual > bytes.len() as u64, "actual {actual}"),
+        other => panic!("expected Differs by size, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn locate_hashes_a_complete_chunked_body() {
+    let fake = FakeMoonraker::start();
+    let bytes = gcode();
+    fake.put_file(HOST_PATH, &bytes);
+    fake.fault(
+        Route::Download,
+        Fault::ChunkedDownloadThenStall(Duration::ZERO),
+    );
+    assert_eq!(
+        adapter(&fake).locate(&artifact_for(&bytes)).await,
+        Ok(LocateOutcome::Matches)
+    );
+}
+
 // --- PrintControl ------------------------------------------------------------------
 
 async fn staged(fake: &FakeMoonraker) {
@@ -732,6 +773,49 @@ async fn host_job_state_queries_objects_only_when_klipper_is_ready() {
     );
     let targets: Vec<String> = fake.requests().iter().map(|r| r.target.clone()).collect();
     assert_eq!(targets, ["/server/info"]);
+}
+
+#[tokio::test]
+async fn a_klippy_503_on_a_read_is_host_not_ready() {
+    let fake = FakeMoonraker::start();
+    // server.info can still say `ready` while objects already fail (a
+    // restart between the two reads).
+    fake.fault(Route::ObjectsList, Fault::klippy_host_not_connected());
+    assert_eq!(
+        adapter(&fake).host_job_state().await,
+        Err(ConnectionError::HostNotReady)
+    );
+    fake.fault(Route::ObjectsQuery, Fault::klippy_disconnected());
+    assert_eq!(
+        adapter(&fake).host_job_state().await,
+        Err(ConnectionError::HostNotReady)
+    );
+    fake.fault(Route::History, Fault::klippy_host_not_connected());
+    assert_eq!(
+        adapter(&fake)
+            .job_history(HistoryQuery {
+                since_epoch_s: None,
+                limit: 50
+            })
+            .await,
+        Err(ConnectionError::HostNotReady)
+    );
+    // A 503 that is not Klippy's is not evidence about Klipper.
+    fake.fault(
+        Route::ObjectsList,
+        Fault::respond(503, "Service Unavailable"),
+    );
+    assert!(matches!(
+        adapter(&fake).host_job_state().await,
+        Err(ConnectionError::Protocol(_))
+    ));
+    // And no raw body leaks through the new variant.
+    let text = format!(
+        "{} {:?}",
+        ConnectionError::HostNotReady,
+        ConnectionError::HostNotReady
+    );
+    assert!(!text.contains(TRACEBACK_MARKER));
 }
 
 #[tokio::test]

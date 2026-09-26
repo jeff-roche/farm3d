@@ -1,12 +1,14 @@
-//! P6 D4/D5/D10, pure: the Moonraker capability adapter's request shapes,
-//! response classification, and response parsers. No I/O lives here —
-//! `control` owns the HTTP client and calls into this module.
+//! P6 D4/D5/D10, pure: the Moonraker capability adapter's request shapes
+//! (including the upload's multipart form), response classification, and
+//! response parsers. No I/O lives here — `control` owns the HTTP client and
+//! calls into this module.
 //!
 //! Raw host bodies never leave this module. Moonraker's error bodies carry
 //! Python tracebacks with host file paths (spike 3), so a body is parsed for
 //! the one field a decision needs (`error.message`) and then dropped. No
 //! error string built here quotes a body.
 
+use reqwest::multipart::{Form, Part};
 use serde_json::Value;
 
 use super::protocol::tool_objects;
@@ -21,14 +23,15 @@ use crate::connections::ConnectionError;
 /// Moonraker's file root that `host_path` is relative to.
 pub const UPLOAD_ROOT: &str = "gcodes";
 /// The multipart part that carries the G-code body.
-pub const UPLOAD_FILE_FIELD: &str = "file";
-pub const UPLOAD_FILE_CONTENT_TYPE: &str = "application/octet-stream";
+const UPLOAD_FILE_FIELD: &str = "file";
+const UPLOAD_FILE_CONTENT_TYPE: &str = "application/octet-stream";
 
 // --- D4: the upload form --------------------------------------------------
 
 /// The upload's multipart form, in wire order: `root`, `path`, `checksum`,
-/// then the `file` part. Its only constructor takes a `StagedArtifact`, and
-/// nothing can add a part to it, so there is no way to send Moonraker's
+/// then the `file` part. Its only constructor takes a `StagedArtifact`,
+/// nothing can add a part to it, and [`UploadForm::into_multipart`] is the
+/// only way to a `reqwest` form — so no code path can send Moonraker's
 /// `print` field (which would start the print on upload).
 #[derive(Clone, PartialEq, Debug)]
 pub struct UploadForm {
@@ -52,23 +55,18 @@ impl UploadForm {
         }
     }
 
-    /// The text parts, in the order they go on the wire (before `file`).
-    pub fn text_fields(&self) -> &[(&'static str, String)] {
-        &self.text_fields
-    }
-
-    /// The `file` part's filename (`<slr-id>.gcode`).
-    pub fn file_name(&self) -> &str {
-        &self.file_name
-    }
-
-    /// Every part name, in wire order, the `file` part last.
-    pub fn part_names(&self) -> Vec<&'static str> {
-        self.text_fields
-            .iter()
-            .map(|(name, _)| *name)
-            .chain(std::iter::once(UPLOAD_FILE_FIELD))
-            .collect()
+    /// The request body: the text parts in order, then `body` (`size`
+    /// bytes) as the `file` part named `<slr-id>.gcode`.
+    pub fn into_multipart(self, body: reqwest::Body, size: u64) -> Form {
+        let mut form = Form::new();
+        for (name, value) in self.text_fields {
+            form = form.text(name, value);
+        }
+        let file = Part::stream_with_length(body, size)
+            .file_name(self.file_name)
+            .mime_str(UPLOAD_FILE_CONTENT_TYPE)
+            .expect("a constant, valid MIME type");
+        form.part(UPLOAD_FILE_FIELD, file)
     }
 }
 
@@ -217,12 +215,22 @@ pub fn classify_write_transport_failure(is_connect: bool) -> CommandFailure {
     }
 }
 
-/// A read's HTTP status. A read never becomes `Absent` or a default value
-/// on an error status: it is an `Err`, and the caller stays inconclusive.
-pub fn classify_read_status(status: u16) -> Result<(), ConnectionError> {
+/// A read's HTTP status (and, for a 503, the error `message`). A read never
+/// becomes `Absent` or a default value on an error status: it is an `Err`,
+/// and the caller stays inconclusive. A 503 from Klippy is `HostNotReady`,
+/// which D5 treats as "Klipper went away"; any other 503 says nothing about
+/// Klipper and stays a protocol error.
+pub fn classify_read_response(status: u16, body: &[u8]) -> Result<(), ConnectionError> {
     match status {
         200..=299 => Ok(()),
         401 | 403 => Err(ConnectionError::Auth(format!("HTTP {status}"))),
+        503 if matches!(
+            error_message(body).as_deref().map(str::trim),
+            Some("Klippy Host not connected" | "Klippy Disconnected")
+        ) =>
+        {
+            Err(ConnectionError::HostNotReady)
+        }
         _ => Err(ConnectionError::Protocol(format!(
             "unexpected HTTP {status}"
         ))),
@@ -249,7 +257,7 @@ pub fn locate_step(
         return Ok(LocateStep::Decided(LocateOutcome::Absent));
     }
     if status != 200 {
-        classify_read_status(status)?;
+        classify_read_response(status, b"")?;
         return Err(ConnectionError::Protocol(format!(
             "unexpected HTTP {status}"
         )));
@@ -262,6 +270,15 @@ pub fn locate_step(
         }
         _ => Ok(LocateStep::HashBody),
     }
+}
+
+/// While streaming: once more bytes than the artifact's size have arrived,
+/// the answer is `Differs { Size }` (with the bytes read so far, a lower
+/// bound on the real size), and the rest of the body is not read.
+pub fn overran_size(artifact: &StagedArtifact, byte_count: u64) -> Option<LocateOutcome> {
+    (byte_count > artifact.size).then_some(LocateOutcome::Differs {
+        reason: DiffersReason::Size { actual: byte_count },
+    })
 }
 
 /// The streamed body's byte count and lower-case SHA-256 against the
@@ -400,7 +417,9 @@ fn parse_print_stats_state(value: &str) -> PrintStatsState {
 
 /// Parses the [`job_state_query_path`] answer, asked while `server.info`
 /// reported Klipper ready. `webhooks.state` is Klipper's own, fresher view:
-/// if it is no longer `ready`, no print snapshot is reported.
+/// if it is no longer `ready`, no print snapshot is reported. A body without
+/// it is malformed, never assumed ready, because a ready snapshot can prove
+/// a start or a control verb applied (D5).
 pub fn parse_host_job_state(
     body: &Value,
     objects: &[String],
@@ -408,14 +427,12 @@ pub fn parse_host_job_state(
     let status = result(body, "objects query")?
         .get("status")
         .ok_or_else(|| malformed("objects query"))?;
-    let klippy_state = match status
+    let klippy_state = status
         .get("webhooks")
         .and_then(|webhooks| webhooks.get("state"))
         .and_then(Value::as_str)
-    {
-        Some(state) => parse_klippy_state(state).ok_or_else(|| malformed("objects query"))?,
-        None => KlippyState::Ready,
-    };
+        .and_then(parse_klippy_state)
+        .ok_or_else(|| malformed("objects query"))?;
     let number = |object: &str, field: &str| {
         status
             .get(object)
@@ -563,34 +580,51 @@ mod tests {
 
     // --- the upload form ---------------------------------------------------
 
-    #[test]
-    fn the_upload_form_sends_root_path_checksum_then_file_in_order() {
-        let form = UploadForm::for_artifact(&artifact());
-        assert_eq!(form.part_names(), ["root", "path", "checksum", "file"]);
-        assert_eq!(
-            form.text_fields(),
-            [
-                ("root", "gcodes".to_string()),
-                ("path", "farm3d".to_string()),
-                ("checksum", SHA.to_string()),
-            ]
-        );
-        assert_eq!(form.file_name(), "slr-1.gcode");
+    /// The multipart body `into_multipart` actually puts on the wire.
+    async fn rendered(artifact: &StagedArtifact, body: &'static [u8]) -> String {
+        use futures_util::TryStreamExt;
+        let chunks: Vec<_> = UploadForm::for_artifact(artifact)
+            .into_multipart(reqwest::Body::from(body), body.len() as u64)
+            .into_stream()
+            .try_collect()
+            .await
+            .unwrap();
+        String::from_utf8(chunks.concat()).unwrap()
     }
 
-    #[test]
-    fn the_built_form_has_no_print_field() {
-        let form = UploadForm::for_artifact(&artifact());
-        assert!(!form.part_names().contains(&"print"));
-        assert!(form.text_fields().iter().all(|(name, _)| *name != "print"));
+    /// Each part's `name="..."`, in wire order.
+    fn part_names(rendered: &str) -> Vec<&str> {
+        rendered
+            .split("form-data; name=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap())
+            .collect()
     }
 
-    #[test]
-    fn the_checksum_is_always_sent_lower_case() {
+    #[tokio::test]
+    async fn the_upload_form_sends_root_path_checksum_then_file_in_order() {
+        let wire = rendered(&artifact(), b"G28\n").await;
+        assert_eq!(part_names(&wire), ["root", "path", "checksum", "file"]);
+        assert!(wire.contains("name=\"root\"\r\n\r\ngcodes\r\n"));
+        assert!(wire.contains("name=\"path\"\r\n\r\nfarm3d\r\n"));
+        assert!(wire.contains(&format!("name=\"checksum\"\r\n\r\n{SHA}\r\n")));
+        assert!(wire.contains("name=\"file\"; filename=\"slr-1.gcode\""));
+        assert!(wire.contains("Content-Type: application/octet-stream\r\n\r\nG28\n\r\n"));
+    }
+
+    #[tokio::test]
+    async fn the_built_form_has_no_print_field() {
+        let wire = rendered(&artifact(), b"G28\n").await;
+        assert!(!part_names(&wire).contains(&"print"));
+        assert!(!wire.contains("print"));
+    }
+
+    #[tokio::test]
+    async fn the_checksum_is_always_sent_lower_case() {
         let mut upper = artifact();
         upper.sha256 = SHA.to_ascii_uppercase();
-        let form = UploadForm::for_artifact(&upper);
-        assert_eq!(form.text_fields()[2], ("checksum", SHA.to_string()));
+        let wire = rendered(&upper, b"G28\n").await;
+        assert!(wire.contains(&format!("name=\"checksum\"\r\n\r\n{SHA}\r\n")));
     }
 
     // --- request paths -------------------------------------------------------
@@ -805,15 +839,37 @@ mod tests {
 
     #[test]
     fn read_statuses_never_quote_a_body() {
-        assert_eq!(classify_read_status(200), Ok(()));
+        assert_eq!(classify_read_response(200, b""), Ok(()));
         assert_eq!(
-            classify_read_status(401),
+            classify_read_response(401, b"{\"error\":{\"message\":\"Unauthorized\"}}"),
             Err(ConnectionError::Auth("HTTP 401".to_string()))
         );
         assert_eq!(
-            classify_read_status(503),
-            Err(ConnectionError::Protocol("unexpected HTTP 503".to_string()))
+            classify_read_response(500, fixture_bytes!("error_400_start_busy.json")),
+            Err(ConnectionError::Protocol("unexpected HTTP 500".to_string()))
         );
+    }
+
+    #[test]
+    fn a_read_503_from_klippy_is_host_not_ready_and_any_other_503_is_not() {
+        assert_eq!(
+            classify_read_response(503, fixture_bytes!("error_503_objects_list_503.json")),
+            Err(ConnectionError::HostNotReady)
+        );
+        let disconnected = br#"{"error":{"code":503,"message":"Klippy Disconnected"}}"#;
+        assert_eq!(
+            classify_read_response(503, disconnected),
+            Err(ConnectionError::HostNotReady)
+        );
+        for body in [
+            &br#"{"error":{"code":503,"message":"Service Unavailable"}}"#[..],
+            b"",
+        ] {
+            assert_eq!(
+                classify_read_response(503, body),
+                Err(ConnectionError::Protocol("unexpected HTTP 503".to_string()))
+            );
+        }
     }
 
     // --- locate -----------------------------------------------------------------
@@ -843,6 +899,17 @@ mod tests {
         for status in [500, 503, 302, 403] {
             assert!(locate_step(status, None, 5517).is_err(), "status {status}");
         }
+    }
+
+    #[test]
+    fn overran_size_stops_only_past_the_artifact_size() {
+        assert_eq!(overran_size(&artifact(), 5517), None);
+        assert_eq!(
+            overran_size(&artifact(), 5518),
+            Some(LocateOutcome::Differs {
+                reason: DiffersReason::Size { actual: 5518 }
+            })
+        );
     }
 
     #[test]
@@ -975,6 +1042,25 @@ mod tests {
     }
 
     #[test]
+    fn job_state_without_webhooks_is_malformed_never_ready() {
+        // A body missing Klipper's own state must never read as Ready:
+        // a Ready snapshot can become reconciliation proof.
+        let body = json!({"result": {"status": {
+            "print_stats": {"state": "printing", "filename": "farm3d/x.gcode"},
+            "extruder": {"temperature": 21.0, "target": 0.0}
+        }}});
+        assert!(matches!(
+            parse_host_job_state(&body, &objects(&["extruder"])),
+            Err(ConnectionError::Protocol(_))
+        ));
+        let no_state = json!({"result": {"status": {
+            "webhooks": {"state_message": "Printer is ready"},
+            "print_stats": {"state": "printing", "filename": "farm3d/x.gcode"}
+        }}});
+        assert!(parse_host_job_state(&no_state, &[]).is_err());
+    }
+
+    #[test]
     fn job_state_on_a_no_bed_printer_has_no_bed_rather_than_zero() {
         let body = json!({"result": {"status": {
             "webhooks": {"state": "ready"},
@@ -1008,6 +1094,14 @@ mod tests {
         assert_eq!(state.bed, None);
     }
 
+    fn job_ids(body: &Value) -> Vec<u64> {
+        parse_history_list(body)
+            .unwrap()
+            .iter()
+            .map(|job| job.job_id)
+            .collect()
+    }
+
     #[test]
     fn history_parses_the_simulator_capture_newest_first() {
         let jobs = parse_history_list(&fixture!("history_list_desc.json")).unwrap();
@@ -1015,9 +1109,35 @@ mod tests {
             jobs.iter().map(|job| job.job_id).collect::<Vec<_>>(),
             [4, 3, 2, 1]
         );
-        assert_eq!(jobs[0].filename, "farm3d/task8-job6.gcode");
+        assert_eq!(jobs[0].filename, "farm3d/task8-job4.gcode");
         assert_eq!(jobs[0].status, "completed");
-        assert_eq!(jobs[0].start_time_epoch_s, 1790381446.2650614);
+        assert_eq!(jobs[0].start_time_epoch_s, 1790383031.2507887);
+    }
+
+    // D5 "Confirming the parameters": the same four jobs, captured from the
+    // v0.11.0 simulator with each query. Moonraker honours `order` and
+    // `since` (on `start_time`), and a `limit` keeps the newest under desc.
+
+    #[test]
+    fn the_simulator_honours_order_asc() {
+        assert_eq!(job_ids(&fixture!("history_list_asc.json")), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_simulator_keeps_the_newest_jobs_under_a_limit_with_order_desc() {
+        assert_eq!(job_ids(&fixture!("history_list_desc_limit2.json")), [4, 3]);
+    }
+
+    #[test]
+    fn the_simulator_honours_since_on_start_time() {
+        // Captured with `since=1790383010`, between job 2 (…009.20) and
+        // job 3 (…020.22).
+        let jobs = parse_history_list(&fixture!("history_list_desc_since.json")).unwrap();
+        assert_eq!(
+            jobs.iter().map(|job| job.job_id).collect::<Vec<_>>(),
+            [4, 3]
+        );
+        assert!(jobs.iter().all(|job| job.start_time_epoch_s > 1790383010.0));
     }
 
     #[test]

@@ -82,8 +82,8 @@ mdns-sd = "0.21"
 # OctoPrint's REST API and Moonraker's capability adapter. No default
 # features: no TLS backend (matching tokio-tungstenite, so neither adapter
 # speaks TLS yet), no system-proxy lookup, no HTTP/2. `multipart` and
-# `stream` carry the streamed G-code upload (P6 D4). Already in the lockfile
-# via Tauri.
+# `stream` carry the streamed G-code upload (P6 D4); they add `mime_guess`
+# and `unicase` to the lockfile. The rest was already there via Tauri.
 reqwest = { version = "0.13", default-features = false, features = ["multipart", "stream"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 sha2 = "0.10"

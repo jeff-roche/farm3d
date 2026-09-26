@@ -75,6 +75,9 @@ pub enum Fault {
     ApplyStartThenDrop(StartTrace),
     /// Pause, resume, cancel: answer `{"result":"ok"}` and change nothing.
     OkWithoutEffect,
+    /// Download: send the file with chunked encoding (no `Content-Length`),
+    /// then hold the connection open this long before ending the body.
+    ChunkedDownloadThenStall(Duration),
 }
 
 impl Fault {
@@ -521,6 +524,8 @@ enum Outcome {
     Respond(Response),
     /// Close the connection without answering.
     Drop,
+    /// A chunked 200 carrying these bytes, then a stall before the end.
+    ChunkedThenStall(Vec<u8>, Duration),
 }
 
 struct RequestHead {
@@ -761,7 +766,23 @@ fn handle_connection(stream: TcpStream, state: &Arc<Mutex<FakeState>>) {
         Outcome::Drop => {
             let _ = stream.shutdown(Shutdown::Both);
         }
+        Outcome::ChunkedThenStall(bytes, stall) => {
+            write_chunked_then_stall(&mut stream, &bytes, stall)
+        }
     }
+}
+
+fn write_chunked_then_stall(stream: &mut TcpStream, bytes: &[u8], stall: Duration) {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    let _ = stream.write_all(head.as_bytes());
+    for chunk in bytes.chunks(4096) {
+        let _ = write!(stream, "{:x}\r\n", chunk.len());
+        let _ = stream.write_all(chunk);
+        let _ = stream.write_all(b"\r\n");
+    }
+    let _ = stream.flush();
+    std::thread::sleep(stall);
+    let _ = stream.write_all(b"0\r\n\r\n");
 }
 
 fn record(
@@ -812,6 +833,11 @@ fn handle(
                     .unwrap_or_default()
                     .trim_start_matches("/server/files/gcodes/"),
             );
+            if let (Some(Fault::ChunkedDownloadThenStall(stall)), Some(bytes)) =
+                (&fault, state.file(&path))
+            {
+                return Outcome::ChunkedThenStall(bytes, *stall);
+            }
             Outcome::Respond(match state.file(&path) {
                 Some(bytes) => Response {
                     status: 200,
