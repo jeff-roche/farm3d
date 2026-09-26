@@ -31,14 +31,31 @@ use super::{
     HostOperationKind, HostOperationLastAttempt, HostOperationResolution, HostOperationState,
 };
 
-/// The columns [`decode_row`] reads, in the order it reads them. `WHERE`
-/// clauses append after this.
-const HOST_OPERATION_SELECT: &str =
-    "SELECT id, printer_id, kind, slice_revision_id, source_host_operation_id, \
-     gcode_sha256, gcode_size, host_path, history_mark, endpoint_json, state, failure_json, \
-     resolution_json, attempts, last_attempt_at, last_attempt_reason, no_longer_pending, \
-     abandoned_at, abandon_note, created_at, dispatched_at, uncertain_since, resolved_at \
-     FROM host_operations";
+/// The columns [`decode_row`] reads, in the order it reads them. A macro,
+/// not a `const`, so `concat!` can build each query shape from it at
+/// compile time.
+macro_rules! host_operation_columns {
+    () => {
+        "id, printer_id, kind, slice_revision_id, source_host_operation_id, \
+         gcode_sha256, gcode_size, host_path, history_mark, endpoint_json, state, failure_json, \
+         resolution_json, attempts, last_attempt_at, last_attempt_reason, no_longer_pending, \
+         abandoned_at, abandon_note, created_at, dispatched_at, uncertain_since, resolved_at"
+    };
+}
+
+/// Every row's columns. `WHERE` clauses append after this.
+const HOST_OPERATION_SELECT: &str = concat!(
+    "SELECT ",
+    host_operation_columns!(),
+    " FROM host_operations"
+);
+
+/// The same columns over [`snapshot`]'s `ranked_terminal` window.
+const RANKED_TERMINAL_SELECT: &str = concat!(
+    "SELECT ",
+    host_operation_columns!(),
+    " FROM ranked_terminal"
+);
 
 fn to_json(value: &impl Serialize) -> String {
     serde_json::to_string(value).expect("host_ops wire types always serialize")
@@ -214,7 +231,7 @@ pub fn snapshot(
          {select_ranked} WHERE rn <= 20
          ORDER BY created_at DESC, id DESC",
         select = HOST_OPERATION_SELECT,
-        select_ranked = HOST_OPERATION_SELECT.replace("FROM host_operations", "FROM ranked_terminal"),
+        select_ranked = RANKED_TERMINAL_SELECT,
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement
