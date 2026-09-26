@@ -141,6 +141,11 @@ describe("capabilityStateLabel", () => {
     expect(capabilityStateLabel(state, null)).toEqual({ text: "No Connection", severity: "neutral" });
   });
 
+  it("falls back to capitalizing an unrecognized adapter kind", () => {
+    const state: CapabilityState = { status: "unsupported", reason: "adapter", detail: "x" };
+    expect(capabilityStateLabel(state, "prusalink")).toMatchObject({ text: "Not supported by Prusalink" });
+  });
+
   it("labels a not-yet-verified capability", () => {
     const state: CapabilityState = { status: "unsupported", reason: "notVerified", detail: "Awaiting live evidence." };
     expect(capabilityStateLabel(state, "octoprint")).toEqual({ text: "Not verified yet", severity: "neutral" });

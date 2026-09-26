@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store";
 import { command, desktopAvailable } from "../ipc/client";
-import type { CommandError } from "../generated/contracts/command/CommandError";
+import { notFound } from "../ipc/local-errors";
 import type { WebHostOpsFixture } from "./web-fixtures";
 import type { AdapterCapabilityRow, PrinterCapabilities } from "./types";
 
@@ -27,17 +27,6 @@ export const capabilities = {
   forPrinter: (printerId: string): PrinterCapabilities | undefined => state.byPrinter[printerId],
   adapterMatrix: (): AdapterCapabilityRow[] => state.adapterMatrix,
 };
-
-function notFound(id: string): CommandError {
-  return {
-    contractVersion: 1,
-    code: "NOT_FOUND",
-    message: id,
-    recovery: [],
-    retryable: false,
-    details: { entityId: id },
-  };
-}
 
 let webFixture: WebHostOpsFixture | undefined;
 
