@@ -1423,8 +1423,7 @@ fn readonly_reconciliation_tracer() {
     // 1. Seed an `uncertain` upload row for a never-sent path, aged past
     //    the settle period. Nothing is sent to create it.
     let first = rig.boot();
-    let id =
-        first.seed_uncertain_upload("printer-tracer-ro", &host.gate, Duration::from_secs(120));
+    let id = first.seed_uncertain_upload("printer-tracer-ro", &host.gate, Duration::from_secs(120));
     drop(first);
 
     // 2. Restart: rebuild the app over the same roots.
@@ -1456,7 +1455,12 @@ fn readonly_reconciliation_tracer() {
     //    registers).
     let unresolved = restarted
         .storage
-        .read(|connection| Ok(host_ops_repo::has_unresolved(connection, "printer-tracer-ro")))
+        .read(|connection| {
+            Ok(host_ops_repo::has_unresolved(
+                connection,
+                "printer-tracer-ro",
+            ))
+        })
         .unwrap()
         .unwrap();
     assert!(!unresolved, "the guard lifted once the row is terminal");

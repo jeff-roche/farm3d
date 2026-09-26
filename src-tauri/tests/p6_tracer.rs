@@ -259,7 +259,8 @@ impl Backend for FakeBackend {
     }
 
     fn locate(&self, host_path: &str, sha256: &str, size: u64) -> LocateOutcome {
-        let adapter = MoonrakerCapabilities::new(&self.connection(), None, fake_moonraker_timings());
+        let adapter =
+            MoonrakerCapabilities::new(&self.connection(), None, fake_moonraker_timings());
         block_on(adapter.locate(&StagedArtifact {
             host_path: host_path.to_string(),
             sha256: sha256.to_string(),
@@ -290,7 +291,11 @@ impl Trigger {
         self.arm_with(before, || Toxiproxy::discover().unwrap().reset());
     }
 
-    fn arm_with(&self, before: impl FnOnce() + Send + 'static, after: impl FnOnce() + Send + 'static) {
+    fn arm_with(
+        &self,
+        before: impl FnOnce() + Send + 'static,
+        after: impl FnOnce() + Send + 'static,
+    ) {
         *self.0.lock().unwrap() = Some(Armed {
             before: Box::new(before),
             after: Box::new(after),
@@ -451,9 +456,11 @@ impl Backend for SimBackend<'_> {
     }
 
     fn arm_drop_after_store(&self) {
-        self.factory
-            .trigger
-            .arm(|| Toxiproxy::discover().unwrap().cut_after(Proxy::Moonraker, 0));
+        self.factory.trigger.arm(|| {
+            Toxiproxy::discover()
+                .unwrap()
+                .cut_after(Proxy::Moonraker, 0)
+        });
     }
 
     fn set_reachable(&self, reachable: bool) {
@@ -515,7 +522,12 @@ fn tracer_telemetry(activity: HostActivity) -> PrinterTelemetry {
     }
 }
 
-fn create_printer(paths: &StoragePaths, lease: &MetadataRootLease, id: &str, connection: &ConnectionConfig) {
+fn create_printer(
+    paths: &StoragePaths,
+    lease: &MetadataRootLease,
+    id: &str,
+    connection: &ConnectionConfig,
+) {
     let storage = Storage::open(paths.clone(), lease).unwrap();
     PrinterRepository::new(Arc::new(storage))
         .create(StoredPrinter {
@@ -717,7 +729,12 @@ impl Running {
     }
 
     /// Waits (up to 90 s) until row `id` satisfies `done`.
-    fn wait_for(&self, id: &str, what: &str, done: impl Fn(&HostOperation) -> bool) -> HostOperation {
+    fn wait_for(
+        &self,
+        id: &str,
+        what: &str,
+        done: impl Fn(&HostOperation) -> bool,
+    ) -> HostOperation {
         let deadline = Instant::now() + WAIT;
         loop {
             let row = self.row(id);
@@ -739,8 +756,10 @@ impl Running {
     }
 
     fn reconcile(&self, id: &str) -> HostOperation {
-        serde_json::from_value(self.ok("reconcile_host_operation", json!({ "hostOperationId": id })))
-            .unwrap()
+        serde_json::from_value(
+            self.ok("reconcile_host_operation", json!({ "hostOperationId": id })),
+        )
+        .unwrap()
     }
 
     fn abandon(&self, operation_id: &str, id: &str) -> HostOperation {
@@ -793,7 +812,12 @@ impl Running {
 /// Every action D7 blocks while `printer_id` has an unresolved upload:
 /// archive, delete, clearing the Connection, and deleting the staged Slice
 /// Revision.
-fn assert_guards_blocked(running: &Running, printer_id: &str, slice_revision_id: &str, upload_id: &str) {
+fn assert_guards_blocked(
+    running: &Running,
+    printer_id: &str,
+    slice_revision_id: &str,
+    upload_id: &str,
+) {
     let error = running.archive(printer_id).unwrap_err();
     assert_blocked_by_unresolved_op(&error, "archive");
 
@@ -847,7 +871,8 @@ fn assert_guards_lifted(running: &Running, printer_id: &str, slice_revision_id: 
 
 fn run_reconciliation_tracer<B: Backend>(backend: &B, gcode_path: &Path) {
     let roots = tempfile::tempdir().unwrap();
-    let paths = StoragePaths::new(roots.path().join("metadata"), roots.path().join("data")).unwrap();
+    let paths =
+        StoragePaths::new(roots.path().join("metadata"), roots.path().join("data")).unwrap();
     let lease = MetadataRootLease::acquire(&paths).unwrap();
     let credentials = tempfile::tempdir().unwrap();
     let connection = backend.connection();
@@ -958,7 +983,9 @@ fn run_reconciliation_tracer<B: Backend>(backend: &B, gcode_path: &Path) {
     );
     // The startup pass makes one attempt; wait for it, then reconcile
     // covers the case where it has not run yet.
-    let row = offline.wait_for(&upload_b, "the startup pass's attempt", |row| row.attempts >= 1);
+    let row = offline.wait_for(&upload_b, "the startup pass's attempt", |row| {
+        row.attempts >= 1
+    });
     assert_eq!(row.state, HostOperationState::Uncertain, "{row:?}");
     assert_eq!(reason(&row), Some(InconclusiveReason::HostUnreachable));
     let row = offline.reconcile(&upload_b);
@@ -966,7 +993,11 @@ fn run_reconciliation_tracer<B: Backend>(backend: &B, gcode_path: &Path) {
     assert_eq!(reason(&row), Some(InconclusiveReason::HostUnreachable));
 
     let abandoned = offline.abandon("op-abandon-b", &upload_b);
-    assert_eq!(abandoned.state, HostOperationState::Abandoned, "{abandoned:?}");
+    assert_eq!(
+        abandoned.state,
+        HostOperationState::Abandoned,
+        "{abandoned:?}"
+    );
 
     backend.set_reachable(true);
     assert_guards_lifted(&offline, PRINTER_B, &slr_b);

@@ -326,7 +326,9 @@ pub struct FakeMoonraker {
 impl FakeMoonraker {
     pub fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind FakeMoonraker");
-        listener.set_nonblocking(true).expect("nonblocking listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
         let port = listener.local_addr().expect("fake address").port();
         let state = Arc::new(Mutex::new(FakeState::new()));
         let down = Arc::new(AtomicBool::new(false));
