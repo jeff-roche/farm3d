@@ -152,6 +152,10 @@ impl MoonrakerCapabilities {
         Client::builder()
             .connect_timeout(self.timings.connect)
             .redirect(reqwest::redirect::Policy::none())
+            // P6 D5: a write is sent at most once. reqwest's default only
+            // retries HTTP/2 NACKs, which this build can't speak; say so
+            // anyway, so no future feature flag can turn one on.
+            .retry(reqwest::retry::never())
             .no_proxy()
             .build()
             .map_err(|_| NotSent::Client)
