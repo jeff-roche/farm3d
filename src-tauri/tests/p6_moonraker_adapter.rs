@@ -1074,6 +1074,18 @@ async fn the_fake_refuses_and_counts_an_upload_with_a_print_field() {
     assert_eq!(fake.print_state().0, "standby");
 }
 
+/// The fake's drop check: a scripted fault that never fired is reported
+/// (and would fail the test at drop); one that fired is not.
+#[tokio::test]
+async fn the_fake_reports_a_scripted_fault_that_never_fired() {
+    let fake = FakeMoonraker::start();
+    fake.fault(Route::Pause, Fault::OkWithoutEffect);
+    fake.fault(Route::Resume, Fault::OkWithoutEffect);
+    assert_eq!(adapter(&fake).pause().await, Ok(()));
+    assert_eq!(fake.take_unfired_faults(), ["Resume: OkWithoutEffect"]);
+    assert!(fake.take_unfired_faults().is_empty());
+}
+
 #[tokio::test]
 async fn timings_default_to_the_spec_values() {
     let timings = MoonrakerTimings::default();

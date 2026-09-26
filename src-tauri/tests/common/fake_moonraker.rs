@@ -12,7 +12,8 @@
 //!
 //! An upload carrying a `print` field fails the test: the fake answers 400
 //! and panics when it is dropped, unless the test took the violation with
-//! [`FakeMoonraker::take_print_field_uploads`].
+//! [`FakeMoonraker::take_print_field_uploads`]. So does a scripted [`Fault`]
+//! that never fired: a test must exercise every fault it scripts.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -179,6 +180,21 @@ pub struct FakeState {
 }
 
 impl FakeState {
+    /// Every scripted fault still waiting for its route, in a stable order.
+    fn unfired_faults(&self) -> Vec<String> {
+        let mut unfired: Vec<String> = self
+            .faults
+            .iter()
+            .flat_map(|(route, faults)| {
+                faults
+                    .iter()
+                    .map(move |fault| format!("{route:?}: {fault:?}"))
+            })
+            .collect();
+        unfired.sort();
+        unfired
+    }
+
     fn new() -> Self {
         Self {
             files: BTreeMap::new(),
@@ -429,6 +445,16 @@ impl FakeMoonraker {
         state.is_paused = false;
     }
 
+    /// The scripted faults that have not fired yet, as `"Route: Fault"`;
+    /// removes them so the drop check passes. A test that means to leave a
+    /// fault unfired calls this and says why.
+    pub fn take_unfired_faults(&self) -> Vec<String> {
+        let mut state = self.lock();
+        let unfired = state.unfired_faults();
+        state.faults.clear();
+        unfired
+    }
+
     /// How many uploads carried a `print` field; resets the count so the
     /// drop check passes.
     pub fn take_print_field_uploads(&self) -> usize {
@@ -438,9 +464,16 @@ impl FakeMoonraker {
 
 impl Drop for FakeMoonraker {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         let violations = self.lock().print_field_uploads;
-        if violations > 0 && !std::thread::panicking() {
+        if violations > 0 {
             panic!("FakeMoonraker: {violations} upload(s) carried a `print` field");
+        }
+        let unfired = self.lock().unfired_faults();
+        if !unfired.is_empty() {
+            panic!("FakeMoonraker: scripted fault(s) never fired: {unfired:?}");
         }
     }
 }
