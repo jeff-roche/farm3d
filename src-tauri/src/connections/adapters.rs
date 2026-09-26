@@ -102,10 +102,14 @@ fn octoprint_observe(
     ))
 }
 
-/// The P6 simulator run (`just test-sim`) that is Moonraker's evidence:
-/// `src-tauri/target/sim-runs/<UTC>/manifest.json`, recorded against the
-/// commit that added the P6 scenarios to `tests/sim_moonraker.rs`.
-pub const MOONRAKER_SIM_MANIFEST: &str = "sim-runs/20260926T033455Z/manifest.json";
+/// The P6 simulator run (`just test-sim`) that is Moonraker's evidence,
+/// recorded against the commit that added the P6 scenarios to
+/// `tests/sim_moonraker.rs`. The harness writes the manifest under the
+/// untracked `src-tauri/target/sim-runs/<UTC>/`, so this cites the
+/// committed, redacted copy (repository-relative) that a reviewer on
+/// another machine can open.
+pub const MOONRAKER_SIM_MANIFEST: &str =
+    "docs/superpowers/baselines/2026-09-26-p6-sim-manifest-20260926T033455Z.json";
 
 /// The Moonraker that run tested (its manifest's `reported` versions).
 pub const MOONRAKER_SIM_VERSION: &str = "Moonraker v0.11.0-1-g1cfb0c4-prind API 1.5.0";
@@ -253,8 +257,15 @@ mod tests {
             );
             assert_eq!(read_only, is_read, "{key:?}");
         }
-        assert!(MOONRAKER_SIM_MANIFEST.starts_with("sim-runs/"));
-        assert!(MOONRAKER_SIM_MANIFEST.ends_with("/manifest.json"));
+        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(MOONRAKER_SIM_MANIFEST);
+        let copy: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&committed).expect("the cited manifest is committed"),
+        )
+        .expect("the cited manifest is JSON");
+        assert_eq!(copy["manifest"]["engine"], "podman");
+        assert!(copy["manifest"]["repoCommit"].is_string());
     }
 
     #[test]

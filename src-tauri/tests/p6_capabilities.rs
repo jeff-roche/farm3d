@@ -137,8 +137,15 @@ fn the_adapter_matrix_lists_moonraker_supported_and_octoprint_not_verified_over_
         assert_eq!(moonraker["evidence"]["tier"], "sim", "{key}");
         let source = moonraker["evidence"]["source"].as_str().unwrap();
         assert!(
-            source.starts_with("sim-runs/") && source.ends_with("/manifest.json"),
+            source.starts_with("docs/superpowers/baselines/") && source.ends_with(".json"),
             "{key}: {source}"
+        );
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(source)
+                .is_file(),
+            "{key}: {source} is not committed"
         );
         let octoprint = &rows[1]["capabilities"][key];
         assert_eq!(octoprint["status"], "unsupported", "{key}");

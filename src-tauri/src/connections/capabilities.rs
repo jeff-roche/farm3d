@@ -259,7 +259,8 @@ pub enum EvidenceTier {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/CapabilityEvidence.ts")]
 pub struct CapabilityEvidence {
-    /// e.g. `"sim-runs/<UTC>/manifest.json"`.
+    /// The repository-relative path of the committed sim-run manifest copy,
+    /// e.g. `"docs/superpowers/baselines/<date>-p6-sim-manifest-<UTC>.json"`.
     pub source: String,
     pub tier: EvidenceTier,
     /// e.g. `["Moonraker v0.11.0-1 API 1.5.0"]`.

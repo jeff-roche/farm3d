@@ -3,7 +3,8 @@ import type { EvidenceTier } from "./EvidenceTier";
 
 export type CapabilityEvidence = {
 /**
- * e.g. `"sim-runs/<UTC>/manifest.json"`.
+ * The repository-relative path of the committed sim-run manifest copy,
+ * e.g. `"docs/superpowers/baselines/<date>-p6-sim-manifest-<UTC>.json"`.
  */
 source: string, tier: EvidenceTier,
 /**
