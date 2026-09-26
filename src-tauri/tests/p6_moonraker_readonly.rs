@@ -41,7 +41,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use farm3d_lib::connections::capabilities::{
     capabilities_for, ArtifactStaging, CameraDiscovery, CameraInfo, CapabilityEvidence,
@@ -59,7 +59,7 @@ use farm3d_lib::connections::{
 };
 use farm3d_lib::host_ops::repository::{self as host_ops_repo, NewHostOperation, Outcome};
 use farm3d_lib::host_ops::{
-    self, CapabilityFactory, HostOperation, HostOperationEndpoint, HostOperationKind,
+    self, CapabilityFactory, Clock, HostOperation, HostOperationEndpoint, HostOperationKind,
     HostOperationServices, HostOperationState, HostOpsTimings, SystemClock,
 };
 use farm3d_lib::persistence::Storage;
@@ -1216,7 +1216,7 @@ impl ReadOnlyRig {
     /// settle period). Every boot after the first is a restart.
     fn boot(&self) -> ReadOnlyApp {
         let storage = Arc::new(Storage::open(self.paths.clone(), &self.lease).unwrap());
-        host_ops::recover_after_restart(&storage, chrono::Utc::now()).unwrap();
+        host_ops::recover_after_restart(&storage, SystemClock.now()).unwrap();
         let factory = Arc::clone(&self.factory);
         let (app, webview, _manager, services) = common::runtime_with(
             tauri::generate_handler![
@@ -1273,6 +1273,29 @@ impl ReadOnlyApp {
             .unwrap_or_else(|error| panic!("abandon: {error}")),
         )
         .unwrap()
+    }
+
+    fn row(&self, id: &str) -> HostOperation {
+        self.storage
+            .read(|connection| Ok(host_ops_repo::load(connection, id)))
+            .unwrap()
+            .unwrap()
+            .expect("row exists")
+    }
+
+    /// Waits (up to 10 s) until row `id` satisfies `done`, so a call that
+    /// lands mid-attempt (the restart's own startup pass may be reconciling
+    /// this same row concurrently) doesn't read a transient state.
+    fn wait_for(&self, id: &str, done: impl Fn(&HostOperation) -> bool) -> HostOperation {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let row = self.row(id);
+            if done(&row) {
+                return row;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting on {row:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// A local `uncertain` upload row for a file farm3d never sent, aimed
@@ -1409,7 +1432,18 @@ fn readonly_reconciliation_tracer() {
 
     // 3. Reconcile against the real host: the file was never sent, so the
     //    identity check comes back absent and the row fails `notApplied`.
+    //    The restart's own startup pass may already be reconciling this row
+    //    concurrently; `reconcile_host_operation` is a no-op on anything
+    //    other than `uncertain`, so a call that lands mid-attempt just
+    //    returns the (possibly still non-terminal) row unchanged — accept
+    //    either path deterministically by waiting for `Failed`, the same
+    //    way the CI/sim tracer does for its own restart.
     let row = restarted.reconcile(&id);
+    let row = if row.state == HostOperationState::Failed {
+        row
+    } else {
+        restarted.wait_for(&id, |row| row.state == HostOperationState::Failed)
+    };
     assert_eq!(row.state, HostOperationState::Failed, "{row:?}");
     assert_eq!(
         row.failure.as_ref().map(|failure| failure.code),

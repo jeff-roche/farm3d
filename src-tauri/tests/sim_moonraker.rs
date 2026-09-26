@@ -425,30 +425,7 @@ const P6_WAIT: Duration = Duration::from_secs(90);
 
 // --- fixtures -----------------------------------------------------------------
 
-/// A no-motion G-code file of about `megabytes` MB: comments and `M117`
-/// only. The simulator runs roughly 10 MB of it per second (spike Gate E),
-/// and a file that ends within one Moonraker status batch leaves no history
-/// job, so even the "quick" file is a few MB.
-fn no_motion_gcode(tag: &str, megabytes: usize) -> Vec<u8> {
-    let mut bytes =
-        format!("; farm3d P6 simulator fixture {tag}: comments and M117 only\n").into_bytes();
-    let mut line = 0usize;
-    while bytes.len() < megabytes * 1024 * 1024 {
-        bytes.extend_from_slice(format!("M117 farm3d {tag} {line}\n").as_bytes());
-        line += 1;
-    }
-    bytes.extend_from_slice(b"; end\n");
-    // Nothing but comments and M117: no M104/M109/M140/M190, no T<n>, no
-    // motion.
-    for line in bytes.split(|byte| *byte == b'\n') {
-        assert!(
-            line.is_empty() || line.starts_with(b";") || line.starts_with(b"M117 "),
-            "the fixture must hold only comments and M117: {}",
-            String::from_utf8_lossy(line)
-        );
-    }
-    bytes
-}
+use sim::moonraker::no_motion_gcode;
 
 /// A couple of seconds on the simulator: long enough to leave a history job.
 fn quick_gcode(tag: &str) -> Vec<u8> {

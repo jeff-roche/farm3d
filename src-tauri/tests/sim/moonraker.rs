@@ -396,3 +396,32 @@ impl MoonrakerSim {
             .collect()
     }
 }
+
+/// A no-motion G-code file of about `megabytes` MB: comments and `M117`
+/// only. The simulator runs roughly 10 MB of it per second (spike Gate E),
+/// and a file that ends within one Moonraker status batch leaves no history
+/// job, so even a "quick" file needs a few MB. `megabytes: 0` yields
+/// comments only, no `M117` lines, which the Library's import inspection
+/// rejects as `INVALID_CONTENT` (a G-code file with no commands) — callers
+/// that only stage or identity-check the file, and never run it, still
+/// need at least `1`.
+pub fn no_motion_gcode(tag: &str, megabytes: usize) -> Vec<u8> {
+    let mut bytes =
+        format!("; farm3d P6 simulator fixture {tag}: comments and M117 only\n").into_bytes();
+    let mut line = 0usize;
+    while bytes.len() < megabytes * 1024 * 1024 {
+        bytes.extend_from_slice(format!("M117 farm3d {tag} {line}\n").as_bytes());
+        line += 1;
+    }
+    bytes.extend_from_slice(b"; end\n");
+    // Nothing but comments and M117: no M104/M109/M140/M190, no T<n>, no
+    // motion.
+    for line in bytes.split(|byte| *byte == b'\n') {
+        assert!(
+            line.is_empty() || line.starts_with(b";") || line.starts_with(b"M117 "),
+            "the fixture must hold only comments and M117: {}",
+            String::from_utf8_lossy(line)
+        );
+    }
+    bytes
+}

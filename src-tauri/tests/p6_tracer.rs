@@ -56,7 +56,7 @@ use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::StoredPrinter;
 use farm3d_lib::RuntimeServices;
 use serde_json::{json, Value};
-use sim::moonraker::MoonrakerSim;
+use sim::moonraker::{no_motion_gcode, MoonrakerSim};
 use sim::toxiproxy::{Proxy, Toxiproxy};
 use tauri::test::MockRuntime;
 
@@ -84,29 +84,6 @@ fn id_of(row: &Value) -> String {
 
 fn reason(row: &HostOperation) -> Option<InconclusiveReason> {
     row.last_attempt.as_ref().map(|attempt| attempt.reason)
-}
-
-// ---------------------------------------------------------------------------
-// The no-motion sim fixture (Task 12): comments and `M117` only.
-// ---------------------------------------------------------------------------
-
-/// A no-motion G-code file: comments and `M117` only, so the simulator
-/// never heats or moves anything while running it.
-fn no_motion_gcode(tag: &str) -> Vec<u8> {
-    let mut bytes = format!("; farm3d P6 tracer fixture {tag}: comments and M117 only\n")
-        .into_bytes();
-    for line in 0..64 {
-        bytes.extend_from_slice(format!("M117 farm3d {tag} {line}\n").as_bytes());
-    }
-    bytes.extend_from_slice(b"; end\n");
-    for line in bytes.split(|byte| *byte == b'\n') {
-        assert!(
-            line.is_empty() || line.starts_with(b";") || line.starts_with(b"M117 "),
-            "the fixture must hold only comments and M117: {}",
-            String::from_utf8_lossy(line)
-        );
-    }
-    bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,7 +993,10 @@ fn p6_reconciliation_tracer_runs_against_the_simulator() {
     let _guard = sim::exclusive();
     sim.reset();
 
-    let bytes = no_motion_gcode("tracer");
+    // The tracer never starts a print, so the smallest fixture with at
+    // least one command line is enough (`megabytes: 0` has none, which the
+    // Library rejects as `INVALID_CONTENT`).
+    let bytes = no_motion_gcode("tracer", 1);
     let source = tempfile::tempdir().unwrap();
     let gcode_path = source.path().join("tracer-no-motion.gcode");
     std::fs::write(&gcode_path, &bytes).unwrap();
