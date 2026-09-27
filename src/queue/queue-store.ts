@@ -80,14 +80,23 @@ export const queue = {
   syncState: (): QueueSyncState => state.syncState,
 };
 
+/** Events for one row can reach the stream out of revision order: the
+ *  backend publishes some results after releasing the Printer lock, so an
+ *  older copy can follow a newer one. A lower revision than the held row's
+ *  is stale and ignored; an equal one still applies, because `startBlockers`
+ *  and `allowedActions` are republished without a revision bump. Backfills
+ *  (`applySnapshot`) replace every row wholesale and skip this check. */
 function upsertEntry(record: QueueEntry): void {
   const index = state.entries.findIndex((entry) => entry.id === record.id);
+  if (index >= 0 && record.revision < state.entries[index].revision) return;
   if (index >= 0) setState("entries", index, reconcile(record));
   else setState("entries", (list) => [...list, record]);
 }
 
+/** Same stale-revision rule as `upsertEntry`. */
 function upsertJob(record: Job): void {
   const index = state.jobs.findIndex((j) => j.id === record.id);
+  if (index >= 0 && record.revision < state.jobs[index].revision) return;
   if (index >= 0) setState("jobs", index, reconcile(record));
   else setState("jobs", (list) => [...list, record]);
 }

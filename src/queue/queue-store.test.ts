@@ -211,6 +211,55 @@ describe("startQueue (desktop)", () => {
     expect(queue.job("job-1")?.state).toBe("printing");
   });
 
+  it("ignores a jobChanged event whose revision is lower than the held Job's", async () => {
+    const { queue } = await startedStore();
+    emit(jobEnvelope(1, job({ id: "job-1", state: "printing", revision: 3 })));
+    emit(jobEnvelope(2, job({ id: "job-1", state: "starting", revision: 2 })));
+    await flush();
+    expect(queue.job("job-1")?.state).toBe("printing");
+    expect(queue.job("job-1")?.revision).toBe(3);
+  });
+
+  it("applies a jobChanged republish at the same revision", async () => {
+    const { queue } = await startedStore();
+    emit(jobEnvelope(1, job({ id: "job-1", state: "printing", revision: 3, allowedActions: [] })));
+    emit(jobEnvelope(2, job({ id: "job-1", state: "printing", revision: 3, allowedActions: ["pause"] })));
+    await flush();
+    expect(queue.job("job-1")?.allowedActions).toEqual(["pause"]);
+  });
+
+  it("ignores an entryChanged event whose revision is lower than the held entry's", async () => {
+    const { queue } = await startedStore();
+    emit(entryEnvelope(1, queueEntry({ id: "qen-1", position: 1, state: "assigned", revision: 5 })));
+    emit(entryEnvelope(2, queueEntry({ id: "qen-1", position: 1, state: "queued", revision: 4 })));
+    await flush();
+    expect(queue.entry("qen-1")?.state).toBe("assigned");
+    expect(queue.entry("qen-1")?.revision).toBe(5);
+  });
+
+  it("applies an entryChanged republish at the same revision", async () => {
+    const { queue } = await startedStore();
+    emit(entryEnvelope(1, queueEntry({ id: "qen-1", position: 1, revision: 5 })));
+    emit(entryEnvelope(2, queueEntry({ id: "qen-1", position: 2, revision: 5 })));
+    await flush();
+    expect(queue.entry("qen-1")?.position).toBe(2);
+  });
+
+  it("a backfill replaces rows wholesale, even with a lower revision than the held one", async () => {
+    const { refreshQueue, queue } = await startedStore();
+    emit(entryEnvelope(1, queueEntry({ id: "qen-1", position: 1, revision: 9 })));
+    emit(jobEnvelope(2, job({ id: "job-1", state: "printing", revision: 9 })));
+    await flush();
+    responders.list_queue = () => queueSnapshot(2, {
+      entries: [queueEntry({ id: "qen-1", position: 1, revision: 2 })],
+      jobs: [job({ id: "job-1", state: "starting", revision: 2 })],
+    });
+    refreshQueue();
+    await flush();
+    expect(queue.entry("qen-1")?.revision).toBe(2);
+    expect(queue.job("job-1")?.state).toBe("starting");
+  });
+
   it("applies a requirementChanged event by upserting the Requirement", async () => {
     const { queue } = await startedStore();
     const event: QueueEvent = {
