@@ -25,7 +25,7 @@ use farm3d_lib::printers::operational::OperationalState;
 use farm3d_lib::printers::StartSafety;
 use farm3d_lib::queue::eligibility::AssignMode;
 use farm3d_lib::queue::world::LiveWorld;
-use p7_dispatch_rig::{boot, id, Driver, Roots, Running, SLR};
+use p7_dispatch_rig::{boot, boot_with, connecting, id, Driver, Roots, Running, SLR};
 use serde_json::{json, Value};
 
 fn roots() -> Roots {
@@ -333,7 +333,11 @@ fn restart_after_start_success_applies_the_outcome() {
     let app = boot(&roots, Driver::Off);
     let job = app.job(&job_id);
     assert_eq!(job["state"], "printing");
-    assert!(job["startedAt"].is_string());
+    assert_eq!(
+        job["startedAt"],
+        json!(start.dispatched_at.clone().expect("the start was sent")),
+        "ruling R13(b): startedAt is when the start was sent, not when it was applied"
+    );
     assert_eq!(job["activeHostOperationId"], Value::Null);
     let mark = app.scalar(&format!("SELECT history_mark FROM jobs WHERE id = '{job_id}'"));
     assert_eq!(Some(mark), start.history_mark, "the start op's history mark");
@@ -476,4 +480,111 @@ fn restart_after_pause_success_applies_the_outcome() {
     assert_eq!(roots.count_requests("POST", "/printer/print/pause"), 1);
     assert_eq!(roots.starts(), 1);
     assert_eq!(roots.uploads(), 1);
+}
+
+/// R2 as production boots: `start_jobs_runtime` runs while the restored
+/// Connection is still `Connecting`. "Not online yet" defers the stage (no
+/// `lastFailure`); the Printer coming Online stages it, once.
+#[test]
+fn restart_after_assign_stages_once_when_the_printer_connects_late() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Off);
+    let spool = app.spool();
+    let job_id = app.assign(&spool);
+    crash(app);
+
+    let app = boot_with(&roots, Driver::Started, connecting());
+    app.wait_first_pass();
+    settle();
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "assigned");
+    assert_eq!(job["lastFailure"], Value::Null, "not reachable yet is a deferral");
+    assert!(app.ops(&job_id).is_empty());
+
+    // The status change stages it, well before the driver's 10 s poll.
+    app.status(OperationalState::Ready);
+    let job = app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
+    assert_eq!(job["lastFailure"], Value::Null);
+    settle();
+    app.status(OperationalState::Ready);
+    settle();
+    assert_eq!(roots.uploads(), 1, "staged exactly once");
+    assert_eq!(app.ops(&job_id).len(), 1);
+    assert_eq!(roots.starts(), 0);
+}
+
+/// An Unattended Printer's awaitingStart Job, staged while the Printer
+/// was `finished` (so nothing started it yet): the Job id.
+fn awaiting_start_unattended(app: &Running) -> String {
+    app.status(OperationalState::Finished);
+    app.awaiting_start()
+}
+
+/// R6 on an Unattended Printer: the driver's own start dies before it is
+/// sent. After the restart the Printer is Ready and fresh again, and the
+/// driver never starts the Job by itself.
+#[test]
+fn restart_before_unattended_start_send_never_starts_again() {
+    let roots = Roots::new(StartSafety::Unattended);
+    let app = boot(&roots, Driver::Started);
+    let job_id = awaiting_start_unattended(&app);
+    let fired = app
+        .services
+        .host_ops
+        .inject_fault(FaultPoint::BeforeMarkSent, FaultAction::Crash);
+    app.status(OperationalState::Ready);
+    wait_fired(fired);
+    let start = op_of_kind(&app, &job_id, HostOperationKind::Start);
+    assert_eq!(app.job(&job_id)["startConfirmation"], "unattended", "the driver started it");
+    crash(app);
+
+    let app = boot(&roots, Driver::Started);
+    assert_eq!(app.row(&start.id).state, HostOperationState::Failed);
+    let job = app.wait_job(&job_id, "awaitingStart");
+    assert_eq!(job["lastFailure"]["failure"]["code"], "neverSent");
+    app.status(OperationalState::Ready);
+    settle();
+    app.status(OperationalState::Ready);
+    settle();
+    assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+    assert_eq!(roots.starts(), 0, "no start by itself after a failed one");
+    assert_eq!(
+        app.ops(&job_id).iter().filter(|op| op.kind == HostOperationKind::Start).count(),
+        1
+    );
+}
+
+/// R7 on an Unattended Printer: the driver's start was sent and its reply
+/// lost. After the restart, reconciliation, and the Printer Ready and
+/// fresh again, the original start is the only one.
+#[test]
+fn restart_after_unattended_start_reply_lost_never_starts_again() {
+    let roots = Roots::new(StartSafety::Unattended);
+    let app = boot(&roots, Driver::Started);
+    let job_id = awaiting_start_unattended(&app);
+    let fired = app
+        .services
+        .host_ops
+        .inject_fault(FaultPoint::AfterSend, FaultAction::Crash);
+    app.status(OperationalState::Ready);
+    wait_fired(fired);
+    let start = op_of_kind(&app, &job_id, HostOperationKind::Start);
+    assert!(app.row(&start.id).dispatched_at.is_some(), "sent");
+    crash(app);
+
+    let app = boot(&roots, Driver::Started);
+    app.status(OperationalState::Printing);
+    if app.row(&start.id).state == HostOperationState::Uncertain {
+        let _ = app.call("reconcile_host_operation", json!({"hostOperationId": start.id}));
+    }
+    app.wait_job(&job_id, "printing");
+    app.status(OperationalState::Ready);
+    settle();
+    app.status(OperationalState::Ready);
+    settle();
+    assert_eq!(roots.starts(), 1, "only the original start");
+    assert_eq!(
+        app.ops(&job_id).iter().filter(|op| op.kind == HostOperationKind::Start).count(),
+        1
+    );
 }

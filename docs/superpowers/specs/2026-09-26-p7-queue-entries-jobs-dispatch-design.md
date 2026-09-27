@@ -1780,6 +1780,13 @@ Each departs from, or sharpens, the plan's Design reference.
     `outcomeUnknown` instead of pinning a same-named job on another host.
 24. **The fail-safe principle covers a Job's end.** `printing` ⇄ `paused`
     may follow status on the Job's own file.
+25. **Ruling R13 (Task 8a fix round 1): driver refusals versus
+    deferrals.** A driver handoff that P6 refuses because the Printer is
+    not reachable yet (`PRINTER_UNREACHABLE`, `TIMEOUT`, or
+    `HOST_OPERATION_PENDING`) is deferred: nothing is recorded, and it is
+    tried again on the next status change or poll. Any other refusal
+    records `lastFailure{refused}`. For an unattended start, that turns
+    off auto-start for the Job until it is staged again.
 
 ## Residual risks
 

@@ -846,27 +846,57 @@ mod dispatch {
 
     #[test]
     fn a_refused_driver_stage_records_last_failure_and_never_retries() {
-        // The Printer goes offline between the assignment and the driver's
-        // stage (its first pass, here).
+        // The Printer stops supporting uploads between the assignment and
+        // the driver's stage (its first pass, here): a refusal, not a
+        // "not yet".
+        let roots = Roots::new(StartSafety::ConfirmBedClear);
+        let app = boot(&roots, Driver::Off);
+        let spool = app.spool();
+        let job_id = app.assign(&spool);
+        roots
+            .upload_unsupported
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        farm3d_lib::start_jobs_runtime(&app.services, app.app.handle());
+
+        let job = app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
+        assert_eq!(job["state"], "assigned");
+        assert_eq!(job["lastFailure"]["kind"], "refused");
+        assert_eq!(job["lastFailure"]["code"], "CAPABILITY_UNSUPPORTED");
+        assert!(job["revision"].as_i64().unwrap() > 1, "the revision goes up");
+        assert_eq!(app.event_kinds(&job_id), ["assigned"], "no event row");
+        assert!(app.ops(&job_id).is_empty());
+
+        roots
+            .upload_unsupported
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        app.status(OperationalState::Ready);
+        settle();
+        assert_eq!(roots.uploads(), 0, "it never stages again by itself");
+        assert_eq!(app.job(&job_id)["state"], "assigned");
+    }
+
+    /// Review Important 1: a Printer that isn't reachable yet defers the
+    /// driver's stage: no `lastFailure`, and the stage goes ahead once the
+    /// Printer is Online.
+    #[test]
+    fn an_offline_printer_defers_the_driver_stage_until_it_is_online() {
         let roots = Roots::new(StartSafety::ConfirmBedClear);
         let app = boot(&roots, Driver::Off);
         let spool = app.spool();
         let job_id = app.assign(&spool);
         app.status(OperationalState::Offline);
         farm3d_lib::start_jobs_runtime(&app.services, app.app.handle());
-
-        let job = app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
+        app.wait_first_pass();
+        settle();
+        let job = app.job(&job_id);
         assert_eq!(job["state"], "assigned");
-        assert_eq!(job["lastFailure"]["kind"], "refused");
-        assert_eq!(job["lastFailure"]["code"], "PRINTER_UNREACHABLE");
-        assert!(job["revision"].as_i64().unwrap() > 1, "the revision goes up");
-        assert_eq!(app.event_kinds(&job_id), ["assigned"], "no event row");
+        assert_eq!(job["lastFailure"], Value::Null);
         assert!(app.ops(&job_id).is_empty());
 
         app.status(OperationalState::Ready);
+        app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
         settle();
-        assert_eq!(roots.uploads(), 0, "it never stages again by itself");
-        assert_eq!(app.job(&job_id)["state"], "assigned");
+        assert_eq!(roots.uploads(), 1);
     }
 
     #[test]
@@ -1260,5 +1290,121 @@ mod dispatch {
             .unwrap();
         assert!(!persisted.contains(SECRET));
         let _ = id;
+    }
+
+    /// An Unattended Printer's awaitingStart Job, staged while the Printer
+    /// was `finished`, so the driver hasn't started it: the Job id.
+    fn awaiting_unattended(roots: &Roots, app: &Running) -> String {
+        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        app.status(OperationalState::Finished);
+        let job_id = app.awaiting_start();
+        settle();
+        assert_eq!(roots.starts(), 0);
+        job_id
+    }
+
+    fn start_ops(app: &Running, job_id: &str) -> usize {
+        app.ops(job_id)
+            .iter()
+            .filter(|op| op.kind == farm3d_lib::host_ops::HostOperationKind::Start)
+            .count()
+    }
+
+    /// Review Important 2: P6 refuses the driver's unattended start (the
+    /// host re-read disagrees with the live status). The Job keeps
+    /// `lastFailure{refused}`; later Ready statuses never start it by
+    /// itself; the operator's Start still does.
+    #[test]
+    fn a_refused_unattended_start_keeps_last_failure_and_never_auto_starts() {
+        let (roots, app) = started(StartSafety::Unattended);
+        let job_id = awaiting_unattended(&roots, &app);
+        // The host's re-read reports the last print failed; the live
+        // status says Ready.
+        roots.fake.with_state(|state| state.print_state = "error".to_string());
+        app.status(OperationalState::Ready);
+        let job = app.wait_job_until(&job_id, |job| !job["lastFailure"].is_null());
+        assert_eq!(job["state"], "awaitingStart");
+        assert_eq!(job["lastFailure"]["kind"], "refused");
+        assert_eq!(job["lastFailure"]["code"], "START_NOT_ALLOWED");
+        assert_eq!(start_ops(&app, &job_id), 0, "refused before any row");
+
+        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        for _ in 0..3 {
+            app.status(OperationalState::Ready);
+            settle();
+        }
+        assert_eq!(roots.starts(), 0, "a refused unattended start is not retried");
+        let job = app.job(&job_id);
+        assert_eq!(job["state"], "awaitingStart");
+        assert_eq!(job["lastFailure"]["kind"], "refused");
+
+        app.start("op-start", &job_id, "ready").expect("the operator's start");
+        let job = app.wait_job(&job_id, "printing");
+        assert_eq!(job["startConfirmation"], "bedClear");
+        assert_eq!(roots.starts(), 1);
+    }
+
+    /// Ruling R13(a): the Spool leaves the Printer between start_job's
+    /// pre-checks and its write-ahead. The link refuses SPOOL_NOT_LOADED;
+    /// nothing is written or sent.
+    #[test]
+    fn the_start_link_rechecks_that_the_spool_is_still_loaded() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        let spool_id = app.job(&job_id)["spoolId"].as_str().unwrap().to_string();
+        app.services.jobs.before_start_link(Box::new(move |storage| {
+            storage
+                .write_repo(|tx| {
+                    tx.execute(
+                        "UPDATE spools SET slot_id = NULL, storage_label = 'Shelf' WHERE id = ?1",
+                        [&spool_id],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }));
+        let error = app.start("op-start", &job_id, "ready").unwrap_err();
+        assert_eq!(error["code"], "JOB_START_BLOCKED", "{error}");
+        assert_eq!(codes(&error["details"]["blockers"]), vec!["SPOOL_NOT_LOADED"]);
+        let job = app.job(&job_id);
+        assert_eq!(job["state"], "awaitingStart");
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        assert_eq!(start_ops(&app, &job_id), 0);
+        assert_eq!(
+            app.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-start'"),
+            0,
+            "the claim rolled back with the link"
+        );
+        settle();
+        assert_eq!(roots.starts(), 0);
+    }
+
+    /// Ruling R13(a): the Printer stops being Unattended between the
+    /// driver's pre-checks and its write-ahead. The link refuses; nothing
+    /// is sent, and the refusal is recorded.
+    #[test]
+    fn the_unattended_start_link_rechecks_start_safety() {
+        let (roots, app) = started(StartSafety::Unattended);
+        let job_id = awaiting_unattended(&roots, &app);
+        app.services.jobs.before_start_link(Box::new(|storage| {
+            storage
+                .write_repo(|tx| {
+                    tx.execute(
+                        "UPDATE printers SET start_safety = 'confirmBedClear' WHERE id = ?1",
+                        [PRINTER],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }));
+        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        app.status(OperationalState::Ready);
+        let job = app.wait_job_until(&job_id, |job| !job["lastFailure"].is_null());
+        assert_eq!(job["state"], "awaitingStart");
+        assert_eq!(job["lastFailure"]["kind"], "refused");
+        assert_eq!(job["lastFailure"]["code"], "START_PRECONDITION_CHANGED");
+        assert_eq!(start_ops(&app, &job_id), 0);
+        settle();
+        assert_eq!(roots.starts(), 0);
     }
 }

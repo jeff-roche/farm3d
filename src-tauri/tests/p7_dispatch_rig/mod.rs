@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use farm3d_lib::connections::capabilities::{
-    ArtifactStaging, CapabilityEvidence, CapabilityMap, CapabilityState, EvidenceTier, HostFacts,
-    HostStateQuery, PrintControl, PrinterCapabilities,
+    ArtifactStaging, CapabilityEvidence, CapabilityKey, CapabilityMap, CapabilityState, EvidenceTier, HostFacts,
+    HostStateQuery, PrintControl, PrinterCapabilities, UnsupportedReason,
 };
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
@@ -66,7 +66,9 @@ pub const WAIT: Duration = Duration::from_secs(15);
 
 // --- capabilities: every capability supported with sim evidence ---------------
 
-struct SimFactory;
+struct SimFactory {
+    upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
+}
 
 fn short_moonraker_timings() -> MoonrakerTimings {
     MoonrakerTimings {
@@ -95,12 +97,22 @@ impl CapabilityFactory for SimFactory {
         PrinterCapabilities {
             printer_id: printer.id.clone(),
             adapter_kind: Some(MOONRAKER_KIND.to_string()),
-            capabilities: CapabilityMap::complete(|_| CapabilityState::Supported {
-                evidence: CapabilityEvidence {
-                    source: "tests/p7_dispatch_rig".to_string(),
-                    tier: EvidenceTier::Sim,
-                    verified_host_versions: Vec::new(),
-                },
+            capabilities: CapabilityMap::complete(|key| {
+                if key == CapabilityKey::Upload
+                    && self.upload_unsupported.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return CapabilityState::Unsupported {
+                        reason: UnsupportedReason::NotVerified,
+                        detail: "Uploads are switched off in this test.".to_string(),
+                    };
+                }
+                CapabilityState::Supported {
+                    evidence: CapabilityEvidence {
+                        source: "tests/p7_dispatch_rig".to_string(),
+                        tier: EvidenceTier::Sim,
+                        verified_host_versions: Vec::new(),
+                    },
+                }
             }),
             host_facts: host_facts.cloned(),
             observed_at: None,
@@ -239,6 +251,8 @@ pub struct Roots {
     pub lease: MetadataRootLease,
     credentials: tempfile::TempDir,
     pub fake: FakeMoonraker,
+    /// When set, the Printer's `upload` capability is unsupported.
+    pub upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Roots {
@@ -278,6 +292,7 @@ impl Roots {
             lease,
             credentials,
             fake,
+            upload_unsupported: Arc::default(),
         }
     }
 
@@ -323,10 +338,18 @@ pub enum Driver {
 /// `build_runtime_services` does (host ops, then Jobs). The Printer is
 /// Online, Ready, and fresh before the driver starts.
 pub fn boot(roots: &Roots, driver: Driver) -> Running {
+    boot_with(roots, driver, status_of(OperationalState::Ready))
+}
+
+/// [`boot`], with the Printer's status `initial` when the runtimes start
+/// (production starts them while the Printer is still `Connecting`).
+pub fn boot_with(roots: &Roots, driver: Driver, initial: PrinterStatus) -> Running {
     let storage = Arc::new(Storage::open(roots.paths.clone(), &roots.lease).unwrap());
     host_ops::recover_after_restart(&storage, SystemClock.now()).unwrap();
     let recovered = farm3d_lib::jobs::recover_after_restart(&storage, SystemClock.now()).unwrap();
-    let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory);
+    let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
+        upload_unsupported: Arc::clone(&roots.upload_unsupported),
+    });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let (app, webview, manager, services) = common::runtime_with(
         tauri::generate_handler![
@@ -364,7 +387,7 @@ pub fn boot(roots: &Roots, driver: Driver) -> Running {
     app.listen(STATUS_EVENT, move |event| {
         sink.lock().unwrap().push(event.payload().to_string());
     });
-    manager.seed(PRINTER, status_of(OperationalState::Ready));
+    manager.seed(PRINTER, initial);
     farm3d_lib::start_host_ops_runtime(&services, app.handle());
     services.jobs.set_recovered(recovered);
     if driver == Driver::Started {
@@ -392,6 +415,11 @@ pub fn status_of(state: OperationalState) -> PrinterStatus {
     status.operational_state = state;
     status.freshness = TelemetryFreshness::Fresh;
     status
+}
+
+/// The status a restored Connection has before its first contact.
+pub fn connecting() -> PrinterStatus {
+    PrinterStatus::new(ConnectionState::Connecting)
 }
 
 pub fn id(value: &Value) -> String {
@@ -428,6 +456,20 @@ impl Running {
     /// Sets the Printer's live status (Online, fresh).
     pub fn status(&self, state: OperationalState) {
         self.manager.seed(PRINTER, status_of(state));
+    }
+
+    /// Waits until the driver's first pass (its first resync) has run.
+    pub fn wait_first_pass(&self) {
+        let deadline = Instant::now() + WAIT;
+        while self.services.jobs.resyncs() == 0 {
+            assert!(Instant::now() < deadline, "the driver's first pass never ran");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Sets the Printer's live status to `status`.
+    pub fn seed(&self, status: PrinterStatus) {
+        self.manager.seed(PRINTER, status);
     }
 
     /// A Spool in storage, PLA 1.75, 1 kg on it.
@@ -523,7 +565,13 @@ impl Running {
 
     /// Waits until the Job's stored state is `state`.
     pub fn wait_job(&self, job_id: &str, state: &str) -> Value {
-        let deadline = Instant::now() + WAIT;
+        self.wait_job_within(job_id, state, WAIT)
+    }
+
+    /// [`Running::wait_job`] with its own deadline: shorter than the
+    /// driver's 10 s poll, it proves a wake (not the poll) moved the Job.
+    pub fn wait_job_within(&self, job_id: &str, state: &str, within: Duration) -> Value {
+        let deadline = Instant::now() + within;
         loop {
             let job = self.job(job_id);
             if job["state"] == state {

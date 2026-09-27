@@ -127,7 +127,9 @@ fn event_for(
         (Kind::Start, Op::Succeeded, Job::Starting) => (
             JobEventKind::StartSucceeded,
             JobChange {
-                started_at: Some(now.to_string()),
+                // Ruling R13(b): when the start was sent, not when its
+                // outcome was applied (a restart can apply it much later).
+                started_at: Some(op.dispatched_at.clone().unwrap_or_else(|| now.to_string())),
                 history_mark: op.history_mark,
                 ..JobChange::default()
             },
@@ -240,6 +242,21 @@ fn any_start_offered(status: &PrinterStatus) -> bool {
 /// D7's start blockers for an `awaitingStart` Job, in the table's order
 /// (every one that applies). Empty for a Job in any other state.
 /// `spool_number` only names the Spool in the "Awaiting material" message.
+/// The `SPOOL_NOT_LOADED` start blocker: "Awaiting material: load Spool
+/// #N on <Printer>."
+fn spool_not_loaded(job: &Job, printer: &StoredPrinter, spool_number: Option<i64>) -> Blocker {
+    let spool = spool_number
+        .map(|number| format!("Spool #{number}"))
+        .unwrap_or_else(|| "this Job's Spool".to_string());
+    Blocker {
+        code: BlockerCode::SpoolNotLoaded,
+        message: format!("Awaiting material: load {spool} on {}.", printer.name),
+        detail: None,
+        recovery: Some(RecoveryCode::LoadSpool),
+        printer_ids: vec![job.printer_id.clone()],
+    }
+}
+
 pub fn start_blockers(
     job: &Job,
     printer: &StoredPrinter,
@@ -262,15 +279,7 @@ pub fn start_blockers(
     let mut blockers = Vec::new();
 
     if !loaded.contains(&job.spool_id) {
-        let spool = spool_number
-            .map(|number| format!("Spool #{number}"))
-            .unwrap_or_else(|| "this Job's Spool".to_string());
-        blockers.push(blocker(
-            BlockerCode::SpoolNotLoaded,
-            format!("Awaiting material: load {spool} on {}.", printer.name),
-            None,
-            Some(RecoveryCode::LoadSpool),
-        ));
+        blockers.push(spool_not_loaded(job, printer, spool_number));
     }
     if unresolved_host_operation {
         blockers.push(blocker(
@@ -695,6 +704,8 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
         let linked = Arc::clone(&linked);
         let operation_id = operation_id.clone();
         let job_id = job_id.to_string();
+        let printer = context.printer.clone();
+        let spool_number = context.spool_number;
         Box::new(move |tx, op| {
             let job = claim_and_recheck(
                 tx,
@@ -711,6 +722,7 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
             {
                 return Err(not_allowed(&job, JobAction::Start));
             }
+            recheck_start_world(tx, &job, &printer, spool_number, confirmation)?;
             jobs_repository::transition(
                 tx,
                 &job_id,
@@ -729,6 +741,9 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
             Ok(())
         })
     };
+    if let Some(hook) = services.jobs.take_before_start_link() {
+        hook(&services.storage);
+    }
     api::start(
         &services.host_ops,
         host_operation_id_for(&operation_id),
@@ -739,6 +754,50 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
     )
     .await?;
     Ok(handed_off(load_committed(&services.storage, job_id)?, &linked))
+}
+
+/// Ruling R13(a): what the start link re-checks inside the write-ahead
+/// transaction, because the world can change after the pre-checks: the
+/// Job's Spool is still in one of this Printer's Material Slots
+/// (`JOB_START_BLOCKED` with `SPOOL_NOT_LOADED`), and, for an unattended
+/// start, the Printer's `startSafety` is still `unattended`
+/// (`START_PRECONDITION_CHANGED`).
+fn recheck_start_world(
+    tx: &Transaction<'_>,
+    job: &Job,
+    printer: &StoredPrinter,
+    spool_number: Option<i64>,
+    confirmation: StartConfirmation,
+) -> Result<(), RepositoryError> {
+    let loaded_on: Option<String> = tx
+        .query_row(
+            "SELECT slots.printer_id FROM spools
+             JOIN material_slots slots ON slots.id = spools.slot_id
+             WHERE spools.id = ?1",
+            [&job.spool_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if loaded_on.as_deref() != Some(job.printer_id.as_str()) {
+        return Err(RepositoryError::JobStartBlocked {
+            job_id: job.id.clone(),
+            blockers: vec![spool_not_loaded(job, printer, spool_number)],
+        });
+    }
+    if confirmation == StartConfirmation::Unattended {
+        let start_safety: String = tx.query_row(
+            "SELECT start_safety FROM printers WHERE id = ?1",
+            [&job.printer_id],
+            |row| row.get(0),
+        )?;
+        if start_safety != "unattended" {
+            return Err(RepositoryError::StartSafetyChanged {
+                job_id: job.id.clone(),
+                printer_id: job.printer_id.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// D7 "Pause, resume, cancel after start": P6's control rule and host
@@ -1251,13 +1310,15 @@ mod tests {
     fn start_succeeded_sets_started_at_and_the_history_mark() {
         let rig = rig();
         let _ = rig.storage.write_repo(|tx| {
-            let op = insert_op(tx, Some(&rig.job_id), HostOperationKind::Start, HostOperationState::Succeeded);
+            let mut op = insert_op(tx, Some(&rig.job_id), HostOperationKind::Start, HostOperationState::Succeeded);
+            // Ruling R13(b): the time the start was sent, not the apply time.
+            op.dispatched_at = Some("2026-09-01T11:59:58Z".to_string());
             force_state(tx, &rig.job_id, JobState::Starting, &op.id);
             tx.execute("UPDATE jobs SET started_at = NULL, history_mark = NULL WHERE id = ?1", [&rig.job_id])
                 .unwrap();
             let job = apply_host_outcome(tx, &op, NOW).unwrap().unwrap().job;
             assert_eq!(job.state, JobState::Printing);
-            assert_eq!(job.started_at.as_deref(), Some(NOW));
+            assert_eq!(job.started_at.as_deref(), Some("2026-09-01T11:59:58Z"));
             let mark: i64 = tx
                 .query_row("SELECT history_mark FROM jobs WHERE id = ?1", [&rig.job_id], |row| row.get(0))
                 .unwrap();

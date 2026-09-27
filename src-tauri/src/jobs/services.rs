@@ -13,8 +13,11 @@
 //!   and start it unattended when decision 1 allows.
 //! - **Stage requested** (after an assignment), and on its first pass for
 //!   every `assigned` Job that never staged (R2): stage it once with a
-//!   `drv-*` id. A refusal before any row was written records
-//!   `lastFailure = refused` and is never retried by the driver.
+//!   `drv-*` id. A status change also stages an `assigned` Job that
+//!   hasn't staged. A refusal before any row was written records
+//!   `lastFailure = refused` and is never retried by the driver, except a
+//!   "not yet" refusal (the Printer not reachable yet), which records
+//!   nothing and is tried again (see `is_not_yet`).
 //! - **`RecvError::Lagged`** or the poll interval: re-read every active
 //!   Job from storage and do all of the above for it.
 //!
@@ -29,7 +32,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::contracts::command::CommandError;
+use crate::contracts::command::{CommandError, ErrorCode};
 use crate::host_ops::{repository as host_ops_repository, HostOperation, HostOperationKind, PriorState};
 use crate::persistence::RepositoryError;
 use crate::printers::now_rfc3339;
@@ -85,7 +88,15 @@ pub struct JobServices<R: tauri::Runtime> {
     published_blockers: Mutex<HashMap<String, Vec<Blocker>>>,
     /// Unattended starts in flight, so one status burst starts a Job once.
     starting: Mutex<HashSet<String>>,
+    /// Test hook: run once, after `start_job`'s pre-checks and before its
+    /// write-ahead, so a test can change the world between the two.
+    before_start_link: Mutex<Option<StartLinkHook>>,
+    /// Completed resyncs (the first pass is the first), for tests.
+    resyncs: std::sync::atomic::AtomicU64,
 }
+
+/// See [`JobServices::before_start_link`].
+pub type StartLinkHook = Box<dyn FnOnce(&crate::persistence::Storage) + Send>;
 
 impl<R: tauri::Runtime> JobServices<R> {
     pub fn new(timings: JobTimings) -> Self {
@@ -100,7 +111,26 @@ impl<R: tauri::Runtime> JobServices<R> {
             stop: tokio::sync::watch::channel(false).0,
             published_blockers: Mutex::new(HashMap::new()),
             starting: Mutex::new(HashSet::new()),
+            before_start_link: Mutex::new(None),
+            resyncs: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Test hook: `hook` runs once, in the next `start_job` (operator or
+    /// driver), after its pre-checks and before the write-ahead
+    /// transaction whose link re-checks them.
+    pub fn before_start_link(&self, hook: StartLinkHook) {
+        *lock(&self.before_start_link) = Some(hook);
+    }
+
+    /// Test hook: how many resyncs the driver has finished. The first
+    /// pass is one, so `>= 1` means it has run.
+    pub fn resyncs(&self) -> u64 {
+        self.resyncs.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn take_before_start_link(&self) -> Option<StartLinkHook> {
+        lock(&self.before_start_link).take()
     }
 
     /// Asks the driver to stage `job_id` (D7: after each committed
@@ -365,9 +395,18 @@ async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id
         .ok()
         .and_then(Result::ok)
         .flatten();
-    let Some(job) = job.filter(|job| job.state == JobState::AwaitingStart) else {
+    let Some(job) = job else {
         return;
     };
+    if job.state == JobState::Assigned {
+        // A stage deferred while the Printer wasn't reachable yet goes
+        // ahead once it is.
+        stage_by_driver(services, &job.id).await;
+        return;
+    }
+    if job.state != JobState::AwaitingStart {
+        return;
+    }
     let context = match StartContext::read(services, &job) {
         Ok(Some(context)) => context,
         Ok(None) => return,
@@ -430,6 +469,7 @@ async fn maybe_start_unattended<R: tauri::Runtime>(
     match result {
         Ok(handoff) if !handoff.replayed => publish(services, handoff.change()),
         Ok(_) => {}
+        Err(error) if is_not_yet(&error) => {}
         Err(error) => {
             record_refusal(services, &job.id, JobState::AwaitingStart, HostOperationKind::Start, &error)
                 .await
@@ -453,11 +493,38 @@ async fn stage_by_driver<R: tauri::Runtime>(services: &RuntimeServices<R>, job_i
     match dispatch::stage_job(services, driver_operation_id(), job_id).await {
         Ok(handoff) if !handoff.replayed => publish(services, handoff.change()),
         Ok(_) => {}
+        Err(error) if is_not_yet(&error) => {}
         Err(error) => {
             record_refusal(services, job_id, JobState::Assigned, HostOperationKind::Upload, &error)
                 .await
         }
     }
+}
+
+/// Which P6 refusals of a driver handoff mean "not yet" rather than "no".
+///
+/// A deferral records nothing: the driver tries again on the Printer's
+/// next status change, the next inventory change, or the next poll. P6
+/// refuses these before it writes any row, so trying again never re-sends
+/// anything:
+/// - `PRINTER_UNREACHABLE`: the Printer is not Online yet (still
+///   `Connecting` after a restart, offline, or in error);
+/// - `TIMEOUT`: a pre-check's host read timed out;
+/// - `HOST_OPERATION_PENDING`: another Host Operation on this Printer
+///   hasn't resolved.
+///
+/// Every other refusal records `lastFailure{refused}`, and the driver
+/// never retries that handoff for this Job. Examples are
+/// `CAPABILITY_UNSUPPORTED`, `UNSUPPORTED_ADAPTER`, `CREDENTIAL_REQUIRED`,
+/// `AUTHENTICATION_FAILED`, `START_NOT_ALLOWED`,
+/// `START_PRECONDITION_CHANGED`, `JOB_START_BLOCKED`,
+/// `STAGED_ARTIFACT_INVALID`, and `VALIDATION`. The operator's own
+/// command is how that Job moves on.
+fn is_not_yet(error: &CommandError) -> bool {
+    matches!(
+        error.code,
+        ErrorCode::PrinterUnreachable | ErrorCode::Timeout | ErrorCode::HostOperationPending
+    )
 }
 
 /// D7: a driver handoff P6 refused before writing any row. Records
@@ -536,4 +603,8 @@ async fn resync<R: tauri::Runtime>(services: &RuntimeServices<R>) {
             _ => {}
         }
     }
+    services
+        .jobs
+        .resyncs
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }

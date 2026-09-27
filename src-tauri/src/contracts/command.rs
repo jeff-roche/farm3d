@@ -1378,6 +1378,19 @@ impl CommandError {
         .with_string_details(&[("jobId", job_id), ("printerId", printer_id)])
     }
 
+    /// P7 ruling R13(a): an unattended start whose Printer stopped being
+    /// `unattended` before the start was written. P6's
+    /// `START_PRECONDITION_CHANGED`, with the Job's own details.
+    pub fn start_safety_changed(job_id: &str, printer_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::StartPreconditionChanged,
+            "This Printer now needs the bed confirmed clear before a start.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("jobId", job_id), ("printerId", printer_id)])
+    }
+
     /// P7 D2 `JOB_ALREADY_RETRIED`.
     pub fn job_already_retried(job_id: &str, retry_entry_id: &str) -> Self {
         Self::typed(
@@ -1554,6 +1567,12 @@ impl CommandError {
             }
             RepositoryError::JobNotOnPrinter { job_id, printer_id } => {
                 Self::job_not_on_printer(&job_id, &printer_id)
+            }
+            RepositoryError::JobStartBlocked { job_id, blockers } => {
+                Self::job_start_blocked(&job_id, &blockers)
+            }
+            RepositoryError::StartSafetyChanged { job_id, printer_id } => {
+                Self::start_safety_changed(&job_id, &printer_id)
             }
             RepositoryError::AssignmentBlocked {
                 entry_id,
