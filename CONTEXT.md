@@ -284,8 +284,10 @@ _Avoid_: Batch, order
 How a Job's reserved material becomes a deduction. A completed Job
 deducts its estimate by itself. A failed or cancelled one is settled by
 the operator: the estimate scaled by how far it printed, a measured
-weight, or deferred. Until it is settled, the amount stays unavailable.
-_Avoid_: Reconciliation (that settles Host Operations), deduction
+weight, or deferred. Until it is settled, the amount stays unavailable,
+and the Job has an open material Reconciliation Requirement.
+_Avoid_: Deduction (settling can also defer); Host Operation
+reconciliation, which only checks the printer and never touches material
 
 **Reconciliation Requirement**:
 A durable record, with a stable id, of something about a Job the operator
@@ -302,7 +304,9 @@ state.
 **Outcome unknown**:
 A Job whose end farm3d could not prove: its start was abandoned, or the
 host's history stopped showing its print. farm3d stops checking, and the
-operator declares whether it completed, failed, or was cancelled.
+operator declares whether it completed, failed, or was cancelled. The
+operator may also declare the end of a printing Job whose printer farm3d
+hasn't reached for 30 minutes.
 _Avoid_: Failed, lost
 
 **Spool**:

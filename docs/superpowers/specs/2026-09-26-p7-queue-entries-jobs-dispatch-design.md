@@ -34,12 +34,19 @@ shape it most:
 P6's principle still holds: farm3d never repeats a write it can't prove
 did not happen. P7 adds one rule on top:
 
-> A Job's state changes only from farm3d's own committed records (an
-> operator command, a Host Operation's proved outcome) or from the host's
-> print history for the exact history job farm3d pinned. A status string
-> is a hint that triggers a check, never proof. When farm3d can't prove
-> how a print ended, the Job becomes **Outcome unknown** and the operator
-> decides.
+> A Job's **end** (completed, failed, or cancelled) comes only from
+> farm3d's own committed records (an operator command, a Host
+> Operation's proved outcome) or from the host's print history for the
+> exact history job farm3d pinned. A status string is a hint that
+> triggers a check, never proof of an end. When farm3d can't prove how a
+> print ended, the Job becomes **Outcome unknown**, or, if the host can't
+> be reached at all, the operator may declare the end after 30 minutes
+> (D9), and the operator decides.
+
+One exception is deliberate: `printing` ⇄ `paused` also follows the
+live status on the Job's own file (D7). Both are active, reversible
+states, neither moves material, and the next status or history read
+corrects them.
 
 ## Goal
 
@@ -200,6 +207,13 @@ other than `releasedBeforeStart`. A released entry already has its
 replacement in the Queue, so retrying it would request a second run.
 This departs from the plan's D2, which also listed `released`.
 
+For the same reason, **a Job is retried at most once**. A second
+`retry_job` for the same Job (with a new `operationId`) fails with
+`JOB_ALREADY_RETRIED` and names the existing retry entry. The newest
+entry in the chain can be retried in turn. A partial unique index on
+`queue_entries(origin_entry_id)` enforces "one successor per entry" for
+both retries and release replacements.
+
 **Position.**
 
 - `position` is dense, 1..n, over open (`queued` and `assigned`) entries.
@@ -212,9 +226,26 @@ This departs from the plan's D2, which also listed `released`.
   inserts the replacement at the freed position. Nothing else moves. Both
   happen in the release transaction (controller ruling).
 - `move_queue_entry(toPosition)` takes 1..n and renumbers the entries
-  between the old and new positions by one. Because the index is unique,
-  renumbering is two statements: negate the affected positions, then
-  write the final ones.
+  between the old and new positions by one.
+- **Renumbering always parks first.** The positions are `CHECK (position
+  >= 1)` and a partial UNIQUE index, and SQLite checks both row by row, so
+  neither negating nor a single `position = position ± 1` works, and no
+  row order is promised. Every renumber (move, close, remove, release,
+  and a Job reaching a terminal state) is therefore:
+  1. Free the slot the change needs: a closing entry's position becomes
+     NULL; a moving entry is parked at `position + 1000000`.
+  2. Park every other entry that must shift:
+     `UPDATE queue_entries SET position = position + 1000000 WHERE
+     position BETWEEN ?lo AND ?hi`. Its targets (1000001 and up) are all
+     free, so no row collides.
+  3. Write the final values from the parked ones, either in one statement
+     (`SET position = position - 1000000 ± 1 WHERE position > 1000000`,
+     whose targets were freed in step 1 and 2) or one row at a time, then
+     set the moving entry's final position.
+
+  This needs fewer than 1 000 000 open entries, which `add_to_queue`'s
+  1..50 quantity and a single operator make safe. A test fills a queue
+  and checks every renumber path (`renumber_paths_never_violate_the_unique_position_index`).
 - Assignment is sticky. An assigned entry keeps its position, and moving
   it changes only its place in the list, never its Printer.
 
@@ -239,7 +270,7 @@ row with no `from_state`, and is not a transition. Every other kind is:
 
 | Event | From | To | Raised by |
 |---|---|---|---|
-| `StageHandedOff` | `assigned` | `staging` | driver after assign, `stage_job` (in the write-ahead tx) |
+| `StageHandedOff` | `assigned`, `awaitingStart` | `staging` | driver after assign, `stage_job` (in the write-ahead tx). From `awaitingStart` it stages again, for example after a Connection endpoint change (D8) or `STAGED_ARTIFACT_INVALID` |
 | `StageSucceeded` | `staging` | `awaitingStart` | `apply_host_outcome`: upload `succeeded` |
 | `StageFailed` | `staging` | `assigned` | `apply_host_outcome`: upload `failed` or `abandoned` |
 | `StartHandedOff` | `awaitingStart` | `starting` | `start_job`, driver's unattended start (write-ahead tx) |
@@ -257,9 +288,9 @@ row with no `from_state`, and is not a transition. Every other kind is:
 | `Failed` | `printing`, `paused` | `failed` | tracker (history failure status) |
 | `Cancelled` | `printing`, `paused` | `cancelled` | tracker (history `cancelled`) |
 | `OutcomeUnknown` | `printing`, `paused` | `outcomeUnknown` | tracker (unprovable, D7) |
-| `DeclaredCompleted` | `outcomeUnknown` | `completed` | `declare_job_outcome` |
-| `DeclaredFailed` | `outcomeUnknown` | `failed` | `declare_job_outcome` |
-| `DeclaredCancelled` | `outcomeUnknown` | `cancelled` | `declare_job_outcome` |
+| `DeclaredCompleted` | `outcomeUnknown`, `printing`, `paused` | `completed` | `declare_job_outcome` (from `printing` or `paused` only while the host is unreachable, D9) |
+| `DeclaredFailed` | `outcomeUnknown`, `printing`, `paused` | `failed` | as above |
+| `DeclaredCancelled` | `outcomeUnknown`, `printing`, `paused` | `cancelled` | as above |
 | `Released` | `assigned`, `awaitingStart` | `cancelled` | `release_job` |
 | `CancelledBeforeStart` | `assigned`, `awaitingStart` | `cancelled` | `cancel_job` before start |
 | `MaterialSettled` | `failed`, `cancelled` | unchanged | `settle_job_material` (estimated, measured) |
@@ -286,19 +317,40 @@ the frontend may offer. A command outside this table fails with
 |---|---|---|---|---|---|---|---|---|---|---|
 | `assigned` | yes | — | — | — | yes (before start) | yes | — | — | — | — |
 | `staging` | — | — | — | — | — | — | — | — | — | — |
-| `awaitingStart` | — | yes | — | — | yes (before start) | yes | — | — | — | — |
+| `awaitingStart` | yes (stage again) | yes | — | — | yes (before start) | yes | — | — | — | — |
 | `starting` | — | — | — | — | — | — | — | — | — | — |
-| `printing` | — | — | yes | — | yes (after start) | — | — | — | — | — |
-| `paused` | — | — | — | yes | yes (after start) | — | — | — | — | — |
+| `printing` | — | — | yes | — | yes (after start) | — | — | if unreachable ≥ 30 min | — | — |
+| `paused` | — | — | — | yes | yes (after start) | — | — | if unreachable ≥ 30 min | — | — |
 | `outcomeUnknown` | — | — | — | — | — | — | — | yes | — | — |
-| `completed` | — | — | — | — | — | — | yes | — | — | if not yet corrected |
-| `failed` | — | — | — | — | — | — | yes | — | if `pending` or `deferred` | — |
-| `cancelled` | — | — | — | — | — | — | yes unless `releasedBeforeStart` | — | if `pending` or `deferred` | — |
+| `completed` | — | — | — | — | — | — | yes, once | — | — | if not yet corrected |
+| `failed` | — | — | — | — | — | — | yes, once | — | if `pending` or `deferred` | — |
+| `cancelled` | — | — | — | — | — | — | yes, once, unless `releasedBeforeStart` | — | if `pending` or `deferred` | — |
 
-`stage` is offered only while `lastFailure` is set or no stage has been
-handed off (the driver stages once by itself, D7). `start` is always
-listed in `awaitingStart`, and `startBlockers` says whether it can
-succeed now.
+- In `assigned`, `stage` is offered only while `lastFailure` is set or no
+  stage has been handed off (the driver stages once by itself, D7).
+- `start` is always listed in `awaitingStart`, and `startBlockers` says
+  whether it can succeed now.
+- "Unreachable ≥ 30 min" means `hostUnreachableSince` is at least
+  `JobTimings.unreachable_declare_after` (30 min) before now (D7, D9).
+  `allowedActions` is computed at read time, and the tracker republishes
+  the Job when it crosses that mark.
+- `retry` disappears once the Job has been retried (`JOB_ALREADY_RETRIED`).
+- **Settle on a settled Job.** A `settleMaterial` or `correctMaterial`
+  command is checked against the settlement before the state table. If
+  `settlement` is `settled` (a completed Job, or a failed or cancelled one
+  already settled), `settle_job_material` fails with
+  `JOB_ALREADY_SETTLED`. A second correction fails the same way. Only
+  when settlement is `open` or `notRequired`, or a correction targets a
+  non-completed Job, is it `JOB_ACTION_NOT_ALLOWED`.
+- **`staging` and `starting` offer no Job action.** Their exit is the
+  linked Host Operation. P6's `reconcile_host_operation` (**Check again**)
+  and `abandon_host_operation` (**Abandon check…**) are **not** guarded
+  by `JOB_ACTIVE`, and `JobPanel` shows both for the Job's active Host
+  Operation, with P6's own enabling rules. Abandoning an upload takes the
+  Job `staging` → `assigned` (`StageFailed`). Abandoning a start takes it
+  `starting` → `outcomeUnknown` (`StartAbandoned`). The same holds for an
+  uncertain pause, resume, or cancel op of a `printing` or `paused` Job
+  (`ControlFailed`).
 
 **Awaiting material** is not a state. `Job.startBlockers` is
 Rust-computed on every read of an `awaitingStart` Job (D7), and the UI
@@ -339,14 +391,14 @@ in-process broadcasts go out after commit, never on a replay.**
 | Stage, start, pause, resume, cancel after start (handoff) | P6's write-ahead: its ledger claim (the Host Operation's derived id), the Connection and unresolved-row re-checks, `insert_dispatching` with `job_id` — **and**, through `LinkInTx`, the Job command's own claim, the Job re-check, the Job transition, and its event | Printer (taken by `host_ops::api`) |
 | Host outcome → Job | `jobs::dispatch::apply_host_outcome(tx, &op)`: the Job transition, its event, and for `StartAbandoned` the `jobOutcomeUnknown` requirement. Idempotent: if the Job has already moved past the event, it writes nothing. | Printer |
 | Tracker terminal | Job → terminal with its event; entry → `closed`; renumber. Completed: `reservations::consume(estimate)`, settlement `settled/estimated`. Failed or cancelled: `reservations::mark_unresolved`, settlement `pending`, a `materialReconciliation` requirement (`pending`). | Printer |
-| Tracker progress and pin | `max_progress_pct`, `inconclusive_checks`, `host_job_id` (the pin writes `HostJobPinned`; the other two write no event) | Printer |
+| Tracker progress, pin, reachability | `max_progress_pct`, `inconclusive_checks`, `host_unreachable_since`, `host_job_id` (the pin writes `HostJobPinned`; the others write no event) | Printer |
 | `OutcomeUnknown` (tracker) | Job → `outcomeUnknown`, event, `jobOutcomeUnknown` requirement | Printer |
-| Declare | claim `declareJobOutcome`; Job → terminal; entry → `closed`; renumber; the `jobOutcomeUnknown` requirement → `resolved` with `{ kind: "declared", outcome }`; then exactly the tracker-terminal settlement work for that outcome | Printer |
+| Declare | claim `declareJobOutcome`; Job → terminal; entry → `closed`; renumber; the `jobOutcomeUnknown` requirement, if any, → `resolved` with `{ kind: "declared", outcome }`; then exactly the tracker-terminal settlement work for that outcome | Printer |
 | Settle / defer | claim `settleJobMaterial`; estimated: `consume(ceil(estimateMg × maxProgressPct / 100))`; measured: `consume_measured(entry)`; defer: nothing on the reservation; the Job's settlement; the requirement's status; the event | Printer |
 | Correct | claim `correctJobMaterial`; one `Measurement` ledger row that references the reservation and is marked as a correction; `correction_event_id`; the event | Printer |
 | Release | claim `releaseJob`; Job → `cancelled{releasedBeforeStart}`, settlement `notRequired`; `reservations::release`; entry → `closed{released}` (position NULL); the replacement entry inserted at the freed position | Printer |
 | Cancel before start | claim `cancelJob`; Job → `cancelled{cancelledBeforeStart}`, settlement `notRequired`; `release`; entry → `closed{cancelled}`; renumber | Printer |
-| Retry | claim `retryJob`; a linked entry (`origin_kind = retry`) at the end | none |
+| Retry | claim `retryJob`; the Job has no retry yet (`JOB_ALREADY_RETRIED`); a linked entry (`origin_kind = retry`) at the end | none |
 
 **The printer lock.** `host_ops::services.printer_lock(printer_id)` is a
 non-reentrant `tokio::sync::Mutex`. Job writes that hand off to P6 call
@@ -427,6 +479,8 @@ request counts. Tests live in `src-tauri/tests/p7_restart_matrix.rs`.
 | R18 | Cancel handoff committed, reply lost | Job `printing`, cancel op `dispatching`, sent | op `uncertain` → reconciled; the tracker proves `cancelled{cancelledByOperator}` from history | `restart_after_cancel_reply_lost_ends_cancelled_once` |
 | R19 | Pause `succeeded` committed, not applied | Job `printing`, pause op `succeeded` | Job `paused` | `restart_after_pause_success_applies_the_outcome` |
 | R20 | After declare committed | Job terminal, requirement `resolved`; for failed or cancelled a new `materialReconciliation` `pending` | unchanged | `restart_after_declare_is_stable` |
+| R21 | While a `printing` Job's Printer is unreachable (offline, or every history read fails) | Job `printing`, `host_unreachable_since` set | `host_unreachable_since` is kept across the restart (never reset by it); a successful read clears it; once it is 30 min old, `declare_job_outcome` is allowed from `printing` | `restart_keeps_host_unreachable_since_and_allows_declare_after_30_minutes` |
+| R22 | After a Connection endpoint change during `printing` (no unresolved Host Operation), then a restart | Job `printing`, the Printer's new Connection | the tracker reads history from the new endpoint and pins or completes the Job normally; nothing is written to either endpoint | `endpoint_change_during_printing_moves_tracking_to_the_new_endpoint` |
 
 **Recovery order** (`lib.rs`), before any command is served:
 `slicing::operations::recover_after_restart` → `host_ops::recover_after_restart`
@@ -524,6 +578,7 @@ comparison under Manual only (with `acknowledgeManualFacts`).
 | no Spool matches material and diameter | `NO_COMPATIBLE_SPOOL` |
 | matching Spools exist but none has enough available | `INSUFFICIENT_MATERIAL` (`detail`: the best `availableMg`) |
 | **Automatic only:** a sufficient matching Spool exists only in storage | `SPOOL_NOT_LOADED` |
+| a `materialFamily` or `filamentDiameterMm` fact is absent and the policy is not Manual | `NEEDS_MANUAL_PRINTER` (every Printer; see F5) |
 
 **Choosing the Spool for a Printer.** Among its candidate Spools: loaded
 on this Printer first, then the smallest sufficient `availableMg`, then
@@ -695,9 +750,14 @@ time.**
   uses `try_send` and ignores `Full`, because a run is already pending.
   The task drains the channel, then runs once.
 - **First run:** after `jobs::recover_after_restart`, the driver's first
-  pass, and the first host-ops reconciliation pass (D4 order). Until
-  then, `list_queue` reports `nextAutomaticAction: { kind:
-  "evaluatorNotRunning" }` (ruling R3).
+  pass, and the first host-ops reconciliation pass (D4 order).
+- **Before the evaluator exists or has run** (ruling R3): `list_queue`
+  computes each `queued` entry's `EligibilitySummary` synchronously with
+  `eligibility::evaluate` over current rows and statuses, and reports
+  `nextAutomaticAction: { kind: "evaluatorNotRunning" }`. Task 6 ships
+  exactly that. Once the evaluator has completed a run, `list_queue`
+  returns the evaluator's cached summaries and `nextAutomaticAction`
+  instead (Task 10).
 - **Triggers** (`Trigger`):
 
   | Trigger | Source |
@@ -711,20 +771,35 @@ time.**
   | `InventoryChanged` | `RuntimeServices.inventory_changes` (loads, moves, amounts, settlements) |
   | `PrinterChanged` | a Printer was created, edited, archived, unarchived, or deleted |
 
-- **A run** (`run_once`) reads every open entry in position order, plus
-  Printers, profiles, Spools, active Jobs, unresolved Host Operations,
-  live statuses, and capabilities. It evaluates each `queued` entry top to
-  bottom:
-  - It computes the entry's `EligibilitySummary`.
-  - For an Automatic entry with a candidate, it calls **the same**
-    `jobs::assign::assign` as the command, in its own `write_repo`, with
-    operation id `auto-<uuid>`, `mode = Automatic`, and
-    `assigned_by = automatic`, on the top candidate and its chosen Spool.
-  - It adds that Printer to `claimed_printers`, and re-reads that Spool's
-    availability before evaluating the next entry.
-  - If the in-transaction re-check refuses (`ASSIGNMENT_BLOCKED`, `JOB_ACTIVE`,
-    or a reservation error), it records the blocker as the entry's
-    summary, moves on, and pokes itself once more.
+- **A run** is split into a pure pass and an async driver, so the pure
+  part needs no lock:
+  - `evaluate_pass(input: &EligibilityInput-set, claimed: &BTreeSet<String>,
+    refused: &BTreeMap<String, Blocker>) -> PassResult { summaries,
+    proposal: Option<Proposal { entry_id, printer_id, spool_id }> }` is
+    pure and synchronous. It evaluates every `queued` entry top to bottom,
+    never offers a Printer in `claimed`, skips entries in `refused` (their
+    summary is the recorded blocker), and returns the **first** Automatic
+    entry with a candidate as the proposal (top candidate, chosen Spool).
+  - `async fn run_once(services) -> Result<EvaluationRun, …>` loops:
+    read a fresh input from storage and live state; call `evaluate_pass`;
+    if there is a proposal, take `host_ops.printer_lock(printer_id)` and
+    call **the same** `jobs::assign::assign` as the command, in its own
+    `write_repo`, with operation id `auto-<uuid>`,
+    `mode = Automatic`, and `assigned_by = automatic`; on success add
+    the Printer to `claimed`; on refusal add the entry to `refused`; then
+    loop. It stops when a pass has no proposal. Each loop re-reads the
+    input, so Spool availability after an assignment is always current.
+  - **Refused assignment.** If the in-transaction re-check refuses, the
+    entry's summary records the refusal's first blocker as `topBlocker`:
+    `ASSIGNMENT_BLOCKED` contributes its first `Blocker`; `JOB_ACTIVE`
+    becomes the `JOB_ACTIVE` blocker; `INSUFFICIENT_MATERIAL` becomes
+    `INSUFFICIENT_MATERIAL`; `SPOOL_NOT_RESERVABLE` becomes
+    `NO_COMPATIBLE_SPOOL`. The Printer is **not** claimed (it got no Job),
+    so later entries may still be offered it. The evaluator pokes itself
+    once more.
+  - A Printer that *was* claimed now has a Job, so later entries see it
+    blocked with `JOB_ACTIVE` in the next pass. No separate "claimed"
+    code exists.
 - **After a run,** it publishes one `queue.eligibility.changed` if any
   summary or `nextAutomaticAction` changed, plus the entry, Job, and
   Spool events of every assignment.
@@ -773,7 +848,7 @@ interval, and a queue of "stage now" requests. On a
   | upload | `failed` | `staging` | `StageFailed` (`lastFailure = { kind: "hostOperationFailed", hostOperationId, failure }`) |
   | upload | `abandoned` | `staging` | `StageFailed` (`lastFailure = { kind: "hostOperationAbandoned", hostOperationId }`) |
   | start | unresolved | any | none |
-  | start | `succeeded` | `starting` | `StartSucceeded` (sets `started_at`, `history_mark` from the op) |
+  | start | `succeeded` | `starting` | `StartSucceeded` (sets `started_at`, and `history_mark` from the op) |
   | start | `failed` | `starting` | `StartFailed` (`lastFailure`) |
   | start | `abandoned` | `starting` | `StartAbandoned`, plus a `jobOutcomeUnknown` requirement |
   | pause | `succeeded` | `printing` | `Paused` |
@@ -782,8 +857,16 @@ interval, and a queue of "stage now" requests. On a
   | pause, resume, cancel | `failed`, `abandoned` | `printing`, `paused` | `ControlFailed` (`detail`: the op id and failure) |
   | any | any | any other state | none (already applied) |
 
-  An op whose `job_id` is NULL is ignored. `active_host_operation_id` is
-  cleared when the op is terminal.
+  - An op whose `job_id` is NULL is ignored.
+  - **Clearing `active_host_operation_id`** is separate from the event
+    table and runs in **every** Job state, terminal ones included: when
+    the op is terminal and equals the Job's `active_host_operation_id`,
+    the column is set to NULL (a column update with no event, `revision`
+    + 1). So a cancel op that resolves after the tracker already made the
+    Job `cancelled` only clears the column. It writes no `ControlFailed`,
+    even if the op failed, because the Job is terminal.
+  - `StartHandedOff` sets `start_host_operation_id`, which is never
+    cleared (the tracker's pin rule reads its `dispatched_at`).
 - **Start.** `start_job(operationId, jobId, priorState, acknowledgement:
   "bedClear")`:
   1. Replay check.
@@ -822,6 +905,10 @@ interval, and a queue of "stage now" requests. On a
   it calls the same start path with a `drv-*` id, `priorState: ready`,
   and `start_confirmation = unattended`. A `ConfirmBedClear` Printer never
   starts without `start_job`.
+- **Staging again.** `stage_job` in `awaitingStart` stages the same Slice
+  Revision again (`StageHandedOff` → `staging`). The operator uses it
+  after a Connection endpoint change or a `STAGED_ARTIFACT_INVALID`
+  start. The driver never does it by itself.
 - **Pause, resume, cancel after start.** `pause_job`, `resume_job`, and
   `cancel_job` (in `printing` or `paused`) call `host_ops::api::control`.
   P6's control rule and host re-read apply unchanged. The link also
@@ -843,9 +930,16 @@ interval, and a queue of "stage now" requests. On a
   inject shorter ones). A status that says `finished`, `cancelled`, or
   `failed` while the reported file is the Job's `host_path` triggers a
   poll at once. So does a succeeded cancel op. A status is never proof.
-- **Pinning:** while `host_job_id` is NULL, the first history job (lowest
-  `job_id`) with `filename == host_path` and `job_id > history_mark` is
-  pinned: `host_job_id` is set and `HostJobPinned` is written.
+- **Endpoint.** Each poll builds its `HostStateQuery` from the Printer's
+  **current** Connection, like P6's per-operation capability objects. A
+  Connection endpoint change during `printing` (allowed by D8 when no
+  Host Operation is unresolved) moves tracking to the new endpoint.
+- **Pinning** reuses P6's start rule (b). While `host_job_id` is NULL,
+  the first history job (lowest `job_id`) that has `filename ==
+  host_path`, **and** `job_id > history_mark`, **and** `start_time_epoch_s
+  ≥ dispatched_at − 30 s` (the Job's start Host Operation's
+  `dispatched_at`, P6's `START_SKEW_TOLERANCE`) is pinned: `host_job_id`
+  is set and `HostJobPinned` is written.
 - **Verdict** (`verdict_from_history(job, history) -> (Option<u64>,
   TrackerVerdict)`, pure):
 
@@ -853,13 +947,22 @@ interval, and a queue of "stage now" requests. On a
   |---|---|---|
   | `in_progress` | `StillRunning` | none |
   | `completed` | `Completed` | `Completed` |
-  | `cancelled` | `Cancelled` | `Cancelled`, reason `cancelledByOperator` if the Job has a succeeded `cancel` op, else `hostCancelled` |
+  | `cancelled` | `Cancelled` | `Cancelled`, with the reason below |
   | `error`, `klippy_shutdown`, `klippy_disconnect`, `server_exit` | `Failed` | `Failed` |
   | any other string | `Inconclusive` | none |
   | the pinned job is not in the page | `Inconclusive` | none |
   | unpinned, and no history job qualifies, and the Printer reports a different file or no print | `Inconclusive` | none |
   | unpinned, no history job qualifies yet, and the Printer reports our file | `StillRunning` | none |
 
+- **Cancel reason.** When history proves `cancelled`, the reason is
+  `cancelledByOperator` if the Job handed off a cancel (`CancelHandedOff`)
+  whose Host Operation is anything but `failed`: `succeeded`, still
+  `dispatching`, `uncertain`, or `reconciling`, or `abandoned`. A failed
+  cancel was definitively not applied, so a cancel seen in history then
+  came from the printer: `hostCancelled`, as it is with no cancel handoff
+  at all. The Job ends `cancelled` either way. A still-unresolved cancel
+  op keeps reconciling on its own (P6), and its resolution later only
+  clears `active_host_operation_id`.
 - **Progress.** `max_progress_pct = max(max_progress_pct,
   floor(telemetry.progress × 100))`, written only when it grows by a
   whole percent, and only while the reported file is the Job's
@@ -871,11 +974,23 @@ interval, and a queue of "stage now" requests. On a
   `JobTimings.inconclusive_limit` (3), the Job becomes `outcomeUnknown`.
   A poll that could not run (the Printer is offline, or the query errors)
   counts as neither.
+- **Unreachable host** (ruling R5). A poll that could not run sets
+  `host_unreachable_since` to now if it is NULL (no event; `revision` + 1;
+  published). Any successful host read (a history poll, or a status
+  observation from the Printer's Connection) sets it back to NULL. Once it
+  is at least `JobTimings.unreachable_declare_after` (30 min) old,
+  `declareOutcome` appears in the Job's `allowedActions` and
+  `declare_job_outcome` is accepted from `printing` or `paused` (D9). The
+  Printer then isn't trapped: without it, a Job whose Printer never
+  answers again could never end, so the Printer couldn't be archived and
+  its Spool's reservation would never settle.
 - **The tracker never adopts a foreign print.** It only considers the
   history job it pinned, and it pins only a job for this Job's
   `host_path` above this Job's `history_mark`.
 
-`JobTimings { history_poll: Duration, inconclusive_limit: u32 }`. The
+`JobTimings { history_poll: Duration, inconclusive_limit: u32,
+unreachable_declare_after: Duration }`, defaulting to 10 s, 3, and 30 min.
+Tests inject short ones. The
 plan's quick-print gap from P6 closes for Jobs: a start that finished
 before the first poll still pins its history job and completes (R10's
 pattern).
@@ -893,7 +1008,7 @@ Every guard runs inside the mutation's own transaction.
 | Slice Revision delete | any Queue Entry (any state) or Job references it | `LIFECYCLE_BLOCKED`, blocker `QUEUE_REFERENCES_REVISION`: "Queue Entries or Jobs use this Slice Revision." |
 | Model delete | already blocked transitively (`SLICE_REVISIONS_EXIST`) | unchanged |
 | Spool archive, mark empty | open (`active` or `unresolved`) reservations | `LIFECYCLE_BLOCKED`, `SPOOL_RESERVED` (P3, unchanged) |
-| Connection endpoint change, Connection clear, credential clear | an active Job past `assigned` (`staging` through `outcomeUnknown`) | `CONNECTION_IN_USE` with `{ printerId, jobId }` |
+| Connection endpoint change, Connection clear, credential clear | the Printer has an **unresolved Host Operation** (P6's guard, unchanged). An active Job with no unresolved Host Operation does **not** block (ruling R5). | `CONNECTION_IN_USE`. When the unresolved op is linked to a Job, `details` also carry `jobId`, `recovery` is `[OPEN_JOB]`, and the message is the Job one (§Error codes) |
 
 - **Why import needs no Job at all, not just no active one.**
   `replace_all` deletes every Printer, and `jobs.printer_id` is `ON
@@ -907,6 +1022,14 @@ Every guard runs inside the mutation's own transaction.
   DELETE RESTRICT`, which backs up `QUEUE_REFERENCES_REVISION`.
 - `LifecycleBlockerCode` gains `JOB_ACTIVE`, `JOB_HISTORY_EXISTS`,
   `QUEUE_ENTRY_PINNED`, and `QUEUE_REFERENCES_REVISION`.
+- **Why an active Job alone doesn't block a Connection change.** A
+  printing Job whose Printer moved to a new address would otherwise be
+  stuck: the tracker could never read it, and the Job could never end.
+  After the change, the tracker reads from the new endpoint (D7). A staged
+  file of an `awaitingStart` Job is on the old endpoint, so its start
+  fails `STAGED_ARTIFACT_INVALID`, and the operator stages again
+  (`stage_job` from `awaitingStart`). This departs from the plan's D8,
+  which blocked any active Job past `assigned`.
 - Archiving keeps Job identity: Jobs keep `printer_id` and
   `printer_snapshot_json` (name, location, catalog reference, resolved
   profile at assignment).
@@ -939,15 +1062,19 @@ Every guard runs inside the mutation's own transaction.
 - **`declare_job_outcome(operationId, jobId, outcome, acknowledgement:
   "hostStateUnknown")`**, with `outcome` one of `completed`, `failed`, or
   `cancelled`:
-  - allowed only in `outcomeUnknown` (`JOB_ACTION_NOT_ALLOWED`);
+  - allowed in `outcomeUnknown`, and in `printing` or `paused` once
+    `hostUnreachableSince` is at least 30 minutes old (ruling R5);
+    otherwise `JOB_ACTION_NOT_ALLOWED`;
+  - from `printing` or `paused` there is no `jobOutcomeUnknown`
+    requirement to resolve; everything else below is the same;
   - `acknowledgement` must be `"hostStateUnknown"` (`VALIDATION`);
   - `completed`: the estimate is consumed and settlement is
     `settled/estimated`;
   - `failed` or `cancelled` (`cancelReason = operatorDeclared`): the
     reservation becomes `unresolved`, settlement is `pending`, and a
     `materialReconciliation` requirement opens;
-  - the `jobOutcomeUnknown` requirement is resolved with `{ kind:
-    "declared", outcome }`, and the entry closes;
+  - the `jobOutcomeUnknown` requirement, if any, is resolved with
+    `{ kind: "declared", outcome }`, and the entry closes;
   - farm3d sends nothing to the host.
 
 ## Material settlement
@@ -968,11 +1095,12 @@ Every guard runs inside the mutation's own transaction.
 - `Job.settlementPreview = { estimatedUseMg }` only while settlement is
   `pending` or `deferred`, and `null` otherwise (ruling R4). The dialog
   shows it before confirming.
-- A second settle with a new `operationId` fails with
-  `JOB_ALREADY_SETTLED`. A second correction fails the same way, with
-  `reason: "corrected"`. `settle` on `open` or `notRequired`, and
-  `correct` on anything but `completed`, fail with
-  `JOB_ACTION_NOT_ALLOWED`.
+- `settle_job_material` on any Job whose settlement is `settled`
+  (including every completed Job) fails with `JOB_ALREADY_SETTLED`
+  (`reason: "settled"`). A second correction fails the same way, with
+  `reason: "corrected"`. `settle` when settlement is `open` or
+  `notRequired`, and `correct` on anything but `completed`, fail with
+  `JOB_ACTION_NOT_ALLOWED` (D3).
 - Every settlement path publishes the Job, the requirement (if any), and
   the Spool (`spools::events::publish_ids`) once, and sends one
   `InventoryChange`.
@@ -1039,6 +1167,7 @@ CREATE TABLE queue_entries (
 CREATE UNIQUE INDEX queue_entries_open_position ON queue_entries(position) WHERE position IS NOT NULL;
 CREATE INDEX queue_entries_lineage ON queue_entries(lineage_id, copy_index);
 CREATE INDEX queue_entries_slice_revision ON queue_entries(slice_revision_id);
+CREATE UNIQUE INDEX queue_entries_one_successor ON queue_entries(origin_entry_id) WHERE origin_entry_id IS NOT NULL;
 CREATE INDEX queue_entries_manual_printer ON queue_entries(manual_printer_id) WHERE manual_printer_id IS NOT NULL;
 
 CREATE TABLE jobs (
@@ -1062,11 +1191,13 @@ CREATE TABLE jobs (
   start_confirmation TEXT CHECK (start_confirmation IN ('bedClear','unattended')),
   upload_host_operation_id TEXT REFERENCES host_operations(id) ON DELETE RESTRICT,
   active_host_operation_id TEXT REFERENCES host_operations(id) ON DELETE RESTRICT,
+  start_host_operation_id TEXT REFERENCES host_operations(id) ON DELETE RESTRICT,
   host_path TEXT,
   history_mark INTEGER CHECK (history_mark IS NULL OR history_mark >= 0),
   host_job_id INTEGER CHECK (host_job_id IS NULL OR host_job_id >= 0),
   max_progress_pct INTEGER NOT NULL DEFAULT 0 CHECK (max_progress_pct BETWEEN 0 AND 100),
   inconclusive_checks INTEGER NOT NULL DEFAULT 0 CHECK (inconclusive_checks >= 0),
+  host_unreachable_since TEXT,
   last_failure_json TEXT CHECK (last_failure_json IS NULL OR json_valid(last_failure_json)),
   correction_event_id TEXT,
   created_at TEXT NOT NULL,
@@ -1081,6 +1212,8 @@ CREATE TABLE jobs (
   CHECK (state NOT IN ('awaitingStart','starting','printing','paused') OR upload_host_operation_id IS NOT NULL),
   CHECK (state NOT IN ('starting','printing','paused') OR start_confirmation IS NOT NULL),
   CHECK (state NOT IN ('printing','paused') OR (started_at IS NOT NULL AND history_mark IS NOT NULL)),
+  CHECK (state NOT IN ('starting','printing','paused') OR start_host_operation_id IS NOT NULL),
+  CHECK (host_unreachable_since IS NULL OR state IN ('printing','paused')),
   CHECK (correction_event_id IS NULL OR state = 'completed')
 ) STRICT;
 CREATE UNIQUE INDEX jobs_one_active_per_printer ON jobs(printer_id)
@@ -1242,6 +1375,7 @@ type Job = {
   assignedBy: AssignedBy; startConfirmation: StartConfirmation | null;
   uploadHostOperationId: string | null; activeHostOperationId: string | null;
   hostPath: string | null; maxProgressPct: number;
+  hostUnreachableSince: string | null;   // ruling R5; printing/paused only
   lastFailure: JobFailure | null;
   startBlockers: Blocker[];            // non-empty only in awaitingStart
   allowedActions: JobAction[];
@@ -1281,8 +1415,8 @@ type JobHistory = {
 
 `HostOperation` gains `jobId: string | null`. `SpoolFacets` gains
 `reconciliation: boolean` (any `unresolved` reservation). The Rust
-backend-only fields are `history_mark`, `host_job_id`, and
-`inconclusive_checks`.
+backend-only fields are `history_mark`, `host_job_id`,
+`start_host_operation_id`, and `inconclusive_checks`.
 
 ### Commands
 
@@ -1292,7 +1426,7 @@ top-level camelCase fields.
 
 | Command | Arguments | Result |
 |---|---|---|
-| `list_queue` | `{}` | `QueueSnapshot` |
+| `list_queue` | `{}` | `QueueSnapshot`. Until the evaluator has run, `eligibility` is computed synchronously and `nextAutomaticAction` is `{ kind: "evaluatorNotRunning" }` (R3, D6) |
 | `add_to_queue` | `{ operationId, sliceRevisionId, quantity: 1..=50, policy, preference, materialEstimate?: MaterialEstimate, manualPrinterId?: string }` | `QueueChange` (the N entries) |
 | `update_queue_entry` | `{ operationId, entryId, expectedRevision, policy?, preference? }` | `QueueChange` |
 | `move_queue_entry` | `{ operationId, entryId, expectedRevision, toPosition }` | `QueueChange` (every renumbered entry) |
@@ -1305,7 +1439,7 @@ top-level camelCase fields.
 | `resume_job` | `{ operationId, jobId }` | `QueueChange` |
 | `cancel_job` | `{ operationId, jobId }` | `QueueChange`: before start, the Job `cancelled` and the entry closed; after start, the Job with its cancel op active |
 | `release_job` | `{ operationId, jobId }` | `QueueChange` (the Job, the closed entry, the replacement) |
-| `retry_job` | `{ operationId, jobId }` | `QueueChange` (the new entry) |
+| `retry_job` | `{ operationId, jobId }` | `QueueChange` (the new entry). A second retry of the same Job is `JOB_ALREADY_RETRIED` |
 | `declare_job_outcome` | `{ operationId, jobId, outcome: DeclaredOutcome, acknowledgement: "hostStateUnknown" }` | `QueueChange` |
 | `settle_job_material` | `{ operationId, jobId, choice: SettleChoice }` | `QueueChange` |
 | `correct_job_material` | `{ operationId, jobId, entry: AmountEntry }` | `QueueChange` |
@@ -1384,6 +1518,7 @@ and never carry a credential, host body, or host URL.
 | `JOB_START_BLOCKED` | `start_job` when `start_blockers` is non-empty | `{ jobId, blockers: Blocker[] }` | the first blocker's `recovery`, if any | the first blocker's message |
 | `JOB_NOT_ON_PRINTER` | `pause_job`, `resume_job`, `cancel_job` after start, when the host reports a file other than the Job's | `{ jobId, printerId }` | `[RELOAD]` | "The printer is printing a different file than this Job's." |
 | `JOB_ALREADY_SETTLED` | `settle_job_material` on `settled`; `correct_job_material` on a corrected Job | `{ jobId, reason: "settled" \| "corrected" }` | `[RELOAD]` | "This Job's material is already settled." / "This Job already has a correction." |
+| `JOB_ALREADY_RETRIED` | `retry_job` on a Job whose entry already has a retry | `{ jobId, retryEntryId }` | `[RELOAD]` | "This Job was already retried." |
 | `JOBS_EXIST` | `import_printers` (`replace_all`) | `{ printerIds: string[], jobIds: string[], queueEntryIds: string[] }` (each list at most 20) | `[]` | "Printers with Job history can't be replaced by an import." |
 | `INSUFFICIENT_MATERIAL` | `ReservationError::InsufficientAvailable` (backstop; the gates normally catch it) | `{ spoolId, availableMg, requiredMg }` | `[RELOAD]` | "Spool #<n> no longer has enough material." |
 | `SPOOL_NOT_RESERVABLE` | `ReservationError::SpoolNotReservable` | `{ spoolId, lifecycle }` | `[RELOAD]` | "Spool #<n> is <lifecycle> and can't be reserved." |
@@ -1392,12 +1527,20 @@ and never carry a credential, host body, or host URL.
 Existing codes reused, unchanged: `VALIDATION` (including a reused
 `operationId`), `NOT_FOUND`, `CONFLICT` (a stale `expectedRevision`),
 `LIFECYCLE_BLOCKED` (with the four new `LifecycleBlockerCode`s),
-`CONNECTION_IN_USE` (now also `{ printerId, jobId }` with
-`[OPEN_JOB]`), and every P6 code that `host_ops::api` returns
+`CONNECTION_IN_USE` (below), and every P6 code that `host_ops::api` returns
 (`HOST_OPERATION_PENDING`, `CAPABILITY_UNSUPPORTED`, `START_NOT_ALLOWED`,
 `START_PRECONDITION_CHANGED`, `CONTROL_NOT_ALLOWED`,
 `STAGED_ARTIFACT_INVALID`, `PRINTER_UNREACHABLE`, `TIMEOUT`,
 `AUTHENTICATION_FAILED`, `PROTOCOL_ERROR`).
+
+**`CONNECTION_IN_USE` for a Job.** P6 raises it while the Printer has an
+unresolved Host Operation. When that operation is linked to a Job
+(`job_id` set), `details` are `{ printerId, hostOperationId, jobId }`,
+`recovery` is `[OPEN_JOB]`, and the message is: "This Printer's Job is
+waiting on a printer operation. Let it finish, or abandon the check from
+the Job, before changing this Connection." A raw (unlinked) operation
+keeps P6's details, recovery, and message. `RepositoryError::ConnectionInUse`
+gains `job_id: Option<String>`.
 
 `RecoveryCode` gains `OPEN_JOB` (open the Job in Queue),
 `OPEN_PRINTER_SETUP`, `UNARCHIVE_PRINTER`, `LOAD_SPOOL` (open Spools
@@ -1408,8 +1551,8 @@ used by the Spool dock for a `reconciliation` Spool.
 `RepositoryError` gains `IllegalQueueEntryTransition`,
 `IllegalJobTransition` (both `INTERNAL` when unmapped, D2/D3),
 `QueueEntryActionNotAllowed`, `JobActionNotAllowed`, `JobActive`,
-`AssignmentBlocked`, `JobNotOnPrinter`, `JobAlreadySettled`, `JobsExist`,
-and `JobConnectionInUse`. Each maps in `CommandError::from_repository` to
+`AssignmentBlocked`, `JobNotOnPrinter`, `JobAlreadySettled`,
+`JobAlreadyRetried`, and `JobsExist`. Each maps in `CommandError::from_repository` to
 the code above.
 
 ## Frontend architecture
@@ -1443,6 +1586,10 @@ settlement, and order. TypeScript presents them.
   (`queue: Set(["job"])`). The id is a Queue Entry id (`qen-*`) or a Job
   id (`job-*`), resolved by prefix. After Add to Queue the app navigates
   to `#nav=v1/queue/job/<first entry id>`.
+- **The Job's Host Operation in the UI.** `JobPanel` shows the Job's
+  active Host Operation from the host-operations store, with P6's **Check
+  again** and **Abandon check…** (P6's enabling rules). That is the only
+  exit from a Job stuck in `staging` or `starting` (D3).
 - **Decision 9 in the UI:** with an active Job, `PrinterJobPanel`
   renders `JobPanel` and hides P6's raw Stage and Start. Pause, Resume,
   and Cancel go through the Job.
@@ -1483,7 +1630,7 @@ settlement, and order. TypeScript presents them.
 3. **Transactions and concurrency.** Assignment is atomic; a failed
    reserve leaves nothing. Two concurrent assigns of one entry, or of two
    entries to one Printer, yield one Job. Replays publish nothing.
-4. **Restart matrix.** One test per row R1–R20, with no duplicate upload
+4. **Restart matrix.** One test per row R1–R22, with no duplicate upload
    and no unconfirmed start.
 5. **Eligibility.** One test per gate, per failing and passing case, and
    fixtures F1–F8 verbatim.
@@ -1520,10 +1667,10 @@ settlement, and order. TypeScript presents them.
 | 5 | `slicing/compat.rs`, D5 gates, ranking, fixtures F1–F8 |
 | 6 | The queue commands, assign, release, retry, cancel before start, `get_job_history`, the `queue` stream, `QueueChange`, `EligibilitySummary` and `evaluatorNotRunning` (R3) |
 | 7 | `host_ops::api`, `NewHostOperation.job_id`, the broadcasts, the raw-write `JOB_ACTIVE` guard |
-| 8 | Driver, `apply_host_outcome`, start, control, tracker, recovery, declare, R1–R20 |
+| 8 | Driver, `apply_host_outcome`, start, control, tracker, recovery, declare, R1–R22, `host_unreachable_since` |
 | 9 | Settlement, `settlementPreview` (R4) |
 | 10 | The evaluator and `NextAutomaticAction` |
-| 11 | D8 guards and `JOBS_EXIST` |
+| 11 | D8 guards, `JOBS_EXIST`, and the Job case of `CONNECTION_IN_USE` |
 | 12–15 | Frontend |
 | 16 | Tracer |
 | 17 | Verification record |
@@ -1574,13 +1721,35 @@ Each departs from, or sharpens, the plan's Design reference.
     `DeclaredFailed`, `DeclaredCancelled`), so the transition function
     needs no payload.
 18. **`MaterialSettled` and `MaterialDeferred` apply to `failed` and
-    `cancelled` only; `MaterialCorrected` to `completed` only.**
+    `cancelled` only; `MaterialCorrected` to `completed` only.** Settling
+    a `settled` Job is `JOB_ALREADY_SETTLED`, checked before the state
+    table.
+19. **Ruling R5 (fix round 1).** `declare_job_outcome` is also allowed
+    from `printing` or `paused` after 30 minutes without a successful host
+    read (`host_unreachable_since`). An active Job alone never blocks a
+    Connection change; only an unresolved Host Operation does. `stage_job`
+    may stage again from `awaitingStart`.
+20. **Renumbering parks rows at `position + 1000000`** before writing
+    final positions, because the CHECK and the unique index are checked
+    row by row.
+21. **A Job is retried at most once** (`JOB_ALREADY_RETRIED`), enforced
+    by a unique index on `origin_entry_id`.
+22. **The evaluator is a pure pass plus an async loop.** Only the loop
+    takes the Printer lock.
+23. **The tracker's pin reuses P6's rule (b)**: `job_id > history_mark`
+    and `start_time ≥ dispatched_at − 30 s`. The Job keeps
+    `start_host_operation_id` for this.
+24. **The fail-safe principle covers a Job's end.** `printing` ⇄ `paused`
+    may follow status on the Job's own file.
 
 ## Residual risks
 
 - Moonraker history pagination: the tracker reads the newest 50 jobs. A
   farm that runs more than 50 other jobs on one Printer during one Job
   would lose the pinned job from the page and end `outcomeUnknown`.
+- Declaring a Job's end after 30 minutes without the host is an operator
+  judgment. If the printer was in fact still printing, the next entries
+  see it as `PRINTER_BUSY_EXTERNAL` once it is reachable again.
 - A foreign print during an `awaitingStart` Job gets no farm3d control;
   the operator uses the printer (decision 9).
 - A Printer import is impossible once any Job exists, until P9 adds

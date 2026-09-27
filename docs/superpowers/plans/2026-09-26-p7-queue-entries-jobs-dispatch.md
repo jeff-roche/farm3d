@@ -950,6 +950,9 @@ pub fn open_requirements(conn) -> Result<Vec<ReconciliationRequirement>, Storage
   - `each_copy_is_independently_removable_and_renumbers_the_rest`
   - `move_entry_renumbers_densely_and_bumps_revision`
   - `move_entry_rejects_stale_revision_with_revision_conflict`
+  - `renumber_paths_never_violate_the_unique_position_index` (move, close,
+    remove, and release all park rows at `position + 1000000` before
+    writing final positions, spec D2)
   - `closed_entries_have_no_position_and_keep_lineage`
   - `create_linked_release_takes_the_released_position_and_shifts_nothing_else`
   - `create_linked_retry_appends_at_the_end`
@@ -1166,6 +1169,7 @@ pub struct QueueChange { pub entries: Vec<QueueEntry>, pub jobs: Vec<Job>, pub r
   - `release_cancels_the_job_releases_the_reservation_and_replaces_the_entry_in_place`
   - `release_after_start_handoff_is_job_action_not_allowed`
   - `retry_creates_a_linked_entry_at_the_end_and_leaves_history_untouched`
+  - `second_retry_of_the_same_job_is_job_already_retried`
   - `three_copies_are_independently_assignable_releasable_and_retryable`
   - `list_queue_snapshot_sequence_precedes_rows` (listen-before-backfill
     contract)
@@ -1223,6 +1227,9 @@ pub fn subscribe_status(&self) -> tokio::sync::broadcast::Receiver<String /* pri
   pause, resume, and cancel) refuse with `JOB_ACTIVE` when the Printer
   has an active Job (decision 9). They check this inside the
   write-ahead, via `jobs::repository::active_job_for_printer`.
+  `reconcile_host_operation` and `abandon_host_operation` are **not**
+  guarded: they are the operator's exit for a Job-linked op stuck
+  `uncertain` (spec D3).
 
 - [ ] **Step 1: Write the failing tests:**
   - `link_runs_in_the_write_ahead_transaction_and_commits_with_the_row`
@@ -1284,15 +1291,17 @@ pub(crate) async fn start_job<R>(jobs: &Arc<JobServices<R>>, operation_id: Strin
 pub(crate) async fn control_job<R>(jobs: &Arc<JobServices<R>>, operation_id: String, job_id: &str, verb: ControlVerb) -> Result<Job, CommandError>;
 /// Idempotent: maps a Job-linked HostOperation's current state onto its Job (D3). No-op when already applied.
 pub fn apply_host_outcome(tx: &Transaction<'_>, op: &HostOperation, now: &str) -> Result<Option<Job>, RepositoryError>;
-pub fn start_blockers(job: &Job, printer: &StoredPrinter, status: Option<&PrinterStatus>, loaded: &[String]) -> Vec<Blocker>;
+pub fn start_blockers(job: &Job, printer: &StoredPrinter, status: Option<&PrinterStatus>, loaded: &[String],
+                      caps: &PrinterCapabilities, unresolved_host_operation: bool) -> Vec<Blocker>;
 pub fn may_start_unattended(job: &Job, printer: &StoredPrinter, status: &PrinterStatus, caps: &PrinterCapabilities, loaded: &[String]) -> bool;
 // jobs/tracker.rs
-pub enum TrackerVerdict { StillRunning { progress_pct: u8 }, Paused, Completed, Failed, Cancelled, Inconclusive }
+// Paused/resumed and progress follow the status broadcast, not history (spec D7).
+pub enum TrackerVerdict { StillRunning, Completed, Failed, Cancelled, Inconclusive }
 pub fn verdict_from_history(job: &Job, history: &[HistoryJob]) -> (Option<u64 /* pinned host_job_id */>, TrackerVerdict); // pure
 // jobs/recovery.rs
 pub fn recover_after_restart(storage: &Storage, now: DateTime<Utc>) -> Result<Vec<Job>, StorageError>;
 // jobs/services.rs
-pub struct JobTimings { pub history_poll: Duration, pub inconclusive_limit: u32 }
+pub struct JobTimings { pub history_poll: Duration, pub inconclusive_limit: u32, pub unreachable_declare_after: Duration } // 10 s, 3, 30 min
 pub struct JobServices<R: Runtime> { /* storage, host_ops, manager, queue stream, inventory tx, evaluator trigger, timings, clock */ }
 ```
 
@@ -1325,9 +1334,20 @@ pub struct JobServices<R: Runtime> { /* storage, host_ops, manager, queue stream
   - `tracker_completes_the_job_from_history_after_finish_print`
   - `tracker_fails_the_job_on_klippy_shutdown`
   - `tracker_cancels_the_job_on_host_cancel`
-  - `tracker_never_adopts_a_foreign_print` (push a job for another file,
-    and the Job stays `awaitingStart`, with the Printer
-    `PRINTER_BUSY_EXTERNAL`)
+  - `tracker_never_adopts_a_foreign_print` (push a job for another file.
+    The Job stays `awaitingStart` with `startBlockers` `PRINTER_NOT_READY`;
+    another entry sees the Printer as `JOB_ACTIVE`, because gate 1 checks
+    the active Job before `PRINTER_BUSY_EXTERNAL`, which applies only to a
+    Printer with no active Job. A `printing` Job never pins the foreign
+    history job.)
+  - `unreachable_printing_job_can_be_declared_after_30_minutes`
+    (ruling R5: `host_unreachable_since`, `allowedActions`, declare from
+    `printing`)
+  - `endpoint_change_during_printing_moves_tracking_to_the_new_endpoint`
+  - `pin_requires_start_time_after_dispatch_minus_30_s`
+  - `stage_again_from_awaiting_start_after_staged_artifact_invalid`
+  - `linked_upload_abandoned_via_p6_returns_the_job_to_assigned`
+    (P6 `abandon_host_operation` is not `JOB_ACTIVE`-guarded)
   - `quick_print_that_finished_before_the_first_poll_is_still_completed`
     (history pinning closes P6's quick-start gap for Jobs)
   - `abandoned_start_makes_the_job_outcome_unknown_with_a_requirement`
@@ -1443,7 +1463,12 @@ pub fn correct(tx, operation_id, job_id, entry: &AmountEntry, now) -> Result<Set
 pub enum Trigger { Startup, QueueChanged, JobChanged, HostOperationChanged, StatusChanged(String), InventoryChanged, PrinterChanged, CapabilitiesChanged }
 pub struct EvaluatorHandle { tx: mpsc::Sender<Trigger> }
 impl EvaluatorHandle { pub fn poke(&self, trigger: Trigger); }                 // coalescing, never blocks
-pub fn run_once(storage: &Storage, world: &dyn WorldReader, now: &str) -> Result<EvaluationRun, RepositoryError>; // pure-ish: one serialized pass
+/// Pure and sync: evaluates every queued entry top to bottom and proposes the first Automatic assignment (spec D6).
+pub fn evaluate_pass(inputs: &PassInput<'_>, claimed: &BTreeSet<String>, refused: &BTreeMap<String, Blocker>) -> PassResult;
+pub struct PassResult { pub summaries: Vec<EligibilitySummary>, pub proposal: Option<Proposal> }
+pub struct Proposal { pub entry_id: String, pub printer_id: String, pub spool_id: String }
+/// Async: loops evaluate_pass → take the Printer lock → jobs::assign::assign, until no proposal.
+pub async fn run_once<R: Runtime>(services: &Arc<QueueServices<R>>) -> Result<EvaluationRun, RepositoryError>;
 pub struct EvaluationRun { pub summaries: Vec<EligibilitySummary>, pub assigned: Vec<Job>, pub next: NextAutomaticAction }
 ```
 
@@ -1496,7 +1521,9 @@ pub struct EvaluationRun { pub summaries: Vec<EligibilitySummary>, pub assigned:
   - `slice_revision_delete_is_blocked_by_any_entry_or_job`
   - `model_delete_stays_blocked_transitively`
   - `printer_import_is_rejected_whole_while_any_job_exists`
-  - `endpoint_change_is_blocked_while_a_job_is_past_assigned`
+  - `endpoint_change_is_blocked_only_by_an_unresolved_host_operation`
+    (ruling R5: an active Job alone doesn't block; a Job-linked unresolved
+    op gives `CONNECTION_IN_USE` with `jobId` and the Job message)
   - `spool_archive_is_blocked_by_an_unresolved_job_reservation`
   - `no_row_is_orphaned_after_every_allowed_lifecycle_action` (walk all
     FKs with `PRAGMA foreign_key_check`)
