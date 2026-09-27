@@ -83,6 +83,16 @@ pub enum ReservationError {
     InvalidAmount,
     /// No reservation (or, for `reserve`, no Spool) with that id.
     NotFound,
+    /// [`consume_measured`]'s caller-supplied `entry` failed
+    /// `ledger::resolve_entry`'s own validation (an out-of-range `netMg`,
+    /// or a `Scale` entry naming an unknown `tareId`) -- carries the same
+    /// `field_path` `RepositoryError::Validation` would (controller ruling
+    /// R8: Task 9 passes an operator-entered weight straight into
+    /// `consume_measured`, so a typo must surface as a recoverable
+    /// `VALIDATION`, not `INTERNAL`).
+    Validation {
+        field_path: &'static str,
+    },
     Storage(StorageError),
 }
 
@@ -101,21 +111,20 @@ impl From<rusqlite::Error> for ReservationError {
 /// `ledger::append` (used by [`consume`] and [`consume_measured`]),
 /// `ledger::resolve_entry` (used by [`consume_measured`]), and
 /// `repository::load_spool` return `RepositoryError`. `Storage` passes
-/// through unchanged. Every other variant collapses to
-/// `Storage(OperationFailed)`, which loses its detail. [`consume`]'s guards
-/// make them unlikely: it rejects a negative `used_mg` and clamps `afterMg`
-/// to `0..=currentMg`, so `append` should not reject the amount, and it
-/// loads the Spool first, so `append`'s own `NotFound` should not occur.
-/// [`consume_measured`] has no equivalent guard on its caller-supplied
-/// `entry` -- an out-of-range amount or an unknown `tareId` genuinely does
-/// collapse into this generic `Storage` case rather than surfacing as
-/// `Validation`, a known gap left for the command layer that calls it
-/// (P7 Task 9) to close, e.g. by validating `entry` itself first. Nothing
-/// here enforces that beyond those guards.
+/// through unchanged, and `Validation` preserves its `field_path` (R8:
+/// [`consume_measured`]'s caller-supplied `entry` is the one path here that
+/// can genuinely fail it -- an out-of-range amount or an unknown `tareId`).
+/// Every other variant collapses to `Storage(OperationFailed)`, which loses
+/// its detail. [`consume`]'s guards make those unlikely: it rejects a
+/// negative `used_mg` and clamps `afterMg` to `0..=currentMg`, so `append`
+/// should not reject the amount, and it loads the Spool first, so
+/// `append`'s own `NotFound` should not occur. Nothing here enforces that
+/// beyond those guards.
 impl From<RepositoryError> for ReservationError {
     fn from(error: RepositoryError) -> Self {
         match error {
             RepositoryError::Storage(storage_error) => Self::Storage(storage_error),
+            RepositoryError::Validation { field_path } => Self::Validation { field_path },
             _ => Self::Storage(StorageError::OperationFailed),
         }
     }

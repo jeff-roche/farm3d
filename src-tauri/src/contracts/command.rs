@@ -1349,6 +1349,14 @@ impl From<crate::spools::reservations::ReservationError> for CommandError {
             ReservationError::InvalidAmount => {
                 Self::validation_at("amountMg", "The submitted value is invalid.")
             }
+            // R8: `consume_measured`'s caller-supplied `entry` failed
+            // validation (an out-of-range amount, or a `Scale` entry
+            // naming an unknown tare) -- the same `VALIDATION` shape
+            // `RepositoryError::Validation` gets from `from_repository`,
+            // so an operator-entered typo is recoverable, not `INTERNAL`.
+            ReservationError::Validation { field_path } => {
+                Self::validation_at(field_path, "The submitted value is invalid.")
+            }
             ReservationError::NotFound => Self::typed(
                 ErrorCode::NotFound,
                 "This reservation no longer exists.",
@@ -1559,6 +1567,20 @@ mod tests {
         let not_found: CommandError = ReservationError::NotFound.into();
         assert_eq!(not_found.code, ErrorCode::NotFound);
         assert_eq!(not_found.recovery, vec![RecoveryCode::Reload]);
+
+        // R8: `consume_measured`'s caller-supplied `entry` failing
+        // validation must map to `VALIDATION` with its `field_path`, not
+        // collapse into `INTERNAL`.
+        let validation: CommandError = ReservationError::Validation {
+            field_path: "entry.netMg",
+        }
+        .into();
+        assert_eq!(validation.code, ErrorCode::Validation);
+        assert_eq!(validation.recovery, vec![RecoveryCode::EditFields]);
+        assert_eq!(
+            validation.details.unwrap().get("fieldPath"),
+            Some(&JsonValue::String("entry.netMg".to_string()))
+        );
     }
 
     #[test]
