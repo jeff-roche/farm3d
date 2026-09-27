@@ -472,10 +472,7 @@ impl<'b, B: Backend> Tracer<'b, B> {
             app.count_events(job_id, "hostJobPinned") == 1
         });
         let job = app.job(job_id);
-        assert!(
-            matches!(job["state"].as_str(), Some("printing") | Some("completed")),
-            "{job}"
-        );
+        self.assert_printing_unless_host_complete(&job);
         assert_eq!(job["startConfirmation"], "bedClear", "{job}");
         // The Job's progress comes from its own print only: never from the
         // previous run of the same file, which the host still reports as
@@ -487,6 +484,20 @@ impl<'b, B: Backend> Tracer<'b, B> {
                     <= (host.progress * 100.0).floor() as i64,
                 "the Job took another run's progress: {job}"
             );
+        }
+    }
+
+    /// `job` (read before this call) is `printing`, or `completed` only when
+    /// the host itself reports the print `complete` (on the simulator, a
+    /// 10 s print can end during a restart; on the fake it never does).
+    /// The host is read after the Job, and a host never leaves `complete`
+    /// by itself, so a completed Job always finds it there.
+    fn assert_printing_unless_host_complete(&self, job: &Value) {
+        let host = self.host().print_state;
+        match job["state"].as_str() {
+            Some("printing") => {}
+            Some("completed") => assert_eq!(host, "complete", "{job}"),
+            _ => panic!("expected printing (host {host}): {job}"),
         }
     }
 
@@ -690,7 +701,15 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
         "start_job",
         json!({ "operationId": "trc-start-1-none", "jobId": job1, "priorState": prior }),
     );
-    assert!(missing.is_err(), "a start with no acknowledgement: {missing:?}");
+    // A missing key never reaches the command: Tauri refuses the call while
+    // deserializing its arguments, so there is no farm3d error code.
+    assert_eq!(
+        missing.expect_err("a start with no acknowledgement"),
+        json!(
+            "invalid args `acknowledgement` for command `start_job`: \
+             command start_job missing required key acknowledgement"
+        )
+    );
     let refused = app
         .call(
             "start_job",
@@ -712,11 +731,7 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     // Restart during `printing`: the tracker keeps its pin, and nothing is
     // sent again.
     let app = t.restart(app);
-    let job = app.job(&job1);
-    assert!(
-        matches!(job["state"].as_str(), Some("printing") | Some("completed")),
-        "{job}"
-    );
+    t.assert_printing_unless_host_complete(&app.job(&job1));
     assert_eq!(app.count_events(&job1, "hostJobPinned"), 1);
     t.assert_writes(&app, 1, 1, "after the restart while printing");
 

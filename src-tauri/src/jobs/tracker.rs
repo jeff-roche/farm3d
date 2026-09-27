@@ -193,10 +193,16 @@ pub fn status_hint(
     if !ours {
         return StatusHint::default();
     }
-    // Owner decision 5: only this Job's print counts. A host that ended the
-    // previous run of the same file still reports that file and its
-    // progress until the next print begins, so an ended status says nothing
-    // about this Job's progress.
+    // Owner decision 5 and ruling R22: only this Job's print counts. A host
+    // that ended the previous run of the same file still reports that file
+    // and its progress until the next print begins, so an ended status says
+    // nothing about this Job's progress, even once the Job is pinned: the
+    // driver pins from history (`jobs::services`, `on_host_operation`'s
+    // `track`) before it reads the Printer's cached status (`on_printer`),
+    // and that cached status can predate the start. Accepted residual risk:
+    // progress between the last printing status and the end (for example a
+    // print that ends while farm3d is disconnected) is not counted; the
+    // operator can settle with a measured amount instead.
     let in_progress = matches!(
         status.operational_state,
         OperationalState::Printing | OperationalState::Paused
@@ -951,6 +957,23 @@ mod tests {
         for state in [Finished, Cancelled, Failed, Ready, Busy] {
             assert_eq!(hint(state), None, "{state:?}");
         }
+    }
+
+    /// Ruling R22, an accepted residual risk: even a pinned Job's own ended
+    /// status does not ratchet its progress. The pin cannot vouch for a
+    /// status frame: the driver pins from history (services.rs:576) before
+    /// it reads the Printer's cached status (services.rs:581), which may
+    /// still be the previous run of the same file. `status_hint` has no pin
+    /// input, so a pinned Job sees exactly this. The cost is the progress
+    /// between the last printing status and the end; the operator can
+    /// settle with a measured amount instead.
+    #[test]
+    fn a_pinned_jobs_own_ended_status_does_not_ratchet_progress() {
+        let cancelled = status(OperationalState::Cancelled, Some(OURS), Some(0.8));
+        assert_eq!(
+            status_hint(JobState::Printing, OURS, 30, &cancelled).progress_pct,
+            None
+        );
     }
 
     #[test]
