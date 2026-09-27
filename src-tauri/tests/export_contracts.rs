@@ -40,6 +40,10 @@ use farm3d_lib::host_ops::{
     HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
     HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
 };
+use farm3d_lib::jobs::{
+    AssignedBy, CancelReason, JobEventKind, JobState, Settlement, SettlementMethod,
+    StartConfirmation,
+};
 use farm3d_lib::library::commands::{
     DeleteModelResult, DeleteProjectResult, LibraryContentInfo, LibrarySnapshot,
     ModelMutationResult, ModelPatch, ProjectMutationResult, RevisionThumbnail,
@@ -86,6 +90,10 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::queue::{
+    CloseReason, DispatchPolicy, DispatchPreference, EstimateSource, MaterialEstimate, OriginKind,
+    QueueEntryState,
+};
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
     SettingsRecord,
@@ -534,6 +542,20 @@ fn export_registry() -> Vec<Export> {
         export::<HostOperationsSnapshot>(),
         export::<HostOperationsEventType>(),
         export::<HostOperationsEvent>(),
+        export::<QueueEntryState>(),
+        export::<CloseReason>(),
+        export::<DispatchPolicy>(),
+        export::<DispatchPreference>(),
+        export::<EstimateSource>(),
+        export::<MaterialEstimate>(),
+        export::<OriginKind>(),
+        export::<JobState>(),
+        export::<CancelReason>(),
+        export::<Settlement>(),
+        export::<SettlementMethod>(),
+        export::<AssignedBy>(),
+        export::<StartConfirmation>(),
+        export::<JobEventKind>(),
     ]
 }
 
