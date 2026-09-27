@@ -60,7 +60,9 @@ fn bed_shape_matches(a: &BedShape, b: &BedShape) -> bool {
                 origin_x_mm: bx,
                 origin_y_mm: by,
             },
-        ) => approx_eq(*aw, *bw) && approx_eq(*ad, *bd) && approx_eq(*ax, *bx) && approx_eq(*ay, *by),
+        ) => {
+            approx_eq(*aw, *bw) && approx_eq(*ad, *bd) && approx_eq(*ax, *bx) && approx_eq(*ay, *by)
+        }
         (BedShape::Polygon { points: ap }, BedShape::Polygon { points: bp }) => {
             ap.len() == bp.len()
                 && ap
@@ -176,27 +178,56 @@ fn family_matches(want: MaterialFamily, want_other: Option<&str>, spool: &SpoolR
 /// `materialFamily` (and, for `OTHER`, `materialOther` case-insensitively
 /// after trimming) and `filamentDiameterMm` within 0.01 mm. Ignores
 /// `active`/availability, which the caller (`queue::eligibility`) checks
-/// separately. An absent `materialFamily` or `filamentDiameterMm` fact
-/// yields `FactAbsent` instead of comparing that half (Manual policy
-/// only, D5).
-pub fn material_compatible(facts: &SliceFacts, spool: &SpoolRecord) -> Result<(), MaterialMismatch> {
+/// separately.
+///
+/// The two facts are checked independently: an absent fact only skips
+/// *its own* comparison (Manual policy only, D5) and is reported as
+/// `FactAbsent` — but only when the *other* half actually matched. A
+/// concrete mismatch on the other half is reported instead, even when this
+/// half's fact is absent, so a genuine problem (e.g. a 2.85 mm Spool
+/// against a 1.75 mm fact) is never masked by an unrelated absent fact.
+pub fn material_compatible(
+    facts: &SliceFacts,
+    spool: &SpoolRecord,
+) -> Result<(), MaterialMismatch> {
+    let family_absent;
+    let mut family_mismatch = None;
     match facts.material_family.value() {
         Some(&family) => {
+            family_absent = false;
             if !family_matches(family, facts.material_other.as_deref(), spool) {
-                return Err(MaterialMismatch::Family);
+                family_mismatch = Some(MaterialMismatch::Family);
             }
         }
-        None => return Err(MaterialMismatch::FactAbsent(FactKey::MaterialFamily)),
+        None => family_absent = true,
     }
 
+    let diameter_absent;
+    let mut diameter_mismatch = None;
     match facts.filament_diameter_mm.value() {
         Some(&want) => {
+            diameter_absent = false;
             let have = diameter_mm(spool.diameter);
             if !approx_eq(want, have) {
-                return Err(MaterialMismatch::Diameter { want, have });
+                diameter_mismatch = Some(MaterialMismatch::Diameter { want, have });
             }
         }
-        None => return Err(MaterialMismatch::FactAbsent(FactKey::FilamentDiameterMm)),
+        None => diameter_absent = true,
+    }
+
+    // Concrete mismatches take priority over reporting either half's
+    // absent fact.
+    if let Some(mismatch) = family_mismatch {
+        return Err(mismatch);
+    }
+    if let Some(mismatch) = diameter_mismatch {
+        return Err(mismatch);
+    }
+    if family_absent {
+        return Err(MaterialMismatch::FactAbsent(FactKey::MaterialFamily));
+    }
+    if diameter_absent {
+        return Err(MaterialMismatch::FactAbsent(FactKey::FilamentDiameterMm));
     }
 
     Ok(())
@@ -390,6 +421,31 @@ mod tests {
         assert_eq!(
             material_compatible(&facts, &spool),
             Err(MaterialMismatch::FactAbsent(FactKey::MaterialFamily))
+        );
+    }
+
+    #[test]
+    fn absent_family_with_a_real_diameter_mismatch_reports_the_mismatch_not_fact_absent() {
+        // D5: "an absent fact skips only that comparison" — a concrete
+        // mismatch on the other half must still be reported, not masked by
+        // the absent family.
+        let facts = ExternalFacts::new(ConfirmedFacts {
+            printer_profile: ConfirmedFact::Absent,
+            nozzle_diameter_mm: ConfirmedFact::Absent,
+            material_family: ConfirmedFact::Absent,
+            material_other: None,
+            filament_diameter_mm: ConfirmedFact::Confirmed(1.75),
+        })
+        .facts()
+        .clone();
+        let spool = a_spool(MaterialFamily::Pla, FilamentDiameter::D285);
+
+        assert_eq!(
+            material_compatible(&facts, &spool),
+            Err(MaterialMismatch::Diameter {
+                want: 1.75,
+                have: 2.85
+            })
         );
     }
 

@@ -188,7 +188,10 @@ pub struct QueueEntry {
 /// only, D7/D8) why an `awaitingStart` Job's Printer can't start yet.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[ts(rename_all = "SCREAMING_SNAKE_CASE", export_to = "domain/BlockerCode.ts")]
+#[ts(
+    rename_all = "SCREAMING_SNAKE_CASE",
+    export_to = "domain/BlockerCode.ts"
+)]
 pub enum BlockerCode {
     PrinterArchived,
     SetupIncomplete,
@@ -285,7 +288,10 @@ pub enum EligibilityVerdict {
 /// aggregated blockers.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/QueueEntryEligibility.ts")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/QueueEntryEligibility.ts"
+)]
 pub struct QueueEntryEligibility {
     pub entry_id: String,
     pub verdict: EligibilityVerdict,
