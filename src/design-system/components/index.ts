@@ -43,3 +43,4 @@ export {
   type SegmentedControlProps,
   type SegmentedControlOption,
 } from "./SegmentedControl";
+export { ReorderHandle, type ReorderHandleProps } from "./ReorderHandle";
