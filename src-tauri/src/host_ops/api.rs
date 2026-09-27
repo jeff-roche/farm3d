@@ -496,13 +496,17 @@ fn host_start_not_allowed(printer_id: &str, observed: OperationalState) -> Comma
 
 /// D9 "`start_staged_artifact` order". Writes no row on any rejection.
 /// `upload_host_operation_id` is the staged upload to start (the command's
-/// `hostOperationId`).
+/// `hostOperationId`). `unattended` is P7 D7's unattended start, which
+/// goes ahead from `ready` only: step 7's host re-read must then report
+/// `ready` exactly, never `finished` or `cancelled`, else
+/// `START_PRECONDITION_CHANGED`.
 pub async fn start<R: tauri::Runtime>(
     services: &Arc<HostOperationServices<R>>,
     operation_id: String,
     printer_id: String,
     upload_host_operation_id: String,
     prior: PriorState,
+    unattended: bool,
     link: Option<(String, LinkInTx<'_>)>,
 ) -> Result<HostOperation, CommandError> {
     let host_operation_id = upload_host_operation_id;
@@ -554,6 +558,16 @@ pub async fn start<R: tauri::Runtime>(
             let observed = host_observed_state(&state);
             if !host_allows_start(observed) {
                 return Err(host_start_not_allowed(&printer_id, observed));
+            }
+            // D7: the live status can say `ready` while Klipper already
+            // reports the last print `complete`, with its part on the bed.
+            if unattended && observed != OperationalState::Ready {
+                return Err(CommandError::start_precondition_changed(
+                    &printer_id,
+                    &wire(observed),
+                    &wire(TelemetryFreshness::Fresh),
+                    &wire(prior_state),
+                ));
             }
         }
         Err(ConnectionError::HostNotReady) => {

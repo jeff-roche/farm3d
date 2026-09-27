@@ -90,6 +90,7 @@ pub async fn start_staged_artifact<R: tauri::Runtime>(
         printer_id,
         host_operation_id,
         prior_state,
+        false,
         None,
     )
     .await

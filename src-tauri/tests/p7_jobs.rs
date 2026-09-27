@@ -1039,6 +1039,33 @@ mod dispatch {
         assert_eq!(roots.starts(), 1);
     }
 
+    /// D7: an unattended start is from `ready` only. A live status that
+    /// lags while Klipper already reports `complete` must not start a
+    /// print onto an occupied bed.
+    #[test]
+    fn unattended_start_refuses_a_host_that_reports_complete_behind_a_ready_status() {
+        let (roots, app) = started(StartSafety::Unattended);
+        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        app.status(OperationalState::Ready);
+        let spool = app.spool();
+        app.load(&spool);
+        let job_id = app.assign(&spool);
+        app.wait_job(&job_id, "awaitingStart");
+        let refused = app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
+        assert_eq!(refused["lastFailure"]["kind"], "refused", "{refused}");
+        assert_eq!(refused["lastFailure"]["code"], "START_PRECONDITION_CHANGED", "{refused}");
+        app.quiesce();
+        assert_eq!(roots.starts(), 0, "no start request reaches the host");
+        assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+        assert_eq!(
+            app.scalar(&format!(
+                "SELECT COUNT(*) FROM host_operations WHERE job_id = '{job_id}' AND kind = 'start'"
+            )),
+            0,
+            "no Host Operation row is written"
+        );
+    }
+
     #[test]
     fn confirm_bed_clear_printer_never_auto_starts() {
         let (roots, app) = started(StartSafety::ConfirmBedClear);

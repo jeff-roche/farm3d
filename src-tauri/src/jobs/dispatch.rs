@@ -773,6 +773,7 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
         job.printer_id.clone(),
         upload,
         prior,
+        confirmation == StartConfirmation::Unattended,
         Some((job.id.clone(), link)),
     )
     .await?;

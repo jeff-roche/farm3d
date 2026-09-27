@@ -661,6 +661,7 @@ fn linked_start_and_control_run_their_links_and_carry_the_job() {
         PRINTER.to_string(),
         upload.id.clone(),
         PriorState::Ready,
+        false,
         Some(marker_link(Arc::clone(&seen))),
     ))
     .expect("a linked start");
