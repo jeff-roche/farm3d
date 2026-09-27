@@ -243,21 +243,67 @@ changes cannot alter existing work.
 _Avoid_: File version, Model version
 
 **Queue Entry**:
-A request to produce one physical run from a Slice Revision that has not yet
-been assigned to a Printer. It carries queue order and a Dispatch Policy.
+One requested physical run of one Slice Revision. It has a queue position,
+a Dispatch Policy, a Dispatch preference, and a material estimate fixed
+when it is created. It is `queued`, `assigned` (it has a Job), or `closed`
+(completed, failed, cancelled, released, or removed). Whether it can run
+now is derived each time, never stored. It becomes a Job only by
+assignment.
 _Avoid_: Job, task, order
 
 **Job**:
-A Slice Revision assigned to a specific Printer for printing, tracked by
-farm3d from assignment through completion (ADR-0005). Not yet implemented —
-no Job dispatch/tracking code exists yet.
+One Queue Entry assigned to one Printer with one reserved Spool, tracked
+by farm3d from assignment to its end (ADR-0005, ADR-0013). It is staged,
+started, and controlled only through Host Operations. Its end is proved
+from the host's print history for the print farm3d started, never from a
+status string alone. At most one Job is active on a Printer at a time.
 _Avoid_: Print, task
 
 **Dispatch Policy**:
-A Queue Entry's rule for becoming a Job: operator-selected,
-farm3d-recommended, or automatically assigned. A Printer's own start-safety
-rule remains a separate gate after assignment.
+A Queue Entry's rule for becoming a Job: Manual (the operator picks the
+Printer and Spool), Recommended (farm3d ranks and explains, the operator
+confirms), or Automatic (farm3d assigns the first qualifying Printer, and
+only through a simulator-proven Connection). A Printer's Start-safety rule
+remains a separate gate after assignment.
 _Avoid_: Queue mode, automation level
+
+**Dispatch preference**:
+How a Queue Entry ranks qualifying Printers: `loadedFirst` (a Printer that
+already has a matching Spool loaded first; the default) or
+`leastRecentlyUsed`. Ties go to Printer name, ignoring case, then to the
+Printer's id.
+_Avoid_: Priority (queue order is the only priority)
+
+**Lineage**:
+The group of Queue Entries one Add to Queue created (copies 1..N), plus
+their retries and release replacements. It only groups them: each entry
+is still assigned, cancelled, retried, and settled on its own.
+_Avoid_: Batch, order
+
+**Settlement**:
+How a Job's reserved material becomes a deduction. A completed Job
+deducts its estimate by itself. A failed or cancelled one is settled by
+the operator: the estimate scaled by how far it printed, a measured
+weight, or deferred. Until it is settled, the amount stays unavailable.
+_Avoid_: Reconciliation (that settles Host Operations), deduction
+
+**Reconciliation Requirement**:
+A durable record, with a stable id, of something about a Job the operator
+must settle: its material after it failed or was cancelled, or its
+outcome when farm3d couldn't prove it. It stays until it is resolved.
+Deferring keeps it open.
+_Avoid_: Alert, notification, Attention Event (P8 shows these as one)
+
+**Awaiting material**:
+A Job that is staged and waiting to start, but whose Spool isn't loaded
+on its Printer. It is a reason the Job can't start yet, not a separate
+state.
+
+**Outcome unknown**:
+A Job whose end farm3d could not prove: its start was abandoned, or the
+host's history stopped showing its print. farm3d stops checking, and the
+operator declares whether it completed, failed, or was cancelled.
+_Avoid_: Failed, lost
 
 **Spool**:
 A physical supply of printable material, with an identity, location, and

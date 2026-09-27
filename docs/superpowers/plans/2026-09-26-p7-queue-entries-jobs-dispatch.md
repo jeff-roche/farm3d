@@ -269,6 +269,13 @@ The owner confirmed these on 2026-09-26. Don't reopen them.
 Tasks restate what they need from here. Task 1 turns this section into
 the focused spec, and after that the spec wins.
 
+> **Superseded by the spec.** Task 1 wrote
+> `docs/superpowers/specs/2026-09-26-p7-queue-entries-jobs-dispatch-design.md`.
+> Its "Decisions made in this spec" section lists every place it departs
+> from D1–D9 below (for example `Settlement::Open`, `JOBS_EXIST` for
+> import, and retry refused for a released Job). Read the spec, not this
+> section, for names, payloads, and tables.
+
 ### D1. Vocabulary and ownership
 
 - A **Queue Entry** is one requested physical run of one Slice Revision.
@@ -571,7 +578,10 @@ implementer.
 9. **Idempotency.** Every mutating command takes a client `operationId`,
    claimed through `spools::operations::claim` in the same transaction.
    A replay returns the same result and publishes nothing. A reused id
-   with a different request is `OPERATION_ID_REUSED`.
+   with a different request is `VALIDATION` on `operationId`
+   (`RepositoryError::OperationIdReused`, as P3–P6 map it). A Job command
+   that hands off to P6 claims its own id, and the Host Operation gets
+   `<operationId>#hostOperation` (spec D4).
 10. **Simulators never run in CI.** Container-backed tests are
     `#[ignore]`, use `require_sim!` and `sim::exclusive()`, and call
     `reset()` first. Anything CI must check needs an in-process fake.
@@ -803,15 +813,23 @@ pub fn transition(from: QueueEntryState, event: &EntryEvent) -> Result<QueueEntr
 // jobs/mod.rs
 pub enum JobState { Assigned, Staging, AwaitingStart, Starting, Printing, Paused,
                     Completed, Failed, Cancelled, OutcomeUnknown }
-pub enum Settlement { NotRequired, Pending, Deferred, Settled }
-pub enum JobEventKind { /* one per D3 arrow, e.g. */ Assigned, StageHandedOff, Staged,
-                        StageFailed, StartHandedOff, Started, StartFailed, StartAbandoned,
+pub enum CancelReason { ReleasedBeforeStart, CancelledBeforeStart, CancelledByOperator, HostCancelled, OperatorDeclared }
+pub enum Settlement { Open, NotRequired, Pending, Deferred, Settled }
+pub enum SettlementMethod { Estimated, Measured }
+pub enum AssignedBy { Operator, Automatic }          // ruling R1
+pub enum StartConfirmation { BedClear, Unattended }  // ruling R2
+// The spec's D3 event table is authoritative. `Assigned` is the insert event
+// and is not passed to `transition`.
+pub enum JobEventKind { Assigned, StageHandedOff, StageSucceeded, StageFailed,
+                        StartHandedOff, StartSucceeded, StartFailed, StartAbandoned, HostJobPinned,
+                        PauseHandedOff, ResumeHandedOff, CancelHandedOff, ControlFailed,
                         Paused, Resumed, Completed, Failed, Cancelled, OutcomeUnknown,
-                        OutcomeDeclared, Released, CancelledBeforeStart,
+                        DeclaredCompleted, DeclaredFailed, DeclaredCancelled,
+                        Released, CancelledBeforeStart,
                         MaterialSettled, MaterialDeferred, MaterialCorrected }
 // jobs/state.rs
 pub fn transition(from: JobState, event: JobEventKind) -> Result<JobState, IllegalTransition>;
-pub fn settlement_after(state: JobState, reached_starting: bool) -> Settlement;
+pub fn settlement_after(event: JobEventKind) -> Option<Settlement>; // None = unchanged
 ```
 
 - `OperationKind` gains `AddToQueue`, `UpdateQueueEntry`,
@@ -839,9 +857,10 @@ fn every_job_transition_pair_matches_the_spec_table() {
 ```
 
   Write the same test for `queue/state.rs`. Add a test that a terminal
-  `JobState` accepts only `MaterialSettled`, `MaterialDeferred`, and
-  `MaterialCorrected`, and that each leaves the state unchanged. Add
-  another that `OutcomeDeclared` is legal only from `OutcomeUnknown`.
+  `JobState` accepts only the material events and that each leaves the
+  state unchanged: `MaterialSettled` and `MaterialDeferred` from `Failed`
+  and `Cancelled`, `MaterialCorrected` from `Completed`. Add another that
+  the three `Declared*` events are legal only from `OutcomeUnknown`.
 - [ ] **Step 2:** Run `just test-rust`. Expect a FAIL because the modules
   don't exist yet.
 - [ ] **Step 3:** Implement the enums (ts-rs exported, camelCase, and an
@@ -856,92 +875,14 @@ fn every_job_transition_pair_matches_the_spec_table() {
   - use `apply_through_failing_before_commit` to prove 0008 is atomic;
   - add a schema test that no new column name contains `credential`,
     `secret`, or `key`.
-- [ ] **Step 5:** Write `0008_p7_queue_jobs.sql`:
-
-```sql
-CREATE TABLE queue_entries (
-  id TEXT PRIMARY KEY CHECK (id GLOB 'qen-*'),
-  revision INTEGER NOT NULL DEFAULT 1,
-  slice_revision_id TEXT NOT NULL REFERENCES slice_revisions(id) ON DELETE RESTRICT,
-  lineage_id TEXT NOT NULL CHECK (lineage_id GLOB 'qln-*'),
-  copy_index INTEGER NOT NULL CHECK (copy_index >= 1),
-  origin_entry_id TEXT REFERENCES queue_entries(id),
-  origin_kind TEXT CHECK (origin_kind IN ('retry','release')),
-  state TEXT NOT NULL CHECK (state IN ('queued','assigned','closed')),
-  close_reason TEXT CHECK (close_reason IN ('completed','failed','cancelled','released','removed')),
-  position INTEGER CHECK (position >= 1),
-  policy TEXT NOT NULL CHECK (policy IN ('manual','recommended','automatic')),
-  preference TEXT NOT NULL CHECK (preference IN ('loadedFirst','leastRecentlyUsed')),
-  estimate_mg INTEGER NOT NULL CHECK (estimate_mg > 0),
-  estimate_source TEXT NOT NULL CHECK (estimate_source IN ('sliceEstimate','fileClaimConfirmed','operatorEntered')),
-  manual_printer_id TEXT REFERENCES printers(id) ON DELETE RESTRICT,
-  job_id TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT,
-  CHECK ((state = 'closed') = (close_reason IS NOT NULL)),
-  CHECK ((state = 'closed') = (position IS NULL)),
-  CHECK ((origin_entry_id IS NULL) = (origin_kind IS NULL))
-) STRICT;
-CREATE INDEX queue_entries_open_position ON queue_entries(position) WHERE state <> 'closed';
-CREATE INDEX queue_entries_lineage ON queue_entries(lineage_id);
-
-CREATE TABLE jobs (
-  id TEXT PRIMARY KEY CHECK (id GLOB 'job-*'),
-  revision INTEGER NOT NULL DEFAULT 1,
-  queue_entry_id TEXT NOT NULL UNIQUE REFERENCES queue_entries(id),
-  slice_revision_id TEXT NOT NULL REFERENCES slice_revisions(id) ON DELETE RESTRICT,
-  printer_id TEXT NOT NULL REFERENCES printers(id) ON DELETE RESTRICT,
-  printer_snapshot_json TEXT NOT NULL CHECK (json_valid(printer_snapshot_json)),
-  spool_id TEXT NOT NULL REFERENCES spools(id),
-  reservation_id TEXT NOT NULL REFERENCES spool_reservations(id),
-  estimate_mg INTEGER NOT NULL CHECK (estimate_mg > 0),
-  state TEXT NOT NULL CHECK (state IN ('assigned','staging','awaitingStart','starting','printing',
-                                       'paused','completed','failed','cancelled','outcomeUnknown')),
-  cancel_reason TEXT CHECK (cancel_reason IN ('releasedBeforeStart','cancelledBeforeStart','hostCancelled','operatorDeclared')),
-  settlement TEXT NOT NULL CHECK (settlement IN ('notRequired','pending','deferred','settled')),
-  settlement_method TEXT CHECK (settlement_method IN ('estimated','measured')),
-  assigned_by TEXT NOT NULL CHECK (assigned_by IN ('operator','automatic')),
-  start_confirmation TEXT CHECK (start_confirmation IN ('bedClear','unattended')),
-  upload_host_operation_id TEXT REFERENCES host_operations(id),
-  active_host_operation_id TEXT REFERENCES host_operations(id),
-  host_path TEXT,
-  history_mark INTEGER,
-  host_job_id TEXT,
-  max_progress_pct INTEGER NOT NULL DEFAULT 0 CHECK (max_progress_pct BETWEEN 0 AND 100),
-  inconclusive_checks INTEGER NOT NULL DEFAULT 0,
-  last_failure_json TEXT CHECK (last_failure_json IS NULL OR json_valid(last_failure_json)),
-  correction_event_id TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT
-) STRICT;
-CREATE UNIQUE INDEX jobs_one_active_per_printer ON jobs(printer_id)
-  WHERE state NOT IN ('completed','failed','cancelled');
-
-CREATE TABLE job_events (
-  id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
-  sequence INTEGER NOT NULL, kind TEXT NOT NULL, from_state TEXT, to_state TEXT,
-  operation_id TEXT, host_operation_id TEXT,
-  detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json)),
-  at TEXT NOT NULL, UNIQUE (job_id, sequence)
-) STRICT;
-CREATE TRIGGER job_events_append_only_u BEFORE UPDATE ON job_events BEGIN SELECT RAISE(ABORT, 'job_events is append-only'); END;
-CREATE TRIGGER job_events_append_only_d BEFORE DELETE ON job_events BEGIN SELECT RAISE(ABORT, 'job_events is append-only'); END;
-
-CREATE TABLE reconciliation_requirements (
-  id TEXT PRIMARY KEY CHECK (id GLOB 'rrq-*'),
-  job_id TEXT NOT NULL REFERENCES jobs(id),
-  kind TEXT NOT NULL CHECK (kind IN ('materialReconciliation','jobOutcomeUnknown')),
-  status TEXT NOT NULL CHECK (status IN ('pending','deferred','resolved')),
-  spool_id TEXT REFERENCES spools(id),
-  reservation_id TEXT REFERENCES spool_reservations(id),
-  opened_at TEXT NOT NULL, deferred_at TEXT, resolved_at TEXT,
-  resolution_json TEXT CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
-  UNIQUE (job_id, kind)
-) STRICT;
-
-ALTER TABLE host_operations ADD COLUMN job_id TEXT REFERENCES jobs(id);
-CREATE INDEX spool_reservations_holder ON spool_reservations(holder_kind, holder_id);
--- then rebuild `operations` exactly as 0007:92-104 does (create operations_p7 with the
--- full kind list including the 15 new kinds, INSERT … SELECT, DROP, RENAME).
-```
+- [ ] **Step 5:** Write `0008_p7_queue_jobs.sql` exactly as the spec's
+  §Schema gives it (every column, CHECK, index, and trigger), then
+  rebuild `operations` exactly as 0007:92–104 does (create
+  `operations_p7` with the full kind list including the 15 new kinds,
+  `INSERT … SELECT`, `DROP`, `RENAME`). The spec's schema differs from
+  this plan's first draft: `settlement` includes `open`, `host_job_id` is
+  an INTEGER, the open-position index is UNIQUE, `manual_printer_id` is
+  `ON DELETE SET NULL`, and `queue_entries.job_id` references `jobs(id)`.
 
   Before using `ALTER TABLE … ADD COLUMN … REFERENCES`, check whether
   it is allowed with the P6 terminal-row trigger on `host_operations`.
@@ -1112,14 +1053,18 @@ pub enum AssignMode { Operator { acknowledge_manual_facts: bool }, Automatic }
 ```
 
   `BlockerCode` covers `PRINTER_ARCHIVED`, `SETUP_INCOMPLETE`,
-  `CONNECTION_ERROR`, `JOB_ACTIVE`, `HOST_OPERATION_PENDING`,
-  `PRINTER_BUSY_EXTERNAL`, `PROFILE_MISMATCH`, `NEEDS_MANUAL_PRINTER`,
-  `CAPABILITY_UNSUPPORTED`, `ADAPTER_NOT_PROVEN`, `NO_COMPATIBLE_SPOOL`,
-  `INSUFFICIENT_MATERIAL`, and `SPOOL_NOT_LOADED` (automatic only).
+  `CONNECTION_ERROR`, `PRINTER_OFFLINE`, `JOB_ACTIVE`,
+  `HOST_OPERATION_PENDING`, `PRINTER_BUSY_EXTERNAL`, `PRINTER_NOT_IDLE`
+  (automatic only), `PINNED_TO_OTHER_PRINTER`, `PROFILE_MISMATCH`,
+  `NEEDS_MANUAL_PRINTER`, `CAPABILITY_UNSUPPORTED`, `ADAPTER_NOT_PROVEN`,
+  `NO_COMPATIBLE_SPOOL`, `INSUFFICIENT_MATERIAL`, `SPOOL_NOT_LOADED`
+  (automatic only), and `PRINTER_NOT_READY` (start blockers only). The
+  spec's D5 gives each one's message and recovery.
 
 - [ ] **Step 1: Write the failing table tests.** Add one test per gate
   in D5, per failing and passing case. Add the spec's tie-break fixtures
-  verbatim as `#[test] fn tie_break_fixture_N()`:
+  F1–F8 verbatim as `#[test] fn tie_break_fixture_N()`. The sketch below
+  shows the shape only; the spec's F1 is the real fixture:
 
 ```rust
 #[test]
@@ -1193,7 +1138,13 @@ pub struct QueueChange { pub entries: Vec<QueueEntry>, pub jobs: Vec<Job>, pub r
 - The commands are `list_queue`, `add_to_queue`, `update_queue_entry`,
   `move_queue_entry`, `remove_queue_entry`, `explain_queue_entry`,
   `assign_queue_entry`, `release_job`, `retry_job`, `cancel_job` (the
-  before-start branch only), and `get_job_history`.
+  before-start branch only), and `get_job_history`. Every mutating one
+  returns `QueueChange` (spec §Commands).
+- Per ruling R3, `list_queue` computes `eligibility` synchronously with
+  `eligibility::evaluate` and reports `nextAutomaticAction: { kind:
+  "evaluatorNotRunning" }` until Task 10. `EligibilitySummary` also
+  carries `verdict` (spec D5).
+- `assign` takes `host_ops.printer_lock(printer_id)` first (spec D4).
 - After commit, the command calls `queue.publish` and
   `spools::events::publish_ids` for the touched Spools, and
   `inventory_changes.send`.
@@ -1213,7 +1164,7 @@ pub struct QueueChange { pub entries: Vec<QueueEntry>, pub jobs: Vec<Job>, pub r
     `std::sync::Barrier`)
   - `concurrent_assigns_of_two_entries_to_one_printer_yield_one_job`
   - `release_cancels_the_job_releases_the_reservation_and_replaces_the_entry_in_place`
-  - `release_after_start_handoff_is_rejected_release_not_allowed`
+  - `release_after_start_handoff_is_job_action_not_allowed`
   - `retry_creates_a_linked_entry_at_the_end_and_leaves_history_untouched`
   - `three_copies_are_independently_assignable_releasable_and_retryable`
   - `list_queue_snapshot_sequence_precedes_rows` (listen-before-backfill
@@ -1337,7 +1288,7 @@ pub fn start_blockers(job: &Job, printer: &StoredPrinter, status: Option<&Printe
 pub fn may_start_unattended(job: &Job, printer: &StoredPrinter, status: &PrinterStatus, caps: &PrinterCapabilities, loaded: &[String]) -> bool;
 // jobs/tracker.rs
 pub enum TrackerVerdict { StillRunning { progress_pct: u8 }, Paused, Completed, Failed, Cancelled, Inconclusive }
-pub fn verdict_from_history(job: &Job, history: &[HistoryJob]) -> (Option<String /* pinned host_job_id */>, TrackerVerdict); // pure
+pub fn verdict_from_history(job: &Job, history: &[HistoryJob]) -> (Option<u64 /* pinned host_job_id */>, TrackerVerdict); // pure
 // jobs/recovery.rs
 pub fn recover_after_restart(storage: &Storage, now: DateTime<Utc>) -> Result<Vec<Job>, StorageError>;
 // jobs/services.rs
@@ -1396,7 +1347,12 @@ pub struct JobServices<R: Runtime> { /* storage, host_ops, manager, queue stream
   - The driver is one tokio task selecting on the host-op broadcast,
     the status broadcast, and the poll interval.
   - On a `RecvError::Lagged` it re-reads every active Job from storage.
-  - Every Job write takes `host_ops.printer_lock(printer_id)` first.
+  - Every Job write takes `host_ops.printer_lock(printer_id)` first,
+    **except** around a `host_ops::api` call, which takes that
+    non-reentrant lock itself (spec D4).
+  - A handoff claims the client's `operationId` under its own kind inside
+    the link, and passes `<operationId>#hostOperation` to `host_ops::api`
+    as the Host Operation's id. The driver uses `drv-<uuid>` ids.
 - [ ] **Step 6:** Run `just test-rust`, `just gen-contracts`, and
   `just check-hosts`.
 - [ ] **Step 7:** Commit:
@@ -1437,7 +1393,9 @@ pub fn correct(tx, operation_id, job_id, entry: &AmountEntry, now) -> Result<Set
     settlement to `settled` with its method, and resolve the
     requirement.
   - A second settle with a new operation id returns
-    `JOB_ALREADY_SETTLED`.
+    `JOB_ALREADY_SETTLED`, and so does a second correction
+    (`reason: "corrected"`). Settle on `open` or `notRequired`, or correct
+    on anything but `completed`, is `JOB_ACTION_NOT_ALLOWED`.
 
 - [ ] **Step 1: Write the failing tests:**
   - `completion_consumes_the_estimate_in_the_terminal_transaction`
@@ -1482,7 +1440,7 @@ pub fn correct(tx, operation_id, job_id, entry: &AmountEntry, now) -> Result<Set
 - Produces:
 
 ```rust
-pub enum Trigger { Startup, QueueChanged, JobChanged, StatusChanged(String), InventoryChanged, PrinterChanged, CapabilitiesChanged }
+pub enum Trigger { Startup, QueueChanged, JobChanged, HostOperationChanged, StatusChanged(String), InventoryChanged, PrinterChanged, CapabilitiesChanged }
 pub struct EvaluatorHandle { tx: mpsc::Sender<Trigger> }
 impl EvaluatorHandle { pub fn poke(&self, trigger: Trigger); }                 // coalescing, never blocks
 pub fn run_once(storage: &Storage, world: &dyn WorldReader, now: &str) -> Result<EvaluationRun, RepositoryError>; // pure-ish: one serialized pass
@@ -1523,7 +1481,8 @@ pub struct EvaluationRun { pub summaries: Vec<EligibilitySummary>, pub assigned:
     new `LifecycleBlockerCode`s `JobActive`, `JobHistoryExists`, and
     `QueueEntryPinned`);
   - `slicing/blockers.rs` (register `QueueReferencesRevision`);
-  - `printers/repository.rs` (the import guard `JOBS_ACTIVE`);
+  - `printers/repository.rs` (the import guard `JOBS_EXIST`: any Job, or
+    any open entry pinned to a Printer, rejects the whole import, spec D8);
   - `connections/commands.rs` and `printers/repository.rs` (the
     Connection guard);
   - `src/screens/*` blocker copy, if new codes need labels.
@@ -1536,7 +1495,7 @@ pub struct EvaluationRun { pub summaries: Vec<EligibilitySummary>, pub assigned:
   - `delete_is_blocked_by_a_pinned_queued_entry`
   - `slice_revision_delete_is_blocked_by_any_entry_or_job`
   - `model_delete_stays_blocked_transitively`
-  - `printer_import_is_rejected_whole_while_a_job_is_active_or_unsettled`
+  - `printer_import_is_rejected_whole_while_any_job_exists`
   - `endpoint_change_is_blocked_while_a_job_is_past_assigned`
   - `spool_archive_is_blocked_by_an_unresolved_job_reservation`
   - `no_row_is_orphaned_after_every_allowed_lifecycle_action` (walk all
@@ -1565,8 +1524,9 @@ Tasks 6, 8, 9, and 10 (the generated types).
     `queue.syncState`. Its writes cover every command in D9, each with a
     fresh `crypto.randomUUID()` and `retryOnTransportFailure`.
   - `views.ts` has `QueueView = "awaitingOperator" | "ready" | "assigned" | "blocked" | "printing" | "history"`,
-    and `viewOf(entry, job, eligibility)` maps only Rust-provided
-    fields.
+    and `viewOf(entry, job, summary)` maps only Rust-provided fields
+    (spec §Frontend architecture: a `queued` entry's view is its
+    summary's `verdict`).
   - `presentation.ts` holds the labels for every `JobState`,
     `BlockerCode`, `Settlement`, and `RecoveryCode` copy. "Awaiting
     material" comes from `startBlockers`.
