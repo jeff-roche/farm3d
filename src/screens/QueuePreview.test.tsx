@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadWebQueueFixture, queueStoreMock, resetQueueStoreMock, setQueueStoreState } from "../queue/queue-store-mock";
 import { eligibilitySummary, job, queueEntry } from "../queue/test-records";
@@ -70,5 +70,20 @@ describe("QueuePreview", () => {
     render(() => <QueuePreview />);
     fireEvent.click(screen.getByRole("button", { name: "Open the Queue" }));
     expect(window.location.hash).toBe("#nav=v1/queue");
+  });
+
+  it("reads the settled Job live: a settlement made elsewhere shows, and a Job that goes away closes the dialog", async () => {
+    loadWebQueueFixture();
+    render(() => <QueuePreview />);
+    fireEvent.click(within(screen.getByRole("list", { name: "Needs reconciliation" })).getByRole("button", { name: "Settle…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settle material" });
+    const held = queueStoreMock.queue.job(WEB_QUEUE_JOB_DEFERRED)!;
+    setQueueStoreState({
+      jobs: [{ ...held, settlement: "settled", settlementMethod: "estimated", settlementPreview: null, allowedActions: ["retry"] }],
+    });
+    expect(await within(dialog).findByText("This Job's material is already settled.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Settle" })).toBeDisabled();
+    setQueueStoreState({ jobs: [] });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });

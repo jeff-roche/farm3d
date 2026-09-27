@@ -204,4 +204,21 @@ describe("PrinterDashboard", () => {
     expect(within(job).getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Next up" })).toBeNull();
   });
+
+  it("closes the overlay Queue preview, and an overlay Job, with a visible Close", async () => {
+    stubWorkspaceWidth(1024);
+    loadWebQueueFixture();
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
+    let dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Queue preview" }));
+    dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Four-tool — Bay 5/ }));
+    await screen.findByRole("region", { name: "Job" });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
 });

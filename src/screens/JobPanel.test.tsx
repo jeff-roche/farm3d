@@ -123,8 +123,11 @@ describe("JobPanel: Start", () => {
       }],
     }));
     expect(screen.getByRole("button", { name: "Start…" })).toBeDisabled();
-    expect(screen.getByText("Awaiting material: load Spool #12 on Bay 1.")).toBeInTheDocument();
-    expect(screen.getAllByText("Awaiting material").length).toBeGreaterThan(0);
+    const reasons = screen.getByRole("list", { name: "Why it can't start" });
+    // Rust's message is the whole sentence: shown once, not after a
+    // separate "Awaiting material" label.
+    expect(within(reasons).getAllByText(/Awaiting material/)).toHaveLength(1);
+    expect(within(reasons).getByText("Awaiting material: load Spool #12 on Bay 1.")).toBeInTheDocument();
   });
 
   it("stays disabled until the P6 bed-clear checkbox is ticked, then starts with the confirmed prior state", async () => {

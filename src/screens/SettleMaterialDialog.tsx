@@ -48,6 +48,12 @@ export function SettleMaterialDialog(props: SettleMaterialDialogProps) {
   const deferOffered = () =>
     (props.job.state === "failed" || props.job.state === "cancelled") && props.job.settlement === "pending";
 
+  /** Read live from the Job (Rust's `allowedActions`): if it was settled
+   *  or corrected elsewhere while this is open, the dialog says so and
+   *  sends nothing. */
+  const stillOffered = () => props.job.allowedActions.includes(correcting() ? "correctMaterial" : "settleMaterial");
+  const spoolTareId = () => spoolState.spools.find((candidate) => candidate.id === props.job.spoolId)?.tareId ?? null;
+
   createEffect(on(() => props.open, (open) => {
     if (!open) return;
     setChoice(correcting() ? "measured" : undefined);
@@ -68,7 +74,14 @@ export function SettleMaterialDialog(props: SettleMaterialDialogProps) {
       default: return undefined;
     }
   };
-  const canConfirm = () => settleChoice() !== undefined && !pending();
+  const canConfirm = () => stillOffered() && settleChoice() !== undefined && !pending();
+  /** Why Confirm is disabled, as visible text. */
+  const reason = () => {
+    if (!stillOffered() || pending()) return undefined;
+    if (!correcting() && choice() === undefined) return "Choose how much material the Job used.";
+    if (choice() === "measured" && entry() === null) return "Enter the Spool's remaining weight.";
+    return undefined;
+  };
 
   async function onConfirm() {
     const current = settleChoice();
@@ -104,54 +117,66 @@ export function SettleMaterialDialog(props: SettleMaterialDialogProps) {
     >
       <div class={styles.body}>
         <Show
-          when={correcting()}
+          when={stillOffered() || pending()}
           fallback={
-            <p class={styles.text}>
-              This Job {jobStateLabel(props.job.state).toLowerCase()} on {props.job.printerSnapshot.name}. Its {reserved()}{" "}
-              reservation on {spool()} is unresolved until you settle it.
+            <p class={styles.text} role="status">
+              {correcting() ? "This Job already has a correction." : "This Job's material is already settled."}
             </p>
           }
         >
-          <p class={styles.text}>
-            This Job completed, and farm3d deducted its {reserved()} estimate from {spool()}. Weigh the Spool and enter what
-            remains; farm3d records the difference as a correction. A Job can be corrected once.
-          </p>
-        </Show>
-        <Show when={props.job.settlement === "deferred"}>
-          <p class={styles.note}>Settlement was deferred earlier. The reserved amount is still unavailable.</p>
-        </Show>
-        <Show when={!correcting()}>
-          <RadioGroup
-            label="Material used"
-            options={options()}
-            value={choice() ?? ""}
-            onChange={(value) => setChoice(value as Choice)}
-            disabled={pending()}
-          />
-        </Show>
-        <Show when={choice() === "estimated"}>
-          <p class={styles.note}>
-            farm3d deducts {preview()}: {props.job.maxProgressPct}% of the {reserved()} estimate, the most progress the
-            printer reported for this Job.
-          </p>
-        </Show>
-        <Show when={choice() === "measured"}>
-          <div class={correcting() ? undefined : styles.group}>
-            <AmountEntryFields showConfidence={false} onChange={setEntry} disabled={pending()} />
-          </div>
-        </Show>
-        <Show when={choice() === "defer"}>
-          <p class={styles.note}>
-            Nothing is deducted now. The reserved {reserved()} stays unavailable on {spool()} until you settle it.
-          </p>
+          <Show
+            when={correcting()}
+            fallback={
+              <p class={styles.text}>
+                This Job {jobStateLabel(props.job.state).toLowerCase()} on {props.job.printerSnapshot.name}. Its {reserved()}{" "}
+                reservation on {spool()} is unresolved until you settle it.
+              </p>
+            }
+          >
+            <p class={styles.text}>
+              This Job completed, and farm3d deducted its {reserved()} estimate from {spool()}. Weigh the Spool and enter what
+              remains; farm3d records the difference as a correction. A Job can be corrected once.
+            </p>
+          </Show>
+          <Show when={props.job.settlement === "deferred"}>
+            <p class={styles.note}>Settlement was deferred earlier. The reserved amount is still unavailable.</p>
+          </Show>
+          <Show when={!correcting()}>
+            <RadioGroup
+              label="Material used"
+              options={options()}
+              value={choice() ?? ""}
+              onChange={(value) => setChoice(value as Choice)}
+              disabled={pending()}
+            />
+          </Show>
+          <Show when={choice() === "estimated"}>
+            <p class={styles.note}>
+              farm3d deducts {preview()}: {props.job.maxProgressPct}% of the {reserved()} estimate, the most progress the
+              printer reported for this Job.
+            </p>
+          </Show>
+          <Show when={choice() === "measured"}>
+            <div class={correcting() ? undefined : styles.group}>
+              <AmountEntryFields
+                defaultTareId={spoolTareId()}
+                showConfidence={false}
+                onChange={setEntry}
+                disabled={pending()}
+              />
+            </div>
+          </Show>
+          <Show when={choice() === "defer"}>
+            <p class={styles.note}>
+              Nothing is deducted now. The reserved {reserved()} stays unavailable on {spool()} until you settle it.
+            </p>
+          </Show>
         </Show>
         <Show when={error()}>
           {(held) => <HostOperationAlert error={held()} fallback="The material couldn't be settled." onReload={refreshQueue} />}
         </Show>
         <div class={styles.footer}>
-          <Show when={!correcting() && choice() === undefined}>
-            <p class={styles.reason}>Choose how much material the Job used.</p>
-          </Show>
+          <Show when={reason()}>{(text) => <p class={styles.reason}>{text()}</p>}</Show>
           <div class={styles.actions}>
             <Button variant="secondary" onClick={() => props.onOpenChange(false)}>Cancel</Button>
             <Button variant="primary" disabled={!canConfirm()} onClick={() => void onConfirm()}>

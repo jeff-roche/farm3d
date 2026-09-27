@@ -103,3 +103,8 @@
   font-family: var(--f3d-type-body-small-font);
   font-size: var(--f3d-type-body-small-size);
 }
+
+.headerActions {
+  display: flex;
+  gap: 0.25rem;
+}

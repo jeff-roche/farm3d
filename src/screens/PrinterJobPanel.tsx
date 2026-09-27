@@ -83,21 +83,18 @@ export function PrinterJobPanel(props: PrinterJobPanelProps) {
             <HostOperationAlert error={error()} fallback="farm3d couldn't read what this printer supports." onRetry={loadHeld} />
           )}
         </Show>
+        {/* Decision 9: while a Job is active its own controls replace P6's
+            raw Stage/Start, Pause, Resume, and Cancel. The Job's panel never
+            waits on the capability load; only P6's raw parts do. */}
+        <Show when={activeJob()}>
+          {(job) => <JobPanel job={job()} printer={props.printer} showHostOperation={false} />}
+        </Show>
         <Show when={held()} fallback={<Show when={!capabilitiesError()}><p class={styles.note}>Checking what this printer supports…</p></Show>}>
           {(record) => (
             <>
-              {/* Decision 9: while a Job is active its own controls replace
-                  P6's raw Stage/Start, Pause, Resume, and Cancel. */}
-              <Show
-                when={activeJob()}
-                fallback={
-                  <>
-                    <Controls printer={props.printer} record={record()} />
-                    <Staged printer={props.printer} record={record()} />
-                  </>
-                }
-              >
-                {(job) => <JobPanel job={job()} printer={props.printer} showHostOperation={false} />}
+              <Show when={!activeJob()}>
+                <Controls printer={props.printer} record={record()} />
+                <Staged printer={props.printer} record={record()} />
               </Show>
               <Operations printer={props.printer} record={record()} />
             </>

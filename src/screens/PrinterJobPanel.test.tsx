@@ -288,4 +288,17 @@ describe("PrinterJobPanel: with an active Job (decision 9)", () => {
     expect(screen.getByRole("region", { name: "Staged on this Printer" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Job" })).not.toBeInTheDocument();
   });
+
+  it("still shows the Job's panel when the capability load fails; only P6's raw parts wait on it", async () => {
+    resetCapabilitiesStoreMock(); // No record: loadCapabilities rejects.
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-1", state: "assigned", jobId: "job-1" })],
+      jobs: [job({ id: "job-1", printerId: "prn-1", state: "printing", allowedActions: ["pause", "cancel"] })],
+    });
+    renderPanel(printing());
+    expect(await screen.findByRole("alert")).toHaveTextContent("prn-1");
+    const panel = screen.getByRole("region", { name: "Job" });
+    expect(within(panel).getByRole("button", { name: "Pause" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "Printer operations" })).not.toBeInTheDocument();
+  });
 });

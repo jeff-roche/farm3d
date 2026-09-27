@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, For, Show, type JSX } from "solid-js";
 import { Button } from "../design-system";
 import { printers } from "../printers/printer-store";
 import { jobStateLabel, queueViewLabel, requirementKindLabel, requirementStatusLabel, startBlockerLabel } from "../queue/presentation";
@@ -14,6 +14,8 @@ export interface QueuePreviewProps {
   /** Opens a Job in the Monitor dock (spec: "selecting a Job opens
    *  `JobPanel`"). Without it, a Job opens in the Queue. */
   onSelectJob?: (jobId: string) => void;
+  /** Shown as **Close** where the preview is an overlay. */
+  onClose?: () => void;
 }
 
 const NEXT_COUNT = 5;
@@ -46,7 +48,17 @@ function jobSeverity(job: Job): Severity {
  *  active Jobs, open Reconciliation Requirements, and what automatic
  *  dispatch will do next -- all as Rust sent them. */
 export function QueuePreview(props: QueuePreviewProps) {
-  const [settling, setSettling] = createSignal<Job | null>(null);
+  /** The Job being settled, by id: the dialog reads it live from the
+   *  store, so a settlement made elsewhere shows there, and a Job that
+   *  leaves the store closes it. */
+  const [settlingId, setSettlingId] = createSignal<string | null>(null);
+  const settling = () => {
+    const id = settlingId();
+    return id ? queue.job(id) : undefined;
+  };
+  createEffect(() => {
+    if (settlingId() && !settling()) setSettlingId(null);
+  });
   let settleTrigger: HTMLButtonElement | undefined;
 
   const next = () => queue.entries().filter((entry) => entry.state === "queued").slice(0, NEXT_COUNT);
@@ -67,7 +79,7 @@ export function QueuePreview(props: QueuePreviewProps) {
           variant="secondary"
           onClick={(event: MouseEvent) => {
             settleTrigger = event.currentTarget as HTMLButtonElement;
-            setSettling(job);
+            setSettlingId(job.id);
           }}
         >
           Settle…
@@ -81,7 +93,12 @@ export function QueuePreview(props: QueuePreviewProps) {
     <div class={styles.preview}>
       <header class={styles.header}>
         <h2 class={styles.title}>Queue</h2>
-        <Button variant="ghost" size="sm" onClick={() => goTo({ version: 1, destination: "queue" })}>Open the Queue</Button>
+        <div class={styles.headerActions}>
+          <Button variant="ghost" size="sm" onClick={() => goTo({ version: 1, destination: "queue" })}>Open the Queue</Button>
+          <Show when={props.onClose}>
+            <Button variant="ghost" size="sm" onClick={() => props.onClose?.()}>Close</Button>
+          </Show>
+        </div>
       </header>
 
       <Section title="Next up" empty="Nothing is queued." count={next().length}>
@@ -154,7 +171,7 @@ export function QueuePreview(props: QueuePreviewProps) {
         {(job) => (
           <SettleMaterialDialog
             open
-            onOpenChange={(open) => !open && setSettling(null)}
+            onOpenChange={(open) => !open && setSettlingId(null)}
             job={job()}
             returnFocus={() => settleTrigger}
           />

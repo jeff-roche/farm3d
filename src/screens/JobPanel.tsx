@@ -20,7 +20,6 @@ import {
   jobEventKindLabel,
   jobStateLabel,
   settlementLabel,
-  startBlockerLabel,
 } from "../queue/presentation";
 import {
   cancelJob,
@@ -230,8 +229,10 @@ export function JobPanel(props: JobPanelProps) {
           <For each={props.job.startBlockers}>
             {(blocker) => (
               <li class={styles.blocker}>
-                <SeverityLabel severity="warning" text={startBlockerLabel(blocker)} />
-                <span class={styles.text}>{blocker.message}</span>
+                {/* Rust's message is the whole sentence ("Awaiting material:
+                    load Spool #12 on Bay 1."), so it is shown once, as the
+                    label. */}
+                <SeverityLabel severity="warning" text={blocker.message} />
                 <QueueRecoveryButton blocker={blocker} />
               </li>
             )}

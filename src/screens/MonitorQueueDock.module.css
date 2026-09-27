@@ -63,3 +63,9 @@
   .overlay,
   .overlayContent { transition: none; }
 }
+
+.headerActions {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+}

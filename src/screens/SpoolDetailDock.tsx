@@ -20,7 +20,6 @@ import type { SpoolMovement } from "../generated/contracts/domain/SpoolMovement"
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import { requirementKindLabel, requirementStatusLabel } from "../queue/presentation";
 import { queue } from "../queue/queue-store";
-import type { Job } from "../queue/types";
 import { MoveSpoolDialog } from "./MoveSpoolDialog";
 import { showQueueEntry } from "./QueueRecoveryButton";
 import { RecordAmountDialog } from "./RecordAmountDialog";
@@ -148,7 +147,17 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
   const [moveOpen, setMoveOpen] = createSignal(false);
   const [editOpen, setEditOpen] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const [settling, setSettling] = createSignal<Job | null>(null);
+  /** The Job being settled, by id: the dialog reads it live from the
+   *  store, so a settlement made elsewhere shows there, and a Job that
+   *  leaves the store closes it. */
+  const [settlingId, setSettlingId] = createSignal<string | null>(null);
+  const settling = () => {
+    const id = settlingId();
+    return id ? queue.job(id) : undefined;
+  };
+  createEffect(() => {
+    if (settlingId() && !settling()) setSettlingId(null);
+  });
   let settleTrigger: HTMLButtonElement | undefined;
 
   /** P7: the open material Reconciliation Requirements on this Spool
@@ -277,7 +286,7 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
                       size="sm"
                       onClick={(event: MouseEvent) => {
                         settleTrigger = event.currentTarget as HTMLButtonElement;
-                        setSettling(held());
+                        setSettlingId(held().id);
                       }}
                     >
                       Settle…
@@ -320,7 +329,7 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
         {(job) => (
           <SettleMaterialDialog
             open
-            onOpenChange={(open) => !open && setSettling(null)}
+            onOpenChange={(open) => !open && setSettlingId(null)}
             job={job()}
             returnFocus={() => settleTrigger}
           />

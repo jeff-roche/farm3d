@@ -35,9 +35,13 @@ export function MonitorQueueDock(props: MonitorQueueDockProps) {
   // One stable wrapper: swapping the preview for a Job directly under
   // Kobalte's `Dialog.Content` (beside its focus-trap sentinels) left the
   // preview behind.
+  const overlay = () => props.mode === "overlay";
   const content = (title: (text: string) => JSX.Element) => (
     <div>
-      <Show when={props.job} fallback={<QueuePreview onSelectJob={props.onSelectJob} />}>
+      <Show
+        when={props.job}
+        fallback={<QueuePreview onSelectJob={props.onSelectJob} onClose={overlay() ? props.onClose : undefined} />}
+      >
         {(job) => (
           <div class={styles.job}>
             <header class={styles.header}>
@@ -45,7 +49,12 @@ export function MonitorQueueDock(props: MonitorQueueDockProps) {
                 {title(jobTitle(job()))}
                 <p class={styles.subtitle}>{job().printerSnapshot.name}</p>
               </div>
-              <Button variant="ghost" size="sm" onClick={props.onBack}>Back to Queue</Button>
+              <div class={styles.headerActions}>
+                <Button variant="ghost" size="sm" onClick={props.onBack}>Back to Queue</Button>
+                <Show when={overlay()}>
+                  <Button variant="ghost" size="sm" onClick={props.onClose}>Close</Button>
+                </Show>
+              </div>
             </header>
             <JobPanel job={job()} />
           </div>
