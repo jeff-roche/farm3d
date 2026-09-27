@@ -638,6 +638,7 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>) {
     let handle = evaluator.handle.clone();
 
     pump(
+        services.jobs.task_guard(),
         services.host_ops.subscribe_changes(),
         handle.clone(),
         stop.clone(),
@@ -645,6 +646,7 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>) {
         Trigger::HostOperationChanged,
     );
     pump(
+        services.jobs.task_guard(),
         services.inventory_changes.subscribe(),
         handle.clone(),
         stop.clone(),
@@ -652,6 +654,7 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>) {
         Trigger::InventoryChanged,
     );
     pump(
+        services.jobs.task_guard(),
         services.host_ops.subscribe_host_facts(),
         handle.clone(),
         stop.clone(),
@@ -666,6 +669,7 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>) {
         .map(|(id, status)| (id.clone(), SchedulingFacts::of(status)))
         .collect();
     pump(
+        services.jobs.task_guard(),
         services.manager.subscribe_status(),
         handle.clone(),
         stop.clone(),
@@ -678,7 +682,12 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>) {
         services.jobs.subscribe_first_pass(),
         services.host_ops.subscribe_startup_pass(),
     );
-    tauri::async_runtime::spawn(run_task(Arc::downgrade(services), receiver, stop, gates));
+    let task = services.jobs.task_guard();
+    let services = Arc::downgrade(services);
+    tauri::async_runtime::spawn(async move {
+        let _task = task;
+        run_task(services, receiver, stop, gates).await;
+    });
 }
 
 /// The status facts gate 1 reads. Telemetry changes far more often than
@@ -715,8 +724,10 @@ fn status_trigger<R: tauri::Runtime>(
 }
 
 /// Forwards a broadcast into the trigger channel until it closes or the
-/// runtime stops. `Lagged` pokes too: a run re-reads everything.
+/// runtime stops. `Lagged` pokes too: a run re-reads everything. `task`
+/// counts the pump as a live runtime task until it ends.
 fn pump<T: Clone + Send + 'static>(
+    task: crate::jobs::services::TaskGuard,
     mut receiver: broadcast::Receiver<T>,
     handle: EvaluatorHandle,
     mut stop: watch::Receiver<bool>,
@@ -724,6 +735,7 @@ fn pump<T: Clone + Send + 'static>(
     lagged: Trigger,
 ) {
     tauri::async_runtime::spawn(async move {
+        let _task = task;
         loop {
             tokio::select! {
                 changed = stop.changed() => {

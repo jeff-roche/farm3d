@@ -117,6 +117,25 @@ pub struct JobServices<R: tauri::Runtime> {
     /// When a status hint last triggered a poll, per Job: at most one per
     /// `history_poll`, so a chatty status can't flood the host.
     hinted: Mutex<HashMap<String, std::time::Instant>>,
+    /// The runtime's live tasks (the driver, and the evaluator's task and
+    /// pumps), so a test can wait for a stopped runtime to finish.
+    tasks: Arc<std::sync::atomic::AtomicUsize>,
+    barriers: tokio::sync::mpsc::UnboundedSender<Barrier>,
+    barrier_receiver: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Barrier>>>,
+}
+
+/// A [`JobServices::barrier`] request: answered once the driver has
+/// handled everything queued for it.
+type Barrier = tokio::sync::oneshot::Sender<()>;
+
+/// Counts one live runtime task until dropped (see
+/// [`JobServices::running_tasks`]).
+pub(crate) struct TaskGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// See [`JobServices::before_start_link`].
@@ -130,6 +149,7 @@ impl<R: tauri::Runtime> JobServices<R> {
     /// [`JobServices::new`] with the tracker's clock injected.
     pub fn with_clock(timings: JobTimings, clock: Arc<dyn Clock>) -> Self {
         let (stage_requests, stage_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (barriers, barrier_receiver) = tokio::sync::mpsc::unbounded_channel();
         Self {
             timings,
             clock,
@@ -146,6 +166,9 @@ impl<R: tauri::Runtime> JobServices<R> {
             first_pass: tokio::sync::watch::channel(false).0,
             declare_offered: Mutex::new(HashSet::new()),
             hinted: Mutex::new(HashMap::new()),
+            tasks: Arc::default(),
+            barriers,
+            barrier_receiver: Mutex::new(Some(barrier_receiver)),
         }
     }
 
@@ -202,9 +225,40 @@ impl<R: tauri::Runtime> JobServices<R> {
     }
 
     /// Test hook: stops the driver, as a crash would. Nothing it would
-    /// have applied is applied; a restart's recovery catches up.
+    /// have applied is applied; a restart's recovery catches up. The
+    /// driver and the evaluator finish the step they are in (a resync
+    /// stops between Jobs); [`JobServices::running_tasks`] reaches zero
+    /// once they have.
     pub fn stop(&self) {
         let _ = self.stop.send(true);
+    }
+
+    /// Whether [`JobServices::stop`] was called.
+    fn stopping(&self) -> bool {
+        *self.stop.borrow()
+    }
+
+    /// Test hook: the runtime's tasks still running (the driver, and the
+    /// evaluator's task and pumps). Zero after a stop means nothing of the
+    /// stopped runtime can write any more.
+    pub fn running_tasks(&self) -> usize {
+        self.tasks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Counts a runtime task from before it is spawned until it ends.
+    pub(crate) fn task_guard(&self) -> TaskGuard {
+        self.tasks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        TaskGuard(Arc::clone(&self.tasks))
+    }
+
+    /// Test hook: a receiver that gets `()` once the driver has handled
+    /// every host-ops change, status, inventory change, and stage request
+    /// sent to it before this call. It errors when the driver stops first.
+    /// Before the driver starts, nothing answers it until it does.
+    pub fn barrier(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (done, receiver) = tokio::sync::oneshot::channel();
+        let _ = self.barriers.send(done);
+        receiver
     }
 }
 
@@ -218,11 +272,14 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>, app: &AppHan
         return;
     }
     let driver = Driver {
+        _task: jobs.task_guard(),
         services: Arc::downgrade(services),
         host_operations: services.host_ops.subscribe_changes(),
         statuses: services.manager.subscribe_status(),
         inventory: services.inventory_changes.subscribe(),
         stage_requests: lock(&jobs.stage_receiver).take(),
+        barriers: lock(&jobs.barrier_receiver).take(),
+        waiting: Vec::new(),
         stop: jobs.stop.subscribe(),
         poll_every: jobs.timings.history_poll,
         poll: None,
@@ -231,11 +288,15 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>, app: &AppHan
 }
 
 struct Driver<R: tauri::Runtime> {
+    _task: TaskGuard,
     services: Weak<RuntimeServices<R>>,
     host_operations: tokio::sync::broadcast::Receiver<HostOperation>,
     statuses: tokio::sync::broadcast::Receiver<String>,
     inventory: tokio::sync::broadcast::Receiver<crate::spools::events::InventoryChange>,
     stage_requests: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    barriers: Option<tokio::sync::mpsc::UnboundedReceiver<Barrier>>,
+    /// Barriers not yet answered: something was still queued.
+    waiting: Vec<Barrier>,
     stop: tokio::sync::watch::Receiver<bool>,
     poll_every: Duration,
     poll: Option<tokio::time::Interval>,
@@ -249,6 +310,7 @@ enum Wake {
     Inventory,
     Stage(String),
     Resync,
+    Barrier(Barrier),
 }
 
 impl<R: tauri::Runtime> Driver<R> {
@@ -292,6 +354,28 @@ impl<R: tauri::Runtime> Driver<R> {
                 Wake::Inventory => on_awaiting_start(&services).await,
                 Wake::Stage(job_id) => stage_by_driver(&services, &job_id).await,
                 Wake::Resync => resync(&services).await,
+                Wake::Barrier(done) => self.waiting.push(done),
+            }
+            self.answer_barriers();
+        }
+    }
+
+    /// Answers the waiting barriers once nothing is queued for the driver:
+    /// everything sent before them has been received, and so handled.
+    fn answer_barriers(&mut self) {
+        if self.waiting.is_empty() {
+            return;
+        }
+        let idle = self.host_operations.is_empty()
+            && self.statuses.is_empty()
+            && self.inventory.is_empty()
+            && self
+                .stage_requests
+                .as_ref()
+                .is_none_or(tokio::sync::mpsc::UnboundedReceiver::is_empty);
+        if idle {
+            for done in self.waiting.drain(..) {
+                let _ = done.send(());
             }
         }
     }
@@ -301,6 +385,13 @@ impl<R: tauri::Runtime> Driver<R> {
         let stage_requests = &mut self.stage_requests;
         let next_stage = async {
             match stage_requests {
+                Some(receiver) => receiver.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+        let barriers = &mut self.barriers;
+        let next_barrier = async {
+            match barriers {
                 Some(receiver) => receiver.recv().await,
                 None => std::future::pending().await,
             }
@@ -333,6 +424,7 @@ impl<R: tauri::Runtime> Driver<R> {
                 None => Wake::Stop,
             },
             _ = poll.tick() => Wake::Resync,
+            Some(done) = next_barrier => Wake::Barrier(done),
         }
     }
 }
@@ -768,14 +860,23 @@ async fn record_refusal<R: tauri::Runtime>(
 /// re-read from storage. A Job whose active op resolved catches up; an
 /// `assigned` Job that never staged is staged (R2); an `awaitingStart`
 /// Job is re-evaluated; a `printing`/`paused` Job's history is polled.
+///
+/// A stopped runtime (a crash, in tests) stops between Jobs: it finishes
+/// the Job in hand and does nothing more.
 async fn resync<R: tauri::Runtime>(services: &RuntimeServices<R>) {
     for job in read_active(services) {
+        if services.jobs.stopping() {
+            return;
+        }
         if let Some(op_id) = &job.active_host_operation_id {
             apply_linked(services, &job.printer_id, op_id).await;
         }
     }
     let active = read_active(services);
     for job in &active {
+        if services.jobs.stopping() {
+            return;
+        }
         match job.state {
             JobState::Assigned => stage_by_driver(services, &job.id).await,
             JobState::AwaitingStart => on_printer(services, &job.printer_id).await,
@@ -784,6 +885,9 @@ async fn resync<R: tauri::Runtime>(services: &RuntimeServices<R>) {
             JobState::Printing | JobState::Paused => track(services, &job.id).await,
             _ => {}
         }
+    }
+    if services.jobs.stopping() {
+        return;
     }
     // A poll can end a Job or set `host_unreachable_since`: re-read.
     let still_active = if active
