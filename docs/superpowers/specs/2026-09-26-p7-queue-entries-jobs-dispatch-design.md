@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft for controller review, 2026-09-26.
+Approved by the controller, 2026-09-26, after two review rounds
+(issue #17 decision gate satisfied).
 
 This is the focused design for GitHub issue #17 (P7). It is Task 1 of
 `docs/superpowers/plans/2026-09-26-p7-queue-entries-jobs-dispatch.md`.

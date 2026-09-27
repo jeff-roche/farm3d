@@ -1,7 +1,6 @@
 # Queue and Job state machines
 
-**Status:** Proposed, 2026-09-26. Awaiting controller approval with the
-P7 spec.
+**Status:** Accepted, 2026-09-26, with the P7 spec.
 
 ## Context
 
