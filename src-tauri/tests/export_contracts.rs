@@ -41,7 +41,7 @@ use farm3d_lib::host_ops::{
     HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
 };
 use farm3d_lib::jobs::{
-    AssignedBy, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
+    AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
     RequirementResolution, RequirementStatus, Settlement, SettlementMethod, SettlementPreview,
     StartConfirmation,
@@ -92,11 +92,12 @@ use farm3d_lib::printers::operational::{
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
+use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
     Blocker, BlockerCode, Candidate, CloseReason, DispatchPolicy, DispatchPreference,
     EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, OriginKind,
     PrinterEligibility, QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryEligibility,
-    QueueEntryState, SpoolOption,
+    QueueEntryState, SpoolOption, NextAutomaticAction, QueueChange, QueueSnapshot,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
@@ -564,12 +565,19 @@ fn export_registry() -> Vec<Export> {
         export::<EligibilityVerdict>(),
         export::<QueueEntryEligibility>(),
         export::<EligibilitySummary>(),
+        export::<NextAutomaticAction>(),
+        export::<QueueSnapshot>(),
+        export::<QueueChange>(),
+        export::<QueueEventType>(),
+        export::<QueueEventPayload>(),
+        export::<QueueEvent>(),
         export::<JobState>(),
         export::<CancelReason>(),
         export::<Settlement>(),
         export::<SettlementMethod>(),
         export::<AssignedBy>(),
         export::<StartConfirmation>(),
+        export::<JobAction>(),
         export::<JobEventKind>(),
         export::<PrinterSnapshot>(),
         export::<JobFailure>(),
@@ -825,6 +833,15 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::StartPreconditionChanged,
         ErrorCode::ControlNotAllowed,
         ErrorCode::StagedArtifactInvalid,
+        ErrorCode::JobActive,
+        ErrorCode::JobActionNotAllowed,
+        ErrorCode::QueueEntryActionNotAllowed,
+        ErrorCode::AssignmentBlocked,
+        ErrorCode::JobStartBlocked,
+        ErrorCode::JobNotOnPrinter,
+        ErrorCode::JobAlreadySettled,
+        ErrorCode::JobAlreadyRetried,
+        ErrorCode::JobsExist,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -845,6 +862,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::UnarchivePrinter,
         RecoveryCode::LoadSpool,
         RecoveryCode::AssignManually,
+        RecoveryCode::SettleMaterial,
     ];
 
     assert_eq!(
@@ -863,7 +881,10 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "PREPARATION_INVALID", "PREPARATION_STALE", "OPERATION_NOT_CANCELLABLE",
                 "HOST_OPERATION_PENDING", "CONNECTION_IN_USE", "CAPABILITY_UNSUPPORTED",
                 "HOST_OPERATION_NOT_ABANDONABLE", "START_NOT_ALLOWED",
-                "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID"
+                "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID",
+                "JOB_ACTIVE", "JOB_ACTION_NOT_ALLOWED", "QUEUE_ENTRY_ACTION_NOT_ALLOWED",
+                "ASSIGNMENT_BLOCKED", "JOB_START_BLOCKED", "JOB_NOT_ON_PRINTER",
+                "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
@@ -871,7 +892,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
                 "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB",
                 "OPEN_JOB", "OPEN_PRINTER_SETUP", "UNARCHIVE_PRINTER", "LOAD_SPOOL",
-                "ASSIGN_MANUALLY"
+                "ASSIGN_MANUALLY", "SETTLE_MATERIAL"
             ]
         })
     );

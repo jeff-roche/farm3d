@@ -26,6 +26,7 @@ use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
 };
+use jobs::commands::{assign_queue_entry, cancel_job, get_job_history, release_job, retry_job};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
@@ -40,6 +41,10 @@ use printers::commands::{
     update_printer,
 };
 use printers::create::probe_connection;
+use queue::commands::{
+    add_to_queue, explain_queue_entry, list_queue, move_queue_entry, remove_queue_entry,
+    update_queue_entry,
+};
 use settings::commands::{export_settings, import_settings, load_settings, save_settings};
 use slicing::commands::{
     cancel_slice_operation, check_slicer_runtime, create_external_slice_revision,
@@ -73,6 +78,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub slicing: Arc<slicing::SlicingServices<R>>,
     /// P6: Host Operations (executor, reconciler, `hostOperations` stream).
     pub host_ops: Arc<host_ops::HostOperationServices<R>>,
+    /// P7: the `queue` event stream's id and sequence.
+    pub queue_stream: queue::events::QueueStream,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -134,12 +141,13 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             )),
             inventory_stream: spools::events::InventoryStream::default(),
             inventory_changes: inventory_changes(),
+            queue_stream: queue::events::QueueStream::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 89] = [
+pub const COMMAND_NAMES: [&str; 100] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -229,6 +237,17 @@ pub const COMMAND_NAMES: [&str; 89] = [
     "cancel_host_print",
     "reconcile_host_operation",
     "abandon_host_operation",
+    "list_queue",
+    "add_to_queue",
+    "update_queue_entry",
+    "move_queue_entry",
+    "remove_queue_entry",
+    "explain_queue_entry",
+    "assign_queue_entry",
+    "release_job",
+    "retry_job",
+    "cancel_job",
+    "get_job_history",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -462,6 +481,7 @@ fn build_runtime_services<R: tauri::Runtime>(
         )),
         slicing,
         host_ops,
+        queue_stream: queue::events::QueueStream::default(),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     };
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -692,6 +712,17 @@ pub fn run() {
             cancel_host_print,
             reconcile_host_operation,
             abandon_host_operation,
+            list_queue,
+            add_to_queue,
+            update_queue_entry,
+            move_queue_entry,
+            remove_queue_entry,
+            explain_queue_entry,
+            assign_queue_entry,
+            release_job,
+            retry_job,
+            cancel_job,
+            get_job_history,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

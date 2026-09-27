@@ -45,7 +45,10 @@ const JOB_ID_PREFIX: &str = "job";
 const JOB_EVENT_ID_PREFIX: &str = "jev";
 const REQUIREMENT_ID_PREFIX: &str = "rrq";
 
-fn new_job_id() -> String {
+/// A new `job-<uuid v4>` id. `pub` so the assign transaction can name the
+/// Job before it inserts it: the Spool reservation's holder is
+/// `("job", jobId)`, and the Job row references that reservation.
+pub fn new_job_id() -> String {
     library::new_id(JOB_ID_PREFIX)
 }
 
@@ -204,6 +207,7 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Job>, StorageError> {
 /// settlement `open`, and its `assigned` event (sequence 1, no
 /// `from_state` — the insert event is not a transition).
 pub struct NewJob {
+    pub id: String,
     pub queue_entry_id: String,
     pub slice_revision_id: String,
     pub printer_id: String,
@@ -212,16 +216,19 @@ pub struct NewJob {
     pub reservation_id: String,
     pub estimate_mg: i64,
     pub assigned_by: AssignedBy,
+    /// D5: the operator acknowledged the Slice's unconfirmed facts
+    /// (`acknowledgeManualFacts`) when assigning.
+    pub manual_facts_acknowledged: bool,
 }
 
 pub fn insert_job(tx: &Transaction<'_>, new: &NewJob, now: &str) -> Result<Job, RepositoryError> {
-    let id = new_job_id();
+    let id = new.id.clone();
     tx.execute(
         "INSERT INTO jobs(
              id, revision, queue_entry_id, slice_revision_id, printer_id, printer_snapshot_json,
              spool_id, reservation_id, estimate_mg, state, settlement, assigned_by,
              manual_facts_acknowledged, created_at, updated_at
-         ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'assigned', 'open', ?9, 0, ?10, ?10)",
+         ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'assigned', 'open', ?9, ?11, ?10, ?10)",
         params![
             id,
             new.queue_entry_id,
@@ -233,6 +240,7 @@ pub fn insert_job(tx: &Transaction<'_>, new: &NewJob, now: &str) -> Result<Job, 
             new.estimate_mg,
             encode_enum(new.assigned_by),
             now,
+            new.manual_facts_acknowledged,
         ],
     )?;
     write_event(
@@ -762,6 +770,7 @@ mod tests {
                 source: EstimateSource::SliceEstimate,
             },
             manual_printer_id: None,
+            lineage_id: None,
         };
         let entry = storage
             .write_repo(|tx| create_entries(tx, &new_entries, NOW))
@@ -797,6 +806,7 @@ mod tests {
             })
             .expect("reserve");
         let new_job = NewJob {
+            id: new_job_id(),
             queue_entry_id: rig.entry.id.clone(),
             slice_revision_id: SLR.to_string(),
             printer_id: PRINTER.to_string(),
@@ -811,6 +821,7 @@ mod tests {
             reservation_id,
             estimate_mg: 100_000,
             assigned_by: AssignedBy::Operator,
+            manual_facts_acknowledged: false,
         };
         let job = rig
             .storage

@@ -10,6 +10,8 @@
 //! the tracker, settlement, guards, and commands are later tasks (see the
 //! module layout table in the design spec).
 
+pub mod assign;
+pub mod commands;
 pub mod repository;
 pub mod state;
 
@@ -115,6 +117,50 @@ pub enum AssignedBy {
 pub enum StartConfirmation {
     BedClear,
     Unattended,
+}
+
+/// D3: what a Job command asks of a Job. `JOB_ACTION_NOT_ALLOWED` names
+/// the refused one in its `details.action`.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/JobAction.ts")]
+pub enum JobAction {
+    Stage,
+    Start,
+    Pause,
+    Resume,
+    Cancel,
+    Release,
+    Retry,
+    DeclareOutcome,
+    SettleMaterial,
+    CorrectMaterial,
+}
+
+impl JobAction {
+    /// The user command whose D3 event this is, if any (D3's "Illegal event
+    /// raised by" table). `None` for the events only farm3d's own code
+    /// raises: an illegal one of those is a bug (`INTERNAL`).
+    pub fn for_user_event(event: JobEventKind) -> Option<JobAction> {
+        match event {
+            JobEventKind::StageHandedOff => Some(JobAction::Stage),
+            JobEventKind::StartHandedOff => Some(JobAction::Start),
+            JobEventKind::PauseHandedOff => Some(JobAction::Pause),
+            JobEventKind::ResumeHandedOff => Some(JobAction::Resume),
+            JobEventKind::CancelHandedOff | JobEventKind::CancelledBeforeStart => {
+                Some(JobAction::Cancel)
+            }
+            JobEventKind::Released => Some(JobAction::Release),
+            JobEventKind::DeclaredCompleted
+            | JobEventKind::DeclaredFailed
+            | JobEventKind::DeclaredCancelled => Some(JobAction::DeclareOutcome),
+            JobEventKind::MaterialSettled | JobEventKind::MaterialDeferred => {
+                Some(JobAction::SettleMaterial)
+            }
+            JobEventKind::MaterialCorrected => Some(JobAction::CorrectMaterial),
+            _ => None,
+        }
+    }
 }
 
 /// D3's `job_events` kinds. `Assigned` is the Job's insert event: it has

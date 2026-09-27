@@ -10,14 +10,19 @@
 //! `QueueSnapshot`, the eligibility types, events, and commands are later
 //! tasks (see the module layout table in the design spec).
 
+pub mod commands;
 pub mod eligibility;
+pub mod events;
 pub mod repository;
 pub mod state;
+pub mod world;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::contracts::command::RecoveryCode;
+use crate::contracts::event::JsSafeInteger;
+use crate::jobs::{Job, ReconciliationRequirement};
 use crate::spools::MaterialFamily;
 
 /// D2: a Queue Entry's state. A closed entry always has a [`CloseReason`]
@@ -313,4 +318,87 @@ pub struct EligibilitySummary {
     pub eligible_count: i64,
     pub top_blocker: Option<Blocker>,
     pub candidate_printer_ids: Vec<String>,
+}
+
+impl EligibilitySummary {
+    /// Ruling R3: the summary `list_queue` reports for one `queued` entry's
+    /// full evaluation — its verdict, how many Printers qualify (and
+    /// which), and the first aggregated blocker in gate order.
+    pub fn of(eligibility: &QueueEntryEligibility) -> Self {
+        Self {
+            entry_id: eligibility.entry_id.clone(),
+            verdict: eligibility.verdict,
+            eligible_count: eligibility.candidates.len() as i64,
+            top_blocker: eligibility.blockers.first().cloned(),
+            candidate_printer_ids: eligibility
+                .candidates
+                .iter()
+                .map(|candidate| candidate.printer_id.clone())
+                .collect(),
+        }
+    }
+}
+
+/// D6: what the automatic evaluator's last run concluded. Until the
+/// evaluator exists and has run (ruling R3), `list_queue` reports
+/// `evaluatorNotRunning`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/NextAutomaticAction.ts"
+)]
+pub enum NextAutomaticAction {
+    EvaluatorNotRunning,
+    NoAutomaticEntries {
+        evaluated_at: String,
+    },
+    Waiting {
+        evaluated_at: String,
+        entry_id: String,
+        blocker: Blocker,
+    },
+    Assigned {
+        evaluated_at: String,
+        entry_id: String,
+        job_id: String,
+        printer_id: String,
+    },
+}
+
+/// `list_queue`'s result (spec "Wire types"): the `queue` stream's
+/// identity and the sequence read before the rows (listen before
+/// backfill), the open entries in position order then the newest 100
+/// closed ones, every active Job plus every listed entry's Job, every open
+/// Reconciliation Requirement, and one eligibility summary per `queued`
+/// entry.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/QueueSnapshot.ts")]
+pub struct QueueSnapshot {
+    pub stream_id: String,
+    pub snapshot_sequence: JsSafeInteger,
+    pub entries: Vec<QueueEntry>,
+    pub jobs: Vec<Job>,
+    pub requirements: Vec<ReconciliationRequirement>,
+    pub eligibility: Vec<EligibilitySummary>,
+    pub next_automatic_action: NextAutomaticAction,
+}
+
+/// What every mutating Queue and Job command returns: the rows it
+/// changed, which are also exactly the rows its `queue` events carry.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/QueueChange.ts")]
+pub struct QueueChange {
+    pub entries: Vec<QueueEntry>,
+    pub jobs: Vec<Job>,
+    pub requirements: Vec<ReconciliationRequirement>,
+    // The Spools whose reservations the change touched. They go out on
+    // the inventory stream after commit, not on the wire.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub spool_ids: Vec<String>,
 }

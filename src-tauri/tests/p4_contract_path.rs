@@ -36,6 +36,10 @@ const P5_COMMAND_COUNT: usize = 21;
 /// lists them) and Task 9's 8 (`tests/p6_host_ops.rs`).
 const P6_COMMAND_COUNT: usize = 2 + 8;
 
+/// Commands P7 added after P6: Task 6's 11 (`tests/p7_queue.rs` and
+/// `tests/p7_jobs.rs` drive them).
+const P7_COMMAND_COUNT: usize = 11;
+
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
     "inspect_import_selection",
@@ -62,7 +66,7 @@ const CORE_3MF_SHA256: &str = "0712090c29fed95a750f831dcb7be12a3372648719e3978d0
 fn every_p4_command_is_registered_with_a_contract() {
     assert_eq!(
         farm3d_lib::COMMAND_NAMES.len(),
-        PRE_P4 + P4_COMMANDS.len() + P5_COMMAND_COUNT + P6_COMMAND_COUNT
+        PRE_P4 + P4_COMMANDS.len() + P5_COMMAND_COUNT + P6_COMMAND_COUNT + P7_COMMAND_COUNT
     );
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     assert_eq!(manifest.len(), farm3d_lib::COMMAND_NAMES.len());

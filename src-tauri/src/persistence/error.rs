@@ -191,6 +191,41 @@ pub enum RepositoryError {
         from: crate::jobs::JobState,
         event: crate::jobs::JobEventKind,
     },
+    /// P7 D3: a Job command whose action the Job's state doesn't allow.
+    /// Nothing was written. `JOB_ACTION_NOT_ALLOWED`.
+    JobActionNotAllowed {
+        job_id: String,
+        action: crate::jobs::JobAction,
+        state: crate::jobs::JobState,
+    },
+    /// P7 D4: assignment to a Printer that already has the active Job
+    /// `job_id`. Nothing was written. `JOB_ACTIVE`.
+    JobActive { printer_id: String, job_id: String },
+    /// P7 D5: the assign transaction's in-transaction `check_assignment`
+    /// refused the pair. Nothing was written. `ASSIGNMENT_BLOCKED`.
+    AssignmentBlocked {
+        entry_id: String,
+        printer_id: String,
+        spool_id: String,
+        blockers: Vec<crate::queue::Blocker>,
+    },
+    /// P7 D2: `retry_job` on a Job whose entry already has its successor
+    /// `retry_entry_id`. Nothing was written. `JOB_ALREADY_RETRIED`.
+    JobAlreadyRetried {
+        job_id: String,
+        retry_entry_id: String,
+    },
+    /// P7 D8: a `spools::reservations` primitive refused inside a Job
+    /// transaction. Carries what the caller knows beyond the primitive's
+    /// own error, so the command's message and `details` can name the
+    /// Spool (`#<n>`), the amount it needed, and the reservation.
+    Reservation {
+        spool_id: String,
+        spool_number: Option<i64>,
+        reservation_id: Option<String>,
+        required_mg: Option<i64>,
+        error: crate::spools::reservations::ReservationError,
+    },
     Storage(StorageError),
 }
 

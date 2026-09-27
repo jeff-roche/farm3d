@@ -360,6 +360,25 @@ pub enum ErrorCode {
     /// P7 D8: `ReservationError::InvalidTransition` -- the reservation's
     /// state changed since the caller last read it.
     ReservationState,
+    /// P7 D4: the Printer already has an active Job (`assign_queue_entry`;
+    /// the raw P6 write commands, decision 9).
+    JobActive,
+    /// P7 D3: the Job's state doesn't allow this action.
+    JobActionNotAllowed,
+    /// P7 D2: the Queue Entry's state doesn't allow this action.
+    QueueEntryActionNotAllowed,
+    /// P7 D5: the assign transaction's in-transaction re-check refused.
+    AssignmentBlocked,
+    /// P7 D7: `start_job` while the Job has start blockers.
+    JobStartBlocked,
+    /// P7 D7: the host reports a file other than the Job's.
+    JobNotOnPrinter,
+    /// P7 settlement: the Job's material is already settled or corrected.
+    JobAlreadySettled,
+    /// P7 D2: the Job was already retried.
+    JobAlreadyRetried,
+    /// P7 D8: a Printers import while Job history exists.
+    JobsExist,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -400,6 +419,8 @@ pub enum RecoveryCode {
     /// P7 D5: switch the entry to Manual and open Assign
     /// (`NEEDS_MANUAL_PRINTER`, `ADAPTER_NOT_PROVEN`).
     AssignManually,
+    /// P7: open the settle dialog for a `reconciliation` Spool's Job.
+    SettleMaterial,
 }
 
 /// The versioned success envelope returned by every command.
@@ -1228,6 +1249,183 @@ impl CommandError {
         Self::internal()
     }
 
+    /// P7 D4 `JOB_ACTIVE`.
+    pub fn job_active(printer_id: &str, job_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::JobActive,
+            "This Printer has an active Job. Use the Job's controls.",
+            vec![RecoveryCode::OpenJob],
+            false,
+        )
+        .with_string_details(&[("printerId", printer_id), ("jobId", job_id)])
+    }
+
+    /// P7 D3 `JOB_ACTION_NOT_ALLOWED`.
+    pub fn job_action_not_allowed(
+        job_id: &str,
+        action: crate::jobs::JobAction,
+        state: crate::jobs::JobState,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::JobActionNotAllowed,
+            format!(
+                "This Job can't {} while it is {}.",
+                job_action_label(action),
+                job_state_label(state)
+            ),
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("jobId", job_id),
+            ("action", &crate::spools::encode_enum(action)),
+            ("state", &crate::spools::encode_enum(state)),
+        ])
+    }
+
+    /// P7 D2 `QUEUE_ENTRY_ACTION_NOT_ALLOWED`. Removing an `assigned`
+    /// entry also says what to do instead.
+    pub fn queue_entry_action_not_allowed(
+        entry_id: &str,
+        action: crate::queue::QueueEntryAction,
+        state: crate::queue::QueueEntryState,
+    ) -> Self {
+        use crate::queue::{QueueEntryAction, QueueEntryState};
+        let label = match state {
+            QueueEntryState::Queued => "queued",
+            QueueEntryState::Assigned => "assigned",
+            QueueEntryState::Closed => "closed",
+        };
+        let mut message = format!("This Queue Entry is {label}.");
+        if action == QueueEntryAction::Remove && state == QueueEntryState::Assigned {
+            message.push_str(" Release or cancel its Job instead.");
+        }
+        Self::typed(
+            ErrorCode::QueueEntryActionNotAllowed,
+            message,
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("entryId", entry_id),
+            ("action", &crate::spools::encode_enum(action)),
+            ("state", &crate::spools::encode_enum(state)),
+        ])
+    }
+
+    /// P7 D5 `ASSIGNMENT_BLOCKED`. The message is the first blocker's.
+    pub fn assignment_blocked(
+        entry_id: &str,
+        printer_id: &str,
+        spool_id: &str,
+        blockers: &[crate::queue::Blocker],
+    ) -> Self {
+        let message = blockers
+            .first()
+            .map(|blocker| blocker.message.clone())
+            .unwrap_or_else(|| "This assignment is blocked.".to_string());
+        let mut error = Self::typed(
+            ErrorCode::AssignmentBlocked,
+            message,
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("entryId", entry_id),
+            ("printerId", printer_id),
+            ("spoolId", spool_id),
+        ]);
+        let blockers = serde_json::to_value(blockers)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
+        error
+            .details
+            .get_or_insert_with(BTreeMap::new)
+            .insert("blockers".to_string(), blockers);
+        error
+    }
+
+    /// P7 D2 `JOB_ALREADY_RETRIED`.
+    pub fn job_already_retried(job_id: &str, retry_entry_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::JobAlreadyRetried,
+            "This Job was already retried.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("jobId", job_id), ("retryEntryId", retry_entry_id)])
+    }
+
+    /// P7 D8: a reservation primitive's refusal, named for the Spool it
+    /// concerns (spec "Error codes": `INSUFFICIENT_MATERIAL`,
+    /// `SPOOL_NOT_RESERVABLE`, `RESERVATION_STATE`). Starts from the
+    /// primitive's baseline mapping and replaces the message and `details`
+    /// with what the caller knows.
+    pub fn reservation(
+        spool_id: &str,
+        spool_number: Option<i64>,
+        reservation_id: Option<&str>,
+        required_mg: Option<i64>,
+        error: crate::spools::reservations::ReservationError,
+    ) -> Self {
+        use crate::spools::encode_enum;
+        use crate::spools::reservations::ReservationError;
+
+        let spool_label = spool_number
+            .map(|number| format!("Spool #{number}"))
+            .unwrap_or_else(|| "This Spool".to_string());
+        let number = |value: i64| {
+            JsonValue::Number(JsonNumber::try_from(value).expect("milligrams are JS-safe"))
+        };
+        match &error {
+            ReservationError::InsufficientAvailable { available_mg } => {
+                let mut mapped = Self::from(ReservationError::InsufficientAvailable {
+                    available_mg: *available_mg,
+                });
+                mapped.message = format!("{spool_label} no longer has enough material.");
+                let mut details = BTreeMap::from([
+                    ("spoolId".to_string(), JsonValue::String(spool_id.to_string())),
+                    ("availableMg".to_string(), number(*available_mg)),
+                ]);
+                if let Some(required_mg) = required_mg {
+                    details.insert("requiredMg".to_string(), number(required_mg));
+                }
+                mapped.details = Some(details);
+                mapped
+            }
+            ReservationError::SpoolNotReservable { lifecycle } => {
+                let lifecycle_text = encode_enum(*lifecycle);
+                let mut mapped = Self::from(ReservationError::SpoolNotReservable {
+                    lifecycle: *lifecycle,
+                });
+                mapped.message =
+                    format!("{spool_label} is {lifecycle_text} and can't be reserved.");
+                mapped.details = Some(BTreeMap::from([
+                    ("spoolId".to_string(), JsonValue::String(spool_id.to_string())),
+                    ("lifecycle".to_string(), JsonValue::String(lifecycle_text)),
+                ]));
+                mapped
+            }
+            ReservationError::InvalidTransition { from } => {
+                let mut mapped = Self::from(ReservationError::InvalidTransition { from: *from });
+                let mut details = BTreeMap::from([(
+                    "state".to_string(),
+                    JsonValue::String(encode_enum(*from)),
+                )]);
+                if let Some(reservation_id) = reservation_id {
+                    details.insert(
+                        "reservationId".to_string(),
+                        JsonValue::String(reservation_id.to_string()),
+                    );
+                }
+                mapped.details = Some(details);
+                mapped
+            }
+            _ => Self::from(error),
+        }
+    }
+
     pub fn from_repository(error: crate::persistence::RepositoryError) -> Self {
         use crate::persistence::{RepositoryError, StorageError};
         match error {
@@ -1272,14 +1470,79 @@ impl CommandError {
             // Likewise: `mark_sent` runs exactly once per row; a second
             // call is an executor bug, not something a user triggers.
             RepositoryError::HostOperationAlreadySent { .. } => Self::internal(),
-            // P7 D2/D3: a caller bug until a later task's command maps
-            // these to `QUEUE_ENTRY_ACTION_NOT_ALLOWED`/
-            // `JOB_ACTION_NOT_ALLOWED` (a user command) or `INTERNAL`
-            // (farm3d's own code), per the spec's tables — Task 3 only
-            // lands the repository functions that raise them.
-            RepositoryError::IllegalQueueEntryTransition { .. } => Self::internal(),
-            RepositoryError::QueueEntryActionNotAllowed { .. } => Self::internal(),
-            RepositoryError::IllegalJobTransition { .. } => Self::internal(),
+            // P7 D2: `Assign` and `Remove` are the user rows of D2's table
+            // (`QUEUE_ENTRY_ACTION_NOT_ALLOWED`); `JobTerminal` and
+            // `Release` only ever come from farm3d's own code, so an
+            // illegal one is a bug (`INTERNAL`).
+            RepositoryError::IllegalQueueEntryTransition {
+                entry_id,
+                from,
+                event,
+            } => {
+                use crate::queue::state::EntryEvent;
+                use crate::queue::QueueEntryAction;
+                match event {
+                    EntryEvent::Assign => Self::queue_entry_action_not_allowed(
+                        &entry_id,
+                        QueueEntryAction::Assign,
+                        from,
+                    ),
+                    EntryEvent::Remove => Self::queue_entry_action_not_allowed(
+                        &entry_id,
+                        QueueEntryAction::Remove,
+                        from,
+                    ),
+                    EntryEvent::JobTerminal(_) | EntryEvent::Release => Self::internal(),
+                }
+            }
+            RepositoryError::QueueEntryActionNotAllowed {
+                entry_id,
+                action,
+                state,
+            } => Self::queue_entry_action_not_allowed(&entry_id, action, state),
+            // P7 D3: an illegal event a user command raised is
+            // `JOB_ACTION_NOT_ALLOWED`; one only farm3d's own code raises
+            // is a bug (`INTERNAL`) — its callers drop the already-applied
+            // ones before they ever get here.
+            RepositoryError::IllegalJobTransition {
+                job_id,
+                from,
+                event,
+            } => match crate::jobs::JobAction::for_user_event(event) {
+                Some(action) => Self::job_action_not_allowed(&job_id, action, from),
+                None => Self::internal(),
+            },
+            RepositoryError::JobActionNotAllowed {
+                job_id,
+                action,
+                state,
+            } => Self::job_action_not_allowed(&job_id, action, state),
+            RepositoryError::JobActive { printer_id, job_id } => {
+                Self::job_active(&printer_id, &job_id)
+            }
+            RepositoryError::AssignmentBlocked {
+                entry_id,
+                printer_id,
+                spool_id,
+                blockers,
+            } => Self::assignment_blocked(&entry_id, &printer_id, &spool_id, &blockers),
+            RepositoryError::JobAlreadyRetried {
+                job_id,
+                retry_entry_id,
+            } => Self::job_already_retried(&job_id, &retry_entry_id),
+            RepositoryError::Reservation {
+                spool_id,
+                spool_number,
+                reservation_id,
+                required_mg,
+                error,
+            } => Self::reservation(
+                &spool_id,
+                spool_number,
+                reservation_id.as_deref(),
+                required_mg,
+                error,
+            ),
             RepositoryError::ConnectionInUse {
                 printer_id,
                 host_operation_id,
@@ -1297,6 +1560,40 @@ impl CommandError {
             | RepositoryError::Storage(StorageError::Database) => Self::persistence_unavailable(),
             RepositoryError::Storage(_) => Self::internal(),
         }
+    }
+}
+
+/// D3's action in `JOB_ACTION_NOT_ALLOWED`'s message.
+fn job_action_label(action: crate::jobs::JobAction) -> &'static str {
+    use crate::jobs::JobAction;
+    match action {
+        JobAction::Stage => "stage",
+        JobAction::Start => "start",
+        JobAction::Pause => "pause",
+        JobAction::Resume => "resume",
+        JobAction::Cancel => "cancel",
+        JobAction::Release => "release",
+        JobAction::Retry => "retry",
+        JobAction::DeclareOutcome => "declare its outcome",
+        JobAction::SettleMaterial => "settle its material",
+        JobAction::CorrectMaterial => "correct its material",
+    }
+}
+
+/// A Job state as `JOB_ACTION_NOT_ALLOWED`'s message names it.
+fn job_state_label(state: crate::jobs::JobState) -> &'static str {
+    use crate::jobs::JobState;
+    match state {
+        JobState::Assigned => "assigned",
+        JobState::Staging => "staging",
+        JobState::AwaitingStart => "awaiting start",
+        JobState::Starting => "starting",
+        JobState::Printing => "printing",
+        JobState::Paused => "paused",
+        JobState::Completed => "completed",
+        JobState::Failed => "failed",
+        JobState::Cancelled => "cancelled",
+        JobState::OutcomeUnknown => "outcome unknown",
     }
 }
 
@@ -1659,5 +1956,119 @@ mod tests {
             extension.details.unwrap().get("extensions"),
             Some(&JsonValue::Array(vec![JsonValue::String("b".to_string())]))
         );
+    }
+
+    fn mg(value: i64) -> JsonValue {
+        JsonValue::Number(JsonNumber::try_from(value).unwrap())
+    }
+
+    /// C5: a reservation refusal inside a Job transaction names the Spool
+    /// (`#<n>`) and carries the spec's details.
+    #[test]
+    fn reservation_refusals_name_the_spool_and_the_amounts() {
+        use crate::spools::reservations::{ReservationError, ReservationState};
+        use crate::spools::SpoolLifecycle;
+
+        let insufficient = CommandError::from_repository(RepositoryError::Reservation {
+            spool_id: "spl-a".to_string(),
+            spool_number: Some(7),
+            reservation_id: None,
+            required_mg: Some(12_500),
+            error: ReservationError::InsufficientAvailable { available_mg: 4_000 },
+        });
+        assert_eq!(insufficient.code, ErrorCode::InsufficientMaterial);
+        assert_eq!(insufficient.message, "Spool #7 no longer has enough material.");
+        assert_eq!(insufficient.recovery, vec![RecoveryCode::Reload]);
+        let details = insufficient.details.unwrap();
+        assert_eq!(details.get("spoolId"), Some(&JsonValue::String("spl-a".to_string())));
+        assert_eq!(details.get("availableMg"), Some(&mg(4_000)));
+        assert_eq!(details.get("requiredMg"), Some(&mg(12_500)));
+
+        let archived = CommandError::from_repository(RepositoryError::Reservation {
+            spool_id: "spl-a".to_string(),
+            spool_number: Some(7),
+            reservation_id: None,
+            required_mg: Some(12_500),
+            error: ReservationError::SpoolNotReservable {
+                lifecycle: SpoolLifecycle::Archived,
+            },
+        });
+        assert_eq!(archived.code, ErrorCode::SpoolNotReservable);
+        assert_eq!(archived.message, "Spool #7 is archived and can't be reserved.");
+        let details = archived.details.unwrap();
+        assert_eq!(details.get("spoolId"), Some(&JsonValue::String("spl-a".to_string())));
+        assert_eq!(
+            details.get("lifecycle"),
+            Some(&JsonValue::String("archived".to_string()))
+        );
+
+        let changed = CommandError::from_repository(RepositoryError::Reservation {
+            spool_id: "spl-a".to_string(),
+            spool_number: Some(7),
+            reservation_id: Some("rsv-1".to_string()),
+            required_mg: None,
+            error: ReservationError::InvalidTransition {
+                from: ReservationState::Consumed,
+            },
+        });
+        assert_eq!(changed.code, ErrorCode::ReservationState);
+        let details = changed.details.unwrap();
+        assert_eq!(
+            details.get("reservationId"),
+            Some(&JsonValue::String("rsv-1".to_string()))
+        );
+        assert_eq!(
+            details.get("state"),
+            Some(&JsonValue::String("consumed".to_string()))
+        );
+    }
+
+    /// C2: D2/D3's illegal user events are the spec's action codes; the
+    /// ones only farm3d's own code raises stay `INTERNAL`.
+    #[test]
+    fn illegal_queue_and_job_transitions_map_by_who_raised_them() {
+        use crate::jobs::{JobEventKind, JobState};
+        use crate::queue::state::EntryEvent;
+        use crate::queue::{CloseReason, QueueEntryState};
+
+        let remove = CommandError::from_repository(RepositoryError::IllegalQueueEntryTransition {
+            entry_id: "qen-1".to_string(),
+            from: QueueEntryState::Assigned,
+            event: EntryEvent::Remove,
+        });
+        assert_eq!(remove.code, ErrorCode::QueueEntryActionNotAllowed);
+        assert_eq!(
+            remove.message,
+            "This Queue Entry is assigned. Release or cancel its Job instead."
+        );
+        let details = remove.details.unwrap();
+        assert_eq!(details.get("action"), Some(&JsonValue::String("remove".to_string())));
+        assert_eq!(details.get("state"), Some(&JsonValue::String("assigned".to_string())));
+
+        let internal = CommandError::from_repository(RepositoryError::IllegalQueueEntryTransition {
+            entry_id: "qen-1".to_string(),
+            from: QueueEntryState::Queued,
+            event: EntryEvent::JobTerminal(CloseReason::Completed),
+        });
+        assert_eq!(internal.code, ErrorCode::Internal);
+
+        let release = CommandError::from_repository(RepositoryError::IllegalJobTransition {
+            job_id: "job-1".to_string(),
+            from: JobState::Printing,
+            event: JobEventKind::Released,
+        });
+        assert_eq!(release.code, ErrorCode::JobActionNotAllowed);
+        assert_eq!(release.message, "This Job can't release while it is printing.");
+        let details = release.details.unwrap();
+        assert_eq!(details.get("jobId"), Some(&JsonValue::String("job-1".to_string())));
+        assert_eq!(details.get("action"), Some(&JsonValue::String("release".to_string())));
+        assert_eq!(details.get("state"), Some(&JsonValue::String("printing".to_string())));
+
+        let tracker = CommandError::from_repository(RepositoryError::IllegalJobTransition {
+            job_id: "job-1".to_string(),
+            from: JobState::Assigned,
+            event: JobEventKind::Completed,
+        });
+        assert_eq!(tracker.code, ErrorCode::Internal);
     }
 }

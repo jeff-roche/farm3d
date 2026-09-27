@@ -339,6 +339,11 @@ fn close_and_renumber(
 /// `copyIndex` 1..N, appended at the end of the open list in copy-index
 /// order.
 pub struct NewEntries {
+    /// The lineage id to use, or `None` for a fresh `qln-<uuid v4>`.
+    /// `add_to_queue` derives it from its `operationId` so a replay can
+    /// find the entries it created (the pattern P5's external revisions
+    /// use for their own ids).
+    pub lineage_id: Option<String>,
     pub slice_revision_id: String,
     pub quantity: u8,
     pub policy: DispatchPolicy,
@@ -352,7 +357,7 @@ pub fn create_entries(
     new: &NewEntries,
     now: &str,
 ) -> Result<Vec<QueueEntry>, RepositoryError> {
-    let lineage_id = new_lineage_id();
+    let lineage_id = new.lineage_id.clone().unwrap_or_else(new_lineage_id);
     let base_position = current_max_position(tx)?;
     let mut ids = Vec::with_capacity(new.quantity as usize);
     for copy_index in 1..=i64::from(new.quantity) {
@@ -627,6 +632,7 @@ mod tests {
 
     fn three() -> NewEntries {
         NewEntries {
+            lineage_id: None,
             slice_revision_id: SLR.to_string(),
             quantity: 3,
             policy: DispatchPolicy::Manual,

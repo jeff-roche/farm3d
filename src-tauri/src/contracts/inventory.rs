@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 89] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 100] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -389,9 +389,64 @@ contracts![
         "AbandonHostOperationRequest",
         "AbandonHostOperationResult"
     ),
+    (
+        "list_queue",
+        "ListQueueRequest",
+        "ListQueueResult"
+    ),
+    (
+        "add_to_queue",
+        "AddToQueueRequest",
+        "AddToQueueResult"
+    ),
+    (
+        "update_queue_entry",
+        "UpdateQueueEntryRequest",
+        "UpdateQueueEntryResult"
+    ),
+    (
+        "move_queue_entry",
+        "MoveQueueEntryRequest",
+        "MoveQueueEntryResult"
+    ),
+    (
+        "remove_queue_entry",
+        "RemoveQueueEntryRequest",
+        "RemoveQueueEntryResult"
+    ),
+    (
+        "explain_queue_entry",
+        "ExplainQueueEntryRequest",
+        "ExplainQueueEntryResult"
+    ),
+    (
+        "assign_queue_entry",
+        "AssignQueueEntryRequest",
+        "AssignQueueEntryResult"
+    ),
+    (
+        "release_job",
+        "ReleaseJobRequest",
+        "ReleaseJobResult"
+    ),
+    (
+        "retry_job",
+        "RetryJobRequest",
+        "RetryJobResult"
+    ),
+    (
+        "cancel_job",
+        "CancelJobRequest",
+        "CancelJobResult"
+    ),
+    (
+        "get_job_history",
+        "GetJobHistoryRequest",
+        "GetJobHistoryResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 89] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 100] {
     &COMMAND_CONTRACTS
 }
 
@@ -591,7 +646,29 @@ export type CancelHostPrintResult = CommandSuccess<HostOperation>;
 export type ReconcileHostOperationRequest = ContractRequest & { hostOperationId: string };
 export type ReconcileHostOperationResult = CommandSuccess<HostOperation>;
 export type AbandonHostOperationRequest = ContractRequest & { operationId: string; hostOperationId: string; acknowledgement: "hostStateUnknown"; note?: string };
-export type AbandonHostOperationResult = CommandSuccess<HostOperation>;"#.to_string()
+export type AbandonHostOperationResult = CommandSuccess<HostOperation>;
+export type ListQueueRequest = NoArgsRequest;
+export type ListQueueResult = CommandSuccess<QueueSnapshot>;
+export type AddToQueueRequest = ContractRequest & { operationId: string; sliceRevisionId: string; quantity: number; policy: DispatchPolicy; preference: DispatchPreference; materialEstimate?: MaterialEstimate; manualPrinterId?: string };
+export type AddToQueueResult = CommandSuccess<QueueChange>;
+export type UpdateQueueEntryRequest = ContractRequest & { operationId: string; entryId: string; expectedRevision: number; policy?: DispatchPolicy; preference?: DispatchPreference };
+export type UpdateQueueEntryResult = CommandSuccess<QueueChange>;
+export type MoveQueueEntryRequest = ContractRequest & { operationId: string; entryId: string; expectedRevision: number; toPosition: number };
+export type MoveQueueEntryResult = CommandSuccess<QueueChange>;
+export type RemoveQueueEntryRequest = ContractRequest & { operationId: string; entryId: string; expectedRevision: number };
+export type RemoveQueueEntryResult = CommandSuccess<QueueChange>;
+export type ExplainQueueEntryRequest = ContractRequest & { entryId: string };
+export type ExplainQueueEntryResult = CommandSuccess<QueueEntryEligibility>;
+export type AssignQueueEntryRequest = ContractRequest & { operationId: string; entryId: string; printerId: string; spoolId: string; acknowledgeManualFacts?: boolean };
+export type AssignQueueEntryResult = CommandSuccess<QueueChange>;
+export type ReleaseJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type ReleaseJobResult = CommandSuccess<QueueChange>;
+export type RetryJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type RetryJobResult = CommandSuccess<QueueChange>;
+export type CancelJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type CancelJobResult = CommandSuccess<QueueChange>;
+export type GetJobHistoryRequest = ContractRequest & { jobId: string };
+export type GetJobHistoryResult = CommandSuccess<JobHistory>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -684,6 +761,13 @@ export type AbandonHostOperationResult = CommandSuccess<HostOperation>;"#.to_str
         visitor.visit::<crate::host_ops::HostOperationsSnapshot>();
         visitor.visit::<crate::host_ops::HostOperation>();
         visitor.visit::<crate::host_ops::PriorState>();
+        visitor.visit::<crate::queue::QueueSnapshot>();
+        visitor.visit::<crate::queue::QueueChange>();
+        visitor.visit::<crate::queue::DispatchPolicy>();
+        visitor.visit::<crate::queue::DispatchPreference>();
+        visitor.visit::<crate::queue::MaterialEstimate>();
+        visitor.visit::<crate::queue::QueueEntryEligibility>();
+        visitor.visit::<crate::jobs::JobHistory>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {
