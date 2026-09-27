@@ -1,8 +1,9 @@
 //! P7's Job commands (spec "Commands"): `assign_queue_entry`,
 //! `release_job`, `retry_job`, `cancel_job`, and `get_job_history`, which
 //! need no host, and the handoffs `stage_job`, `start_job`, `pause_job`,
-//! `resume_job`, and `cancel_job` after start (Task 8a). `declare_job_outcome`
-//! comes with the tracker; settlement with its own task.
+//! `resume_job`, and `cancel_job` after start (Task 8a), and
+//! `declare_job_outcome` (Task 8b, with the tracker). Settlement comes
+//! with its own task.
 //!
 //! The host-free writes take the Printer lock first (D4) and run one
 //! `Storage::write_repo` transaction from `jobs::assign`. The handoffs go
@@ -31,6 +32,7 @@ use crate::RuntimeServices;
 use super::assign::{self, AssignRequest};
 use super::dispatch::{self, Handoff};
 use super::repository as jobs_repository;
+use super::tracker;
 use super::{AssignedBy, Job, JobHistory, JobState, StartConfirmation};
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
@@ -311,4 +313,44 @@ pub async fn resume_job<R: tauri::Runtime>(
     let handoff =
         dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Resume).await?;
     Ok(finish(&app, &services, handoff))
+}
+
+/// D9 "declare_job_outcome": the operator declares how an `outcomeUnknown`
+/// Job ended, or a `printing`/`paused` one whose host has been unreachable
+/// for `JobTimings.unreachable_declare_after`. farm3d sends nothing to the
+/// host.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn declare_job_outcome<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+    outcome: super::DeclaredOutcome,
+    acknowledgement: String,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    if acknowledgement != tracker::DECLARE_ACKNOWLEDGEMENT {
+        return Err(CommandError::validation_at(
+            "acknowledgement",
+            "Confirm that farm3d can't know how this print ended.",
+        ));
+    }
+    let job = committed_job(&services, &job_id)?;
+    let printer_lock = services.host_ops.printer_lock(&job.printer_id);
+    let _serialized = printer_lock.lock().await;
+
+    let at = services.jobs.now();
+    let declare_after = services.jobs.timings.unreachable_declare_after;
+    let declared = services
+        .storage
+        .write_repo(|tx| tracker::declare(tx, &operation_id, &job_id, outcome, at, declare_after))
+        .map_err(CommandError::from_repository)?;
+    let mut change = declared.change;
+    dispatch::present_change(&services, &mut change);
+    if !declared.replayed {
+        publish(&app, &services, &change);
+    }
+    Ok(CommandSuccess::new(change))
 }

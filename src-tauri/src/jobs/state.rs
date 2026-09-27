@@ -127,17 +127,6 @@ pub fn allowed_actions(
 ) -> Vec<JobAction> {
     use JobAction::*;
 
-    let unreachable_long_enough = || {
-        job.host_unreachable_since
-            .as_deref()
-            .and_then(|since| DateTime::parse_from_rfc3339(since).ok())
-            .and_then(|since| {
-                chrono::Duration::from_std(declare_after)
-                    .ok()
-                    .map(|after| since.with_timezone(&Utc) + after <= now)
-            })
-            .unwrap_or(false)
-    };
     let settleable = matches!(job.settlement, Settlement::Pending | Settlement::Deferred);
 
     let mut actions = match job.state {
@@ -173,10 +162,28 @@ pub fn allowed_actions(
             actions
         }
     };
-    if matches!(job.state, JobState::Printing | JobState::Paused) && unreachable_long_enough() {
+    if may_declare_while_unreachable(job, now, declare_after) {
         actions.push(DeclareOutcome);
     }
     actions
+}
+
+/// D9 (ruling R5): a `printing` or `paused` Job whose host has been
+/// unreachable for at least `declare_after` at `now` may have its end
+/// declared. An unparseable `host_unreachable_since` never qualifies
+/// (fail-safe).
+pub fn may_declare_while_unreachable(job: &Job, now: DateTime<Utc>, declare_after: Duration) -> bool {
+    matches!(job.state, JobState::Printing | JobState::Paused)
+        && job
+            .host_unreachable_since
+            .as_deref()
+            .and_then(|since| DateTime::parse_from_rfc3339(since).ok())
+            .and_then(|since| {
+                chrono::Duration::from_std(declare_after)
+                    .ok()
+                    .map(|after| since.with_timezone(&Utc) + after <= now)
+            })
+            .unwrap_or(false)
 }
 
 /// Fixtures shared by this module's tests and `jobs::dispatch`'s.

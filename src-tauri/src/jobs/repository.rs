@@ -17,11 +17,13 @@
 //! ([`super::state::allowed_actions`]) and a successor-entry column in
 //! [`JOB_COLUMNS`]. `Job.startBlockers` needs the live Printer status, so
 //! it decodes empty and `jobs::dispatch::present_jobs` fills it before a
-//! Job leaves the backend. [`update_columns`] is the one write that moves
-//! no state: it bumps `revision` without an event row (D7's outcome
-//! bookkeeping and driver refusals). `JobHistory.hostOperations` is still
-//! left empty: `host_operations.job_id` is not yet on `HostOperation`'s
-//! wire type.
+//! Job leaves the backend (it also recomputes `declareOutcome` with the
+//! runtime's injected timings and clock). [`update_columns`] is the one
+//! write that moves no state: it bumps `revision` without an event row
+//! (D7's outcome bookkeeping, the tracker's progress and reachability, and
+//! driver refusals). [`tracking`] reads the backend-only columns the
+//! tracker needs. `JobHistory.hostOperations` lists every Host Operation
+//! whose `job_id` is the Job's.
 
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -156,6 +158,9 @@ fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         start_blockers: Vec::new(),
         allowed_actions: Vec::new(),
     };
+    // The production timing and clock. A `printing`/`paused` Job's
+    // `declareOutcome` depends on them, so `dispatch::present_jobs`
+    // recomputes it with the runtime's injected ones before it leaves Rust.
     job.allowed_actions = state::allowed_actions(
         &job,
         has_successor,
@@ -295,6 +300,10 @@ pub struct JobChange {
     pub history_mark: Option<i64>,
     pub host_job_id: Option<i64>,
     pub max_progress_pct: Option<i64>,
+    /// D7: the tracker's count of inconclusive polls in a row.
+    pub inconclusive_checks: Option<i64>,
+    /// D7/R5: set by a history poll that could not run.
+    pub host_unreachable_since: Option<String>,
     pub last_failure: Option<JobFailure>,
     pub correction_event_id: Option<String>,
     pub started_at: Option<String>,
@@ -308,6 +317,9 @@ pub struct JobChange {
     pub clear_upload_host_operation_id: bool,
     /// Sets `active_host_operation_id` to NULL (D7: its op is terminal).
     pub clear_active_host_operation_id: bool,
+    /// Sets `host_unreachable_since` to NULL (D7: a successful history
+    /// poll). Wins over `host_unreachable_since`.
+    pub clear_host_unreachable_since: bool,
 }
 
 fn next_sequence(tx: &Transaction<'_>, job_id: &str) -> Result<i64, RepositoryError> {
@@ -447,7 +459,9 @@ fn write_row(
              correction_event_id = COALESCE(?16, correction_event_id),
              started_at = COALESCE(?17, started_at),
              ended_at = COALESCE(?18, ended_at),
-             host_unreachable_since = CASE WHEN ?19 THEN NULL ELSE host_unreachable_since END
+             host_unreachable_since = CASE WHEN ?19 OR ?23 THEN NULL
+                                           ELSE COALESCE(?24, host_unreachable_since) END,
+             inconclusive_checks = COALESCE(?25, inconclusive_checks)
          WHERE id = ?1",
         params![
             job_id,
@@ -472,6 +486,9 @@ fn write_row(
             change.clear_upload_host_operation_id,
             change.clear_active_host_operation_id,
             change.clear_last_failure,
+            change.clear_host_unreachable_since,
+            change.host_unreachable_since,
+            change.inconclusive_checks,
         ],
     )?;
     Ok(())
@@ -491,6 +508,34 @@ pub fn update_columns(
     let current = load_job(tx, job_id)?.ok_or_else(|| not_found(job_id))?;
     write_row(tx, job_id, current.state, None, &change, None, false, now)?;
     load_job(tx, job_id)?.ok_or_else(|| not_found(job_id))
+}
+
+/// The backend-only `jobs` columns the tracker reads (spec "Wire types":
+/// never on the wire).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tracking {
+    pub history_mark: Option<i64>,
+    pub host_job_id: Option<i64>,
+    pub inconclusive_checks: i64,
+    pub start_host_operation_id: Option<String>,
+}
+
+pub fn tracking(conn: &Connection, job_id: &str) -> Result<Option<Tracking>, StorageError> {
+    Ok(conn
+        .query_row(
+            "SELECT history_mark, host_job_id, inconclusive_checks, start_host_operation_id
+             FROM jobs WHERE id = ?1",
+            [job_id],
+            |row| {
+                Ok(Tracking {
+                    history_mark: row.get(0)?,
+                    host_job_id: row.get(1)?,
+                    inconclusive_checks: row.get(2)?,
+                    start_host_operation_id: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 // --- job_events --------------------------------------------------------------
@@ -694,16 +739,35 @@ fn lineage_entries(conn: &Connection, lineage_id: &str) -> Result<Vec<QueueEntry
         .collect()
 }
 
+/// Every Host Operation handed off for the Job (`host_operations.job_id`),
+/// oldest first.
+fn host_operations_of(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Vec<crate::host_ops::HostOperation>, StorageError> {
+    let mut statement =
+        conn.prepare("SELECT id FROM host_operations WHERE job_id = ?1 ORDER BY created_at, rowid")?;
+    let ids = statement
+        .query_map([job_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter()
+        .map(|id| match crate::host_ops::repository::load(conn, id) {
+            Ok(Some(op)) => Ok(op),
+            Ok(None) => Err(StorageError::OperationFailed),
+            Err(RepositoryError::Storage(error)) => Err(error),
+            Err(_) => Err(StorageError::OperationFailed),
+        })
+        .collect()
+}
+
 /// `get_job_history`'s assembly (spec "Backend model"): the Job, its
 /// Queue Entry, that entry's whole lineage, the Job's timeline in
-/// sequence order, its reservation, and its Reconciliation Requirements.
+/// sequence order, its reservation, its Host Operations, and its
+/// Reconciliation Requirements.
 /// Assumes `job_id` names an existing Job (a later task's command checks
 /// that first, the way every other `NOT_FOUND` read does); a missing one
 /// here surfaces as `StorageError::OperationFailed`, since this function's
 /// signature carries no `NotFound` variant of its own.
-///
-/// `host_operations` is always empty for now — see this module's doc
-/// comment on why.
 pub fn history(conn: &Connection, job_id: &str) -> Result<JobHistory, StorageError> {
     let job = load_job(conn, job_id)?.ok_or(StorageError::OperationFailed)?;
     let entry = queue_repository::load(conn, &job.queue_entry_id)?.ok_or(StorageError::OperationFailed)?;
@@ -719,7 +783,7 @@ pub fn history(conn: &Connection, job_id: &str) -> Result<JobHistory, StorageErr
         lineage,
         events,
         reservations,
-        host_operations: Vec::new(),
+        host_operations: host_operations_of(conn, job_id)?,
         requirements,
     })
 }

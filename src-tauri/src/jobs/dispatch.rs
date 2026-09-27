@@ -202,19 +202,7 @@ pub fn apply_host_outcome(
             change.host_operation_id = Some(op.id.clone());
             let job = jobs_repository::transition(tx, job_id, event, change, now)?;
             if event == JobEventKind::StartAbandoned {
-                let exists = jobs_repository::requirements_for_job(tx, job_id)?
-                    .iter()
-                    .any(|requirement| requirement.kind == RequirementKind::JobOutcomeUnknown);
-                if !exists {
-                    requirements.push(jobs_repository::open_requirement(
-                        tx,
-                        job_id,
-                        RequirementKind::JobOutcomeUnknown,
-                        None,
-                        None,
-                        now,
-                    )?);
-                }
+                requirements.extend(open_outcome_unknown_requirement(tx, job_id, now)?);
             }
             job
         }
@@ -229,6 +217,24 @@ pub fn apply_host_outcome(
         )?,
     };
     Ok(Some(Applied { job, requirements }))
+}
+
+/// D1/D9: opens the Job's `jobOutcomeUnknown` requirement (`pending`),
+/// unless it already has one (one per `(job, kind)`). Returns what it
+/// opened.
+pub(crate) fn open_outcome_unknown_requirement(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    now: &str,
+) -> Result<Option<ReconciliationRequirement>, RepositoryError> {
+    let exists = jobs_repository::requirements_for_job(tx, job_id)?
+        .iter()
+        .any(|requirement| requirement.kind == RequirementKind::JobOutcomeUnknown);
+    if exists {
+        return Ok(None);
+    }
+    jobs_repository::open_requirement(tx, job_id, RequirementKind::JobOutcomeUnknown, None, None, now)
+        .map(Some)
 }
 
 // --- start checks ------------------------------------------------------------
@@ -439,13 +445,30 @@ impl StartContext {
 /// status, just before they leave Rust (a command result, an event, or a
 /// snapshot). Rust computes them; the frontend never derives them (C1).
 /// A Printer that can't be read leaves the Job's blockers empty.
+///
+/// A `printing`/`paused` Job's `allowedActions` are recomputed here with
+/// the runtime's own `JobTimings.unreachable_declare_after` and clock
+/// (D3: "computed at read time"); the decode-time value used the
+/// production defaults.
 pub(crate) fn present_jobs<R: tauri::Runtime>(services: &RuntimeServices<R>, jobs: &mut [Job]) {
     for job in jobs.iter_mut() {
-        if job.state != JobState::AwaitingStart {
-            continue;
-        }
-        if let Ok(Some(context)) = StartContext::read(services, job) {
-            job.start_blockers = context.blockers(job);
+        match job.state {
+            JobState::AwaitingStart => {
+                if let Ok(Some(context)) = StartContext::read(services, job) {
+                    job.start_blockers = context.blockers(job);
+                }
+            }
+            JobState::Printing | JobState::Paused => {
+                // Retry needs a terminal Job, so the successor flag can't
+                // matter here.
+                job.allowed_actions = super::state::allowed_actions(
+                    job,
+                    false,
+                    services.jobs.now(),
+                    services.jobs.timings.unreachable_declare_after,
+                );
+            }
+            _ => {}
         }
     }
 }

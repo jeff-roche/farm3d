@@ -7,6 +7,7 @@ import type { CatalogRef } from "../domain/CatalogRef";
 import type { CatalogVariantSummary } from "../domain/CatalogVariantSummary";
 import type { ConnectionSubmission } from "../domain/ConnectionSubmission";
 import type { CredentialStoreInfo } from "../domain/CredentialStoreInfo";
+import type { DeclaredOutcome } from "../domain/DeclaredOutcome";
 import type { DiscoveredPrinter } from "../domain/DiscoveredPrinter";
 import type { DispatchPolicy } from "../domain/DispatchPolicy";
 import type { DispatchPreference } from "../domain/DispatchPreference";
@@ -296,3 +297,5 @@ export type PauseJobRequest = ContractRequest & { operationId: string; jobId: st
 export type PauseJobResult = CommandSuccess<QueueChange>;
 export type ResumeJobRequest = ContractRequest & { operationId: string; jobId: string };
 export type ResumeJobResult = CommandSuccess<QueueChange>;
+export type DeclareJobOutcomeRequest = ContractRequest & { operationId: string; jobId: string; outcome: DeclaredOutcome; acknowledgement: "hostStateUnknown" };
+export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;

@@ -20,6 +20,14 @@
 //!   nothing and is tried again (see `is_not_yet`).
 //! - **`RecvError::Lagged`** or the poll interval: re-read every active
 //!   Job from storage and do all of the above for it.
+//! - **The tracker** (`jobs::tracker`, Task 8b): every resync polls the
+//!   history of each `printing`/`paused` Job, so `JobTimings.history_poll`
+//!   is the history poll. A Job entering `printing`, a succeeded cancel
+//!   op, and a status that says our file ended each trigger a poll at
+//!   once; a status on our file also moves progress and `printing` ⇄
+//!   `paused`. When a Job's `host_unreachable_since` crosses
+//!   `unreachable_declare_after`, the resync republishes it, so its
+//!   `allowedActions` show `declareOutcome`.
 //!
 //! Every Job write takes `host_ops.printer_lock(printer_id)` first, except
 //! the handoffs, which call `host_ops::api` (it takes that non-reentrant
@@ -29,11 +37,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use tauri::AppHandle;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::contracts::command::{CommandError, ErrorCode};
-use crate::host_ops::{repository as host_ops_repository, HostOperation, HostOperationKind, PriorState};
+use crate::host_ops::{
+    repository as host_ops_repository, Clock, HostOperation, HostOperationKind, PriorState,
+    SystemClock,
+};
 use crate::persistence::RepositoryError;
 use crate::printers::now_rfc3339;
 use crate::queue::{Blocker, QueueChange};
@@ -41,7 +53,7 @@ use crate::RuntimeServices;
 
 use super::dispatch::{self, StartContext};
 use super::repository::{self as jobs_repository, JobChange};
-use super::{Job, JobFailure, JobState, StartConfirmation};
+use super::{tracker, Job, JobAction, JobFailure, JobState, StartConfirmation};
 
 /// D7's tracker and driver timings. `default()` holds the production
 /// values (10 s, 3, 30 min); tests inject short ones.
@@ -76,6 +88,9 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// The dispatch driver's state, held in `RuntimeServices.jobs`.
 pub struct JobServices<R: tauri::Runtime> {
     pub timings: JobTimings,
+    /// The tracker's time source: `host_unreachable_since`, and when
+    /// `declareOutcome` is offered. Injectable so no test waits 30 minutes.
+    clock: Arc<dyn Clock>,
     app: OnceLock<AppHandle<R>>,
     started: OnceLock<()>,
     stage_requests: tokio::sync::mpsc::UnboundedSender<String>,
@@ -93,6 +108,12 @@ pub struct JobServices<R: tauri::Runtime> {
     before_start_link: Mutex<Option<StartLinkHook>>,
     /// Completed resyncs (the first pass is the first), for tests.
     resyncs: std::sync::atomic::AtomicU64,
+    /// `printing`/`paused` Jobs last published with `declareOutcome`, so
+    /// crossing the mark republishes each once.
+    declare_offered: Mutex<HashSet<String>>,
+    /// When a status hint last triggered a poll, per Job: at most one per
+    /// `history_poll`, so a chatty status can't flood the host.
+    hinted: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 /// See [`JobServices::before_start_link`].
@@ -100,9 +121,15 @@ pub type StartLinkHook = Box<dyn FnOnce(&crate::persistence::Storage) + Send>;
 
 impl<R: tauri::Runtime> JobServices<R> {
     pub fn new(timings: JobTimings) -> Self {
+        Self::with_clock(timings, Arc::new(SystemClock))
+    }
+
+    /// [`JobServices::new`] with the tracker's clock injected.
+    pub fn with_clock(timings: JobTimings, clock: Arc<dyn Clock>) -> Self {
         let (stage_requests, stage_receiver) = tokio::sync::mpsc::unbounded_channel();
         Self {
             timings,
+            clock,
             app: OnceLock::new(),
             started: OnceLock::new(),
             stage_requests,
@@ -113,7 +140,14 @@ impl<R: tauri::Runtime> JobServices<R> {
             starting: Mutex::new(HashSet::new()),
             before_start_link: Mutex::new(None),
             resyncs: std::sync::atomic::AtomicU64::new(0),
+            declare_offered: Mutex::new(HashSet::new()),
+            hinted: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The tracker's "now".
+    pub fn now(&self) -> DateTime<Utc> {
+        self.clock.now()
     }
 
     /// Test hook: `hook` runs once, in the next `start_job` (operator or
@@ -221,6 +255,11 @@ impl<R: tauri::Runtime> Driver<R> {
         self.poll = Some(poll);
         loop {
             let wake = self.next().await;
+            // `select!` picks among ready branches at random: a poll tick
+            // must never win over a stop (a crash does no more work).
+            if *self.stop.borrow() {
+                return;
+            }
             let Some(services) = self.services.upgrade() else {
                 return;
             };
@@ -282,21 +321,32 @@ fn log_failure(what: &str, error: &RepositoryError) {
 }
 
 /// Publishes `change` on the `queue` stream, with live `startBlockers`,
-/// and remembers what it published for each `awaitingStart` Job.
+/// then the Spools it touched on the inventory stream; remembers what it
+/// published for each `awaitingStart` Job, and which Jobs it published
+/// with `declareOutcome`.
 fn publish<R: tauri::Runtime>(services: &RuntimeServices<R>, mut change: QueueChange) {
     dispatch::present_change(services, &mut change);
     {
         let mut published = lock(&services.jobs.published_blockers);
+        let mut offered = lock(&services.jobs.declare_offered);
         for job in &change.jobs {
             if job.state == JobState::AwaitingStart {
                 published.insert(job.id.clone(), job.start_blockers.clone());
             } else {
                 published.remove(&job.id);
             }
+            if job.allowed_actions.contains(&JobAction::DeclareOutcome)
+                && matches!(job.state, JobState::Printing | JobState::Paused)
+            {
+                offered.insert(job.id.clone());
+            } else {
+                offered.remove(&job.id);
+            }
         }
     }
     if let Some(app) = services.jobs.app.get() {
         services.queue_stream.publish(app, &change);
+        crate::spools::events::publish_ids(app, services, &change.spool_ids, &[]);
     }
 }
 
@@ -360,6 +410,15 @@ fn has_handed_off(
 /// Re-applies the Job-linked op `op_id`'s current state to its Job, under
 /// the Printer lock, and publishes what changed.
 async fn apply_linked<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id: &str, op_id: &str) {
+    apply_linked_job(services, printer_id, op_id).await;
+}
+
+/// [`apply_linked`], returning the Job it changed.
+async fn apply_linked_job<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    printer_id: &str,
+    op_id: &str,
+) -> Option<Job> {
     let printer_lock = services.host_ops.printer_lock(printer_id);
     let _serialized = printer_lock.lock().await;
     let now = now_rfc3339();
@@ -370,15 +429,31 @@ async fn apply_linked<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_
         }
     });
     match applied {
-        Ok(Some(applied)) => publish(services, applied.change()),
-        Ok(None) => {}
-        Err(error) => log_failure("apply a Host Operation's outcome", &error),
+        Ok(Some(applied)) => {
+            publish(services, applied.change());
+            Some(applied.job)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            log_failure("apply a Host Operation's outcome", &error);
+            None
+        }
     }
 }
 
 async fn on_host_operation<R: tauri::Runtime>(services: &RuntimeServices<R>, op: &HostOperation) {
-    if op.job_id.is_some() {
-        apply_linked(services, &op.printer_id, &op.id).await;
+    if let Some(job_id) = &op.job_id {
+        let applied = apply_linked_job(services, &op.printer_id, &op.id).await;
+        // D7: a Job entering `printing` pins its history job at once (a
+        // quick print may already be over), and a succeeded cancel makes
+        // the tracker check history now.
+        let started = applied.is_some_and(|job| job.state == JobState::Printing)
+            && op.kind == HostOperationKind::Start;
+        let cancelled = op.kind == HostOperationKind::Cancel
+            && op.state == crate::host_ops::HostOperationState::Succeeded;
+        if started || cancelled {
+            track(services, job_id).await;
+        }
     }
     // An op resolving can lift `HOST_OPERATION_PENDING`, and a Job may
     // just have entered `awaitingStart`.
@@ -398,6 +473,10 @@ async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id
     let Some(job) = job else {
         return;
     };
+    if matches!(job.state, JobState::Printing | JobState::Paused) {
+        follow_status(services, &job).await;
+        return;
+    }
     if job.state == JobState::Assigned {
         // A stage deferred while the Printer wasn't reachable yet goes
         // ahead once it is.
@@ -433,6 +512,76 @@ async fn on_awaiting_start<R: tauri::Runtime>(services: &RuntimeServices<R>) {
     for job in read_active(services) {
         if job.state == JobState::AwaitingStart {
             on_printer(services, &job.printer_id).await;
+        }
+    }
+}
+
+/// D7: one tracker poll of `job_id`, published.
+async fn track<R: tauri::Runtime>(services: &RuntimeServices<R>, job_id: &str) {
+    match tracker::check(services, job_id).await {
+        Ok(Some(change)) => publish(services, change),
+        Ok(None) => {}
+        Err(error) => log_failure("track a Job's history", &error),
+    }
+}
+
+/// D7: a status for a `printing`/`paused` Job's Printer — progress and
+/// `printing` ⇄ `paused` on its own file, and a poll at once (at most one
+/// per `history_poll`) when it says our file ended.
+async fn follow_status<R: tauri::Runtime>(services: &RuntimeServices<R>, job: &Job) {
+    let check_now = match tracker::observe_status(services, job).await {
+        Ok((change, check_now)) => {
+            if let Some(change) = change {
+                publish(services, change);
+            }
+            check_now
+        }
+        Err(error) => {
+            log_failure("follow a Job's status", &error);
+            false
+        }
+    };
+    if !check_now {
+        return;
+    }
+    let due = {
+        let mut hinted = lock(&services.jobs.hinted);
+        let now = std::time::Instant::now();
+        let due = hinted
+            .get(&job.id)
+            .is_none_or(|last| now.duration_since(*last) >= services.jobs.timings.history_poll);
+        if due {
+            hinted.insert(job.id.clone(), now);
+        }
+        due
+    };
+    if due {
+        track(services, &job.id).await;
+    }
+}
+
+/// D3: a `printing`/`paused` Job whose `host_unreachable_since` just
+/// crossed `unreachable_declare_after` is republished, once, so its
+/// `allowedActions` offer `declareOutcome`.
+fn republish_declare_crossings<R: tauri::Runtime>(services: &RuntimeServices<R>, active: Vec<Job>) {
+    let now = services.jobs.now();
+    let after = services.jobs.timings.unreachable_declare_after;
+    let ids: HashSet<&str> = active.iter().map(|job| job.id.as_str()).collect();
+    lock(&services.jobs.declare_offered).retain(|id| ids.contains(id.as_str()));
+    lock(&services.jobs.hinted).retain(|id, _| ids.contains(id.as_str()));
+    for job in active {
+        let offered = super::state::may_declare_while_unreachable(&job, now, after);
+        let known = lock(&services.jobs.declare_offered).contains(&job.id);
+        if offered && !known {
+            publish(
+                services,
+                QueueChange {
+                    jobs: vec![job],
+                    ..QueueChange::default()
+                },
+            );
+        } else if !offered && known {
+            lock(&services.jobs.declare_offered).remove(&job.id);
         }
     }
 }
@@ -589,20 +738,34 @@ async fn record_refusal<R: tauri::Runtime>(
 /// D7 `Lagged`, the poll interval, and the first pass: every active Job
 /// re-read from storage. A Job whose active op resolved catches up; an
 /// `assigned` Job that never staged is staged (R2); an `awaitingStart`
-/// Job is re-evaluated.
+/// Job is re-evaluated; a `printing`/`paused` Job's history is polled.
 async fn resync<R: tauri::Runtime>(services: &RuntimeServices<R>) {
     for job in read_active(services) {
         if let Some(op_id) = &job.active_host_operation_id {
             apply_linked(services, &job.printer_id, op_id).await;
         }
     }
-    for job in read_active(services) {
+    let active = read_active(services);
+    for job in &active {
         match job.state {
             JobState::Assigned => stage_by_driver(services, &job.id).await,
             JobState::AwaitingStart => on_printer(services, &job.printer_id).await,
+            // The tracker's history poll (D7), and its first pass after a
+            // restart (R9–R11).
+            JobState::Printing | JobState::Paused => track(services, &job.id).await,
             _ => {}
         }
     }
+    // A poll can end a Job or set `host_unreachable_since`: re-read.
+    let still_active = if active
+        .iter()
+        .any(|job| matches!(job.state, JobState::Printing | JobState::Paused))
+    {
+        read_active(services)
+    } else {
+        active
+    };
+    republish_declare_crossings(services, still_active);
     services
         .jobs
         .resyncs

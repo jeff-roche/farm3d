@@ -17,6 +17,7 @@ pub mod recovery;
 pub mod repository;
 pub mod services;
 pub mod state;
+pub mod tracker;
 
 pub use recovery::recover_after_restart;
 pub use services::{JobServices, JobTimings};

@@ -23,7 +23,9 @@ use farm3d_lib::connections::supervisor::{ConnectionManager, STATUS_EVENT};
 use farm3d_lib::connections::{
     ConnectionConfig, ConnectionState, PrinterConnection, PrinterStatus, MOONRAKER_KIND,
 };
+use chrono::{DateTime, Utc};
 use farm3d_lib::host_ops::repository as host_ops_repo;
+use farm3d_lib::jobs::{JobServices, JobTimings};
 use farm3d_lib::host_ops::{
     self, CapabilityFactory, Clock, HostOperation, HostOperationServices, HostOperationState,
     HostOpsTimings, SystemClock,
@@ -63,6 +65,10 @@ const CREDENTIAL_REF: &str = "farm3d/printer/prn-fake/apikey";
 const NOW: &str = "2026-09-27T00:00:00Z";
 /// How long any one wait may take.
 pub const WAIT: Duration = Duration::from_secs(15);
+/// How often a wait on a Job re-reads it. Each read is a `get_job_history`
+/// (several fresh SQLite connections, each parsing the schema), so a
+/// tighter loop across parallel tests only adds contention.
+const POLL: Duration = Duration::from_millis(50);
 
 // --- capabilities: every capability supported with sim evidence ---------------
 
@@ -313,6 +319,39 @@ impl Roots {
     }
 }
 
+// --- time ------------------------------------------------------------------------
+
+/// A clock a test moves by hand (the tracker's `host_unreachable_since` and
+/// `declareOutcome`), starting at the real time.
+pub struct ManualClock(Mutex<DateTime<Utc>>);
+
+impl ManualClock {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Utc::now())))
+    }
+
+    pub fn advance(&self, by: Duration) {
+        let mut now = self.0.lock().unwrap();
+        *now += chrono::Duration::from_std(by).unwrap();
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> DateTime<Utc> {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// Short tracker timings: a 200 ms history poll, the production limit of
+/// three inconclusive polls, and the production 30 minutes before a
+/// declare (tests move a [`ManualClock`] instead of waiting).
+pub fn fast() -> JobTimings {
+    JobTimings {
+        history_poll: Duration::from_millis(200),
+        ..JobTimings::default()
+    }
+}
+
 // --- a running app ---------------------------------------------------------------
 
 pub struct Running {
@@ -344,6 +383,18 @@ pub fn boot(roots: &Roots, driver: Driver) -> Running {
 /// [`boot`], with the Printer's status `initial` when the runtimes start
 /// (production starts them while the Printer is still `Connecting`).
 pub fn boot_with(roots: &Roots, driver: Driver, initial: PrinterStatus) -> Running {
+    boot_tuned(roots, driver, initial, JobTimings::default(), None)
+}
+
+/// [`boot_with`], with the Job runtime's timings and (optionally) its
+/// clock injected.
+pub fn boot_tuned(
+    roots: &Roots,
+    driver: Driver,
+    initial: PrinterStatus,
+    timings: JobTimings,
+    job_clock: Option<Arc<dyn Clock>>,
+) -> Running {
     let storage = Arc::new(Storage::open(roots.paths.clone(), &roots.lease).unwrap());
     host_ops::recover_after_restart(&storage, SystemClock.now()).unwrap();
     let recovered = farm3d_lib::jobs::recover_after_restart(&storage, SystemClock.now()).unwrap();
@@ -363,6 +414,8 @@ pub fn boot_with(roots: &Roots, driver: Driver, initial: PrinterStatus) -> Runni
             farm3d_lib::jobs::commands::cancel_job,
             farm3d_lib::jobs::commands::release_job,
             farm3d_lib::jobs::commands::get_job_history,
+            farm3d_lib::jobs::commands::declare_job_outcome,
+            farm3d_lib::queue::commands::explain_queue_entry,
             farm3d_lib::host_ops::commands::reconcile_host_operation,
             farm3d_lib::host_ops::commands::abandon_host_operation,
             farm3d_lib::spools::commands::move_spool,
@@ -380,6 +433,10 @@ pub fn boot_with(roots: &Roots, driver: Driver, initial: PrinterStatus) -> Runni
                 clock,
                 host_ops_timings(),
             ));
+            services.jobs = Arc::new(match job_clock {
+                Some(clock) => JobServices::with_clock(timings, clock),
+                None => JobServices::new(timings),
+            });
         },
     );
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -414,6 +471,24 @@ pub fn status_of(state: OperationalState) -> PrinterStatus {
     let mut status = PrinterStatus::new(connection);
     status.operational_state = state;
     status.freshness = TelemetryFreshness::Fresh;
+    status
+}
+
+/// What `fake` reports, as a live status: Online and fresh, with its
+/// print state, file, and progress.
+pub fn status_from(fake: &FakeMoonraker) -> PrinterStatus {
+    let (print_state, filename, _) = fake.print_state();
+    let progress = fake.with_state(|state| state.progress);
+    let mut status = status_of(match print_state.as_str() {
+        "printing" => OperationalState::Printing,
+        "paused" => OperationalState::Paused,
+        "complete" => OperationalState::Finished,
+        "cancelled" => OperationalState::Cancelled,
+        "error" => OperationalState::Failed,
+        _ => OperationalState::Ready,
+    });
+    status.telemetry.job_name = (!filename.is_empty()).then_some(filename);
+    status.telemetry.progress = Some(progress);
     status
 }
 
@@ -470,6 +545,73 @@ impl Running {
     /// Sets the Printer's live status to `status`.
     pub fn seed(&self, status: PrinterStatus) {
         self.manager.seed(PRINTER, status);
+    }
+
+    /// Sets the Printer's live status to what `fake` reports: Online and
+    /// fresh, its print state, file, and progress.
+    pub fn mirror(&self, fake: &FakeMoonraker) {
+        self.seed(status_from(fake));
+    }
+
+    /// Waits until the driver has run `count` whole passes that started
+    /// after this call (each pass polls every `printing`/`paused` Job's
+    /// history). One pass may already be running, hence the extra one.
+    pub fn wait_passes(&self, count: u64) {
+        let target = self.services.jobs.resyncs() + count + 1;
+        let deadline = Instant::now() + WAIT;
+        while self.services.jobs.resyncs() < target {
+            assert!(Instant::now() < deadline, "the driver never ran {count} more passes");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// `declare_job_outcome` with the right acknowledgement.
+    pub fn declare(&self, operation_id: &str, job_id: &str, outcome: &str) -> Result<Value, Value> {
+        self.call(
+            "declare_job_outcome",
+            json!({
+                "operationId": operation_id,
+                "jobId": job_id,
+                "outcome": outcome,
+                "acknowledgement": "hostStateUnknown",
+            }),
+        )
+    }
+
+    /// How many timeline events of `kind` the Job has (one SQL read).
+    pub fn count_events(&self, job_id: &str, kind: &str) -> usize {
+        self.storage
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM job_events WHERE job_id = ?1 AND kind = ?2",
+                    [job_id, kind],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap() as usize
+    }
+
+    /// Waits until `done` holds, re-checking every [`POLL`]. For conditions
+    /// on stored columns, which don't need the presented Job.
+    pub fn wait_until(&self, what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + WAIT;
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// A backend-only `jobs` column, as SQLite has it.
+    pub fn job_column(&self, job_id: &str, column: &str) -> Option<i64> {
+        self.storage
+            .read(|connection| {
+                connection.query_row(
+                    &format!("SELECT {column} FROM jobs WHERE id = ?1"),
+                    [job_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap()
     }
 
     /// A Spool in storage, PLA 1.75, 1 kg on it.
@@ -573,15 +715,17 @@ impl Running {
     pub fn wait_job_within(&self, job_id: &str, state: &str, within: Duration) -> Value {
         let deadline = Instant::now() + within;
         loop {
-            let job = self.job(job_id);
-            if job["state"] == state {
-                return job;
+            // One SQL read per round; the presented Job only at the end.
+            let stored = self.text(&format!("SELECT state FROM jobs WHERE id = '{job_id}'"));
+            if stored.as_deref() == Some(state) {
+                return self.job(job_id);
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {state}: {job}"
+                "timed out waiting for {state}: {}",
+                self.job(job_id)
             );
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -594,7 +738,7 @@ impl Running {
                 return job;
             }
             assert!(Instant::now() < deadline, "timed out waiting on {job}");
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -607,7 +751,7 @@ impl Running {
                 return op;
             }
             assert!(Instant::now() < deadline, "no Host Operation for {job_id}");
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -627,7 +771,7 @@ impl Running {
                 return row;
             }
             assert!(Instant::now() < deadline, "timed out waiting on {row:?}");
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(POLL);
         }
     }
 
@@ -701,12 +845,14 @@ impl Running {
         job
     }
 
-    /// A Job printing (started by the operator): the Job id.
+    /// A Job printing (started by the operator), its history job pinned
+    /// by the tracker's check on entering `printing`: the Job id.
     pub fn printing(&self) -> String {
         let job = self.awaiting_start();
         self.start(&format!("start-{job}"), &job, "ready")
             .expect("start_job");
         self.wait_job(&job, "printing");
+        self.wait_until("pinned", || self.count_events(&job, "hostJobPinned") == 1);
         self.status(OperationalState::Printing);
         job
     }

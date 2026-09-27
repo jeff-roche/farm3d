@@ -934,9 +934,11 @@ mod dispatch {
         let job = app.wait_job(&job_id, "printing");
         assert!(job["startedAt"].is_string());
         assert_eq!(roots.starts(), 1);
+        // Entering printing makes the tracker pin the history job at once.
+        app.wait_until("pinned", || app.count_events(&job_id, "hostJobPinned") == 1);
         assert_eq!(
             app.event_kinds(&job_id)[3..],
-            ["startHandedOff", "startSucceeded"]
+            ["startHandedOff", "startSucceeded", "hostJobPinned"]
         );
         assert_eq!(strings(&job["allowedActions"]), ["pause", "cancel"]);
         assert_eq!(
@@ -1066,15 +1068,22 @@ mod dispatch {
         assert_eq!(cancelled["jobs"][0]["state"], "printing");
         assert_eq!(cancelled["entries"], json!([]), "the entry stays open");
         app.wait_resolved(&cancel_op, HostOperationState::Succeeded);
-        // A succeeded cancel only clears the active op: the tracker proves
-        // the end from history (Task 8b).
-        app.wait_op(&cancel_op, |_| {
-            app.job(&job_id)["activeHostOperationId"] == Value::Null
-        });
-        assert_eq!(app.job(&job_id)["state"], "printing");
+        // A succeeded cancel only clears the active op; it makes the
+        // tracker check history at once, and history proves the end.
+        let job = app.wait_job(&job_id, "cancelled");
+        assert_eq!(job["cancelReason"], "cancelledByOperator");
+        assert_eq!(job["activeHostOperationId"], Value::Null);
         assert_eq!(
             app.event_kinds(&job_id)[5..],
-            ["pauseHandedOff", "paused", "resumeHandedOff", "resumed", "cancelHandedOff"]
+            [
+                "hostJobPinned",
+                "pauseHandedOff",
+                "paused",
+                "resumeHandedOff",
+                "resumed",
+                "cancelHandedOff",
+                "cancelled"
+            ]
         );
         for (path, count) in [
             ("/printer/print/pause", 1),
@@ -1406,5 +1415,682 @@ mod dispatch {
         assert_eq!(start_ops(&app, &job_id), 0);
         settle();
         assert_eq!(roots.starts(), 0);
+    }
+}
+
+/// Task 8b: the outcome tracker (spec D7) and `declare_job_outcome` (D9),
+/// against FakeMoonraker through the dispatch rig.
+mod tracking {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use farm3d_lib::connections::ConnectionState;
+    use farm3d_lib::host_ops::{Clock, HostOperationState};
+    use farm3d_lib::jobs::JobTimings;
+    use farm3d_lib::printers::operational::OperationalState;
+    use farm3d_lib::printers::repository::PrinterRepository;
+    use farm3d_lib::printers::StartSafety;
+    use serde_json::{json, Value};
+
+    use crate::common::fake_moonraker::{Fault, FakeMoonraker, Route, StartTrace};
+    use crate::p7_dispatch_rig::{
+        boot, boot_tuned, fast, id, status_of, Driver, ManualClock, Roots, Running, HOST_PATH,
+        PRINTER, SECRET, SLR, WAIT,
+    };
+
+    fn strings(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn codes(blockers: &Value) -> Vec<String> {
+        blockers
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|blocker| blocker["code"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn ready() -> farm3d_lib::connections::PrinterStatus {
+        status_of(OperationalState::Ready)
+    }
+
+    /// A running app with fast tracker timings.
+    fn fast_app(roots: &Roots) -> Running {
+        boot_tuned(roots, Driver::Started, ready(), fast(), None)
+    }
+
+    /// A running app with fast timings and a hand-moved tracker clock.
+    fn clocked_app(roots: &Roots) -> (Running, Arc<ManualClock>) {
+        let clock = ManualClock::new();
+        let app = boot_tuned(
+            roots,
+            Driver::Started,
+            ready(),
+            fast(),
+            Some(Arc::clone(&clock) as Arc<dyn Clock>),
+        );
+        (app, clock)
+    }
+
+    fn roots() -> Roots {
+        Roots::new(StartSafety::ConfirmBedClear)
+    }
+
+    fn posts(fake: &FakeMoonraker) -> usize {
+        fake.requests().iter().filter(|request| request.method == "POST").count()
+    }
+
+    fn entry_of(app: &Running, job_id: &str) -> Value {
+        app.history(job_id)["entry"].clone()
+    }
+
+    fn pinned_id(app: &Running, job_id: &str) -> Option<i64> {
+        app.job_column(job_id, "host_job_id")
+    }
+
+    #[test]
+    fn tracker_completes_the_job_from_history_after_finish_print() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        let pin = pinned_id(&app, &job_id).expect("pinned on entering printing");
+        assert_eq!(
+            Some(pin),
+            roots.fake.history().last().map(|job| i64::from_str_radix(&job.job_id, 16).unwrap()),
+            "the history job this start created"
+        );
+
+        roots.fake.finish_print("completed");
+        let job = app.wait_job(&job_id, "completed");
+        assert_eq!(job["settlement"], "settled");
+        assert_eq!(job["settlementMethod"], "estimated");
+        assert_eq!(job["cancelReason"], Value::Null);
+        assert!(job["endedAt"].is_string());
+        assert_eq!(strings(&job["allowedActions"]), ["retry", "correctMaterial"]);
+        let entry = entry_of(&app, &job_id);
+        assert_eq!(entry["state"], "closed");
+        assert_eq!(entry["closeReason"], "completed");
+        assert_eq!(entry["position"], Value::Null);
+
+        app.wait_passes(3);
+        assert_eq!(app.count_events(&job_id, "completed"), 1, "ended exactly once");
+        let events = app.history(&job_id)["events"].clone();
+        let completed = events.as_array().unwrap().last().unwrap();
+        assert_eq!(completed["kind"], "completed");
+        assert_eq!(completed["detail"]["hostJobId"], json!(pin));
+        assert_eq!(completed["detail"]["status"], "completed");
+        assert_eq!(roots.starts(), 1);
+        assert_eq!(roots.uploads(), 1);
+    }
+
+    /// A status is a hint that triggers a check at once (D7): with the
+    /// production 10 s poll, an ended status on our file still ends the Job
+    /// well inside that.
+    #[test]
+    fn an_ended_status_on_our_file_checks_history_at_once() {
+        let roots = roots();
+        let app = boot(&roots, Driver::Started);
+        let job_id = app.printing();
+        roots.fake.finish_print("completed");
+        app.mirror(&roots.fake);
+        app.wait_job_within(&job_id, "completed", Duration::from_secs(5));
+    }
+
+    /// A status alone is never proof: finished on our file with history
+    /// still `in_progress` leaves the Job printing.
+    #[test]
+    fn an_ended_status_without_history_never_ends_the_job() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        app.mirror(&roots.fake);
+        app.wait_passes(4);
+        assert_eq!(app.job(&job_id)["state"], "printing");
+        assert_eq!(app.job_column(&job_id, "inconclusive_checks"), Some(0));
+    }
+
+    #[test]
+    fn tracker_fails_the_job_on_klippy_shutdown() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.finish_print("klippy_shutdown");
+        let job = app.wait_job(&job_id, "failed");
+        assert_eq!(job["settlement"], "pending");
+        assert_eq!(job["settlementMethod"], Value::Null);
+        assert_eq!(job["cancelReason"], Value::Null);
+        assert_eq!(strings(&job["allowedActions"]), ["retry", "settleMaterial"]);
+        let entry = entry_of(&app, &job_id);
+        assert_eq!(entry["state"], "closed");
+        assert_eq!(entry["closeReason"], "failed");
+        let events = app.history(&job_id)["events"].clone();
+        assert_eq!(events.as_array().unwrap().last().unwrap()["detail"]["status"], "klippy_shutdown");
+    }
+
+    #[test]
+    fn tracker_cancels_the_job_on_host_cancel() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.finish_print("cancelled");
+        let job = app.wait_job(&job_id, "cancelled");
+        assert_eq!(job["cancelReason"], "hostCancelled");
+        assert_eq!(job["settlement"], "pending");
+        assert_eq!(entry_of(&app, &job_id)["closeReason"], "cancelled");
+    }
+
+    /// Closing the entry renumbers every later open entry (D2).
+    #[test]
+    fn a_tracked_end_closes_the_entry_and_moves_later_entries_up() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        let later = id(&app.ok(
+            "add_to_queue",
+            json!({"operationId": "op-later", "sliceRevisionId": SLR, "quantity": 1,
+                   "policy": "recommended", "preference": "loadedFirst"}),
+        )["entries"][0]);
+        assert_eq!(
+            app.scalar(&format!("SELECT position FROM queue_entries WHERE id = '{later}'")),
+            2
+        );
+        roots.fake.finish_print("completed");
+        app.wait_job(&job_id, "completed");
+        assert_eq!(
+            app.scalar(&format!("SELECT position FROM queue_entries WHERE id = '{later}'")),
+            1
+        );
+    }
+
+    #[test]
+    fn progress_is_persisted_only_on_our_file_and_only_when_it_grows() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.set_progress(0.257);
+        app.mirror(&roots.fake);
+        app.wait_job_until(&job_id, |job| job["maxProgressPct"] == 25);
+
+        roots.fake.set_progress(0.2);
+        app.mirror(&roots.fake);
+        let mut foreign = crate::p7_dispatch_rig::status_from(&roots.fake);
+        foreign.telemetry.job_name = Some("someone/else.gcode".to_string());
+        foreign.telemetry.progress = Some(0.9);
+        app.seed(foreign);
+        app.wait_passes(2);
+        assert_eq!(app.job(&job_id)["maxProgressPct"], 25);
+
+        roots.fake.set_progress(0.61);
+        app.mirror(&roots.fake);
+        app.wait_job_until(&job_id, |job| job["maxProgressPct"] == 61);
+    }
+
+    /// D7: `printing` ⇄ `paused` also follows the live status on the Job's
+    /// own file, with no Host Operation.
+    #[test]
+    fn the_job_follows_paused_and_printing_on_its_own_file() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.with_state(|state| {
+            state.print_state = "paused".to_string();
+            state.is_paused = true;
+        });
+        app.mirror(&roots.fake);
+        let job = app.wait_job(&job_id, "paused");
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        roots.fake.with_state(|state| {
+            state.print_state = "printing".to_string();
+            state.is_paused = false;
+        });
+        app.mirror(&roots.fake);
+        app.wait_job(&job_id, "printing");
+        assert_eq!(app.count_events(&job_id, "paused"), 1);
+        assert_eq!(app.count_events(&job_id, "resumed"), 1);
+        assert_eq!(posts(&roots.fake), 2, "the upload and the start only");
+    }
+
+    /// Decision 9 and D9: a Job never adopts a print it didn't start.
+    #[test]
+    fn tracker_never_adopts_a_foreign_print() {
+        // An awaitingStart Job whose Printer prints something else.
+        let roots = roots();
+        let app = fast_app(&roots);
+        let waiting = app.awaiting_start();
+        roots.fake.with_state(|state| {
+            state.print_state = "printing".to_string();
+            state.print_filename = "someone/else.gcode".to_string();
+            state.push_job("someone/else.gcode", "in_progress");
+        });
+        app.mirror(&roots.fake);
+        let job = app.wait_job_until(&waiting, |job| {
+            codes(&job["startBlockers"]).contains(&"PRINTER_NOT_READY".to_string())
+        });
+        assert_eq!(job["state"], "awaitingStart");
+        let other = id(&app.ok(
+            "add_to_queue",
+            json!({"operationId": "op-other", "sliceRevisionId": SLR, "quantity": 1,
+                   "policy": "recommended", "preference": "loadedFirst"}),
+        )["entries"][0]);
+        let explained = app.ok("explain_queue_entry", json!({"entryId": other}));
+        let printer = explained["printers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["printerId"] == PRINTER)
+            .unwrap()
+            .clone();
+        let printer_codes = codes(&printer["blockers"]);
+        assert_eq!(printer_codes.first().map(String::as_str), Some("JOB_ACTIVE"), "{printer}");
+        assert!(!printer_codes.contains(&"PRINTER_BUSY_EXTERNAL".to_string()));
+        app.wait_passes(2);
+        assert_eq!(app.job(&waiting)["state"], "awaitingStart");
+
+        // A printing Job whose history holds only a foreign job above its
+        // mark, while the Printer reports the foreign file: never pinned,
+        // never ended by it; after three inconclusive polls, outcomeUnknown.
+        let roots = self::roots();
+        let app = fast_app(&roots);
+        let job_id = app.awaiting_start();
+        roots
+            .fake
+            .fault(Route::Start, Fault::ApplyStartThenDrop(StartTrace::PrintingOnly));
+        let change = app.start("op-start", &job_id, "ready").unwrap();
+        let start_op = change["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        app.wait_op(&start_op, |row| row.state == HostOperationState::Uncertain);
+        roots
+            .fake
+            .with_state(|state| state.push_job("someone/else.gcode", "completed"));
+        let mut foreign = status_of(OperationalState::Printing);
+        foreign.telemetry.job_name = Some("someone/else.gcode".to_string());
+        app.seed(foreign);
+        app.ok("reconcile_host_operation", json!({"hostOperationId": start_op}));
+        app.wait_resolved(&start_op, HostOperationState::Succeeded);
+        let job = app.wait_job(&job_id, "outcomeUnknown");
+        assert_eq!(pinned_id(&app, &job_id), None);
+        assert_eq!(app.count_events(&job_id, "hostJobPinned"), 0);
+        assert_eq!(strings(&job["allowedActions"]), ["declareOutcome"]);
+        assert_eq!(job["settlement"], "open");
+        assert_eq!(entry_of(&app, &job_id)["state"], "assigned", "outcomeUnknown is still active");
+        let requirements = app.history(&job_id)["requirements"].clone();
+        assert_eq!(requirements.as_array().unwrap().len(), 1);
+        assert_eq!(requirements[0]["kind"], "jobOutcomeUnknown");
+        assert_eq!(requirements[0]["status"], "pending");
+        assert_eq!(roots.starts(), 1);
+    }
+
+    /// Acceptance 7: three inconclusive polls give outcomeUnknown, with one
+    /// requirement, and the tracker stops.
+    #[test]
+    fn a_pinned_job_missing_from_history_three_times_is_outcome_unknown() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        roots.fake.with_state(|state| state.history.clear());
+        app.wait_job(&job_id, "outcomeUnknown");
+        assert_eq!(app.job_column(&job_id, "inconclusive_checks"), Some(3));
+        assert_eq!(app.count_events(&job_id, "outcomeUnknown"), 1);
+        let history_reads = roots.count_requests("GET", "/server/history/list");
+        app.wait_passes(3);
+        assert_eq!(
+            roots.count_requests("GET", "/server/history/list"),
+            history_reads,
+            "farm3d stops checking an outcomeUnknown Job"
+        );
+        assert_eq!(
+            app.scalar(&format!(
+                "SELECT COUNT(*) FROM reconciliation_requirements WHERE job_id = '{job_id}'"
+            )),
+            1
+        );
+    }
+
+    /// A conclusive poll resets the count (D7).
+    #[test]
+    fn a_conclusive_poll_resets_the_inconclusive_count() {
+        let roots = roots();
+        let app = boot_tuned(
+            &roots,
+            Driver::Started,
+            ready(),
+            JobTimings {
+                inconclusive_limit: 1000,
+                ..fast()
+            },
+            None,
+        );
+        let job_id = app.printing();
+        let history = roots.fake.history();
+        roots.fake.with_state(|state| state.history.clear());
+        app.wait_until("two inconclusive polls", || app.job_column(&job_id, "inconclusive_checks") >= Some(2));
+        roots.fake.with_state(|state| state.history = history);
+        app.wait_until("the count reset", || app.job_column(&job_id, "inconclusive_checks") == Some(0));
+        assert_eq!(app.job(&job_id)["state"], "printing");
+    }
+
+    /// Ruling R5: `host_unreachable_since`, `allowedActions`, and a declare
+    /// from `printing` once the host has been unreachable for 30 minutes.
+    #[test]
+    fn unreachable_printing_job_can_be_declared_after_30_minutes() {
+        let roots = roots();
+        let (app, clock) = clocked_app(&roots);
+        let job_id = app.printing();
+        let posts_before = posts(&roots.fake);
+        roots.fake.set_reachable(false);
+        let job = app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_string());
+        assert_eq!(strings(&job["allowedActions"]), ["pause", "cancel"]);
+        let refused = app.declare("op-early", &job_id, "failed").unwrap_err();
+        assert_eq!(refused["code"], "JOB_ACTION_NOT_ALLOWED", "{refused}");
+        assert_eq!(refused["details"]["action"], "declareOutcome");
+
+        clock.advance(Duration::from_secs(29 * 60));
+        app.wait_passes(1);
+        assert!(!strings(&app.job(&job_id)["allowedActions"]).contains(&"declareOutcome".to_string()));
+        clock.advance(Duration::from_secs(60));
+        let job = app.job(&job_id);
+        assert_eq!(strings(&job["allowedActions"]), ["pause", "cancel", "declareOutcome"]);
+        // The tracker republishes the Job when it crosses the mark.
+        app.wait_until("republished with declareOutcome", || {
+            app.job_events(&job_id).iter().any(|event| {
+                strings(&event["allowedActions"]).contains(&"declareOutcome".to_string())
+            })
+        });
+
+        let declared = app.declare("op-declare", &job_id, "failed").unwrap();
+        let job = &declared["jobs"][0];
+        assert_eq!(job["state"], "failed");
+        assert_eq!(job["hostUnreachableSince"], Value::Null, "ruling R7");
+        assert_eq!(job["settlement"], "pending");
+        assert_eq!(declared["entries"][0]["closeReason"], "failed");
+        assert_eq!(app.count_events(&job_id, "declaredFailed"), 1);
+        assert!(
+            app.history(&job_id)["requirements"].as_array().unwrap().iter().all(|requirement| requirement["kind"] != "jobOutcomeUnknown"),
+            "no jobOutcomeUnknown requirement from printing"
+        );
+        roots.fake.set_reachable(true);
+        app.wait_passes(2);
+        assert_eq!(posts(&roots.fake), posts_before, "a declare sends nothing");
+    }
+
+    #[test]
+    fn status_stream_without_history_does_not_clear_host_unreachable_since() {
+        let roots = roots();
+        let (app, clock) = clocked_app(&roots);
+        let job_id = app.printing();
+        roots.fake.set_reachable(false);
+        let since = app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_string())
+            ["hostUnreachableSince"]
+            .clone();
+        for progress in [0.3, 0.4, 0.5] {
+            // A cleared and re-set mark would now show a later time.
+            clock.advance(Duration::from_secs(60));
+            roots.fake.set_progress(progress);
+            app.mirror(&roots.fake);
+            let pct = (progress * 100.0).round() as i64;
+            app.wait_job_until(&job_id, |job| job["maxProgressPct"] == pct);
+            app.wait_passes(1);
+        }
+        let job = app.job(&job_id);
+        assert_eq!(job["hostUnreachableSince"], since, "status never clears it");
+        assert_eq!(job["state"], "printing");
+        assert_eq!(app.job_column(&job_id, "inconclusive_checks"), Some(0), "an unrun poll counts as neither");
+
+        roots.fake.set_reachable(true);
+        app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_null());
+    }
+
+    /// Ruling R7: `printing` ⇄ `paused` keeps `host_unreachable_since`;
+    /// leaving them clears it, so a declare from `paused` passes the CHECK.
+    #[test]
+    fn leaving_printing_clears_host_unreachable_since() {
+        let roots = roots();
+        let (app, clock) = clocked_app(&roots);
+        let job_id = app.printing();
+        roots.fake.set_reachable(false);
+        let since = app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_string())
+            ["hostUnreachableSince"]
+            .clone();
+        let mut paused = status_of(OperationalState::Paused);
+        paused.telemetry.job_name = Some(HOST_PATH.to_string());
+        app.seed(paused);
+        let job = app.wait_job(&job_id, "paused");
+        assert_eq!(job["hostUnreachableSince"], since);
+        clock.advance(Duration::from_secs(30 * 60));
+        let declared = app.declare("op-declare", &job_id, "cancelled").unwrap();
+        let job = &declared["jobs"][0];
+        assert_eq!(job["state"], "cancelled");
+        assert_eq!(job["cancelReason"], "operatorDeclared");
+        assert_eq!(job["hostUnreachableSince"], Value::Null);
+        assert_eq!(
+            app.text(&format!("SELECT host_unreachable_since FROM jobs WHERE id = '{job_id}'")),
+            None
+        );
+        roots.fake.set_reachable(true);
+    }
+
+    /// D7 "Endpoint": after a Connection endpoint change, history from the
+    /// new host is never proof — not even a same-named, completed job
+    /// there whose id collides with the pin (ids belong to the host the
+    /// start went to). The Job ends outcomeUnknown; nothing is written to
+    /// either host.
+    #[test]
+    fn endpoint_change_during_printing_never_pins_a_job_on_the_new_host() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        let pin = pinned_id(&app, &job_id);
+        let other = FakeMoonraker::start();
+        other.with_state(|state| {
+            state.api_key = Some(SECRET.to_string());
+            state.next_job_id = u64::try_from(pin.unwrap()).unwrap();
+            state.print_state = "printing".to_string();
+            state.print_filename = HOST_PATH.to_string();
+            state.push_job(HOST_PATH, "completed");
+        });
+        let posts_before = posts(&roots.fake);
+        move_connection(&app, &other);
+        app.mirror(&other);
+
+        let job = app.wait_job(&job_id, "outcomeUnknown");
+        assert_eq!(pinned_id(&app, &job_id), pin, "the old pin is kept, never replaced");
+        assert_eq!(app.count_events(&job_id, "hostJobPinned"), 1);
+        assert_eq!(job["hostUnreachableSince"], Value::Null, "the new host answered");
+        assert!(other.requests().iter().any(|request| request.path() == "/server/history/list"));
+        assert_eq!(posts(&other), 0);
+        assert_eq!(posts(&roots.fake), posts_before);
+    }
+
+    /// Points the Printer's Connection at `fake`, keeping its credential.
+    fn move_connection(app: &Running, fake: &FakeMoonraker) {
+        let printers = PrinterRepository::new(Arc::clone(&app.storage));
+        let printer = printers.get(PRINTER).unwrap().unwrap();
+        let mut config = fake.config();
+        config.credential_ref = printer.connection.as_ref().unwrap().credential_ref.clone();
+        printers
+            .set_connection(PRINTER, printer.revision, Some(config), None, "test")
+            .unwrap();
+    }
+
+    #[test]
+    fn declare_outcome_requires_acknowledgement_and_is_exactly_once() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        let refused = app.declare("op-early", &job_id, "completed").unwrap_err();
+        assert_eq!(refused["code"], "JOB_ACTION_NOT_ALLOWED", "reachable and printing");
+        roots.fake.with_state(|state| state.history.clear());
+        app.wait_job(&job_id, "outcomeUnknown");
+        let posts_before = posts(&roots.fake);
+
+        let wrong = app
+            .call(
+                "declare_job_outcome",
+                json!({"operationId": "op-declare", "jobId": job_id, "outcome": "completed",
+                       "acknowledgement": "bedClear"}),
+            )
+            .unwrap_err();
+        assert_eq!(wrong["code"], "VALIDATION");
+        assert_eq!(wrong["details"]["fieldPath"], "acknowledgement");
+        assert_eq!(
+            app.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-declare'"),
+            0,
+            "a refusal never burns the id"
+        );
+
+        let declared = app.declare("op-declare", &job_id, "completed").unwrap();
+        assert_eq!(declared["jobs"][0]["state"], "completed");
+        assert_eq!(declared["jobs"][0]["settlement"], "settled");
+        assert_eq!(declared["jobs"][0]["settlementMethod"], "estimated");
+        assert_eq!(declared["entries"][0]["state"], "closed");
+        assert_eq!(declared["entries"][0]["closeReason"], "completed");
+        let requirement = &declared["requirements"][0];
+        assert_eq!(requirement["kind"], "jobOutcomeUnknown");
+        assert_eq!(requirement["status"], "resolved");
+        assert_eq!(requirement["resolution"], json!({"kind": "declared", "outcome": "completed"}));
+        let events = app.job_events(&job_id).len();
+
+        let replayed = app.declare("op-declare", &job_id, "completed").unwrap();
+        assert_eq!(replayed["jobs"][0]["id"], json!(job_id));
+        assert_eq!(replayed["jobs"][0]["state"], "completed");
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
+        let reused = app.declare("op-declare", &job_id, "failed").unwrap_err();
+        assert_eq!(reused["code"], "VALIDATION");
+        assert_eq!(reused["details"]["fieldPath"], "operationId");
+        let again = app.declare("op-again", &job_id, "failed").unwrap_err();
+        assert_eq!(again["code"], "JOB_ACTION_NOT_ALLOWED");
+        assert_eq!(app.count_events(&job_id, "declaredCompleted"), 1);
+        assert_eq!(posts(&roots.fake), posts_before, "farm3d sends nothing to the host");
+        let unknown = app.declare("op-x", "job-missing", "failed").unwrap_err();
+        assert_eq!(unknown["code"], "NOT_FOUND");
+    }
+
+    /// A start that finished before the tracker's first poll still pins its
+    /// history job and completes (the plan's quick-print gap, closed for
+    /// Jobs).
+    #[test]
+    fn quick_print_that_finished_before_the_first_poll_is_still_completed() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.awaiting_start();
+        app.services.jobs.stop();
+        std::thread::sleep(Duration::from_millis(200));
+        app.start("op-start", &job_id, "ready").unwrap();
+        let start = app
+            .ops(&job_id)
+            .into_iter()
+            .rfind(|op| op.kind == farm3d_lib::host_ops::HostOperationKind::Start)
+            .unwrap();
+        app.wait_resolved(&start.id, HostOperationState::Succeeded);
+        roots.fake.finish_print("completed");
+        drop(app);
+
+        let app = boot_tuned(&roots, Driver::Started, ready(), fast(), None);
+        let job = app.wait_job(&job_id, "completed");
+        assert_eq!(job["settlement"], "settled");
+        assert_eq!(app.count_events(&job_id, "hostJobPinned"), 1);
+        assert_eq!(roots.starts(), 1);
+    }
+
+    /// P6's start rule (b) for the pin: a history job of our file above the
+    /// mark that started more than 30 s before dispatch is not ours.
+    #[test]
+    fn pin_requires_start_time_after_dispatch_minus_30_s() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.awaiting_start();
+        app.services.jobs.stop();
+        std::thread::sleep(Duration::from_millis(200));
+        app.start("op-start", &job_id, "ready").unwrap();
+        let start = app
+            .ops(&job_id)
+            .into_iter()
+            .rfind(|op| op.kind == farm3d_lib::host_ops::HostOperationKind::Start)
+            .unwrap();
+        let start = app.wait_resolved(&start.id, HostOperationState::Succeeded);
+        let dispatched = chrono::DateTime::parse_from_rfc3339(start.dispatched_at.as_deref().unwrap())
+            .unwrap()
+            .timestamp() as f64;
+        roots
+            .fake
+            .with_state(|state| state.history.last_mut().unwrap().start_time = dispatched - 31.0);
+        drop(app);
+
+        let mut ours = status_of(OperationalState::Printing);
+        ours.telemetry.job_name = Some(HOST_PATH.to_string());
+        let app = boot_tuned(&roots, Driver::Started, ours, fast(), None);
+        app.wait_job(&job_id, "printing");
+        app.wait_passes(4);
+        assert_eq!(pinned_id(&app, &job_id), None, "started too early to be ours");
+        assert_eq!(app.count_events(&job_id, "hostJobPinned"), 0);
+        assert_eq!(app.job(&job_id)["state"], "printing", "our file is still printing");
+
+        roots
+            .fake
+            .with_state(|state| state.history.last_mut().unwrap().start_time = dispatched - 29.0);
+        app.wait_until("pinned", || app.count_events(&job_id, "hostJobPinned") == 1);
+        let expected = i64::from_str_radix(&roots.fake.history().last().unwrap().job_id, 16).unwrap();
+        assert_eq!(pinned_id(&app, &job_id), Some(expected));
+    }
+
+    #[test]
+    fn job_history_lists_the_jobs_host_operations() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        let operations = app.history(&job_id)["hostOperations"].clone();
+        let kinds: Vec<&str> = operations
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|op| op["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["upload", "start"]);
+        for op in operations.as_array().unwrap() {
+            assert_eq!(op["jobId"], json!(job_id));
+        }
+        // Another Job's operations stay out of this Job's history.
+        roots.fake.finish_print("completed");
+        app.wait_job(&job_id, "completed");
+        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        app.status(OperationalState::Ready);
+        let spool = app.job(&job_id)["spoolId"].as_str().unwrap().to_string();
+        let next = app.assign(&spool);
+        app.wait_job(&next, "awaitingStart");
+        let operations = app.history(&next)["hostOperations"].clone();
+        assert_eq!(operations.as_array().unwrap().len(), 1);
+        assert_eq!(operations[0]["jobId"], json!(next));
+    }
+
+    #[test]
+    fn tracker_rows_and_events_never_carry_the_credential() {
+        let roots = roots();
+        let (app, clock) = clocked_app(&roots);
+        let job_id = app.printing();
+        roots.fake.set_reachable(false);
+        app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_string());
+        clock.advance(Duration::from_secs(30 * 60));
+        app.declare("op-declare", &job_id, "failed").unwrap();
+        roots.fake.set_reachable(true);
+        assert!(!app.history(&job_id).to_string().contains(SECRET));
+        for event in app.events.lock().unwrap().iter() {
+            assert!(!event.contains(SECRET), "event leaks the secret");
+        }
+        let persisted: String = app
+            .text(
+                "SELECT COALESCE((SELECT group_concat(COALESCE(last_failure_json, '') || COALESCE(host_unreachable_since, '')) FROM jobs), '')
+                     || (SELECT group_concat(COALESCE(detail_json, '')) FROM job_events)
+                     || COALESCE((SELECT group_concat(COALESCE(resolution_json, '')) FROM reconciliation_requirements), '')",
+            )
+            .unwrap();
+        assert!(!persisted.contains(SECRET));
+        let _ = (WAIT, ConnectionState::Online);
     }
 }
