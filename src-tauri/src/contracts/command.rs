@@ -1250,6 +1250,14 @@ impl CommandError {
             // Likewise: `mark_sent` runs exactly once per row; a second
             // call is an executor bug, not something a user triggers.
             RepositoryError::HostOperationAlreadySent { .. } => Self::internal(),
+            // P7 D2/D3: a caller bug until a later task's command maps
+            // these to `QUEUE_ENTRY_ACTION_NOT_ALLOWED`/
+            // `JOB_ACTION_NOT_ALLOWED` (a user command) or `INTERNAL`
+            // (farm3d's own code), per the spec's tables — Task 3 only
+            // lands the repository functions that raise them.
+            RepositoryError::IllegalQueueEntryTransition { .. } => Self::internal(),
+            RepositoryError::QueueEntryActionNotAllowed { .. } => Self::internal(),
+            RepositoryError::IllegalJobTransition { .. } => Self::internal(),
             RepositoryError::ConnectionInUse {
                 printer_id,
                 host_operation_id,

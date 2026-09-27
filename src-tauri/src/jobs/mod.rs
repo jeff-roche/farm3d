@@ -3,16 +3,24 @@
 //! P7 design spec's D1 (vocabulary and ownership) and D3 (the Job state
 //! machine) for the rules this module's types encode.
 //!
-//! This task (Task 2) only lands the pure wire enums the D3 state machine
-//! needs and the transition/settlement functions themselves. The rest of
-//! `Job`'s wire type, the repository, assignment, dispatch, the tracker,
-//! settlement, guards, and commands are later tasks (see the module
-//! layout table in the design spec).
+//! Task 2 landed the pure wire enums the D3 state machine needs and the
+//! transition/settlement functions themselves. Task 3 (this module's
+//! [`repository`]) adds the rest of `Job`'s wire type, the Job timeline
+//! (`job_events`), and Reconciliation Requirements. Assignment, dispatch,
+//! the tracker, settlement, guards, and commands are later tasks (see the
+//! module layout table in the design spec).
 
+pub mod repository;
 pub mod state;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::catalog::PrinterProfile;
+use crate::contracts::command::ErrorCode;
+use crate::host_ops::HostOperationFailure;
+use crate::printers::CatalogRef;
+use crate::queue::QueueEntry;
 
 /// D3: a Job's state. `completed`, `failed`, and `cancelled` are
 /// terminal; every other state is active. A partial unique index allows
@@ -175,4 +183,214 @@ impl JobEventKind {
         JobEventKind::MaterialDeferred,
         JobEventKind::MaterialCorrected,
     ];
+}
+
+/// What a Job's Printer looked like at assignment (`printer_snapshot_json`,
+/// spec "Backend model"). Never carries an endpoint or a credential
+/// reference — see the 0008 migration's notes.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterSnapshot.ts")]
+pub struct PrinterSnapshot {
+    pub name: String,
+    pub location: Option<String>,
+    pub catalog_ref: Option<CatalogRef>,
+    pub adapter_kind: Option<String>,
+    pub profile: PrinterProfile,
+}
+
+/// D3/D9: what a Job's own record or a proved Host Operation says went
+/// wrong, most recently. `refused` is a farm3d-side rejection (never sent
+/// to the host); the other two describe the linked Host Operation's own
+/// outcome.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/JobFailure.ts"
+)]
+pub enum JobFailure {
+    HostOperationFailed {
+        at: String,
+        host_operation_id: String,
+        failure: HostOperationFailure,
+    },
+    HostOperationAbandoned {
+        at: String,
+        host_operation_id: String,
+    },
+    Refused {
+        at: String,
+        code: ErrorCode,
+        message: String,
+    },
+}
+
+/// Ruling R4: `Job.settlementPreview`, present only while `settlement` is
+/// `pending` or `deferred` (spec "Material settlement").
+/// `estimatedUseMg = ceil(estimateMg × maxProgressPct / 100)`.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/SettlementPreview.ts")]
+pub struct SettlementPreview {
+    #[ts(type = "number")]
+    pub estimated_use_mg: i64,
+}
+
+/// `estimatedUseMg = ceil(estimateMg × maxProgressPct / 100)`, the
+/// integer form the spec gives: `(estimateMg * pct + 99) / 100`. `0` when
+/// the Job never printed (`maxProgressPct == 0`).
+pub fn estimated_use_mg(estimate_mg: i64, max_progress_pct: i64) -> i64 {
+    (estimate_mg * max_progress_pct + 99) / 100
+}
+
+/// A Job as the wire shares it (spec "Backend model" wire types).
+/// Assembled by [`repository`] from the `jobs` row. `startBlockers` and
+/// `allowedActions` are deliberately not part of this shape yet: D7's
+/// dispatch driver (`jobs::dispatch.rs`, a later task) is the one place
+/// with the live Printer status `startBlockers` needs, and D3's full
+/// `allowedActions` table needs retry tracking this task doesn't touch.
+/// That later task adds both fields once it exists — see this task's
+/// report for the reasoning.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/Job.ts")]
+pub struct Job {
+    pub id: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub queue_entry_id: String,
+    pub slice_revision_id: String,
+    pub printer_id: String,
+    pub printer_snapshot: PrinterSnapshot,
+    pub spool_id: String,
+    pub reservation_id: String,
+    #[ts(type = "number")]
+    pub estimate_mg: i64,
+    pub state: JobState,
+    pub cancel_reason: Option<CancelReason>,
+    pub settlement: Settlement,
+    pub settlement_method: Option<SettlementMethod>,
+    pub settlement_preview: Option<SettlementPreview>,
+    pub corrected: bool,
+    pub assigned_by: AssignedBy,
+    pub start_confirmation: Option<StartConfirmation>,
+    pub upload_host_operation_id: Option<String>,
+    pub active_host_operation_id: Option<String>,
+    #[ts(type = "number")]
+    pub max_progress_pct: i64,
+    pub host_unreachable_since: Option<String>,
+    pub host_path: Option<String>,
+    pub last_failure: Option<JobFailure>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+}
+
+/// `job_events` in full (spec "Backend model" wire types). `Assigned`
+/// (the insert event) carries no `fromState`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/JobEvent.ts")]
+pub struct JobEvent {
+    pub id: String,
+    pub job_id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
+    pub kind: JobEventKind,
+    pub from_state: Option<JobState>,
+    pub to_state: JobState,
+    pub operation_id: Option<String>,
+    pub host_operation_id: Option<String>,
+    #[ts(type = "Record<string, unknown> | null")]
+    pub detail: Option<serde_json::Value>,
+    pub at: String,
+}
+
+/// D1: what a Reconciliation Requirement is durably about.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/RequirementKind.ts")]
+pub enum RequirementKind {
+    MaterialReconciliation,
+    JobOutcomeUnknown,
+}
+
+/// D1: a Reconciliation Requirement's own lifecycle, independent of the
+/// Job's.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/RequirementStatus.ts")]
+pub enum RequirementStatus {
+    Pending,
+    Deferred,
+    Resolved,
+}
+
+/// D9: the outcome an operator declares for an `outcomeUnknown` Job (or a
+/// `printing`/`paused` one the host has been unreachable for, D9).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/DeclaredOutcome.ts")]
+pub enum DeclaredOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// D1/D4: how a resolved Reconciliation Requirement was closed.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/RequirementResolution.ts"
+)]
+pub enum RequirementResolution {
+    Settled {
+        method: SettlementMethod,
+        #[ts(type = "number")]
+        used_mg: i64,
+    },
+    Declared {
+        outcome: DeclaredOutcome,
+    },
+}
+
+/// D1: a durable Reconciliation Requirement row, one per `(job, kind)`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ReconciliationRequirement.ts")]
+pub struct ReconciliationRequirement {
+    pub id: String,
+    pub job_id: String,
+    pub kind: RequirementKind,
+    pub status: RequirementStatus,
+    pub spool_id: Option<String>,
+    pub reservation_id: Option<String>,
+    pub opened_at: String,
+    pub deferred_at: Option<String>,
+    pub resolved_at: Option<String>,
+    pub resolution: Option<RequirementResolution>,
+}
+
+/// `get_job_history`'s result (spec "Backend model" wire types): the Job,
+/// its Queue Entry, every entry in that entry's lineage, the Job's
+/// timeline in sequence order, its reservation(s), its linked Host
+/// Operations, and its Reconciliation Requirements.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/JobHistory.ts")]
+pub struct JobHistory {
+    pub job: Job,
+    pub entry: QueueEntry,
+    pub lineage: Vec<QueueEntry>,
+    pub events: Vec<JobEvent>,
+    pub reservations: Vec<crate::spools::reservations::Reservation>,
+    pub host_operations: Vec<crate::host_ops::HostOperation>,
+    pub requirements: Vec<ReconciliationRequirement>,
 }

@@ -161,6 +161,36 @@ pub enum RepositoryError {
         printer_ids: Vec<String>,
         host_operation_ids: Vec<String>,
     },
+    /// P7 D2: `queue::repository::apply` rejected an event the pure
+    /// `queue::state::transition` doesn't allow from the entry's current
+    /// state. Nothing was written. A later task's caller maps this to
+    /// `QUEUE_ENTRY_ACTION_NOT_ALLOWED` (a user command) or `INTERNAL`
+    /// (farm3d's own code), per D2's table.
+    IllegalQueueEntryTransition {
+        entry_id: String,
+        from: crate::queue::QueueEntryState,
+        event: crate::queue::state::EntryEvent,
+    },
+    /// P7 D2: `move_entry`/`update_entry` refused because the entry isn't
+    /// in a state that action allows (`move` needs an open entry;
+    /// `update` needs `queued`). Nothing was written.
+    /// `QUEUE_ENTRY_ACTION_NOT_ALLOWED`.
+    QueueEntryActionNotAllowed {
+        entry_id: String,
+        action: crate::queue::QueueEntryAction,
+        state: crate::queue::QueueEntryState,
+    },
+    /// P7 D3: `jobs::repository::transition` rejected an event the pure
+    /// `jobs::state::transition` doesn't allow from the Job's current
+    /// state. Nothing was written. A later task's caller maps this to
+    /// `JOB_ACTION_NOT_ALLOWED` (a user command) or drops it as an
+    /// already-applied idempotent no-op (the driver, tracker, or
+    /// `apply_host_outcome`), per D3's table.
+    IllegalJobTransition {
+        job_id: String,
+        from: crate::jobs::JobState,
+        event: crate::jobs::JobEventKind,
+    },
     Storage(StorageError),
 }
 

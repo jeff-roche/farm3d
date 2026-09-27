@@ -41,7 +41,9 @@ use farm3d_lib::host_ops::{
     HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
 };
 use farm3d_lib::jobs::{
-    AssignedBy, CancelReason, JobEventKind, JobState, Settlement, SettlementMethod,
+    AssignedBy, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
+    JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
+    RequirementResolution, RequirementStatus, Settlement, SettlementMethod, SettlementPreview,
     StartConfirmation,
 };
 use farm3d_lib::library::commands::{
@@ -92,7 +94,7 @@ use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::{
     CloseReason, DispatchPolicy, DispatchPreference, EstimateSource, MaterialEstimate, OriginKind,
-    QueueEntryState,
+    QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryState,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
@@ -549,6 +551,9 @@ fn export_registry() -> Vec<Export> {
         export::<EstimateSource>(),
         export::<MaterialEstimate>(),
         export::<OriginKind>(),
+        export::<QueueEntryDisplay>(),
+        export::<QueueEntryAction>(),
+        export::<QueueEntry>(),
         export::<JobState>(),
         export::<CancelReason>(),
         export::<Settlement>(),
@@ -556,6 +561,17 @@ fn export_registry() -> Vec<Export> {
         export::<AssignedBy>(),
         export::<StartConfirmation>(),
         export::<JobEventKind>(),
+        export::<PrinterSnapshot>(),
+        export::<JobFailure>(),
+        export::<SettlementPreview>(),
+        export::<Job>(),
+        export::<JobEvent>(),
+        export::<RequirementKind>(),
+        export::<RequirementStatus>(),
+        export::<DeclaredOutcome>(),
+        export::<RequirementResolution>(),
+        export::<ReconciliationRequirement>(),
+        export::<JobHistory>(),
     ]
 }
 
