@@ -29,7 +29,7 @@ use crate::connections::{ConnectionState, PrinterStatus};
 use crate::host_ops::{
     parse_time, repository as host_ops_repository, HostOperationEndpoint, HostOperationState,
 };
-use crate::persistence::RepositoryError;
+use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::operational::{OperationalState, TelemetryFreshness};
 use crate::printers::StoredPrinter;
 use crate::queue::repository as queue_repository;
@@ -671,7 +671,7 @@ pub(crate) fn settle_terminal_material(
             let requirement = jobs_repository::requirements_for_job(tx, &job.id)?
                 .into_iter()
                 .find(|requirement| requirement.kind == RequirementKind::MaterialReconciliation)
-                .expect("on_failed_or_cancelled just opened it");
+                .ok_or(RepositoryError::Storage(StorageError::OperationFailed))?;
             Ok(SettlementEffects {
                 requirements: vec![requirement],
                 spool_ids: vec![job.spool_id.clone()],

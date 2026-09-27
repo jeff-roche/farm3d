@@ -42,6 +42,9 @@ const ESTIMATED: fn() -> Value = || json!({"kind": "estimated"});
 fn measured(net_mg: i64) -> Value {
     json!({"kind": "measured", "entry": {"kind": "net", "netMg": net_mg, "confidence": "measured"}})
 }
+fn measured_with_confidence(net_mg: i64, confidence: &str) -> Value {
+    json!({"kind": "measured", "entry": {"kind": "net", "netMg": net_mg, "confidence": confidence}})
+}
 const DEFER: fn() -> Value = || json!({"kind": "defer"});
 
 /// `estimated_use_mg`'s pure rounding rule (owner decisions 5/6):
@@ -156,6 +159,106 @@ fn failed_job_marks_the_reservation_unresolved_and_opens_a_pending_requirement()
     assert_eq!(requirement["spoolId"], json!(spool_id));
     assert_eq!(requirement["reservationId"], json!(reservation_id));
     assert_eq!(requirement["resolution"], Value::Null);
+}
+
+/// Fix round 1 (Important finding): owner decision 5 checked end to end
+/// -- `settle(estimated)` on a Job with a non-zero `maxProgressPct` must
+/// use `estimated_use_mg` (progress-scaled), not the full estimate and
+/// not zero. A Job stuck at 0 % or one that ran to completion wouldn't
+/// tell `job.estimate_mg`/`0` apart from the real, progress-scaled value.
+#[test]
+fn estimated_settlement_uses_the_progress_scaled_estimate() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    let spool_id = app.job(&job_id)["spoolId"].as_str().unwrap().to_string();
+    let before_mg = app.spool_current_mg(&spool_id);
+
+    roots.fake.set_progress(0.37);
+    app.mirror(&roots.fake);
+    app.wait_job_until(&job_id, |job| job["maxProgressPct"] == 37);
+
+    roots.fake.finish_print("klippy_shutdown");
+    let job = app.wait_job(&job_id, "failed");
+    assert_eq!(job["maxProgressPct"], 37);
+    let expected_used_mg = estimated_use_mg(ESTIMATE_MG, 37);
+    assert_ne!(expected_used_mg, ESTIMATE_MG, "sanity: distinct from the full estimate");
+    assert_ne!(expected_used_mg, 0, "sanity: distinct from zero");
+    assert_eq!(
+        job["settlementPreview"],
+        json!({"estimatedUseMg": expected_used_mg}),
+        "ruling R4: settlementPreview matched it beforehand"
+    );
+
+    let settled = app.settle("op-settle-progress", &job_id, ESTIMATED()).unwrap();
+    let requirement = settled["requirements"][0].clone();
+    assert_eq!(
+        requirement["resolution"],
+        json!({"kind": "settled", "method": "estimated", "usedMg": expected_used_mg}),
+        "owner decision 5: progress-scaled, not the full estimate or zero"
+    );
+
+    let consumptions: Vec<Value> = app
+        .amount_events(&spool_id)
+        .into_iter()
+        .filter(|event| event["kind"] == "consumption")
+        .collect();
+    assert_eq!(consumptions.len(), 1);
+    assert_eq!(consumptions[0]["afterMg"], json!(before_mg - expected_used_mg));
+    assert_eq!(app.spool_current_mg(&spool_id), before_mg - expected_used_mg);
+}
+
+/// Fix round 1 ruling R14(b)/(c): `settle_job_material`'s `measured`
+/// choice must reject an entry that isn't genuinely measured (a `Net`
+/// entry silently carrying `confidence: "estimated"` would promote a
+/// guess into a Measurement ledger row), and an out-of-range weight --
+/// both `VALIDATION`, naming the field under `choice.entry`, not `entry`
+/// (the entry lives nested under `choice` in this command's request).
+#[test]
+fn settle_measured_rejects_a_non_measured_or_out_of_range_entry() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.finish_print("klippy_shutdown");
+    app.wait_job(&job_id, "failed");
+
+    let not_measured = app
+        .settle("op-bad-confidence", &job_id, measured_with_confidence(100_000, "estimated"))
+        .unwrap_err();
+    assert_eq!(not_measured["code"], "VALIDATION");
+    assert_eq!(not_measured["details"]["fieldPath"], "choice.entry.confidence");
+
+    let out_of_range = app.settle("op-bad-range", &job_id, measured(-1)).unwrap_err();
+    assert_eq!(out_of_range["code"], "VALIDATION");
+    assert_eq!(out_of_range["details"]["fieldPath"], "choice.entry.netMg");
+
+    assert_eq!(app.job(&job_id)["settlement"], "pending", "neither attempt settled the Job");
+}
+
+/// Fix round 1 ruling R14(b)/(c): `correct_job_material`'s entry has the
+/// same two guards, with the field named at the request's own top-level
+/// `entry` (no `choice` nesting for this command).
+#[test]
+fn correct_rejects_a_non_measured_or_out_of_range_entry() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.finish_print("completed");
+    app.wait_job(&job_id, "completed");
+
+    let not_measured = app
+        .correct("op-bad-confidence", &job_id, json!({"kind": "net", "netMg": 100_000, "confidence": "estimated"}))
+        .unwrap_err();
+    assert_eq!(not_measured["code"], "VALIDATION");
+    assert_eq!(not_measured["details"]["fieldPath"], "entry.confidence");
+
+    let out_of_range = app
+        .correct("op-bad-range", &job_id, json!({"kind": "net", "netMg": -1, "confidence": "measured"}))
+        .unwrap_err();
+    assert_eq!(out_of_range["code"], "VALIDATION");
+    assert_eq!(out_of_range["details"]["fieldPath"], "entry.netMg");
+
+    assert_eq!(app.job(&job_id)["corrected"], false, "neither attempt recorded a correction");
 }
 
 /// `measured` settlement consumes the reservation once (via the measured
@@ -279,7 +382,7 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
 
     let first = app.settle("op-settle", &job_id, ESTIMATED()).unwrap();
     assert_eq!(first["jobs"][0]["settlement"], "settled");
-    let events_before = app.job_events(&job_id).len();
+    let job_events_before = app.count_stream_events("queue.job.changed", &job_id);
     let ledger_before = app
         .amount_events(&spool_id)
         .into_iter()
@@ -290,7 +393,11 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
     assert_eq!(replayed["jobs"][0]["id"], json!(job_id));
     assert_eq!(replayed["jobs"][0]["settlement"], "settled");
     std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(app.job_events(&job_id).len(), events_before, "a replay publishes nothing");
+    assert_eq!(
+        app.count_stream_events("queue.job.changed", &job_id),
+        job_events_before,
+        "a replay publishes nothing"
+    );
     let ledger_after = app
         .amount_events(&spool_id)
         .into_iter()

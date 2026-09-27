@@ -19,7 +19,7 @@ use crate::persistence::{RepositoryError, StorageError};
 use crate::queue::QueueChange;
 use crate::spools::ledger::{self, AmountEntry, AmountEventKind};
 use crate::spools::operations::{self, Claim, OperationKind};
-use crate::spools::reservations;
+use crate::spools::reservations::{self, ReservationError};
 use crate::spools::AmountConfidence;
 
 use super::assign::{reservation_error, spool_number};
@@ -143,6 +143,43 @@ struct CorrectDigest<'a> {
     entry: &'a AmountEntry,
 }
 
+/// Fix round 1 (ruling R14(c)): `ledger::resolve_entry`/`consume_measured`
+/// phrase their `field_path` for a bare `entry` request field
+/// (`entry.netMg`, ...). `settle_job_material`'s entry lives at
+/// `choice.entry` instead (the request's top-level field is `choice`, an
+/// internally-tagged `SettleChoice`), so remap before a `VALIDATION`
+/// reaches `CommandError` -- `correct_job_material`'s `entry` needs no
+/// remapping, since it *is* the request's top-level field.
+fn choice_field_path(field_path: &'static str) -> &'static str {
+    match field_path {
+        "entry.netMg" => "choice.entry.netMg",
+        "entry.tareId" => "choice.entry.tareId",
+        "entry.tareMg" => "choice.entry.tareMg",
+        "entry.grossMg" => "choice.entry.grossMg",
+        "entry.confidence" => "choice.entry.confidence",
+        other => other,
+    }
+}
+
+/// Fix round 1 (ruling R14(b)): a settle-by-measurement or a correction
+/// must carry a genuinely measured entry -- a `Net` entry silently
+/// carrying `confidence: "estimated"` would promote a guess into a
+/// Measurement ledger row, indistinguishable later from a real scale
+/// reading. `Scale` entries are always `Measured` (`ledger::resolve_entry`
+/// sets it, never taking the caller's word), so only `Net`'s explicit
+/// confidence needs checking here.
+fn require_measured_entry(
+    entry: &AmountEntry,
+    field_path: &'static str,
+) -> Result<(), RepositoryError> {
+    if let AmountEntry::Net { confidence, .. } = entry {
+        if *confidence != AmountConfidence::Measured {
+            return Err(RepositoryError::Validation { field_path });
+        }
+    }
+    Ok(())
+}
+
 /// Checks `choice` against D3/D4's settlement rule -- before the pure
 /// state table, per the spec: a `settled` Job (any state) is
 /// `JOB_ALREADY_SETTLED`; `estimated`/`measured` need `pending` or
@@ -234,15 +271,19 @@ pub fn settle(
             )
         }
         SettleChoice::Measured { entry } => {
+            require_measured_entry(entry, "choice.entry.confidence")?;
             let measurement = reservations::consume_measured(tx, &job.reservation_id, entry, None)
-                .map_err(|error| {
-                    reservation_error(
+                .map_err(|error| match error {
+                    ReservationError::Validation { field_path } => RepositoryError::Validation {
+                        field_path: choice_field_path(field_path),
+                    },
+                    other => reservation_error(
                         spool_number(tx, &job.spool_id),
                         &job.spool_id,
                         Some(&job.reservation_id),
                         None,
-                        error,
-                    )
+                        other,
+                    ),
                 })?;
             let used_mg = measurement
                 .before_mg
@@ -343,6 +384,7 @@ pub fn correct(
         });
     }
 
+    require_measured_entry(entry, "entry.confidence")?;
     let (after_mg, _confidence, mut snapshot) = ledger::resolve_entry(tx, entry)?;
     snapshot.reservation_id = Some(job.reservation_id.clone());
     snapshot.note = Some(format!("Correction for Job {}", job.id));
