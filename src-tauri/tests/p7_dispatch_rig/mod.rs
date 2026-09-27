@@ -78,12 +78,19 @@ struct SimFactory {
     tier: Arc<Mutex<EvidenceTier>>,
 }
 
-fn short_moonraker_timings() -> MoonrakerTimings {
+/// The adapter's timeouts against the in-process fake. No test here needs
+/// one to fire: an unreachable fake drops the connection at once, and no
+/// fault stalls past them. So they only have to be longer than a loaded
+/// machine can take to answer on loopback (sub-2 s values turned a slow but
+/// healthy fake into `TIMEOUT` refusals and `uncertain` uploads and starts
+/// when many test binaries ran at once), and shorter than [`WAIT`], so a
+/// request that really hangs still fails the wait around it.
+fn rig_moonraker_timings() -> MoonrakerTimings {
     MoonrakerTimings {
-        connect: Duration::from_millis(500),
-        query: Duration::from_millis(1500),
-        control: Duration::from_millis(1500),
-        transfer_base: Duration::from_millis(1500),
+        connect: Duration::from_secs(5),
+        query: Duration::from_secs(10),
+        control: Duration::from_secs(10),
+        transfer_base: Duration::from_secs(10),
         transfer_per_started_mib: Duration::from_millis(10),
     }
 }
@@ -93,7 +100,7 @@ fn adapter(
     key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<MoonrakerCapabilities> {
     (config.kind == MOONRAKER_KIND)
-        .then(|| MoonrakerCapabilities::new(config, key, short_moonraker_timings()))
+        .then(|| MoonrakerCapabilities::new(config, key, rig_moonraker_timings()))
 }
 
 impl CapabilityFactory for SimFactory {
@@ -367,6 +374,18 @@ pub struct Running {
     pub services: Arc<RuntimeServices<MockRuntime>>,
     pub storage: Arc<Storage>,
     pub events: Arc<Mutex<Vec<String>>>,
+}
+
+/// Dropping a running app stops its Job runtime. `RuntimeServices` holds
+/// the `AppHandle` whose state holds `RuntimeServices`, so dropping the app
+/// never frees them, and without a stop the driver (and the evaluator)
+/// would keep running to the end of the test binary. With `fast()` timings
+/// each one polls its fake's history every 200 ms, and the leaked runtimes
+/// of earlier tests starve later ones on a loaded machine.
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.services.jobs.stop();
+    }
 }
 
 /// How [`boot`] leaves the runtime.
@@ -763,8 +782,9 @@ impl Running {
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {state}: {}",
-                self.job(job_id)
+                "timed out waiting for {state}: {}\nits Host Operations: {:?}",
+                self.job(job_id),
+                self.ops(job_id)
             );
             std::thread::sleep(POLL);
         }
@@ -778,7 +798,11 @@ impl Running {
             if done(&job) {
                 return job;
             }
-            assert!(Instant::now() < deadline, "timed out waiting on {job}");
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting on {job}\nits Host Operations: {:?}",
+                self.ops(job_id)
+            );
             std::thread::sleep(POLL);
         }
     }
