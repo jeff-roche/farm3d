@@ -12,10 +12,12 @@ import { isCommandError } from "../ipc/client";
 import {
   clearConnection,
   credentialStoreInfo,
+  reportError,
   setConnection,
   testConnection,
 } from "../printers/printer-store";
 import type { ConnectionSubmission, ResolvedPrinter } from "../printers/types";
+import { HostOperationAlert } from "./HostOperationAlert";
 import { RemoveCredentialsDialog } from "./RemoveCredentialsDialog";
 import styles from "./PrinterConnectionPanel.module.css";
 
@@ -53,6 +55,9 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   const [store] = createResource(credentialStoreInfo);
   const [removingCredentials, setRemovingCredentials] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
+  // `CONNECTION_IN_USE` (spec D7: a Host Operation on this Printer is
+  // unresolved) from Save or Disconnect, shown with its link to the Job tab.
+  const [inUse, setInUse] = createSignal<unknown>(null);
   // The exact submission a failed Save was attempted with, so "Save anyway"
   // (D8's `acceptUnverified`) resubmits it unchanged -- `draft().credential`
   // is blanked right after the failed attempt below (never re-echoing a
@@ -65,6 +70,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   function clearSaveFailure() {
     setSaveError(null);
     setFailedSubmission(null);
+    setInUse(null);
   }
 
   // A failed Save describes the exact submission it was attempted with; a
@@ -83,6 +89,11 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
       }
       clearSaveFailure();
     } catch (e) {
+      if (isCommandError(e) && e.code === "CONNECTION_IN_USE") {
+        clearSaveFailure();
+        setInUse(e);
+        return;
+      }
       // `setConnection` rejects (Ruling R2, superseded by spec D8) so a
       // replacement probe failure can be shown inline next to a "Save
       // anyway" affordance, instead of only reaching the store's error
@@ -98,6 +109,16 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
       await attemptSave(submission);
     } finally {
       setDraft((d) => ({ ...d, credential: "" }));
+    }
+  }
+
+  async function onDisconnect() {
+    clearSaveFailure();
+    try {
+      await clearConnection(props.printer.id);
+    } catch (e) {
+      if (isCommandError(e) && e.code === "CONNECTION_IN_USE") setInUse(e);
+      else reportError(e);
     }
   }
 
@@ -142,6 +163,16 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
         )}
       </Show>
 
+      <Show when={inUse()}>
+        {(error) => (
+          <HostOperationAlert
+            error={error()}
+            fallback="Finish or abandon the pending printer operation before changing this Connection."
+            printerId={props.printer.id}
+          />
+        )}
+      </Show>
+
       <div class={styles.actions}>
         <Button variant="primary" onClick={() => void onSave()}>
           Save
@@ -152,7 +183,7 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
           </Button>
         </Show>
         <Show when={existing()}>
-          <Button variant="danger" onClick={() => void clearConnection(props.printer.id)}>
+          <Button variant="danger" onClick={() => void onDisconnect()}>
             Disconnect
           </Button>
         </Show>

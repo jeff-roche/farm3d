@@ -5,6 +5,7 @@
  * `NotArchived`/`AlreadyArchived`; P3 adds `SpoolsLoaded` (a Printer still
  * holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
  * has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
- * still has Slice Revisions, D14).
+ * still has Slice Revisions, D14). P6 adds `HostOperationUnresolved` (a
+ * Printer, or a Slice Revision, has a pending Host Operation, D7).
  */
-export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST";
+export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST" | "HOST_OPERATION_UNRESOLVED";

@@ -123,7 +123,9 @@ pub fn probe_error(
             ],
             false,
         ),
-        ConnectionError::Protocol(_) => (
+        // A probe never produces `HostNotReady`; if one ever did, it is an
+        // answer farm3d could not use, like a protocol error.
+        ConnectionError::Protocol(_) | ConnectionError::HostNotReady => (
             ErrorCode::ProtocolError,
             "The Printer returned an unexpected response.",
             vec![RecoveryCode::CheckConnection, RecoveryCode::Retry],

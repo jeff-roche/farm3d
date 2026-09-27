@@ -44,9 +44,17 @@ moonraker-live mode="probe":
     cargo test --manifest-path src-tauri/Cargo.toml --test a0_moonraker_live "$test" \
         -- --ignored --exact --nocapture
 
-# Manage the local Klipper + Moonraker simulator (build, up [trusted|apikey], down, status, restart klipper, ...)
-moonraker-sim *args:
-    scripts/moonraker-sim/sim.sh {{ args }}
+
+# Run the ignored P6 read-only real-host suite: probe, subscribe, and query only, through a gate that refuses every write. FARM3D_MOONRAKER_HOST (required), FARM3D_MOONRAKER_PORT, FARM3D_MOONRAKER_API_KEY[_FILE]
+p6-readonly:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${FARM3D_MOONRAKER_HOST:-}" ]; then
+        echo "error: set FARM3D_MOONRAKER_HOST, e.g. FARM3D_MOONRAKER_HOST=192.0.2.10 just p6-readonly" >&2
+        exit 1
+    fi
+    cargo test --manifest-path src-tauri/Cargo.toml --test p6_moonraker_readonly \
+        -- --ignored --test-threads=1 --nocapture
 
 # Run the ignored live OctoPrint checks; FARM3D_OCTOPRINT_HOST (required), FARM3D_OCTOPRINT_PORT, FARM3D_OCTOPRINT_API_KEY, FARM3D_OCTOPRINT_POLL_SECONDS
 test-octoprint-live:
@@ -153,7 +161,7 @@ test-sim:
     sim/simctl manifest >"$out/manifest.json"
     echo "test-sim: recording to $out"
     cargo test --manifest-path src-tauri/Cargo.toml \
-        --test sim_moonraker --test sim_octoprint --test sim_elegoolink \
+        --test sim_moonraker --test sim_octoprint --test sim_elegoolink --test p6_tracer \
         -- --include-ignored --test-threads=1 --nocapture 2>&1 | tee "$out/test.log"
 
 # Fail if a tracked or staged file names one of the owner's private hosts (listed in FARM3D_PRIVATE_HOSTS or an untracked .private-hosts file)

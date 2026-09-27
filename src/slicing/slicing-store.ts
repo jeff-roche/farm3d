@@ -6,9 +6,9 @@ import {
   isCommandError,
   retryOnTransportFailure,
 } from "../ipc/client";
+import { notFound, validationError } from "../ipc/local-errors";
 import { createSequencedStream } from "../ipc/sequenced-stream";
 import { desktopOnlyError } from "./desktop-only";
-import { notFound, validationError } from "./local-errors";
 import { decodeMeshBuffer, type MeshBuffer } from "./mesh-buffer";
 import type { WebSlicingFixture } from "./web-fixtures";
 import {

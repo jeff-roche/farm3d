@@ -25,6 +25,8 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
+pub mod control;
+pub mod files;
 pub mod protocol;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

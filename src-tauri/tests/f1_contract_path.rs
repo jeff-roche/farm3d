@@ -1,7 +1,7 @@
 #[test]
-fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
-    // P4's 58 plus P5's 21.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21);
+fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
+    // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -84,6 +84,16 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_additions() {
             "get_slice_revision_log",
             "create_external_slice_revision",
             "delete_slice_revision",
+            "printer_capabilities",
+            "adapter_capability_matrix",
+            "list_host_operations",
+            "stage_slice_revision",
+            "start_staged_artifact",
+            "pause_host_print",
+            "resume_host_print",
+            "cancel_host_print",
+            "reconcile_host_operation",
+            "abandon_host_operation",
         ]
     );
 }
@@ -217,6 +227,16 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::slicing::commands::get_slice_revision_log,
             farm3d_lib::slicing::commands::create_external_slice_revision,
             farm3d_lib::slicing::commands::delete_slice_revision,
+            farm3d_lib::connections::commands::printer_capabilities,
+            farm3d_lib::connections::commands::adapter_capability_matrix,
+            farm3d_lib::host_ops::commands::list_host_operations,
+            farm3d_lib::host_ops::commands::stage_slice_revision,
+            farm3d_lib::host_ops::commands::start_staged_artifact,
+            farm3d_lib::host_ops::commands::pause_host_print,
+            farm3d_lib::host_ops::commands::resume_host_print,
+            farm3d_lib::host_ops::commands::cancel_host_print,
+            farm3d_lib::host_ops::commands::reconcile_host_operation,
+            farm3d_lib::host_ops::commands::abandon_host_operation,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -451,6 +471,34 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             }),
         ),
         ("delete_slice_revision", json!({"sliceRevisionId": "s"})),
+        ("printer_capabilities", json!({"printerId": "p"})),
+        ("adapter_capability_matrix", json!({})),
+        ("list_host_operations", json!({})),
+        (
+            "stage_slice_revision",
+            json!({"operationId": "o", "printerId": "p", "sliceRevisionId": "s"}),
+        ),
+        (
+            "start_staged_artifact",
+            json!({"operationId": "o", "printerId": "p", "hostOperationId": "h", "priorState": "ready"}),
+        ),
+        (
+            "pause_host_print",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        (
+            "resume_host_print",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        (
+            "cancel_host_print",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        ("reconcile_host_operation", json!({"hostOperationId": "h"})),
+        (
+            "abandon_host_operation",
+            json!({"operationId": "o", "hostOperationId": "h", "acknowledgement": "hostStateUnknown"}),
+        ),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

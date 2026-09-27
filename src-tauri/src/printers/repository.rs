@@ -12,6 +12,7 @@ use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
 use super::{StartSafety, StoredPrinter};
 use crate::connections::ConnectionConfig;
+use crate::host_ops::repository as host_operations;
 
 /// Shared column list for every `SELECT ... FROM printers` — keeps the four
 /// P2 columns (`location`, `start_safety`, `archived_at`, `host_identity`)
@@ -291,6 +292,12 @@ impl PrinterRepository {
                 blocked = Some(blockers_for(eligibility, LifecycleAction::Delete));
                 return Err(StorageError::OperationFailed);
             }
+            // P6 owner decision 5: the Printer's terminal Host Operation
+            // rows go with it. The blocker check above has just proved
+            // none is unresolved (`HostOperationBlockers`), and
+            // `ON DELETE RESTRICT` backs that up.
+            host_operations::delete_terminal_for_printer(transaction, id)
+                .map_err(crate::host_ops::guards::storage_error)?;
             transaction.execute("DELETE FROM printers WHERE id = ?1", [id])?;
             if let Some(reference) = printer
                 .connection
@@ -453,6 +460,7 @@ impl PrinterRepository {
                 field_path: "expectedRevision",
             });
         }
+        let mut in_use: Option<RepositoryError> = None;
         let result = self.storage.write(|transaction| {
             let mut printer = transaction
                 .query_row(
@@ -464,6 +472,22 @@ impl PrinterRepository {
                 .ok_or(StorageError::OperationFailed)?;
             if printer.revision != expected_revision || expected_revision <= 0 {
                 return Err(StorageError::OperationFailed);
+            }
+            // P6 D7: never take the endpoint or credential out from under
+            // an unresolved Host Operation.
+            if let Err(error) = crate::host_ops::guards::check_connection_change(
+                transaction,
+                id,
+                printer.connection.as_ref(),
+                connection.as_ref(),
+            ) {
+                return Err(match error {
+                    RepositoryError::Storage(storage) => storage,
+                    refused => {
+                        in_use = Some(refused);
+                        StorageError::OperationFailed
+                    }
+                });
             }
             let old_reference = printer
                 .connection
@@ -491,6 +515,9 @@ impl PrinterRepository {
             printer.material_slots = slots::live_slots(transaction, id)?;
             Ok(printer)
         });
+        if let Some(error) = in_use {
+            return Err(error);
+        }
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
@@ -565,6 +592,12 @@ impl PrinterRepository {
     /// deleted out from under it, surfacing as an opaque
     /// `PERSISTENCE_UNAVAILABLE` instead of a real validation error.
     ///
+    /// P6 D7: likewise, any unresolved Host Operation rejects the whole
+    /// import (`RepositoryError::HostOperationsPending`) before anything is
+    /// written, and every replaced Printer's terminal Host Operation rows
+    /// are deleted with it (owner decision 5), since `host_operations.
+    /// printer_id` is `ON DELETE RESTRICT`.
+    ///
     /// With no Spool loaded, the `DELETE FROM printers` cascades away every
     /// REPLACED Printer's Material Slot rows AND its `spool_movements`
     /// history (the migration's `ON DELETE CASCADE` on both
@@ -596,6 +629,14 @@ impl PrinterRepository {
             }
             if crate::spools::repository::any_loaded(transaction)? {
                 return Err(RepositoryError::SpoolsLoadedForImport);
+            }
+            // P6 D7: an unresolved Host Operation anywhere rejects the whole
+            // import. Terminal rows go with the Printers the import
+            // replaces (owner decision 5), before `printer_id`'s
+            // `ON DELETE RESTRICT` would refuse the delete below.
+            crate::host_ops::guards::check_import(transaction)?;
+            for (printer_id, _) in &current {
+                host_operations::delete_terminal_for_printer(transaction, printer_id)?;
             }
             let revisions: std::collections::HashMap<_, _> = current.into_iter().collect();
             let old_references = transaction.prepare("SELECT DISTINCT json_extract(connection_json, '$.credentialRef') FROM printers WHERE json_extract(connection_json, '$.credentialRef') IS NOT NULL")?
@@ -844,6 +885,20 @@ fn enqueue_credential_cleanup(
                     (None, _) => false,
                 });
         if incoming_wins {
+            // P6 D7: `retry_pending_credential_cleanup` keeps a credential
+            // while the Printer its row names has an unresolved Host
+            // Operation, so never move the row off such a Printer (to
+            // another Printer, or to none) until that row is terminal.
+            let keep_printer = match current_printer.as_deref() {
+                Some(current) => crate::host_ops::repository::has_unresolved(transaction, current)
+                    .map_err(crate::host_ops::guards::storage_error)?,
+                None => false,
+            };
+            let printer_id = if keep_printer {
+                current_printer.as_deref()
+            } else {
+                printer_id
+            };
             transaction.execute(
                 "UPDATE pending_credential_cleanup SET reason=?2, printer_id=?3 WHERE credential_ref=?1",
                 params![reference, reason, printer_id],

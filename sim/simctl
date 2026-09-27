@@ -10,8 +10,15 @@
 #   wait [seconds]     wait until every simulator is ready (default 180)
 #   env                print the FARM3D_SIM_* variables the Rust harness reads
 #   manifest           print a JSON record of images, digests, versions, config hashes
-#   reset              clear all faults, restart any Klipper that is not ready, wait
+#   reset              clear all faults, restore the moonraker variant, restart any
+#                      Klipper that is not ready, wait
 #   logs <service>     service logs (a compose service name, or simulavr[-multi])
+#   variant moonraker default|no-bed|apikey
+#                      switch the single-extruder Moonraker simulator between its
+#                      default printer.cfg, a no-bed printer, and an
+#                      API-key-enforcing Moonraker (loopback no longer trusted).
+#                      Restarts klipper and moonraker; `env` then exports
+#                      FARM3D_SIM_MOONRAKER_API_KEY in apikey mode.
 #
 # Fault injection (the states that are hard to reach on purpose):
 #
@@ -136,7 +143,80 @@ klipper_service() {
 }
 
 moonraker_state() {
-    http "$(control_url "$1")/server/info" | json_get "d['result']['klippy_state']"
+    local sim="$1" headers=()
+    if [ "$sim" = moonraker ] && [ "$(moonraker_variant)" = apikey ]; then
+        headers=(-H "X-Api-Key: $(moonraker_api_key)")
+    fi
+    http "${headers[@]}" "$(control_url "$sim")/server/info" | json_get "d['result']['klippy_state']"
+}
+
+# The single-extruder simulator's current mode, from the marker `variant`
+# writes into the writable `run` volume klipper and moonraker share.
+# Neither container writes it, so a missing file (before any `variant`
+# call) reads as "default".
+moonraker_variant() {
+    compose exec -T klipper cat /opt/printer_data/run/variant 2>/dev/null || echo default
+}
+
+# Moonraker seeds this key in its database at every startup, regardless of
+# mode, so it is readable even before `apikey` mode is selected. A restart
+# can briefly hold the database open, so this retries.
+moonraker_api_key() {
+    local key="" _try
+    for _try in $(seq 1 20); do
+        key="$(compose exec -T moonraker python3 - <<'PY' 2>/dev/null
+import sqlite3
+try:
+    row = sqlite3.connect("/opt/printer_data/database/moonraker-sql.db").execute(
+        "SELECT password FROM authorized_users WHERE username='_API_KEY_USER_'"
+    ).fetchone()
+    print(row[0] if row else "")
+except Exception:
+    print("")
+PY
+)"
+        [ -n "$key" ] && break
+        sleep 0.5
+    done
+    [ -n "$key" ] || die "could not read Moonraker's API key from its database"
+    echo "$key"
+}
+
+# Switches the single-extruder Moonraker simulator's mode and waits for it
+# to report Klipper ready again. Idempotent: a no-op if already in `mode`.
+variant() {
+    local sim="${1:-}" mode="${2:-}"
+    [ "$sim" = moonraker ] ||
+        die "variant only supports the single-extruder moonraker simulator"
+    case "$mode" in
+    default | no-bed | apikey) ;;
+    *) die "mode must be default, no-bed, or apikey" ;;
+    esac
+    if [ "$(moonraker_variant)" = "$mode" ]; then
+        echo "simctl: moonraker already in $mode mode"
+        return 0
+    fi
+    compose exec -T klipper sh -c "printf '%s' '$mode' >/opt/printer_data/run/variant"
+    # Two separate restarts, not `compose restart klipper moonraker`: podman
+    # compose validates moonraker's `depends_on` while klipper is still
+    # mid-restart in a combined call and refuses it.
+    compose restart klipper
+    compose restart moonraker
+    local headers=()
+    if [ "$mode" = apikey ]; then
+        headers=(-H "X-Api-Key: $(moonraker_api_key)")
+    fi
+    local start=$SECONDS state
+    while true; do
+        state="$(http "${headers[@]}" "$moonraker_control_url/server/info" |
+            json_get "d['result']['klippy_state']")"
+        [ "$state" = ready ] && break
+        if ((SECONDS - start >= 90)); then
+            die "moonraker did not report ready in $mode mode after 90s; see: sim/simctl logs moonraker"
+        fi
+        sleep 2
+    done
+    echo "simctl: moonraker variant set to $mode ($state)"
 }
 
 octoprint_state() {
@@ -395,10 +475,14 @@ export FARM3D_SIM_OCTOPRINT_API_KEY=$octoprint_api_key
 export FARM3D_SIM_TOXIPROXY=$toxiproxy_url
 export FARM3D_SIM_CTL=$here/simctl
 EOF
+    if [ "$(moonraker_variant 2>/dev/null || echo default)" = apikey ]; then
+        echo "export FARM3D_SIM_MOONRAKER_API_KEY=$(moonraker_api_key)"
+    fi
     ;;
 manifest) manifest ;;
 reset)
     clear_all_faults
+    variant moonraker default
     for sim in "${moonraker_sims[@]}"; do
         recover_klipper "$sim"
     done
@@ -413,6 +497,7 @@ logs)
     esac
     ;;
 fault) shift && fault "$@" ;;
+variant) shift && variant "$@" ;;
 -h | --help | help | "")
     awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
     ;;

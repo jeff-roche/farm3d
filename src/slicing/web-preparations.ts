@@ -2,7 +2,7 @@
  *  checks that need no geometry, and a simplified D5 seed. Loaded only in
  *  web mode, so none of it is in the desktop bundle's main chunk. */
 import type { ModelRecord } from "../library/types";
-import { notFound, validationError } from "./local-errors";
+import { notFound, validationError } from "../ipc/local-errors";
 import type { PreparationDocument, PreparationRecord, SliceTarget } from "./types";
 import type { WebSlicingFixture } from "./web-fixtures";
 

@@ -329,6 +329,28 @@ pub enum ErrorCode {
     PreparationStale,
     /// P5 D10: the slice operation has already finished.
     OperationNotCancellable,
+    /// P6 D7/D9: the Printer has an unresolved Host Operation (a write
+    /// command, or `import_printers`).
+    HostOperationPending,
+    /// P6 D7: the Connection change would orphan an unresolved Host
+    /// Operation.
+    ConnectionInUse,
+    /// P6 D6: the Printer's Connection can't do this (or can't reconcile a
+    /// row of this kind).
+    CapabilityUnsupported,
+    /// P6 D8: the row is not `uncertain`, or has had no attempt and can
+    /// still be reconciled.
+    HostOperationNotAbandonable,
+    /// P6 D9: the Printer's state does not allow a start.
+    StartNotAllowed,
+    /// P6 D9: Start is offered, but from another state than the operator
+    /// confirmed.
+    StartPreconditionChanged,
+    /// P6 D9: the Printer's state does not allow this pause, resume, or
+    /// cancel.
+    ControlNotAllowed,
+    /// P6 D9: the staged file is gone from the host or no longer matches.
+    StagedArtifactInvalid,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -354,6 +376,8 @@ pub enum RecoveryCode {
     ReloadPreparation,
     /// P5: change the Preparation (presets, controls, or plates).
     EditPreparation,
+    /// P6: open the Printer's Job tab (its pending Host Operation).
+    OpenPrinterJob,
 }
 
 /// The versioned success envelope returned by every command.
@@ -656,6 +680,158 @@ impl CommandError {
             JsonValue::String(entity_id.into()),
         )]));
         error
+    }
+
+    /// P6 D7 `CONNECTION_IN_USE`: `set_printer_connection` or
+    /// `clear_printer_connection` would change the endpoint, or clear the
+    /// Connection or its credential, while `host_operation_id` is
+    /// unresolved.
+    pub fn connection_in_use(printer_id: &str, host_operation_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::ConnectionInUse,
+            "Finish or abandon the pending printer operation before changing this Connection.",
+            vec![RecoveryCode::OpenPrinterJob],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("hostOperationId", host_operation_id),
+        ])
+    }
+
+    /// P6 D7/D9 `HOST_OPERATION_PENDING`: these Printers have these
+    /// unresolved Host Operations.
+    pub fn host_operation_pending(printer_ids: &[String], host_operation_ids: &[String]) -> Self {
+        let strings = |values: &[String]| {
+            JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
+        };
+        let mut error = Self::typed(
+            ErrorCode::HostOperationPending,
+            "This printer has a pending operation. Finish or abandon it first.",
+            vec![RecoveryCode::OpenPrinterJob],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("printerIds".to_string(), strings(printer_ids)),
+            ("hostOperationIds".to_string(), strings(host_operation_ids)),
+        ]));
+        error
+    }
+
+    /// P6 `CAPABILITY_UNSUPPORTED`. The message is the capability's own
+    /// `detail`. `capability` and `reason` are wire spellings.
+    pub fn capability_unsupported(
+        printer_id: &str,
+        capability: &str,
+        reason: &str,
+        detail: &str,
+    ) -> Self {
+        Self::typed(ErrorCode::CapabilityUnsupported, detail, vec![], false).with_string_details(&[
+            ("printerId", printer_id),
+            ("capability", capability),
+            ("reason", reason),
+            ("detail", detail),
+        ])
+    }
+
+    /// P6 D8 `HOST_OPERATION_NOT_ABANDONABLE`. `state` is the wire spelling.
+    pub fn host_operation_not_abandonable(
+        host_operation_id: &str,
+        state: &str,
+        attempts: i64,
+    ) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::HostOperationNotAbandonable,
+            "farm3d can only stop checking an uncertain operation after it has checked at least once.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("hostOperationId", host_operation_id), ("state", state)]);
+        error.details.get_or_insert_with(BTreeMap::new).insert(
+            "attempts".to_string(),
+            JsonValue::Number(
+                JsonNumber::try_from(attempts)
+                    .unwrap_or_else(|_| JsonNumber::try_from(0_i64).expect("constant is safe")),
+            ),
+        );
+        error
+    }
+
+    /// P6 D9 `START_NOT_ALLOWED`. `observed_state`/`freshness` are wire
+    /// spellings; `state_label` is the human one.
+    pub fn start_not_allowed(
+        printer_id: &str,
+        observed_state: &str,
+        freshness: &str,
+        state_label: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::StartNotAllowed,
+            format!("The printer can't start a print now: {state_label}."),
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+        ])
+    }
+
+    /// P6 D9 `START_PRECONDITION_CHANGED`.
+    pub fn start_precondition_changed(
+        printer_id: &str,
+        observed_state: &str,
+        freshness: &str,
+        prior_state: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::StartPreconditionChanged,
+            "The printer's state changed. Confirm the bed again.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+            ("priorState", prior_state),
+        ])
+    }
+
+    /// P6 D9 `CONTROL_NOT_ALLOWED`. `verb` is `pause`, `resume`, or
+    /// `cancel`.
+    pub fn control_not_allowed(
+        printer_id: &str,
+        verb: &str,
+        observed_state: &str,
+        freshness: &str,
+        state_label: &str,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::ControlNotAllowed,
+            format!("The printer isn't in a state to {verb} now: {state_label}."),
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("printerId", printer_id),
+            ("verb", verb),
+            ("observedState", observed_state),
+            ("freshness", freshness),
+        ])
+    }
+
+    /// P6 D9 `STAGED_ARTIFACT_INVALID`. `reason` is `absent` or `differs`.
+    /// No recovery code: **Stage again** is the Start dialog's own action.
+    pub fn staged_artifact_invalid(host_operation_id: &str, reason: &str) -> Self {
+        let message = if reason == "absent" {
+            "The staged file is no longer on the printer. Stage it again."
+        } else {
+            "The file on the printer no longer matches this Slice Revision. Stage it again."
+        };
+        Self::typed(ErrorCode::StagedArtifactInvalid, message, vec![], false)
+            .with_string_details(&[("hostOperationId", host_operation_id), ("reason", reason)])
     }
 
     /// D3: another active Printer already owns this host identity.
@@ -1068,6 +1244,20 @@ impl CommandError {
             // commands give it a user-facing code (e.g. cancelling a
             // finished operation).
             RepositoryError::IllegalSliceTransition { .. } => Self::internal(),
+            // Likewise a caller bug until a later task's guard rejects the
+            // request itself before this ever runs.
+            RepositoryError::IllegalHostOperationTransition { .. } => Self::internal(),
+            // Likewise: `mark_sent` runs exactly once per row; a second
+            // call is an executor bug, not something a user triggers.
+            RepositoryError::HostOperationAlreadySent { .. } => Self::internal(),
+            RepositoryError::ConnectionInUse {
+                printer_id,
+                host_operation_id,
+            } => Self::connection_in_use(&printer_id, &host_operation_id),
+            RepositoryError::HostOperationsPending {
+                printer_ids,
+                host_operation_ids,
+            } => Self::host_operation_pending(&printer_ids, &host_operation_ids),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
@@ -1193,6 +1383,44 @@ mod tests {
         assert_eq!(
             backstop.details.unwrap().get("conflictingPrinterId"),
             Some(&JsonValue::String("printer-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn p6_guard_errors_carry_their_code_message_recovery_and_details() {
+        let in_use = CommandError::from_repository(RepositoryError::ConnectionInUse {
+            printer_id: "prn-a".to_string(),
+            host_operation_id: "hop-a".to_string(),
+        });
+        assert_eq!(in_use.code, ErrorCode::ConnectionInUse);
+        assert_eq!(
+            in_use.message,
+            "Finish or abandon the pending printer operation before changing this Connection."
+        );
+        assert_eq!(in_use.recovery, vec![RecoveryCode::OpenPrinterJob]);
+        assert!(!in_use.retryable);
+        assert_eq!(
+            serde_json::to_value(&in_use.details).unwrap(),
+            serde_json::json!({"printerId": "prn-a", "hostOperationId": "hop-a"})
+        );
+
+        let pending = CommandError::from_repository(RepositoryError::HostOperationsPending {
+            printer_ids: vec!["prn-a".to_string(), "prn-b".to_string()],
+            host_operation_ids: vec!["hop-a".to_string(), "hop-b".to_string()],
+        });
+        assert_eq!(pending.code, ErrorCode::HostOperationPending);
+        assert_eq!(
+            pending.message,
+            "This printer has a pending operation. Finish or abandon it first."
+        );
+        assert_eq!(pending.recovery, vec![RecoveryCode::OpenPrinterJob]);
+        assert!(!pending.retryable);
+        assert_eq!(
+            serde_json::to_value(&pending.details).unwrap(),
+            serde_json::json!({
+                "printerIds": ["prn-a", "prn-b"],
+                "hostOperationIds": ["hop-a", "hop-b"],
+            })
         );
     }
 

@@ -32,6 +32,18 @@ pub enum OperationKind {
     StartSlice,
     /// P5 D16: `create_external_slice_revision`.
     CreateExternalSliceRevision,
+    /// P6 D2: `stage_slice_revision`.
+    StageSliceRevision,
+    /// P6 D2: `start_staged_artifact`.
+    StartStagedArtifact,
+    /// P6 D2: `pause_host_print`.
+    PauseHostPrint,
+    /// P6 D2: `resume_host_print`.
+    ResumeHostPrint,
+    /// P6 D2: `cancel_host_print`.
+    CancelHostPrint,
+    /// P6 D2: `abandon_host_operation`.
+    AbandonHostOperation,
 }
 
 /// What [`claim`] found.

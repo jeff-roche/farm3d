@@ -1,0 +1,67 @@
+{
+  "result": {
+    "eventtime": 284793.851946132,
+    "status": {
+      "webhooks": {
+        "state": "ready",
+        "state_message": "Printer is ready"
+      },
+      "print_stats": {
+        "filename": "",
+        "total_duration": 0.0,
+        "print_duration": 0.0,
+        "filament_used": 0.0,
+        "state": "standby",
+        "message": "",
+        "info": {
+          "total_layer": null,
+          "current_layer": null
+        }
+      },
+      "pause_resume": {
+        "is_paused": false
+      },
+      "heater_bed": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0
+      },
+      "extruder": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": true,
+        "pressure_advance": 0.0,
+        "smooth_time": 0.04,
+        "motion_queue": null
+      },
+      "extruder1": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": true,
+        "pressure_advance": 0.0,
+        "smooth_time": 0.04,
+        "motion_queue": null
+      },
+      "extruder2": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": true,
+        "pressure_advance": 0.0,
+        "smooth_time": 0.04,
+        "motion_queue": null
+      },
+      "extruder3": {
+        "temperature": 103.26,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": true,
+        "pressure_advance": 0.0,
+        "smooth_time": 0.04,
+        "motion_queue": null
+      }
+    }
+  }
+}

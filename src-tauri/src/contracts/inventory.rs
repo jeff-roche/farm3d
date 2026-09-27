@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 79] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 89] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -339,9 +339,59 @@ contracts![
         "DeleteSliceRevisionRequest",
         "DeleteSliceRevisionResult"
     ),
+    (
+        "printer_capabilities",
+        "PrinterCapabilitiesRequest",
+        "PrinterCapabilitiesResult"
+    ),
+    (
+        "adapter_capability_matrix",
+        "AdapterCapabilityMatrixRequest",
+        "AdapterCapabilityMatrixResult"
+    ),
+    (
+        "list_host_operations",
+        "ListHostOperationsRequest",
+        "ListHostOperationsResult"
+    ),
+    (
+        "stage_slice_revision",
+        "StageSliceRevisionRequest",
+        "StageSliceRevisionResult"
+    ),
+    (
+        "start_staged_artifact",
+        "StartStagedArtifactRequest",
+        "StartStagedArtifactResult"
+    ),
+    (
+        "pause_host_print",
+        "PauseHostPrintRequest",
+        "PauseHostPrintResult"
+    ),
+    (
+        "resume_host_print",
+        "ResumeHostPrintRequest",
+        "ResumeHostPrintResult"
+    ),
+    (
+        "cancel_host_print",
+        "CancelHostPrintRequest",
+        "CancelHostPrintResult"
+    ),
+    (
+        "reconcile_host_operation",
+        "ReconcileHostOperationRequest",
+        "ReconcileHostOperationResult"
+    ),
+    (
+        "abandon_host_operation",
+        "AbandonHostOperationRequest",
+        "AbandonHostOperationResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 79] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 89] {
     &COMMAND_CONTRACTS
 }
 
@@ -521,7 +571,27 @@ export type GetSliceRevisionLogResult = CommandSuccess<SliceRevisionLog>;
 export type CreateExternalSliceRevisionRequest = ContractRequest & { operationId: string; sourceRevisionId: string; facts: CreateExternalSliceRevisionFacts };
 export type CreateExternalSliceRevisionResult = CommandSuccess<SliceRevisionRecord>;
 export type DeleteSliceRevisionRequest = ContractRequest & { sliceRevisionId: string };
-export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_string()
+export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;
+export type PrinterCapabilitiesRequest = ContractRequest & { printerId: string };
+export type PrinterCapabilitiesResult = CommandSuccess<PrinterCapabilities>;
+export type AdapterCapabilityMatrixRequest = NoArgsRequest;
+export type AdapterCapabilityMatrixResult = CommandSuccess<AdapterCapabilityRow[]>;
+export type ListHostOperationsRequest = ContractRequest & { printerId?: string };
+export type ListHostOperationsResult = CommandSuccess<HostOperationsSnapshot>;
+export type StageSliceRevisionRequest = ContractRequest & { operationId: string; printerId: string; sliceRevisionId: string };
+export type StageSliceRevisionResult = CommandSuccess<HostOperation>;
+export type StartStagedArtifactRequest = ContractRequest & { operationId: string; printerId: string; hostOperationId: string; priorState: PriorState };
+export type StartStagedArtifactResult = CommandSuccess<HostOperation>;
+export type PauseHostPrintRequest = ContractRequest & { operationId: string; printerId: string };
+export type PauseHostPrintResult = CommandSuccess<HostOperation>;
+export type ResumeHostPrintRequest = ContractRequest & { operationId: string; printerId: string };
+export type ResumeHostPrintResult = CommandSuccess<HostOperation>;
+export type CancelHostPrintRequest = ContractRequest & { operationId: string; printerId: string };
+export type CancelHostPrintResult = CommandSuccess<HostOperation>;
+export type ReconcileHostOperationRequest = ContractRequest & { hostOperationId: string };
+export type ReconcileHostOperationResult = CommandSuccess<HostOperation>;
+export type AbandonHostOperationRequest = ContractRequest & { operationId: string; hostOperationId: string; acknowledgement: "hostStateUnknown"; note?: string };
+export type AbandonHostOperationResult = CommandSuccess<HostOperation>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -609,6 +679,11 @@ export type DeleteSliceRevisionResult = CommandSuccess<SlicingDeleted>;"#.to_str
         visitor.visit::<crate::slicing::SliceRevisionSummary>();
         visitor.visit::<crate::slicing::SliceRevisionRecord>();
         visitor.visit::<crate::slicing::external::CreateExternalSliceRevisionFacts>();
+        visitor.visit::<crate::connections::capabilities::PrinterCapabilities>();
+        visitor.visit::<crate::connections::capabilities::AdapterCapabilityRow>();
+        visitor.visit::<crate::host_ops::HostOperationsSnapshot>();
+        visitor.visit::<crate::host_ops::HostOperation>();
+        visitor.visit::<crate::host_ops::PriorState>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

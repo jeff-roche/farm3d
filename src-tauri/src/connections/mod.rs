@@ -7,6 +7,8 @@
 //! farm3d's own small vocabulary rather than any one protocol's, so a push
 //! adapter and a polling adapter fit the same shape.
 
+pub mod adapters;
+pub mod capabilities;
 pub mod commands;
 pub mod credentials;
 pub mod discovery;
@@ -33,12 +35,12 @@ pub const DEFAULT_OCTOPRINT_PORT: u16 = 80;
 
 /// Every Connection kind this build can construct, probe, and supervise.
 /// The one place the setup, batch, and connection-edit paths ask "can this
-/// build speak `kind`?" — `supervisor::build` is the matching constructor,
+/// build speak `kind`?" — `adapters::descriptor` is the matching lookup,
 /// and a test there keeps the two in step.
 pub const SUPPORTED_KINDS: &[&str] = &[MOONRAKER_KIND, OCTOPRINT_KIND];
 
 pub fn is_supported_kind(kind: &str) -> bool {
-    SUPPORTED_KINDS.contains(&kind)
+    adapters::descriptor(kind).is_some()
 }
 
 /// No adapter speaks TLS yet: the WebSocket client is built without a TLS
@@ -234,6 +236,11 @@ pub enum ConnectionError {
     /// Reached the host; it spoke something we could not parse.
     Protocol(String),
     Timeout,
+    /// Reached Moonraker; it answered 503 because Klipper is not connected
+    /// (`Klippy Host not connected` or `Klippy Disconnected`). P6's capability
+    /// reads report it so reconciliation can tell "Klipper went away" (D5)
+    /// from an unreadable answer. The observation adapters never produce it.
+    HostNotReady,
 }
 
 impl std::fmt::Display for ConnectionError {
@@ -243,6 +250,7 @@ impl std::fmt::Display for ConnectionError {
             ConnectionError::Auth(m) => write!(f, "The printer rejected the credentials: {m}"),
             ConnectionError::Protocol(m) => write!(f, "Unexpected response from the printer: {m}"),
             ConnectionError::Timeout => write!(f, "The printer did not respond in time"),
+            ConnectionError::HostNotReady => write!(f, "Klipper isn't ready on the printer"),
         }
     }
 }

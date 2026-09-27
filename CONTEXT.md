@@ -70,9 +70,62 @@ _Avoid_: Preset, config
 **Connection**:
 The channel farm3d uses to communicate with a Printer — either a network
 print-server API (Moonraker/OctoPrint/ElegooLink-style) or a direct USB/serial
-link. Moonraker and OctoPrint (status-only monitoring) are implemented;
-ElegooLink is planned (see ADR-0002).
+link. Moonraker is implemented with monitoring and the P6 command
+Capabilities (upload, start, pause, resume, cancel, host state, artifact
+identity, camera query). OctoPrint
+is implemented for status-only monitoring. ElegooLink is planned (see
+ADR-0002). What a Connection can do is described by its Capabilities
+(ADR-0011).
 _Avoid_: Link, interface
+
+**Capability**:
+One thing farm3d can do through a Printer's Connection: upload, start,
+pause, resume, cancel, host state, artifact identity, or camera. Each is
+either supported, with the evidence behind it, or unsupported, with a
+reason: the adapter can't, it isn't verified yet, or this printer lacks
+it. Unsupported is not the same as failed.
+_Avoid_: Feature, permission
+
+**Host Operation**:
+One write farm3d sends to a Printer's host (upload, start, pause, resume,
+or cancel). farm3d records it durably before the first byte leaves, and
+keeps the outcome it has proved. A Printer has at most one unresolved
+Host Operation at a time, and while it has one, the Printer can't be
+archived, deleted, or moved to another endpoint, and no Printer import can
+run. Its states are `dispatching`, `uncertain`, and `reconciling`
+(unresolved), then `succeeded`, `failed`, or `abandoned` (terminal).
+Terminal rows are history: deleting a Printer, or replacing it through a
+Printer import, deletes them with it.
+_Avoid_: Job (that is P7), command, request
+
+**Staged artifact**:
+A Slice Revision's G-code that a succeeded upload Host Operation put on a
+Printer's host, and whose bytes farm3d read back and verified. Staging
+never starts a print; starting one is a separate Host Operation.
+_Avoid_: Uploaded file, remote copy
+
+**Uncertain outcome**:
+The state of a Host Operation whose effect farm3d could not prove either
+way, for example because the printer's answer was lost. farm3d keeps
+checking the printer by reading from it, and never repeats the write by
+itself.
+_Avoid_: Failed, unknown error
+
+**Reconciliation**:
+farm3d reading a Printer's host to settle an uncertain Host Operation: is
+the staged file there with the right bytes, did the print start, did the
+pause take effect. While a check runs the operation is `reconciling`; it
+then ends `succeeded` or `failed`, or goes back to `uncertain` when the
+host can't yet say. It runs after a reconnect, after a restart, on a
+backoff, and when the operator asks (Check again). It only ever reads.
+_Avoid_: Retry, resync
+
+**Abandon reconciliation**:
+The operator's explicit, recorded decision to stop checking an uncertain
+Host Operation, typically for a printer that is gone for good. The
+printer's state stays unknown; abandoning is not success, but it releases
+the Printer for other changes.
+_Avoid_: Dismiss, clear, retry
 
 **Connection Supervisor**:
 The backend component that owns a Printer's Connection lifecycle — opening

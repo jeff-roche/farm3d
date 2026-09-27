@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Unable to open file",
+    "traceback": "Traceback (most recent call last):\n  File \"/opt/moonraker/moonraker/components/application.py\", line 714, in _process_http_request\n...\ntornado.web.HTTPError: HTTP 400: Unable to open file\n"
+  }
+}

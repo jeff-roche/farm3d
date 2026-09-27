@@ -4,6 +4,7 @@ pub mod connections;
 pub mod contracts;
 pub mod document_io;
 mod file_links;
+pub mod host_ops;
 pub mod library;
 pub mod persistence;
 pub mod printers;
@@ -15,10 +16,14 @@ use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
 };
 use connections::commands::{
-    clear_printer_connection, credential_store_info, discover_printers, printer_statuses,
-    set_printer_connection, test_printer_connection,
+    adapter_capability_matrix, clear_printer_connection, credential_store_info, discover_printers,
+    printer_capabilities, printer_statuses, set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use host_ops::commands::{
+    abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
+    reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
+};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
@@ -64,6 +69,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub library: Arc<library::LibraryServices<R>>,
     /// P5: the slicer runtime, the scheduler, and the `slicing` stream.
     pub slicing: Arc<slicing::SlicingServices<R>>,
+    /// P6: Host Operations (executor, reconciler, `hostOperations` stream).
+    pub host_ops: Arc<host_ops::HostOperationServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -103,12 +110,18 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             Arc::new(slicing::runtime::FixedSlicerRuntimeFileIo::default()),
             storage.paths().metadata_root().join("slicer-cache"),
         ));
+        let host_ops = Arc::new(host_ops::HostOperationServices::production(
+            Arc::clone(&storage),
+            Arc::clone(&content),
+            Arc::clone(&manager),
+        ));
         Self {
             library: Arc::new(library::LibraryServices::new(
                 content,
                 Arc::new(library::selection::CancelledModelFileIo),
             )),
             slicing,
+            host_ops,
             storage,
             catalog,
             manager,
@@ -124,7 +137,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 79] = [
+pub const COMMAND_NAMES: [&str; 89] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -204,6 +217,16 @@ pub const COMMAND_NAMES: [&str; 79] = [
     "get_slice_revision_log",
     "create_external_slice_revision",
     "delete_slice_revision",
+    "printer_capabilities",
+    "adapter_capability_matrix",
+    "list_host_operations",
+    "stage_slice_revision",
+    "start_staged_artifact",
+    "pause_host_print",
+    "resume_host_print",
+    "cancel_host_print",
+    "reconcile_host_operation",
+    "abandon_host_operation",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -256,6 +279,19 @@ pub fn start_slicing_runtime<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) {
     services.slicing.start(app);
+}
+
+/// P6: starts the Host Operation services for `services` — the Online
+/// hook, the host facts of Printers already Online, and one reconcile
+/// attempt per `uncertain` row (D5 "When reconciliation runs"). Startup
+/// recovery (`host_ops::recover_after_restart`) must already have run.
+/// `build_runtime_services` calls it after `restore_persisted_connections`;
+/// tests call it the same way. A second call does nothing.
+pub fn start_host_ops_runtime<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    app: &tauri::AppHandle<R>,
+) {
+    services.host_ops.start(app, &services.credentials);
 }
 
 enum StartupFailure {
@@ -338,6 +374,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     // Recovery pruned old operation logs; unlink them now. A blob that
     // can't be unlinked is retried by the next startup sweep.
     let _ = content.release_unreferenced(&storage);
+    // P6 D3: a `dispatching` row never sent fails `neverSent`; one that may
+    // have been sent becomes `uncertain`; a `reconciling` row goes back to
+    // `uncertain`. Before any command is served or any attempt runs.
+    host_ops::recover_after_restart(&storage, chrono::Utc::now()).map_err(startup_error)?;
 
     let resource_path = app
         .path()
@@ -401,6 +441,11 @@ fn build_runtime_services<R: tauri::Runtime>(
         )),
         slicer_cache,
     ));
+    let host_ops = Arc::new(host_ops::HostOperationServices::production(
+        Arc::clone(&storage),
+        Arc::clone(&content),
+        Arc::clone(&manager),
+    ));
     let services = RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -414,10 +459,13 @@ fn build_runtime_services<R: tauri::Runtime>(
             Arc::new(library::selection::NativeModelFileIo::new(app.clone())),
         )),
         slicing,
+        host_ops,
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     };
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
     start_slicing_runtime(&services, app);
+    // P6: after `restore_persisted_connections`, the first reconcile pass.
+    start_host_ops_runtime(&services, app);
     // D2: the startup probe runs in the background; `get_slicer_runtime`
     // meanwhile waits on the same probe rather than starting another.
     services.slicing.probe_in_background();
@@ -632,6 +680,16 @@ pub fn run() {
             get_slice_revision_log,
             create_external_slice_revision,
             delete_slice_revision,
+            printer_capabilities,
+            adapter_capability_matrix,
+            list_host_operations,
+            stage_slice_revision,
+            start_staged_artifact,
+            pause_host_print,
+            resume_host_print,
+            cancel_host_print,
+            reconcile_host_operation,
+            abandon_host_operation,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

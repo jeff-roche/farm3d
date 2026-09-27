@@ -61,7 +61,7 @@ just sim fault slow moonraker 2000          # 2 s of latency on every response
 just sim fault cut moonraker 400            # close after 400 response bytes
 just sim fault hang moonraker               # connections stay open, nothing arrives
 just sim fault clear                        # remove every fault
-just sim reset                              # clear faults and recover Klipper
+just sim reset                              # clear faults, restore the variant, recover Klipper
 just sim logs moonraker
 just sim manifest
 ```
@@ -69,6 +69,25 @@ just sim manifest
 Keep `slow` latency below the adapter's timeouts. Toxiproxy cannot drop a
 latency toxic quickly while it is still holding data back; use `hang` to
 test a timeout.
+
+### Moonraker variants
+
+`sim/simctl variant moonraker default|no-bed|apikey` switches the
+single-extruder Moonraker simulator between three modes, restarting
+`klipper` and `moonraker` (never new containers, since each simulavr pins
+a CPU core):
+
+```sh
+just sim variant moonraker no-bed    # drops [heater_bed]: the missing-object case
+just sim variant moonraker apikey    # loopback no longer trusted
+just sim variant moonraker default   # back to the full, trusted printer
+```
+
+In `apikey` mode `trusted_clients` is a documentation-only range (RFC
+5737) that no client is ever really from, so every request needs the API
+key; `sim/simctl env` then also exports `FARM3D_SIM_MOONRAKER_API_KEY`.
+`sim/simctl reset` (and `just sim reset`) always returns to `default`.
+`moonraker-multi` has no variants.
 
 ## The Rust harness
 

@@ -35,7 +35,8 @@ pub enum LifecycleAction {
 /// `NotArchived`/`AlreadyArchived`; P3 adds `SpoolsLoaded` (a Printer still
 /// holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
 /// has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
-/// still has Slice Revisions, D14).
+/// still has Slice Revisions, D14). P6 adds `HostOperationUnresolved` (a
+/// Printer, or a Slice Revision, has a pending Host Operation, D7).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(
@@ -48,6 +49,7 @@ pub enum LifecycleBlockerCode {
     SpoolsLoaded,
     SpoolReserved,
     SliceRevisionsExist,
+    HostOperationUnresolved,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -119,7 +121,11 @@ impl LifecycleBlockerSource for ArchiveStateBlockers {
 /// Every blocker source, in the order their blockers should be reported.
 /// Later phases append here rather than changing anything above.
 pub fn blocker_sources() -> &'static [&'static dyn LifecycleBlockerSource] {
-    &[&ArchiveStateBlockers, &LoadedSpoolBlockers]
+    &[
+        &ArchiveStateBlockers,
+        &LoadedSpoolBlockers,
+        &crate::host_ops::guards::HostOperationBlockers,
+    ]
 }
 
 /// The single derivation of a Printer's lifecycle eligibility. Always run

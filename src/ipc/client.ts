@@ -120,6 +120,28 @@ type CommandMap = {
     Contracts.DeleteSliceRevisionRequest,
     Contracts.DeleteSliceRevisionResult,
   ];
+  printer_capabilities: [Contracts.PrinterCapabilitiesRequest, Contracts.PrinterCapabilitiesResult];
+  adapter_capability_matrix: [
+    Contracts.AdapterCapabilityMatrixRequest,
+    Contracts.AdapterCapabilityMatrixResult,
+  ];
+  list_host_operations: [Contracts.ListHostOperationsRequest, Contracts.ListHostOperationsResult];
+  stage_slice_revision: [Contracts.StageSliceRevisionRequest, Contracts.StageSliceRevisionResult];
+  start_staged_artifact: [
+    Contracts.StartStagedArtifactRequest,
+    Contracts.StartStagedArtifactResult,
+  ];
+  pause_host_print: [Contracts.PauseHostPrintRequest, Contracts.PauseHostPrintResult];
+  resume_host_print: [Contracts.ResumeHostPrintRequest, Contracts.ResumeHostPrintResult];
+  cancel_host_print: [Contracts.CancelHostPrintRequest, Contracts.CancelHostPrintResult];
+  reconcile_host_operation: [
+    Contracts.ReconcileHostOperationRequest,
+    Contracts.ReconcileHostOperationResult,
+  ];
+  abandon_host_operation: [
+    Contracts.AbandonHostOperationRequest,
+    Contracts.AbandonHostOperationResult,
+  ];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

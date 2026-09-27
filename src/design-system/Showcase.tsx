@@ -15,6 +15,7 @@ import {
   Slider,
   Tabs,
   Dialog,
+  AlertDialog,
   Popover,
   Tooltip,
   DropdownMenu,
@@ -170,6 +171,13 @@ export function Showcase() {
               { label: "Printer profiles", options: ["Elegoo Centauri Carbon 0.4 nozzle"] },
             ]}
           />
+          <Select
+            label="Disabled options with reasons"
+            placeholder="Choose a Printer"
+            options={["Bay 1", "Bay 2", "Bay 3"]}
+            optionDisabled={(option) => option !== "Bay 1"}
+            optionDescription={(option) => ({ "Bay 2": "Offline", "Bay 3": "Not verified yet" } as Record<string, string>)[option]}
+          />
         </div>
       </Panel>
 
@@ -280,6 +288,10 @@ export function Showcase() {
           </div>
         </Dialog>
         <ReturnFocusDialogDemo />
+      </Panel>
+
+      <Panel title="Alert dialog">
+        <AlertDialogDemo />
       </Panel>
 
       <Panel title="Popover">
@@ -492,6 +504,32 @@ function ReturnFocusDialogDemo() {
       <Dialog title="Opened from elsewhere" open={open()} onOpenChange={setOpen} returnFocus={() => opener}>
         Closing returns focus to the button that opened this.
       </Dialog>
+    </>
+  );
+}
+
+/** A confirmation that interrupts (`role="alertdialog"`): no close button,
+ *  only the explicit choices; Escape still dismisses it. */
+function AlertDialogDemo() {
+  const [open, setOpen] = createSignal(false);
+  let opener: HTMLButtonElement | undefined;
+  return (
+    <>
+      <Button ref={opener} variant="danger" onClick={() => setOpen(true)}>
+        Cancel print…
+      </Button>
+      <AlertDialog
+        title="Cancel this print?"
+        description="The printer stops the print now. farm3d can't resume a cancelled print."
+        open={open()}
+        onOpenChange={setOpen}
+        returnFocus={() => opener}
+      >
+        <div class={styles.row}>
+          <Button variant="secondary" onClick={() => setOpen(false)}>Keep printing</Button>
+          <Button variant="danger" onClick={() => setOpen(false)}>Cancel print</Button>
+        </div>
+      </AlertDialog>
     </>
   );
 }

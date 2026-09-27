@@ -79,6 +79,19 @@ impl Toxiproxy {
         self.toxic(proxy, "cut", "limit_data", json!({"bytes": bytes}));
     }
 
+    /// Closes each connection after `bytes` of the **request**: an upload
+    /// cut mid-body, before the host has the whole file (spike Gate D). The
+    /// other toxics act on responses only.
+    pub fn cut_request_after(&self, proxy: Proxy, bytes: u64) {
+        self.toxic_on(
+            proxy,
+            "cut-request",
+            "limit_data",
+            "upstream",
+            json!({"bytes": bytes}),
+        );
+    }
+
     /// Stops delivering responses but keeps connections open, like a pulled
     /// cable: no FIN, no RST, just silence.
     pub fn hang(&self, proxy: Proxy) {
@@ -86,13 +99,26 @@ impl Toxiproxy {
     }
 
     fn toxic(&self, proxy: Proxy, name: &str, kind: &str, attributes: serde_json::Value) {
+        self.toxic_on(proxy, name, kind, "downstream", attributes);
+    }
+
+    /// `stream` is Toxiproxy's direction: `downstream` acts on what the
+    /// host sends back, `upstream` on what the client sends.
+    fn toxic_on(
+        &self,
+        proxy: Proxy,
+        name: &str,
+        kind: &str,
+        stream: &str,
+        attributes: serde_json::Value,
+    ) {
         self.call(
             "POST",
             &format!("/proxies/{}/toxics", proxy.name()),
             Some(json!({
                 "name": name,
                 "type": kind,
-                "stream": "downstream",
+                "stream": stream,
                 "attributes": attributes,
             })),
         );

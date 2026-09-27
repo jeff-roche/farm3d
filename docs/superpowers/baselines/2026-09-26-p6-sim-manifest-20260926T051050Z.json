@@ -1,0 +1,252 @@
+{
+  "copiedFrom": "src-tauri/target/sim-runs/20260926T051050Z/manifest.json",
+  "purpose": "P6 Task 14 gate run, on the Task 14 working tree (repoCommit is its parent; the uncommitted changes were docs, evidence-source paths, and two test assertions).",
+  "command": "just sim-up && FARM3D_SIM_REQUIRED=1 just test-sim && just sim-down",
+  "redaction": "manifest.json is copied verbatim; it holds no home path, hostname, or non-loopback address. The run's test.log is not committed because its compiler lines carry a local home path; 'results' below is transcribed from it, with the 'PENDING' lines' local capture-directory path dropped and any extra printed text kept after the ok. A test line that printed text on its own line before 'ok' is recorded as ok (printed: <text>).",
+  "manifest": {
+    "recordedAt": "2026-09-26T05:10:50+00:00",
+    "engine": "podman",
+    "repoCommit": "81029516ffe22a7d621dc1891e6700ccccb164b4",
+    "pins": {
+      "prindCommit": "80600f7d6f0d28d4d249728a054ac546a22743b9",
+      "klipperCommit": "ce7002bedf37e938bb483572949f3703ac6476cb"
+    },
+    "images": [
+      {
+        "ref": "docker.io/mkuf/moonraker:v0.11.0-1-g1cfb0c4@sha256:c398e6e95def8f4112128ddf51d6dab3a7766e6ea28691e7b42f3bb98622a26d",
+        "id": "0236c28d23bb7b075f8a94e4f42e38a2a29292424a11a409e052ab94fde31fb3",
+        "repoDigests": [
+          "docker.io/mkuf/moonraker@sha256:0cf8693b2e5c356f92f637f0ceff35db86108b483f621503dae9fd5d383de223",
+          "docker.io/mkuf/moonraker@sha256:c398e6e95def8f4112128ddf51d6dab3a7766e6ea28691e7b42f3bb98622a26d"
+        ]
+      },
+      {
+        "ref": "docker.io/octoprint/octoprint:1.11.8@sha256:5ea0181e476597faa2800c991af4ce16903005f46b4c16666a4080ad606310bb",
+        "id": "6190bc936630b2156ae2cb29057f0d5df7b92f2f26d327739c84ff2109226b13",
+        "repoDigests": [
+          "docker.io/octoprint/octoprint@sha256:392bcadf7e5719fe9cbeae607c917a3ebd8915579d593ee9e91809defc15dd6a",
+          "docker.io/octoprint/octoprint@sha256:5ea0181e476597faa2800c991af4ce16903005f46b4c16666a4080ad606310bb"
+        ]
+      },
+      {
+        "ref": "ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e",
+        "id": "3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa",
+        "repoDigests": [
+          "ghcr.io/shopify/toxiproxy@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e",
+          "ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8"
+        ]
+      },
+      {
+        "ref": "localhost/farm3d-simulavr:prind-80600f7-klipper-ce7002b",
+        "id": "7c3347af30ceb85c2f7eaf35571fade71c4b53b2e0763b8e8dd3cba5bdffd4ae",
+        "repoDigests": [
+          "localhost/farm3d-simulavr@sha256:d121e6e3b6673f312fa48b531aede3bff58e17477f78c6d9ae50f27971342830"
+        ]
+      }
+    ],
+    "reported": {
+      "moonraker": {
+        "moonraker": {
+          "moonrakerVersion": "v0.11.0-1-g1cfb0c4-prind",
+          "klipperVersion": "v0.13.0-770-gce7002bed-prind"
+        },
+        "moonraker-multi": {
+          "moonrakerVersion": "v0.11.0-1-g1cfb0c4-prind",
+          "klipperVersion": "v0.13.0-770-gce7002bed-prind"
+        }
+      },
+      "octoprintVersion": "1.11.8"
+    },
+    "configSha256": {
+      "compose.yaml": "c3cd5eee9431ccf1452cf1852e0e296e01a85f8c050f8edaa69c161c2ed8a411",
+      "simctl": "399a9af9cfa3f8785261c49e5393d58f6a590e8089bec15b41dd8b3decc0e0df",
+      "moonraker/klipper-entrypoint.sh": "2afa7510e0708cb44d7cec7597cb7bbb3163968ab4f418f98642333e90e5fbaa",
+      "moonraker/moonraker.conf": "d8c9d712a7ed2ad9a11e5bff17265e403c5a1e6acd63702c310fb0dbab9af50d",
+      "moonraker/moonraker-entrypoint.sh": "aa9ae18e677174eeb0a3e5c1374008cc827883c9f09b8efc2930e538bec6fb65",
+      "moonraker/moonraker-multi.conf": "19efa607e4378bf24c3b73b697d6041465c1f4abcfb27bf84ecac47f1921187a",
+      "moonraker/printer.cfg": "2c773413ca070190189bd9444ba6ea5fcae9685dc7505f75d5a630fe9fcbb463",
+      "moonraker/printer-multi.cfg": "abfd33ee8a55cb1efa54218949b828edb95b31e9ad3e6aff133370070fcf2b60",
+      "octoprint/config.yaml": "444b1fefca73aac398f7234ee34b24df572d32aa1ca32835488d9fe5957a286c",
+      "octoprint/entrypoint.sh": "dfd9853636794a739f0f44573231912a10b9f4c9700a8f0a64d4b022d43a7ba3",
+      "toxiproxy/toxiproxy.json": "73830bb6c1a96cf8f5d02b674c3a87d2b22fca36322142f2c5e114d10cde663a"
+    }
+  },
+  "results": [
+    {
+      "binary": "p6_tracer",
+      "tests": [
+        {
+          "name": "p6_reconciliation_tracer_runs_against_the_simulator",
+          "result": "ok"
+        },
+        {
+          "name": "reconciliation_tracer_runs_against_fake_moonraker",
+          "result": "ok"
+        },
+        {
+          "name": "sim::tests::only_loopback_hosts_count_as_simulators",
+          "result": "ok"
+        }
+      ],
+      "summary": "ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.67s"
+    },
+    {
+      "binary": "sim_elegoolink",
+      "tests": [
+        {
+          "name": "client_traffic_keeps_the_connection_open",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        },
+        {
+          "name": "discovery_gets_the_recorded_reply",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        },
+        {
+          "name": "sim::tests::only_loopback_hosts_count_as_simulators",
+          "result": "ok"
+        },
+        {
+          "name": "the_fake_answers_cmd_1_and_cmd_0_the_way_the_printer_did",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        },
+        {
+          "name": "the_fake_drops_a_silent_client_without_a_close_frame",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        },
+        {
+          "name": "the_fake_never_pushes_status_and_never_answers_ping",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        },
+        {
+          "name": "unrecorded_commands_get_no_answer_and_are_reported",
+          "result": "ok (reported PENDING: the ElegooLink fake has no #8 captures)"
+        }
+      ],
+      "summary": "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    },
+    {
+      "binary": "sim_moonraker",
+      "tests": [
+        {
+          "name": "a_host_that_goes_away_ends_the_stream_and_fails_the_probe",
+          "result": "ok"
+        },
+        {
+          "name": "a_klipper_shutdown_turns_the_stream_offline",
+          "result": "ok"
+        },
+        {
+          "name": "a_no_bed_printer_reports_the_bed_as_absent_not_zero",
+          "result": "ok"
+        },
+        {
+          "name": "a_response_cut_mid_stream_fails_the_probe_without_hanging",
+          "result": "ok"
+        },
+        {
+          "name": "a_silent_host_times_out_the_probe",
+          "result": "ok"
+        },
+        {
+          "name": "a_slow_host_still_probes",
+          "result": "ok"
+        },
+        {
+          "name": "apikey_mode_refuses_no_key_and_accepts_the_right_one",
+          "result": "ok"
+        },
+        {
+          "name": "p6_a_host_that_stays_away_keeps_the_row_uncertain_until_abandoned",
+          "result": "ok"
+        },
+        {
+          "name": "p6_a_klipper_restart_keeps_a_started_row_and_an_uncertain_start_no_longer_pending",
+          "result": "ok"
+        },
+        {
+          "name": "p6_a_lost_upload_response_reconciles_after_a_restart_to_one_file",
+          "result": "ok"
+        },
+        {
+          "name": "p6_a_queued_start_stays_uncertain_until_it_runs",
+          "result": "ok (printed: P6: the queued start reconciled after 42 attempts)"
+        },
+        {
+          "name": "p6_a_second_start_from_finished_needs_prior_state_finished",
+          "result": "ok"
+        },
+        {
+          "name": "p6_a_start_whose_response_is_cut_reconciles_to_succeeded",
+          "result": "ok (printed: P6: the cut start was proved from PrintStats)"
+        },
+        {
+          "name": "p6_an_upload_cut_mid_body_settles_then_fails_not_applied",
+          "result": "ok"
+        },
+        {
+          "name": "p6_capability_detection_on_every_simulator_variant",
+          "result": "ok"
+        },
+        {
+          "name": "p6_history_list_honours_order_desc_and_since",
+          "result": "ok (printed: P6 D5: Moonraker v0.11.0-1-g1cfb0c4-prind API 1.5.0 honours order=desc (newest 000008 first) and since)"
+        },
+        {
+          "name": "p6_pause_resume_and_cancel_a_running_print",
+          "result": "ok"
+        },
+        {
+          "name": "probe_reports_the_simulated_klipper",
+          "result": "ok"
+        },
+        {
+          "name": "sim::tests::only_loopback_hosts_count_as_simulators",
+          "result": "ok"
+        },
+        {
+          "name": "subscribe_streams_telemetry_and_follows_a_target_change",
+          "result": "ok"
+        },
+        {
+          "name": "the_four_toolhead_simulator_probes_and_streams",
+          "result": "ok"
+        }
+      ],
+      "summary": "ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 229.78s"
+    },
+    {
+      "binary": "sim_octoprint",
+      "tests": [
+        {
+          "name": "a_disabled_proxy_cuts_the_simulator_off",
+          "result": "ok"
+        },
+        {
+          "name": "a_disabled_proxy_ends_subscribe_with_an_error",
+          "result": "ok"
+        },
+        {
+          "name": "a_wrong_key_is_an_auth_error",
+          "result": "ok"
+        },
+        {
+          "name": "probe_reports_the_simulated_octoprint",
+          "result": "ok"
+        },
+        {
+          "name": "sim::tests::only_loopback_hosts_count_as_simulators",
+          "result": "ok"
+        },
+        {
+          "name": "subscribe_yields_telemetry_and_an_online_health",
+          "result": "ok"
+        },
+        {
+          "name": "the_simulator_answers_through_the_proxy_with_its_api_key",
+          "result": "ok"
+        }
+      ],
+      "summary": "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+    }
+  ]
+}

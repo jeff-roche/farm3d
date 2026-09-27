@@ -32,6 +32,7 @@ import { logSegments } from "../slicing/slice-presentation";
 import { loadSliceRevision, loadSliceRevisionLog, slicing } from "../slicing/slicing-store";
 import type { SliceOperationLog, SliceRevisionRecord } from "../slicing/types";
 import { DeleteSliceRevisionDialog } from "./DeleteSliceRevisionDialog";
+import { StageOnPrinterDialog } from "./StageOnPrinterDialog";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import styles from "./SliceRevisionReview.module.css";
 
@@ -134,6 +135,8 @@ export function SliceRevisionReview(props: SliceRevisionReviewProps) {
 function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => void }) {
   const revision = () => props.revision;
   const queueReasonId = createUniqueId();
+  const [staging, setStaging] = createSignal(false);
+  let stageTrigger: HTMLButtonElement | undefined;
   const absentCount = () => FACT_KEYS.filter((key) => revision().facts[key].provenance === "absent").length;
 
   const targetRows = (): FactRow[] => {
@@ -177,9 +180,17 @@ function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => vo
 
       <div class={styles.actions}>
         <Button variant="primary" disabled aria-describedby={queueReasonId}>Add to Queue…</Button>
+        <Button ref={stageTrigger} variant="secondary" onClick={() => setStaging(true)}>Stage on Printer…</Button>
         <Button variant="secondary" onClick={() => props.onDelete()}>Delete…</Button>
       </div>
       <p id={queueReasonId} class={styles.note}>{QUEUE_LATER_REASON}</p>
+      <StageOnPrinterDialog
+        open={staging()}
+        onOpenChange={setStaging}
+        sliceRevisionId={revision().id}
+        revisionTitle={revisionTitle(revision())}
+        returnFocus={() => stageTrigger}
+      />
 
       <Section title="Facts">
         <Show when={revision().requiresManualPrinterSelection}>

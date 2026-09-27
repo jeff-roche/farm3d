@@ -3,6 +3,7 @@ import { Button, Dialog } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { setConnection } from "../printers/printer-store";
 import type { ResolvedPrinter } from "../printers/types";
+import { HostOperationAlert } from "./HostOperationAlert";
 import styles from "./RemoveCredentialsDialog.module.css";
 
 export interface RemoveCredentialsDialogProps {
@@ -18,9 +19,15 @@ export interface RemoveCredentialsDialogProps {
 export function RemoveCredentialsDialog(props: RemoveCredentialsDialogProps) {
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  // `CONNECTION_IN_USE`: clearing the credential is blocked while a Host
+  // Operation is unresolved (spec D7), shown with its link to the Job tab.
+  const [inUse, setInUse] = createSignal<unknown>(null);
 
   createEffect(on(() => props.open, (open) => {
-    if (open) setError(null);
+    if (open) {
+      setError(null);
+      setInUse(null);
+    }
   }));
 
   async function onConfirm() {
@@ -28,6 +35,7 @@ export function RemoveCredentialsDialog(props: RemoveCredentialsDialogProps) {
     if (!connection || pending()) return;
     setPending(true);
     setError(null);
+    setInUse(null);
     try {
       await setConnection(props.printer.id, {
         kind: connection.kind,
@@ -38,7 +46,8 @@ export function RemoveCredentialsDialog(props: RemoveCredentialsDialogProps) {
       });
       props.onOpenChange(false);
     } catch (e) {
-      setError(isCommandError(e) ? e.message : "The credentials could not be removed.");
+      if (isCommandError(e) && e.code === "CONNECTION_IN_USE") setInUse(e);
+      else setError(isCommandError(e) ? e.message : "The credentials could not be removed.");
     } finally {
       setPending(false);
     }
@@ -53,6 +62,16 @@ export function RemoveCredentialsDialog(props: RemoveCredentialsDialogProps) {
         </p>
         <Show when={error()}>
           {(message) => <p class={styles.error} role="alert">{message()}</p>}
+        </Show>
+        <Show when={inUse()}>
+          {(held) => (
+            <HostOperationAlert
+              error={held()}
+              fallback="Finish or abandon the pending printer operation before changing this Connection."
+              printerId={props.printer.id}
+              onOpenJob={() => props.onOpenChange(false)}
+            />
+          )}
         </Show>
         <div class={styles.actions}>
           <Button variant="secondary" onClick={() => props.onOpenChange(false)}>

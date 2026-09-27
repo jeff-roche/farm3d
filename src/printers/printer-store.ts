@@ -86,6 +86,10 @@ interface PrinterStoreState {
   printers: ResolvedPrinter[];
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
+  /** The `CommandError` behind `error`, when there is one, so the banner
+   *  can offer its recovery (e.g. `import_printers`' `HOST_OPERATION_PENDING`
+   *  → open the Printer's Job tab). */
+  commandError: CommandError | null;
   retryable: boolean;
   /** Explains Printers archived automatically for sharing a host (D3). */
   archiveNotice: { message: string; dismissKeys: string[] } | null;
@@ -105,6 +109,7 @@ const [state, setState] = createStore<PrinterStoreState>({
   printers: [],
   status: "idle",
   error: null,
+  commandError: null,
   retryable: false,
   archiveNotice: null,
 });
@@ -116,6 +121,7 @@ export const printers = () => state.printers;
 export const printerStoreStatus = () => state.status;
 export const printerStoreError = () => state.error;
 export const printerStoreRetryable = () => state.retryable;
+export const printerStoreCommandError = () => state.commandError;
 export const printerArchiveNotice = () => state.archiveNotice?.message ?? null;
 export const printerStatusSyncState = () => {
   statusStoreRevision();
@@ -137,12 +143,13 @@ export const printerStatusSyncState = () => {
 export function reportError(e: unknown): void {
   setState({
     error: isCommandError(e) ? e.message : "The operation could not be completed.",
+    commandError: isCommandError(e) ? e : null,
     retryable: isCommandError(e) && e.retryable,
   });
 }
 
 export function dismissPrinterStoreError(): void {
-  setState({ error: null, retryable: false });
+  setState({ error: null, commandError: null, retryable: false });
 }
 
 const DISMISSED_ARCHIVES_KEY = "farm3d:dismissed-duplicate-host-archives";
@@ -333,24 +340,62 @@ async function buildWebFallbackPrinters(): Promise<ResolvedPrinter[]> {
       };
     }),
   );
+  const own = resolved.filter((p): p is ResolvedPrinter => p !== null);
+  return [...own, ...(await buildWebHostOpsPrinters())];
+}
+
+/** The host-ops web fixture's Printers (a Ready, a four-tool, an
+ *  OctoPrint, a Finished, a Failed, and an uncertain-upload Printer), so
+ *  `just web` shows the Job tab's scenarios. Loaded on demand, keeping the
+ *  fixture out of the desktop bundle's main chunk. */
+async function buildWebHostOpsPrinters(): Promise<ResolvedPrinter[]> {
+  const { WEB_HOST_OPS_PRINTERS } = await import("../host-ops/web-fixtures");
+  const resolved = await Promise.all(WEB_HOST_OPS_PRINTERS.map(async (spec): Promise<ResolvedPrinter | null> => {
+    const match = await resolveWebCatalogVariant(spec.vendor, spec.model, spec.printerVariant);
+    if (!match) return null;
+    return {
+      id: spec.id,
+      revision: 1,
+      name: spec.name,
+      notes: "",
+      overrides: {},
+      catalogRef: match.catalogRef,
+      catalogStatus: "ok",
+      modelLabel: match.modelLabel,
+      variantLabel: match.variantLabel,
+      profile: match.profile,
+      overriddenFields: [],
+      inherited: {},
+      profileDrift: [],
+      unknownOverrideKeys: [],
+      startSafety: "confirmBedClear",
+      materialSlots: defaultWebMaterialSlots(spec.id),
+      setupGaps: [],
+      connection: spec.connection,
+      runtimeStatus: spec.status,
+      createdAt: "",
+      updatedAt: "",
+    };
+  }));
   return resolved.filter((p): p is ResolvedPrinter => p !== null);
 }
 
 export async function loadPrinters(): Promise<void> {
   setState("status", "loading");
   if (!desktopAvailable()) {
-    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, retryable: false });
+    setState({ printers: await buildWebFallbackPrinters(), status: "ready", error: null, commandError: null, retryable: false });
     webPrintersLoaded?.();
     return;
   }
   try {
     const loaded = (await command("list_printers")).map(resolvePrinterRecord);
-    setState({ printers: loaded, status: "ready", error: null, retryable: false });
+    setState({ printers: loaded, status: "ready", error: null, commandError: null, retryable: false });
     statusStore?.prune();
   } catch (e) {
     setState({
       status: "error",
       error: isCommandError(e) ? e.message : "farm3d could not finish starting.",
+      commandError: isCommandError(e) ? e : null,
       retryable: isCommandError(e) && e.retryable,
     });
   }
@@ -732,13 +777,13 @@ export async function setConnection(
   spliceResolved(resolvePrinterRecord(printer));
 }
 
+/** Rejects rather than reporting into the banner: a `CONNECTION_IN_USE`
+ *  (a Host Operation is unresolved, spec D7) must reach the Connection tab
+ *  inline with its link to the Job tab. `PrinterConnectionPanel` routes
+ *  any other failure to `reportError` itself. */
 export async function clearConnection(id: string): Promise<void> {
   if (!desktopAvailable()) return;
-  try {
-    spliceResolved(resolvePrinterRecord((await command("clear_printer_connection", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 })).printer));
-  } catch (e) {
-    reportError(e);
-  }
+  spliceResolved(resolvePrinterRecord((await command("clear_printer_connection", { id, expectedRevision: state.printers.find((printer) => printer.id === id)?.revision ?? 1 })).printer));
 }
 
 /** Rejects rather than reporting into the banner: the Connection tab renders

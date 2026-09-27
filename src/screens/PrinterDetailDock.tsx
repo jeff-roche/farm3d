@@ -5,10 +5,13 @@ import { isCommandError } from "../ipc/client";
 import { archivePrinter, lifecycleEligibility, printers, reportError, unarchivePrinter } from "../printers/printer-store";
 import type { LifecycleEligibility, ResolvedPrinter } from "../printers/types";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
+import { clearPrinterJobRequest, openPrinterJob, printerJobRequest } from "../host-ops/open-printer-job";
 import { ArchivePrinterDialog } from "./ArchivePrinterDialog";
+import { CapabilityList } from "./CapabilityList";
 import { DeletePrinterDialog } from "./DeletePrinterDialog";
 import { MATERIAL_SLOTS_ANCHOR_ID, MaterialSlotsSection } from "./MaterialSlotsEditor";
 import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
+import { PrinterJobPanel } from "./PrinterJobPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
 import { PrinterSetupPanel } from "./PrinterSetupPanel";
 import { PrinterStatusPanel } from "./PrinterStatusPanel";
@@ -96,6 +99,18 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
       section?.querySelector<HTMLElement>("h3")?.focus();
     });
   }));
+
+  // OPEN_PRINTER_JOB (spec "Error codes"): a request for this Printer,
+  // raised from anywhere (a Connection edit, the Stage dialog), opens the
+  // Job tab once this dock shows that Printer.
+  createEffect(on(
+    () => [printerJobRequest(), props.printer.id] as const,
+    ([request, id]) => {
+      if (request?.printerId !== id) return;
+      setTab("job");
+      clearPrinterJobRequest();
+    },
+  ));
 
   const archived = () => Boolean(props.printer.archivedAt);
   // Only explain actions the dock actually shows: Archive for an active
@@ -259,6 +274,7 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                 <MaterialSlotsSection printer={props.printer} />
                 <PrinterProfilePanel printer={props.printer} />
                 <PrinterConnectionPanel printer={props.printer} />
+                <CapabilityList printerId={props.printer.id} />
                 <div class={styles.lifecycle}>
                   <div class={styles.lifecycleActions}>
                     <Show when={!archived()}>
@@ -302,11 +318,28 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                     {(message) => <p class={styles.error} role="alert">{message()}</p>}
                   </Show>
                   <For each={visibleBlockers()}>
-                    {(blocker) => <p class={styles.blocker}>{blocker.message}</p>}
+                    {(blocker) => (
+                      <Show
+                        when={blocker.code === "HOST_OPERATION_UNRESOLVED"}
+                        fallback={<p class={styles.blocker}>{blocker.message}</p>}
+                      >
+                        <div class={styles.eligibilityError}>
+                          <p class={styles.blocker}>{blocker.message}</p>
+                          <Button variant="secondary" size="sm" onClick={() => openPrinterJob(props.printer.id)}>
+                            Open the Job tab
+                          </Button>
+                        </div>
+                      </Show>
+                    )}
                   </For>
                 </div>
               </div>
             ),
+          },
+          {
+            value: "job",
+            label: "Job",
+            content: <PrinterJobPanel printer={props.printer} />,
           },
         ]}
       />

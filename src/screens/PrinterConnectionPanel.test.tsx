@@ -2,13 +2,29 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMismatches, PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import type { PrinterProfile, ResolvedPrinter } from "../printers/types";
+import { printerJobRequest, clearPrinterJobRequest } from "../host-ops/open-printer-job";
+
+vi.mock("../host-ops/host-operations-store", async () =>
+  (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+
+const CONNECTION_IN_USE = {
+  contractVersion: 1,
+  code: "CONNECTION_IN_USE",
+  message: "Finish or abandon the pending printer operation before changing this Connection.",
+  recovery: ["OPEN_PRINTER_JOB"],
+  retryable: false,
+  details: { printerId: "prn-1", hostOperationId: "hop-1" },
+};
 
 const setConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const testConnection = vi.hoisted(() => vi.fn());
 const discoverPrinters = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const clearConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const reportError = vi.hoisted(() => vi.fn());
 vi.mock("../printers/printer-store", () => ({
   setConnection,
-  clearConnection: vi.fn(),
+  clearConnection,
+  reportError,
   testConnection,
   discoverPrinters,
   credentialStoreInfo: vi.fn().mockResolvedValue({ kind: "keychain" }),
@@ -185,6 +201,39 @@ describe("PrinterConnectionPanel", () => {
     expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
   });
 
+  it("shows CONNECTION_IN_USE from Save with a link that opens the Printer's Job tab, and no 'Save anyway'", async () => {
+    clearPrinterJobRequest();
+    setConnection.mockRejectedValueOnce(CONNECTION_IN_USE);
+    render(() => <PrinterConnectionPanel printer={printer} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Finish or abandon the pending printer operation before changing this Connection.");
+    expect(screen.queryByRole("button", { name: "Save anyway" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open the Job tab" }));
+    expect(printerJobRequest()).toEqual({ printerId: "prn-1" });
+  });
+
+  it("shows CONNECTION_IN_USE from Disconnect inline, the same way", async () => {
+    clearConnection.mockRejectedValueOnce(CONNECTION_IN_USE);
+    const connected = { ...printer, connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false } } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={connected} />);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Finish or abandon the pending printer operation");
+    expect(screen.getByRole("button", { name: "Open the Job tab" })).toBeInTheDocument();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("still reports any other Disconnect failure to the app's banner", async () => {
+    const failure = { contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "busy", recovery: [], retryable: true };
+    clearConnection.mockRejectedValueOnce(failure);
+    const connected = { ...printer, connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false } } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={connected} />);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(reportError).toHaveBeenCalledWith(failure));
+  });
+
   it("drops the failed Save and its 'Save anyway' once the Connection is edited", async () => {
     setConnection.mockRejectedValueOnce({
       contractVersion: 1,
@@ -313,6 +362,20 @@ describe("PrinterConnectionPanel — Remove credentials", () => {
       useTls: false,
       credential: "",
     });
+  });
+
+  it("shows CONNECTION_IN_USE from removing the credential with a link to the Job tab, which closes the dialog", async () => {
+    clearPrinterJobRequest();
+    setConnection.mockRejectedValueOnce(CONNECTION_IN_USE);
+    render(() => <PrinterConnectionPanel printer={withCredential} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove credentials" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove credentials" }).find((button) => dialog.contains(button))!);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Finish or abandon the pending printer operation");
+    fireEvent.click(screen.getByRole("button", { name: "Open the Job tab" }));
+    expect(printerJobRequest()).toEqual({ printerId: "prn-1" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("keeps the dialog open and shows the error when removal fails", async () => {

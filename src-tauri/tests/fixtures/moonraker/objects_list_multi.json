@@ -1,0 +1,29 @@
+{
+  "result": {
+    "objects": [
+      "gcode",
+      "webhooks",
+      "configfile",
+      "mcu",
+      "heaters",
+      "heater_bed",
+      "fan",
+      "gcode_move",
+      "print_stats",
+      "virtual_sdcard",
+      "display_status",
+      "pause_resume",
+      "query_endstops",
+      "stepper_enable",
+      "motion_report",
+      "toolhead",
+      "extruder",
+      "extruder1",
+      "extruder2",
+      "extruder3",
+      "idle_timeout",
+      "system_stats",
+      "manual_probe"
+    ]
+  }
+}
