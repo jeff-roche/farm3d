@@ -85,6 +85,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub queue_stream: queue::events::QueueStream,
     /// P7 D7: the dispatch driver's state and timings.
     pub jobs: Arc<jobs::JobServices<R>>,
+    /// P7 D6: the automatic evaluator's trigger channel and last run.
+    pub evaluator: Arc<queue::evaluator::Evaluator>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -148,6 +150,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             inventory_changes: inventory_changes(),
             queue_stream: queue::events::QueueStream::default(),
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
+            evaluator: Arc::default(),
             _lease: None,
         }
     }
@@ -330,15 +333,19 @@ pub fn start_host_ops_runtime<R: tauri::Runtime>(
 
 /// P7 D7: starts the dispatch driver for `services` — its first pass
 /// stages every Job a restart left unstaged, then it follows the host-ops
-/// change broadcast, Printer status, and inventory changes. Startup
-/// recovery (`jobs::recover_after_restart`) and `start_host_ops_runtime`
-/// must already have run. `build_runtime_services` calls it; tests call it
-/// the same way. A second call does nothing.
+/// change broadcast, Printer status, and inventory changes. Then P7 D6's
+/// automatic evaluator, whose first run waits for the driver's first pass
+/// and the host-ops startup pass (D4 "Recovery order"); it starts with the
+/// driver because every Job it assigns needs the driver to stage it.
+/// Startup recovery (`jobs::recover_after_restart`) and
+/// `start_host_ops_runtime` must already have run. `build_runtime_services`
+/// calls it; tests call it the same way. A second call does nothing.
 pub fn start_jobs_runtime<R: tauri::Runtime>(
     services: &Arc<RuntimeServices<R>>,
     app: &tauri::AppHandle<R>,
 ) {
     jobs::services::start(services, app);
+    queue::evaluator::start(services);
 }
 
 enum StartupFailure {
@@ -515,6 +522,7 @@ fn build_runtime_services<R: tauri::Runtime>(
         host_ops,
         queue_stream: queue::events::QueueStream::default(),
         jobs,
+        evaluator: Arc::default(),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());

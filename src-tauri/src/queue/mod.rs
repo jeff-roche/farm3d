@@ -12,6 +12,7 @@
 
 pub mod commands;
 pub mod eligibility;
+pub mod evaluator;
 pub mod events;
 pub mod repository;
 pub mod state;

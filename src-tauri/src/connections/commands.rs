@@ -452,6 +452,9 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     if committed.cleanup_pending {
         warnings.push(OperationWarning::cleanup());
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: resolve_printer(&services.catalog, &updated),
         warnings,
@@ -545,6 +548,9 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
             warnings.push(OperationWarning::cleanup());
         }
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: resolve_printer(&services.catalog, &updated),
         warnings,

@@ -108,6 +108,9 @@ pub struct JobServices<R: tauri::Runtime> {
     before_start_link: Mutex<Option<StartLinkHook>>,
     /// Completed resyncs (the first pass is the first), for tests.
     resyncs: std::sync::atomic::AtomicU64,
+    /// `true` once the driver's first pass has finished (D4 "Recovery
+    /// order": the evaluator's first run waits for it).
+    first_pass: tokio::sync::watch::Sender<bool>,
     /// `printing`/`paused` Jobs last published with `declareOutcome`, so
     /// crossing the mark republishes each once.
     declare_offered: Mutex<HashSet<String>>,
@@ -140,6 +143,7 @@ impl<R: tauri::Runtime> JobServices<R> {
             starting: Mutex::new(HashSet::new()),
             before_start_link: Mutex::new(None),
             resyncs: std::sync::atomic::AtomicU64::new(0),
+            first_pass: tokio::sync::watch::channel(false).0,
             declare_offered: Mutex::new(HashSet::new()),
             hinted: Mutex::new(HashMap::new()),
         }
@@ -161,6 +165,23 @@ impl<R: tauri::Runtime> JobServices<R> {
     /// pass is one, so `>= 1` means it has run.
     pub fn resyncs(&self) -> u64 {
         self.resyncs.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A receiver that reads `true` once the driver's first pass has
+    /// finished (D4 "Recovery order").
+    pub fn subscribe_first_pass(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.first_pass.subscribe()
+    }
+
+    /// A receiver of the stop signal [`JobServices::stop`] sends, so the
+    /// evaluator stops with the driver, as a crash would stop both.
+    pub(crate) fn subscribe_stop(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.stop.subscribe()
+    }
+
+    /// The app the runtime publishes to, once `start_jobs_runtime` ran.
+    pub(crate) fn app(&self) -> Option<&AppHandle<R>> {
+        self.app.get()
     }
 
     pub(crate) fn take_before_start_link(&self) -> Option<StartLinkHook> {
@@ -246,6 +267,7 @@ impl<R: tauri::Runtime> Driver<R> {
                 publish(&services, change);
             }
             resync(&services).await;
+            services.jobs.first_pass.send_replace(true);
         }
         // Created inside the task, on the runtime; the first tick fires at
         // once, and the first pass above already did its work.
@@ -347,6 +369,13 @@ fn publish<R: tauri::Runtime>(services: &RuntimeServices<R>, mut change: QueueCh
     if let Some(app) = services.jobs.app.get() {
         services.queue_stream.publish(app, &change);
         crate::spools::events::publish_ids(app, services, &change.spool_ids, &[]);
+    }
+    // D6 `JobChanged`: a Job that ended frees its Printer (and its entry
+    // left the Queue).
+    if change.jobs.iter().any(|job| job.state.is_terminal()) {
+        services
+            .evaluator
+            .poke(crate::queue::evaluator::Trigger::JobChanged);
     }
 }
 

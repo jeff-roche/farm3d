@@ -75,6 +75,7 @@ const POLL: Duration = Duration::from_millis(50);
 
 struct SimFactory {
     upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
+    tier: Arc<Mutex<EvidenceTier>>,
 }
 
 fn short_moonraker_timings() -> MoonrakerTimings {
@@ -116,7 +117,7 @@ impl CapabilityFactory for SimFactory {
                 CapabilityState::Supported {
                     evidence: CapabilityEvidence {
                         source: "tests/p7_dispatch_rig".to_string(),
-                        tier: EvidenceTier::Sim,
+                        tier: *self.tier.lock().unwrap(),
                         verified_host_versions: Vec::new(),
                     },
                 }
@@ -260,6 +261,9 @@ pub struct Roots {
     pub fake: FakeMoonraker,
     /// When set, the Printer's `upload` capability is unsupported.
     pub upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
+    /// The evidence tier every supported capability carries (`sim` by
+    /// default; Task 10 sets `readOnlyHardware` for an unproven adapter).
+    pub evidence_tier: Arc<Mutex<EvidenceTier>>,
 }
 
 impl Roots {
@@ -300,6 +304,7 @@ impl Roots {
             credentials,
             fake,
             upload_unsupported: Arc::default(),
+            evidence_tier: Arc::new(Mutex::new(EvidenceTier::Sim)),
         }
     }
 
@@ -396,17 +401,35 @@ pub fn boot_tuned(
     timings: JobTimings,
     job_clock: Option<Arc<dyn Clock>>,
 ) -> Running {
+    boot_prepared(roots, driver, initial, timings, job_clock, |_| {})
+}
+
+/// [`boot_tuned`], with `prepare` run over the built services before any
+/// runtime starts (Task 10: to install the evaluator's test hooks before
+/// its first run).
+pub fn boot_prepared(
+    roots: &Roots,
+    driver: Driver,
+    initial: PrinterStatus,
+    timings: JobTimings,
+    job_clock: Option<Arc<dyn Clock>>,
+    prepare: impl FnOnce(&Arc<RuntimeServices<MockRuntime>>),
+) -> Running {
     let storage = Arc::new(Storage::open(roots.paths.clone(), &roots.lease).unwrap());
     host_ops::recover_after_restart(&storage, SystemClock.now()).unwrap();
     let recovered = farm3d_lib::jobs::recover_after_restart(&storage, SystemClock.now()).unwrap();
     let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
         upload_unsupported: Arc::clone(&roots.upload_unsupported),
+        tier: Arc::clone(&roots.evidence_tier),
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let (app, webview, manager, services) = common::runtime_with(
         tauri::generate_handler![
             farm3d_lib::queue::commands::list_queue,
             farm3d_lib::queue::commands::add_to_queue,
+            farm3d_lib::queue::commands::update_queue_entry,
+            farm3d_lib::queue::commands::move_queue_entry,
+            farm3d_lib::queue::commands::remove_queue_entry,
             farm3d_lib::jobs::commands::assign_queue_entry,
             farm3d_lib::jobs::commands::stage_job,
             farm3d_lib::jobs::commands::start_job,
@@ -449,6 +472,7 @@ pub fn boot_tuned(
         sink.lock().unwrap().push(event.payload().to_string());
     });
     manager.seed(PRINTER, initial);
+    prepare(&services);
     farm3d_lib::start_host_ops_runtime(&services, app.handle());
     services.jobs.set_recovered(recovered);
     if driver == Driver::Started {

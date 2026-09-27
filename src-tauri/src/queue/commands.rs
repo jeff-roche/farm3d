@@ -29,6 +29,7 @@ use crate::spools::weight::grams_to_mg_round_up;
 use crate::RuntimeServices;
 
 use super::eligibility;
+use super::evaluator::{LastRun, Trigger};
 use super::repository::{self, NewEntries};
 use super::state::EntryEvent;
 use super::world::{facts_for, LiveWorld, World, WorldReader};
@@ -55,8 +56,23 @@ fn ready<R: tauri::Runtime>(
 
 /// Publishes a committed change: its rows on the `queue` stream, then the
 /// Spools whose reservations it changed on the inventory stream (which
-/// also sends the one `InventoryChange`). Never for a replay.
+/// also sends the one `InventoryChange`), then one evaluator poke (spec
+/// "Commands"). Never for a replay.
 pub(crate) fn publish<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    services: &RuntimeServices<R>,
+    change: &QueueChange,
+) {
+    publish_rows(app, services, change);
+    services.evaluator.poke(if change.jobs.is_empty() {
+        Trigger::QueueChanged
+    } else {
+        Trigger::JobChanged
+    });
+}
+
+/// [`publish`] without the evaluator poke: the evaluator's own assignments.
+pub(crate) fn publish_rows<R: tauri::Runtime>(
     app: &AppHandle<R>,
     services: &RuntimeServices<R>,
     change: &QueueChange,
@@ -152,6 +168,7 @@ fn read_snapshot(
     now: &str,
     stream_id: String,
     snapshot_sequence: JsSafeInteger,
+    last_run: Option<LastRun>,
 ) -> Result<QueueSnapshot, RepositoryError> {
     let mut entries = repository::list_open(tx)?;
     entries.extend(repository::list_history(tx, HISTORY_LIMIT)?);
@@ -168,14 +185,33 @@ fn read_snapshot(
     }
     let requirements = jobs_repository::open_requirements(tx)?;
 
-    // Ruling R3: until the evaluator runs, each `queued` entry's summary
-    // is computed here, synchronously, over the same rows.
-    let world = World::read(tx, reader)?;
+    // D6: once the evaluator has finished a run, its summaries and
+    // conclusion. Ruling R3: before that, every `queued` entry's summary is
+    // computed here, synchronously, over the same rows, and so is the
+    // summary of an entry queued since the last run (the run its trigger
+    // asked for will publish its own). Either way there is exactly one
+    // summary per `queued` entry, in position order.
+    let (mut cached, next_automatic_action) = match last_run {
+        Some(last) => (last.summaries, last.next),
+        None => (Vec::new(), NextAutomaticAction::EvaluatorNotRunning),
+    };
+    let mut world = None;
     let mut eligibility = Vec::new();
     for entry in entries
         .iter()
         .filter(|entry| entry.state == QueueEntryState::Queued)
     {
+        if let Some(index) = cached
+            .iter()
+            .position(|summary| summary.entry_id == entry.id)
+        {
+            eligibility.push(cached.swap_remove(index));
+            continue;
+        }
+        let world = match &world {
+            Some(world) => world,
+            None => world.insert(World::read(tx, reader)?),
+        };
         let facts = facts_for(tx, entry)?;
         let views = world.views(entry, None);
         let evaluated = eligibility::evaluate(&world.input(entry, &facts, &views), now);
@@ -188,14 +224,13 @@ fn read_snapshot(
         jobs,
         requirements,
         eligibility,
-        // Ruling R3: the evaluator (a later task) replaces this with its
-        // last run's conclusion.
-        next_automatic_action: NextAutomaticAction::EvaluatorNotRunning,
+        next_automatic_action,
     })
 }
 
 /// Spec "Commands": the backfill. The sequence is read before the rows,
-/// so a change the snapshot misses carries a larger sequence.
+/// so a change the snapshot misses carries a larger sequence. Eligibility
+/// comes from the evaluator's last run once there is one (D6, ruling R3).
 #[tauri::command]
 pub async fn list_queue<R: tauri::Runtime>(
     _app: AppHandle<R>,
@@ -207,6 +242,7 @@ pub async fn list_queue<R: tauri::Runtime>(
     let reader = LiveWorld::of(&services);
     let now = now_rfc3339();
     let stream_id = services.queue_stream.stream_id().to_string();
+    let last_run = services.evaluator.last_run();
     let snapshot = services
         .storage
         .read_transaction(|tx| {
@@ -216,6 +252,7 @@ pub async fn list_queue<R: tauri::Runtime>(
                 &now,
                 stream_id,
                 snapshot_sequence,
+                last_run,
             ))
         })
         .map_err(storage_error)?

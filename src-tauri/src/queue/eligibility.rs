@@ -462,7 +462,7 @@ fn material_family_wire_name(family: MaterialFamily) -> &'static str {
     }
 }
 
-fn no_compatible_spool_message(facts: &SliceFacts) -> String {
+pub(crate) fn no_compatible_spool_message(facts: &SliceFacts) -> String {
     match (
         facts.material_family.value(),
         facts.filament_diameter_mm.value(),
@@ -480,7 +480,7 @@ fn no_compatible_spool_message(facts: &SliceFacts) -> String {
 /// D5's `INSUFFICIENT_MATERIAL` message states grams, not raw milligrams
 /// (`"No matching Spool has <estimate> g available."`) — `detail` still
 /// carries the best `availableMg` as a raw mg figure.
-fn insufficient_material_message(estimate_mg: i64) -> String {
+pub(crate) fn insufficient_material_message(estimate_mg: i64) -> String {
     format!("No matching Spool has {} g available.", estimate_mg / 1000)
 }
 

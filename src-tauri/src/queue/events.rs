@@ -4,7 +4,7 @@
 //! `EventEnvelope`, on this stream's own id and sequence (as
 //! `host_ops/events.rs` does): `queue.entry.changed`, `queue.job.changed`,
 //! `queue.requirement.changed`, and `queue.eligibility.changed` (the
-//! evaluator's, a later task). The payload is a tagged union, as
+//! automatic evaluator's, `queue::evaluator`). The payload is a tagged union, as
 //! `InventoryEventPayload` is.
 //!
 //! [`QueueStream::publish`] emits one event per changed row — entries
@@ -166,6 +166,30 @@ impl QueueStream {
                 ),
             );
         }
+    }
+
+    /// D6: the evaluator's `queue.eligibility.changed`, with the full set
+    /// of summaries and the run's `nextAutomaticAction`. The evaluator
+    /// calls it after a run whose conclusion changed.
+    pub fn publish_eligibility<R: tauri::Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        summaries: &[EligibilitySummary],
+        next_automatic_action: &NextAutomaticAction,
+    ) {
+        let _ordered = self.lock();
+        let _ = app.emit(
+            STATUS_EVENT,
+            self.envelope(
+                QueueEventType::EligibilityChanged,
+                "queue",
+                "eligibility",
+                QueueEventPayload::EligibilityChanged {
+                    summaries: summaries.to_vec(),
+                    next_automatic_action: next_automatic_action.clone(),
+                },
+            ),
+        );
     }
 
     fn envelope(
