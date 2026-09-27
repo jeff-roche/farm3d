@@ -1,4 +1,5 @@
-//! P7 spec D4 "Restart matrix", Task 8a's rows (R1–R8, R15–R17, R19):
+//! P7 spec D4 "Restart matrix", Task 8a's rows (R1–R8, R15–R17, R19) and
+//! Task 8b's tracker rows (R9–R11, R18, R20–R22):
 //! each runs to its crash point — a P6 fault injection, a stopped
 //! dispatch driver, or a transaction that never commits — then rebuilds
 //! `RuntimeServices` over the same roots (`p6_tracer.rs`'s pattern: host-ops
@@ -7,7 +8,8 @@
 //! plus FakeMoonraker's request counts: no duplicate upload and no
 //! unconfirmed or second start.
 //!
-//! The tracker rows (R9–R14, R18, R20–R22) belong to Tasks 8b and 9.
+//! Task 9 adds the material assertions to R10, R11, and R20, and rows
+//! R12–R14.
 
 mod common;
 mod p7_dispatch_rig;
@@ -25,7 +27,14 @@ use farm3d_lib::printers::operational::OperationalState;
 use farm3d_lib::printers::StartSafety;
 use farm3d_lib::queue::eligibility::AssignMode;
 use farm3d_lib::queue::world::LiveWorld;
-use p7_dispatch_rig::{boot, boot_with, connecting, id, Driver, Roots, Running, SLR};
+use common::fake_moonraker::FakeMoonraker;
+use farm3d_lib::host_ops::Clock;
+use farm3d_lib::printers::repository::PrinterRepository;
+use p7_dispatch_rig::{
+    boot, boot_tuned, boot_with, connecting, fast, id, status_from, status_of, Driver,
+    ManualClock, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR,
+};
+use std::sync::Arc;
 use serde_json::{json, Value};
 
 fn roots() -> Roots {
@@ -587,4 +596,327 @@ fn restart_after_unattended_start_reply_lost_never_starts_again() {
         app.ops(&job_id).iter().filter(|op| op.kind == HostOperationKind::Start).count(),
         1
     );
+}
+
+// --- Task 8b: the tracker rows ------------------------------------------------------
+
+fn fast_boot(roots: &Roots) -> Running {
+    boot_tuned(roots, Driver::Started, status_of(OperationalState::Ready), fast(), None)
+}
+
+fn requirements(app: &Running, job_id: &str) -> Vec<Value> {
+    app.history(job_id)["requirements"].as_array().unwrap().clone()
+}
+
+/// R9: a restart while printing. The Job stays printing, keeps its last
+/// persisted progress, and the tracker's first pass pins it if it was
+/// unpinned — once.
+#[test]
+fn restart_during_printing_keeps_tracking() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let job_id = app.awaiting_start();
+    // The start's outcome is applied only by the next boot's recovery, so
+    // the Job restarts printing and unpinned.
+    app.services.jobs.stop();
+    settle();
+    app.start("op-start", &job_id, "ready").unwrap();
+    app.wait_resolved(
+        &op_of_kind(&app, &job_id, HostOperationKind::Start).id,
+        HostOperationState::Succeeded,
+    );
+    crash(app);
+
+    let app = boot(&roots, Driver::Off);
+    assert_eq!(app.job(&job_id)["state"], "printing");
+    assert_eq!(app.job_column(&job_id, "host_job_id"), None, "unpinned");
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_until("pinned", || app.count_events(&job_id, "hostJobPinned") == 1);
+    roots.fake.set_progress(0.42);
+    app.mirror(&roots.fake);
+    app.wait_job_until(&job_id, |job| job["maxProgressPct"] == 42);
+    let pin = app.job_column(&job_id, "host_job_id");
+    assert!(pin.is_some());
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    app.wait_passes(3);
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "printing");
+    assert_eq!(job["maxProgressPct"], 42, "the last persisted progress");
+    assert_eq!(app.job_column(&job_id, "host_job_id"), pin);
+    assert_eq!(app.count_events(&job_id, "hostJobPinned"), 1, "pinned once");
+    assert_eq!(entry_of(&app, &job_id)["state"], "assigned");
+    assert_eq!(reservation_state(&app, &job_id), "active");
+    assert_eq!(roots.starts(), 1);
+    assert_eq!(roots.uploads(), 1);
+}
+
+/// R10: the host completed while farm3d was closed. The first tracker
+/// pass completes the Job once and closes its entry. (Task 9 asserts the
+/// estimate is consumed once.)
+#[test]
+fn restart_after_host_completed_completes_once() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    crash(app);
+    roots.fake.finish_print("completed");
+
+    let app = fast_boot(&roots);
+    let job = app.wait_job(&job_id, "completed");
+    assert_eq!(job["settlement"], "settled");
+    assert_eq!(job["settlementMethod"], "estimated");
+    let entry = entry_of(&app, &job_id);
+    assert_eq!(entry["state"], "closed");
+    assert_eq!(entry["closeReason"], "completed");
+    assert!(requirements(&app, &job_id).is_empty());
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    settle();
+    assert_eq!(app.job(&job_id)["state"], "completed");
+    assert_eq!(app.count_events(&job_id, "completed"), 1, "completed once");
+    assert_eq!(roots.starts(), 1);
+    assert_eq!(roots.uploads(), 1);
+}
+
+/// R11: the host cancelled or failed while farm3d was closed. (Task 9
+/// asserts the reservation is `unresolved` and one `materialReconciliation`
+/// requirement is `pending`.)
+#[test]
+fn restart_after_host_failed_opens_one_requirement() {
+    for (status, state, cancel_reason) in [
+        ("cancelled", "cancelled", json!("hostCancelled")),
+        ("klippy_shutdown", "failed", Value::Null),
+    ] {
+        let roots = roots();
+        let app = fast_boot(&roots);
+        let job_id = app.printing();
+        crash(app);
+        roots.fake.finish_print(status);
+
+        let app = fast_boot(&roots);
+        let job = app.wait_job(&job_id, state);
+        assert_eq!(job["cancelReason"], cancel_reason, "{status}");
+        assert_eq!(job["settlement"], "pending", "{status}");
+        let entry = entry_of(&app, &job_id);
+        assert_eq!(entry["state"], "closed");
+        assert_eq!(entry["closeReason"], state);
+        assert!(
+            requirements(&app, &job_id)
+                .iter()
+                .all(|requirement| requirement["kind"] != "jobOutcomeUnknown"),
+            "{status}"
+        );
+        crash(app);
+
+        let app = fast_boot(&roots);
+        app.wait_first_pass();
+        settle();
+        assert_eq!(app.job(&job_id)["state"], state);
+        assert_eq!(app.count_events(&job_id, state), 1, "{status}: ended once");
+        assert_eq!(roots.starts(), 1);
+    }
+}
+
+/// R18: the cancel was sent and its reply lost. After the restart the
+/// cancel op is uncertain; the tracker proves `cancelled{cancelledByOperator}`
+/// from history, once; the op's own resolution later only clears the
+/// Job's active op.
+#[test]
+fn restart_after_cancel_reply_lost_ends_cancelled_once() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    // The crash point: the cancel was sent (the host applied it) and
+    // nothing after the send ran, the tracker included.
+    app.services.jobs.stop();
+    settle();
+    let fired = app
+        .services
+        .host_ops
+        .inject_fault(FaultPoint::AfterSend, FaultAction::Crash);
+    app.job_command("cancel_job", "op-cancel", &job_id).unwrap();
+    wait_fired(fired);
+    let cancel = op_of_kind(&app, &job_id, HostOperationKind::Cancel);
+    assert_eq!(app.job(&job_id)["state"], "printing");
+    crash(app);
+
+    let app = fast_boot(&roots);
+    let job = app.wait_job(&job_id, "cancelled");
+    assert_eq!(job["cancelReason"], "cancelledByOperator");
+    assert_eq!(entry_of(&app, &job_id)["closeReason"], "cancelled");
+    if app.row(&cancel.id).state == HostOperationState::Uncertain {
+        let _ = app.call("reconcile_host_operation", json!({"hostOperationId": cancel.id}));
+    }
+    app.wait_resolved(&cancel.id, HostOperationState::Succeeded);
+    let job = app.wait_job_until(&job_id, |job| job["activeHostOperationId"].is_null());
+    assert_eq!(job["state"], "cancelled");
+    assert_eq!(app.count_events(&job_id, "cancelled"), 1);
+    assert_eq!(app.count_events(&job_id, "controlFailed"), 0);
+    assert_eq!(roots.count_requests("POST", "/printer/print/cancel"), 1);
+    assert_eq!(roots.starts(), 1);
+}
+
+/// R20: after a declare committed, a restart changes nothing.
+#[test]
+fn restart_after_declare_is_stable() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.with_state(|state| state.history.clear());
+    app.wait_job(&job_id, "outcomeUnknown");
+    app.declare("op-declare", &job_id, "failed").unwrap();
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    settle();
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "failed");
+    assert_eq!(job["settlement"], "pending");
+    assert_eq!(job["cancelReason"], Value::Null);
+    let entry = entry_of(&app, &job_id);
+    assert_eq!(entry["state"], "closed");
+    assert_eq!(entry["closeReason"], "failed");
+    let outcome_unknown: Vec<Value> = requirements(&app, &job_id)
+        .into_iter()
+        .filter(|requirement| requirement["kind"] == "jobOutcomeUnknown")
+        .collect();
+    assert_eq!(outcome_unknown.len(), 1);
+    assert_eq!(outcome_unknown[0]["status"], "resolved");
+    assert_eq!(
+        outcome_unknown[0]["resolution"],
+        json!({"kind": "declared", "outcome": "failed"})
+    );
+    assert_eq!(app.count_events(&job_id, "declaredFailed"), 1);
+    // The same operationId replays; nothing moves.
+    let replayed = app.declare("op-declare", &job_id, "failed").unwrap();
+    assert_eq!(replayed["jobs"][0]["state"], "failed");
+    assert_eq!(app.count_events(&job_id, "declaredFailed"), 1);
+    assert_eq!(roots.starts(), 1);
+}
+
+/// R21: while history polls can't run (the host is gone, though status
+/// still streams), `host_unreachable_since` is set, kept across a restart,
+/// and never cleared by status; 30 minutes after it, a declare from
+/// `printing` is allowed. Only a successful history poll clears it.
+#[test]
+fn restart_keeps_host_unreachable_since_and_allows_declare_after_30_minutes() {
+    let roots = roots();
+    let clock = ManualClock::new();
+    let clocked = |roots: &Roots| {
+        boot_tuned(
+            roots,
+            Driver::Started,
+            status_of(OperationalState::Ready),
+            fast(),
+            Some(Arc::clone(&clock) as Arc<dyn Clock>),
+        )
+    };
+    let app = clocked(&roots);
+    let job_id = app.printing();
+    roots.fake.set_reachable(false);
+    let since = app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_string())
+        ["hostUnreachableSince"]
+        .clone();
+    crash(app);
+
+    clock.advance(Duration::from_secs(10 * 60));
+    let mut streaming = status_from(&roots.fake);
+    streaming.telemetry.job_name = Some(HOST_PATH.to_string());
+    let app = boot_tuned(
+        &roots,
+        Driver::Started,
+        streaming,
+        fast(),
+        Some(Arc::clone(&clock) as Arc<dyn Clock>),
+    );
+    app.wait_first_pass();
+    app.wait_passes(2);
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "printing");
+    assert_eq!(job["hostUnreachableSince"], since, "kept across the restart");
+    assert!(!job["allowedActions"].as_array().unwrap().contains(&json!("declareOutcome")));
+
+    clock.advance(Duration::from_secs(20 * 60));
+    app.wait_job_until(&job_id, |job| {
+        job["allowedActions"].as_array().unwrap().contains(&json!("declareOutcome"))
+    });
+    crash(app);
+
+    // Still allowed after another restart, then declared from printing.
+    let app = clocked(&roots);
+    app.wait_first_pass();
+    let declared = app.declare("op-declare", &job_id, "cancelled").unwrap();
+    assert_eq!(declared["jobs"][0]["state"], "cancelled");
+    assert_eq!(declared["jobs"][0]["cancelReason"], "operatorDeclared");
+    assert_eq!(declared["jobs"][0]["hostUnreachableSince"], Value::Null);
+    crash(app);
+    roots.fake.set_reachable(true);
+    let app = clocked(&roots);
+    app.wait_first_pass();
+    assert_eq!(app.job(&job_id)["state"], "cancelled");
+    assert_eq!(roots.starts(), 1);
+    assert_eq!(roots.count_requests("POST", "/printer/print/cancel"), 0, "a declare sends nothing");
+}
+
+/// R22: a Connection endpoint change during printing, then a restart. The
+/// tracker reads the new endpoint, where a same-named job is never pinned;
+/// every poll is inconclusive, so the Job becomes outcomeUnknown. Nothing
+/// is written to either endpoint.
+#[test]
+fn endpoint_change_during_printing_never_pins_a_job_on_the_new_host() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let job_id = app.awaiting_start();
+    app.services.jobs.stop();
+    settle();
+    app.start("op-start", &job_id, "ready").unwrap();
+    app.wait_resolved(
+        &op_of_kind(&app, &job_id, HostOperationKind::Start).id,
+        HostOperationState::Succeeded,
+    );
+    let other = FakeMoonraker::start();
+    other.with_state(|state| {
+        state.api_key = Some(SECRET.to_string());
+        state.next_job_id = 900;
+        state.print_state = "printing".to_string();
+        state.print_filename = HOST_PATH.to_string();
+        state.push_job(HOST_PATH, "in_progress");
+    });
+    let printers = PrinterRepository::new(Arc::clone(&app.storage));
+    let printer = printers.get(PRINTER).unwrap().unwrap();
+    let mut config = other.config();
+    config.credential_ref = printer.connection.as_ref().unwrap().credential_ref.clone();
+    printers
+        .set_connection(PRINTER, printer.revision, Some(config), None, "test")
+        .unwrap();
+    crash(app);
+    let old_posts = roots.fake.requests().iter().filter(|r| r.method == "POST").count();
+
+    let app = boot_tuned(&roots, Driver::Started, status_from(&other), fast(), None);
+    let job = app.wait_job(&job_id, "outcomeUnknown");
+    assert_eq!(app.job_column(&job_id, "host_job_id"), None, "never pinned");
+    assert_eq!(app.count_events(&job_id, "hostJobPinned"), 0);
+    assert_eq!(job["hostUnreachableSince"], Value::Null);
+    assert_eq!(
+        requirements(&app, &job_id)
+            .iter()
+            .filter(|requirement| requirement["kind"] == "jobOutcomeUnknown")
+            .count(),
+        1
+    );
+    assert!(other.requests().iter().any(|request| request.path() == "/server/history/list"));
+    assert_eq!(other.requests().iter().filter(|r| r.method == "POST").count(), 0);
+    assert_eq!(
+        roots.fake.requests().iter().filter(|r| r.method == "POST").count(),
+        old_posts
+    );
+    assert_eq!(roots.starts(), 1);
 }
