@@ -692,19 +692,45 @@ fn events_carry_no_credential() {
             "no endpoint in Queue or Job rows"
         );
     }
-    let persisted: String = rig
-        .storage
+    let persisted = persisted_job_text(&rig);
+    assert!(!persisted.contains(SECRET));
+    assert!(!persisted.contains(credential_ref));
+}
+
+/// Every Job's snapshot and every `job_events` row's detail and operation
+/// id, as one text for the credential scan.
+fn persisted_job_text(rig: &Rig) -> String {
+    rig.storage
         .read(|connection| {
             connection.query_row(
                 "SELECT (SELECT group_concat(printer_snapshot_json) FROM jobs)
-                     || (SELECT group_concat(COALESCE(detail_json, '') || operation_id) FROM job_events)",
+                     || (SELECT group_concat(COALESCE(detail_json, '') || COALESCE(operation_id, '')) FROM job_events)",
                 [],
                 |row| row.get(0),
             )
         })
+        .unwrap()
+}
+
+/// The scan above must read a `job_events` row whose `operation_id` is
+/// NULL (the driver's and the tracker's writes), not skip it.
+#[test]
+fn the_credential_scan_reads_job_events_without_an_operation_id() {
+    let rig = Rig::new();
+    let spool = rig.spool(1_000_000);
+    let entry = id(&rig.add("op-add", 1)[0]);
+    let job = id(&rig.assign("op-a", &entry, PRINTER_A, &spool).unwrap()["jobs"][0]);
+    rig.storage
+        .write_repo(|tx| {
+            tx.execute(
+                "INSERT INTO job_events (id, job_id, sequence, kind, to_state, detail_json, at)
+                 VALUES ('jev-canary', ?1, 99, 'paused', 'paused', '{\"canary\":\"scan-canary\"}', ?2)",
+                [job.as_str(), NOW],
+            )?;
+            Ok(())
+        })
         .unwrap();
-    assert!(!persisted.contains(SECRET));
-    assert!(!persisted.contains(credential_ref));
+    assert!(persisted_job_text(&rig).contains("scan-canary"));
 }
 
 // --- Task 8a: handoffs and the dispatch driver ---------------------------------
