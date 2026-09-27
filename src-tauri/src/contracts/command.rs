@@ -1346,6 +1346,38 @@ impl CommandError {
         error
     }
 
+    /// P7 D7 `JOB_START_BLOCKED`: the first blocker's message and
+    /// recovery, with every blocker in `details`.
+    pub fn job_start_blocked(job_id: &str, blockers: &[crate::queue::Blocker]) -> Self {
+        let first = blockers.first();
+        let message = first
+            .map(|blocker| blocker.message.clone())
+            .unwrap_or_else(|| "This Job can't start yet.".to_string());
+        let recovery = first.and_then(|blocker| blocker.recovery).into_iter().collect();
+        let mut error = Self::typed(ErrorCode::JobStartBlocked, message, recovery, false)
+            .with_string_details(&[("jobId", job_id)]);
+        let blockers = serde_json::to_value(blockers)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
+        error
+            .details
+            .get_or_insert_with(BTreeMap::new)
+            .insert("blockers".to_string(), blockers);
+        error
+    }
+
+    /// P7 D7 `JOB_NOT_ON_PRINTER`.
+    pub fn job_not_on_printer(job_id: &str, printer_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::JobNotOnPrinter,
+            "The printer is printing a different file than this Job's.",
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[("jobId", job_id), ("printerId", printer_id)])
+    }
+
     /// P7 D2 `JOB_ALREADY_RETRIED`.
     pub fn job_already_retried(job_id: &str, retry_entry_id: &str) -> Self {
         Self::typed(
@@ -1519,6 +1551,9 @@ impl CommandError {
             } => Self::job_action_not_allowed(&job_id, action, state),
             RepositoryError::JobActive { printer_id, job_id } => {
                 Self::job_active(&printer_id, &job_id)
+            }
+            RepositoryError::JobNotOnPrinter { job_id, printer_id } => {
+                Self::job_not_on_printer(&job_id, &printer_id)
             }
             RepositoryError::AssignmentBlocked {
                 entry_id,
@@ -2070,5 +2105,38 @@ mod tests {
             event: JobEventKind::Completed,
         });
         assert_eq!(tracker.code, ErrorCode::Internal);
+    }
+
+    /// P7 "Error codes": `JOB_NOT_ON_PRINTER` and `JOB_START_BLOCKED`.
+    #[test]
+    fn p7_dispatch_errors_carry_their_spec_shapes() {
+        let not_on = CommandError::from_repository(RepositoryError::JobNotOnPrinter {
+            job_id: "job-1".to_string(),
+            printer_id: "prn-1".to_string(),
+        });
+        assert_eq!(not_on.code, ErrorCode::JobNotOnPrinter);
+        assert_eq!(
+            not_on.message,
+            "The printer is printing a different file than this Job's."
+        );
+        assert_eq!(not_on.recovery, vec![RecoveryCode::Reload]);
+        let details = not_on.details.unwrap();
+        assert_eq!(details.get("jobId"), Some(&JsonValue::String("job-1".to_string())));
+        assert_eq!(details.get("printerId"), Some(&JsonValue::String("prn-1".to_string())));
+
+        let blocker = crate::queue::Blocker {
+            code: crate::queue::BlockerCode::SpoolNotLoaded,
+            message: "Awaiting material: load Spool #3 on Alpha.".to_string(),
+            detail: None,
+            recovery: Some(RecoveryCode::LoadSpool),
+            printer_ids: vec!["prn-1".to_string()],
+        };
+        let blocked = CommandError::job_start_blocked("job-1", std::slice::from_ref(&blocker));
+        assert_eq!(blocked.code, ErrorCode::JobStartBlocked);
+        assert_eq!(blocked.message, blocker.message);
+        assert_eq!(blocked.recovery, vec![RecoveryCode::LoadSpool]);
+        let details = serde_json::to_value(blocked.details.unwrap()).unwrap();
+        assert_eq!(details["jobId"], "job-1");
+        assert_eq!(details["blockers"][0]["code"], "SPOOL_NOT_LOADED");
     }
 }

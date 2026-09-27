@@ -26,7 +26,10 @@ use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
 };
-use jobs::commands::{assign_queue_entry, cancel_job, get_job_history, release_job, retry_job};
+use jobs::commands::{
+    assign_queue_entry, cancel_job, get_job_history, pause_job, release_job, resume_job, retry_job,
+    stage_job, start_job,
+};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
@@ -80,6 +83,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub host_ops: Arc<host_ops::HostOperationServices<R>>,
     /// P7: the `queue` event stream's id and sequence.
     pub queue_stream: queue::events::QueueStream,
+    /// P7 D7: the dispatch driver's state and timings.
+    pub jobs: Arc<jobs::JobServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -142,12 +147,13 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             inventory_stream: spools::events::InventoryStream::default(),
             inventory_changes: inventory_changes(),
             queue_stream: queue::events::QueueStream::default(),
+            jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 100] = [
+pub const COMMAND_NAMES: [&str; 104] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -248,6 +254,10 @@ pub const COMMAND_NAMES: [&str; 100] = [
     "retry_job",
     "cancel_job",
     "get_job_history",
+    "stage_job",
+    "start_job",
+    "pause_job",
+    "resume_job",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -315,6 +325,19 @@ pub fn start_host_ops_runtime<R: tauri::Runtime>(
     services.host_ops.start(app, &services.credentials);
 }
 
+/// P7 D7: starts the dispatch driver for `services` — its first pass
+/// stages every Job a restart left unstaged, then it follows the host-ops
+/// change broadcast, Printer status, and inventory changes. Startup
+/// recovery (`jobs::recover_after_restart`) and `start_host_ops_runtime`
+/// must already have run. `build_runtime_services` calls it; tests call it
+/// the same way. A second call does nothing.
+pub fn start_jobs_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    jobs::services::start(services, app);
+}
+
 enum StartupFailure {
     Fatal,
     Recoverable(contracts::command::CommandError),
@@ -357,7 +380,7 @@ fn startup_error(error: persistence::StorageError) -> StartupFailure {
 fn build_runtime_services<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     retained_lease: &Arc<std::sync::Mutex<Option<persistence::MetadataRootLease>>>,
-) -> Result<RuntimeServices<R>, StartupFailure> {
+) -> Result<Arc<RuntimeServices<R>>, StartupFailure> {
     let metadata_root = app
         .path()
         .app_config_dir()
@@ -399,6 +422,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     // have been sent becomes `uncertain`; a `reconciling` row goes back to
     // `uncertain`. Before any command is served or any attempt runs.
     host_ops::recover_after_restart(&storage, chrono::Utc::now()).map_err(startup_error)?;
+    // P7 D4: a Job whose linked Host Operation moved while farm3d was
+    // closed catches up with it, before any command is served.
+    let recovered_jobs =
+        jobs::recover_after_restart(&storage, chrono::Utc::now()).map_err(startup_error)?;
 
     let resource_path = app
         .path()
@@ -467,7 +494,9 @@ fn build_runtime_services<R: tauri::Runtime>(
         Arc::clone(&content),
         Arc::clone(&manager),
     ));
-    let services = RuntimeServices {
+    let jobs = Arc::new(jobs::JobServices::new(jobs::JobTimings::default()));
+    jobs.set_recovered(recovered_jobs);
+    let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
         manager,
@@ -482,12 +511,15 @@ fn build_runtime_services<R: tauri::Runtime>(
         slicing,
         host_ops,
         queue_stream: queue::events::QueueStream::default(),
+        jobs,
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
-    };
+    });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
     start_slicing_runtime(&services, app);
     // P6: after `restore_persisted_connections`, the first reconcile pass.
     start_host_ops_runtime(&services, app);
+    // P7 D4: then the dispatch driver.
+    start_jobs_runtime(&services, app);
     // D2: the startup probe runs in the background; `get_slicer_runtime`
     // meanwhile waits on the same probe rather than starting another.
     services.slicing.probe_in_background();
@@ -600,7 +632,7 @@ pub fn run() {
             let retained_lease = Arc::new(std::sync::Mutex::new(None));
             match build_runtime_services(&handle, &retained_lease) {
                 Ok(services) => {
-                    app.manage(bootstrap::BootstrapState::ready_with(Arc::new(services)));
+                    app.manage(bootstrap::BootstrapState::ready_with(services));
                     Ok(())
                 }
                 Err(StartupFailure::Recoverable(error)) => {
@@ -608,7 +640,6 @@ pub fn run() {
                     let retry_lease = Arc::clone(&retained_lease);
                     app.manage(bootstrap::BootstrapState::failed(error, move || {
                         build_runtime_services(&retry_handle, &retry_lease)
-                            .map(Arc::new)
                             .map_err(|failure| match failure {
                                 StartupFailure::Recoverable(error) => error,
                                 StartupFailure::Fatal => contracts::command::CommandError::internal(),
@@ -723,6 +754,10 @@ pub fn run() {
             retry_job,
             cancel_job,
             get_job_history,
+            stage_job,
+            start_job,
+            pause_job,
+            resume_job,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

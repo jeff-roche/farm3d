@@ -1,8 +1,8 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
-    // P7 Task 6's 11.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11);
+    // P7's: Task 6's 11 and Task 8a's 4.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -106,6 +106,10 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "retry_job",
             "cancel_job",
             "get_job_history",
+            "stage_job",
+            "start_job",
+            "pause_job",
+            "resume_job",
         ]
     );
 }
@@ -260,6 +264,10 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::jobs::commands::retry_job,
             farm3d_lib::jobs::commands::cancel_job,
             farm3d_lib::jobs::commands::get_job_history,
+            farm3d_lib::jobs::commands::stage_job,
+            farm3d_lib::jobs::commands::start_job,
+            farm3d_lib::jobs::commands::pause_job,
+            farm3d_lib::jobs::commands::resume_job,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -548,6 +556,13 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ("retry_job", json!({"operationId": "o", "jobId": "j"})),
         ("cancel_job", json!({"operationId": "o", "jobId": "j"})),
         ("get_job_history", json!({"jobId": "j"})),
+        ("stage_job", json!({"operationId": "o", "jobId": "j"})),
+        (
+            "start_job",
+            json!({"operationId": "o", "jobId": "j", "priorState": "ready", "acknowledgement": "bedClear"}),
+        ),
+        ("pause_job", json!({"operationId": "o", "jobId": "j"})),
+        ("resume_job", json!({"operationId": "o", "jobId": "j"})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

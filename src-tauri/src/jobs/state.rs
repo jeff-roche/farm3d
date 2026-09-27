@@ -10,7 +10,11 @@
 //! module's [`settlement_after`] gives only the `Settlement` half of
 //! that, since D3's settlement table is keyed on the event alone.
 
-use super::{JobEventKind, JobState, Settlement};
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+
+use super::{CancelReason, Job, JobAction, JobEventKind, JobState, Settlement};
 
 /// `transition`'s rejection: `event` never legally fires from `from`. The
 /// design spec's D3 splits the code an illegal pair maps to by who raised
@@ -111,13 +115,246 @@ pub fn settlement_after(event: JobEventKind) -> Option<Settlement> {
     }
 }
 
+/// D3's "Job actions by state" table: what `Job.allowedActions` lists, in
+/// `JobAction` order. `has_successor` is whether the Job's Queue Entry
+/// already has a retry (or release replacement); `now` and
+/// `declare_after` decide the "unreachable ≥ 30 min" rows (D7, D9).
+pub fn allowed_actions(
+    job: &Job,
+    has_successor: bool,
+    now: DateTime<Utc>,
+    declare_after: Duration,
+) -> Vec<JobAction> {
+    use JobAction::*;
+
+    let unreachable_long_enough = || {
+        job.host_unreachable_since
+            .as_deref()
+            .and_then(|since| DateTime::parse_from_rfc3339(since).ok())
+            .and_then(|since| {
+                chrono::Duration::from_std(declare_after)
+                    .ok()
+                    .map(|after| since.with_timezone(&Utc) + after <= now)
+            })
+            .unwrap_or(false)
+    };
+    let settleable = matches!(job.settlement, Settlement::Pending | Settlement::Deferred);
+
+    let mut actions = match job.state {
+        // D3: in `assigned`, `stage` is offered while `lastFailure` is set
+        // or no stage was handed off yet. Every failed or refused stage
+        // sets `lastFailure`, and only `StageSucceeded` (which leaves
+        // `assigned`) clears it, so an `assigned` Job always qualifies.
+        JobState::Assigned => vec![Stage, Cancel, Release],
+        JobState::Staging | JobState::Starting => vec![],
+        JobState::AwaitingStart => vec![Stage, Start, Cancel, Release],
+        JobState::Printing => vec![Pause, Cancel],
+        JobState::Paused => vec![Resume, Cancel],
+        JobState::OutcomeUnknown => vec![DeclareOutcome],
+        JobState::Completed => {
+            let mut actions = Vec::new();
+            if !has_successor {
+                actions.push(Retry);
+            }
+            if !job.corrected {
+                actions.push(CorrectMaterial);
+            }
+            actions
+        }
+        JobState::Failed | JobState::Cancelled => {
+            let mut actions = Vec::new();
+            let released = job.cancel_reason == Some(CancelReason::ReleasedBeforeStart);
+            if !has_successor && !released {
+                actions.push(Retry);
+            }
+            if settleable {
+                actions.push(SettleMaterial);
+            }
+            actions
+        }
+    };
+    if matches!(job.state, JobState::Printing | JobState::Paused) && unreachable_long_enough() {
+        actions.push(DeclareOutcome);
+    }
+    actions
+}
+
+/// Fixtures shared by this module's tests and `jobs::dispatch`'s.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use crate::catalog::{BedShape, PrinterProfile};
+
+    use super::super::{Job, JobState, Settlement};
+
+    pub fn a_profile() -> PrinterProfile {
+        PrinterProfile {
+            bed_shape: BedShape::Rectangular {
+                width_mm: 256.0,
+                depth_mm: 256.0,
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
+            },
+            printable_height_mm: 256.0,
+            bed_exclude_areas: Vec::new(),
+            default_bed_type: "PEI".to_string(),
+            nozzle_diameter_mm: vec![0.4],
+            nozzle_type: "hardened_steel".to_string(),
+            gcode_flavor: "klipper".to_string(),
+            has_auxiliary_fan: false,
+            supports_air_filtration: false,
+            supports_multi_filament: false,
+            suggested_host_type: None,
+        }
+    }
+
+    pub fn a_job(state: JobState) -> Job {
+        Job {
+            id: "job-a".to_string(),
+            revision: 1,
+            queue_entry_id: "qen-a".to_string(),
+            slice_revision_id: "slr-a".to_string(),
+            printer_id: "prn-a".to_string(),
+            printer_snapshot: crate::jobs::PrinterSnapshot {
+                name: "A".to_string(),
+                location: None,
+                catalog_ref: None,
+                adapter_kind: None,
+                profile: a_profile(),
+            },
+            spool_id: "spl-a".to_string(),
+            reservation_id: "rsv-a".to_string(),
+            estimate_mg: 1000,
+            state,
+            cancel_reason: None,
+            settlement: if state.is_terminal() {
+                Settlement::Pending
+            } else {
+                Settlement::Open
+            },
+            settlement_method: None,
+            settlement_preview: None,
+            corrected: false,
+            assigned_by: crate::jobs::AssignedBy::Operator,
+            start_confirmation: None,
+            upload_host_operation_id: None,
+            active_host_operation_id: None,
+            max_progress_pct: 0,
+            host_unreachable_since: None,
+            host_path: None,
+            last_failure: None,
+            start_blockers: Vec::new(),
+            allowed_actions: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            started_at: None,
+            ended_at: None,
+        }
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
+    use super::tests_support::a_job;
     use super::*;
     use JobState::{
         Assigned, AwaitingStart, Cancelled, Completed, Failed, OutcomeUnknown, Paused, Printing,
         Staging, Starting,
     };
+
+    const THIRTY_MINUTES: Duration = Duration::from_secs(30 * 60);
+
+    fn now() -> DateTime<Utc> {
+        "2026-09-27T12:00:00Z".parse().unwrap()
+    }
+
+    fn actions(job: &Job) -> Vec<JobAction> {
+        allowed_actions(job, false, now(), THIRTY_MINUTES)
+    }
+
+    /// D3's table, row by row, for a Job with nothing special about it
+    /// (reachable host, not retried, settlement as its state implies).
+    #[test]
+    fn allowed_actions_follow_d3s_table_by_state() {
+        use JobAction::*;
+        let table: [(JobState, &[JobAction]); 10] = [
+            (Assigned, &[Stage, Cancel, Release]),
+            (Staging, &[]),
+            (AwaitingStart, &[Stage, Start, Cancel, Release]),
+            (Starting, &[]),
+            (Printing, &[Pause, Cancel]),
+            (Paused, &[Resume, Cancel]),
+            (OutcomeUnknown, &[DeclareOutcome]),
+            (Completed, &[Retry, CorrectMaterial]),
+            (Failed, &[Retry, SettleMaterial]),
+            (Cancelled, &[Retry, SettleMaterial]),
+        ];
+        for (state, expected) in table {
+            let mut job = a_job(state);
+            if state == Completed {
+                job.settlement = Settlement::Settled;
+            }
+            if state == Cancelled {
+                job.cancel_reason = Some(CancelReason::HostCancelled);
+            }
+            assert_eq!(actions(&job), expected, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn retry_disappears_once_retried_and_never_offered_after_release() {
+        let mut failed = a_job(Failed);
+        assert!(allowed_actions(&failed, false, now(), THIRTY_MINUTES).contains(&JobAction::Retry));
+        assert!(!allowed_actions(&failed, true, now(), THIRTY_MINUTES).contains(&JobAction::Retry));
+        failed.state = Cancelled;
+        failed.cancel_reason = Some(CancelReason::ReleasedBeforeStart);
+        failed.settlement = Settlement::NotRequired;
+        assert_eq!(actions(&failed), Vec::<JobAction>::new());
+    }
+
+    #[test]
+    fn settle_is_offered_only_while_pending_or_deferred() {
+        for (settlement, offered) in [
+            (Settlement::Pending, true),
+            (Settlement::Deferred, true),
+            (Settlement::Settled, false),
+            (Settlement::NotRequired, false),
+        ] {
+            let mut job = a_job(Cancelled);
+            job.cancel_reason = Some(CancelReason::CancelledByOperator);
+            job.settlement = settlement;
+            assert_eq!(
+                actions(&job).contains(&JobAction::SettleMaterial),
+                offered,
+                "{settlement:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn correct_material_is_offered_until_corrected() {
+        let mut job = a_job(Completed);
+        job.settlement = Settlement::Settled;
+        assert!(actions(&job).contains(&JobAction::CorrectMaterial));
+        job.corrected = true;
+        assert!(!actions(&job).contains(&JobAction::CorrectMaterial));
+    }
+
+    /// D3/D9: `declareOutcome` appears in `printing`/`paused` only once
+    /// the host has been unreachable for at least 30 minutes.
+    #[test]
+    fn declare_outcome_appears_after_thirty_minutes_unreachable() {
+        for state in [Printing, Paused] {
+            let mut job = a_job(state);
+            job.host_unreachable_since = Some("2026-09-27T11:31:00Z".to_string());
+            assert!(!actions(&job).contains(&JobAction::DeclareOutcome), "{state:?} at 29 min");
+            job.host_unreachable_since = Some("2026-09-27T11:30:00Z".to_string());
+            assert!(actions(&job).contains(&JobAction::DeclareOutcome), "{state:?} at 30 min");
+            // Unparseable timestamps never offer it (fail-safe).
+            job.host_unreachable_since = Some("garbage".to_string());
+            assert!(!actions(&job).contains(&JobAction::DeclareOutcome), "{state:?}");
+        }
+    }
 
     /// D3's event table, copied verbatim as `(from, event, to)` triples.
     /// `Assigned` (the insert event) is deliberately absent: every pair

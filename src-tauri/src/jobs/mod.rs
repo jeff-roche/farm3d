@@ -12,8 +12,14 @@
 
 pub mod assign;
 pub mod commands;
+pub mod dispatch;
+pub mod recovery;
 pub mod repository;
+pub mod services;
 pub mod state;
+
+pub use recovery::recover_after_restart;
+pub use services::{JobServices, JobTimings};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -22,7 +28,7 @@ use crate::catalog::PrinterProfile;
 use crate::contracts::command::ErrorCode;
 use crate::host_ops::HostOperationFailure;
 use crate::printers::CatalogRef;
-use crate::queue::QueueEntry;
+use crate::queue::{Blocker, QueueEntry};
 
 /// D3: a Job's state. `completed`, `failed`, and `cancelled` are
 /// terminal; every other state is active. A partial unique index allows
@@ -293,13 +299,11 @@ pub fn estimated_use_mg(estimate_mg: i64, max_progress_pct: i64) -> i64 {
 }
 
 /// A Job as the wire shares it (spec "Backend model" wire types).
-/// Assembled by [`repository`] from the `jobs` row. `startBlockers` and
-/// `allowedActions` are deliberately not part of this shape yet: D7's
-/// dispatch driver (`jobs::dispatch.rs`, a later task) is the one place
-/// with the live Printer status `startBlockers` needs, and D3's full
-/// `allowedActions` table needs retry tracking this task doesn't touch.
-/// That later task adds both fields once it exists — see this task's
-/// report for the reasoning.
+/// Assembled by [`repository`] from the `jobs` row. `allowedActions` is
+/// computed there, at read time (D3's table, [`state::allowed_actions`]).
+/// `startBlockers` depends on the live Printer status, so the repository
+/// leaves it empty and [`dispatch::present_jobs`] fills it for an
+/// `awaitingStart` Job before the Job leaves Rust (D7).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "domain/Job.ts")]
@@ -330,6 +334,10 @@ pub struct Job {
     pub host_unreachable_since: Option<String>,
     pub host_path: Option<String>,
     pub last_failure: Option<JobFailure>,
+    /// D7: non-empty only in `awaitingStart`.
+    pub start_blockers: Vec<Blocker>,
+    /// D3: what the frontend may offer. Rust-computed.
+    pub allowed_actions: Vec<JobAction>,
     pub created_at: String,
     pub updated_at: String,
     pub started_at: Option<String>,

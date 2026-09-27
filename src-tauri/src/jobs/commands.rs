@@ -1,16 +1,16 @@
-//! P7's Job commands (spec "Commands"). This task lands the ones that
-//! need no host: `assign_queue_entry`, `release_job`, `retry_job`,
-//! `cancel_job` (its before-start branch), and `get_job_history`. The
-//! host handoffs (`stage_job`, `start_job`, `pause_job`, `resume_job`,
-//! `cancel_job` after start) and `declare_job_outcome` come with the
-//! dispatch driver; settlement with its own task.
+//! P7's Job commands (spec "Commands"): `assign_queue_entry`,
+//! `release_job`, `retry_job`, `cancel_job`, and `get_job_history`, which
+//! need no host, and the handoffs `stage_job`, `start_job`, `pause_job`,
+//! `resume_job`, and `cancel_job` after start (Task 8a). `declare_job_outcome`
+//! comes with the tracker; settlement with its own task.
 //!
-//! Every write takes the Printer lock first (D4) and runs one
-//! `Storage::write_repo` transaction from `jobs::assign`. Nothing here
-//! calls into `host_ops`, so holding its non-reentrant lock is safe.
-//! After commit, the command publishes the changed rows on the `queue`
-//! stream and the touched Spools on the inventory stream; a replay
-//! publishes nothing.
+//! The host-free writes take the Printer lock first (D4) and run one
+//! `Storage::write_repo` transaction from `jobs::assign`. The handoffs go
+//! through `jobs::dispatch`, which calls `host_ops::api`: that takes the
+//! non-reentrant Printer lock itself, so these commands never hold it
+//! around a handoff. After commit, a command publishes the changed rows on
+//! the `queue` stream (Jobs with live `startBlockers`) and the touched
+//! Spools on the inventory stream; a replay publishes nothing.
 
 use std::sync::Arc;
 
@@ -23,12 +23,15 @@ use crate::printers::now_rfc3339;
 use crate::queue::commands::publish;
 use crate::queue::eligibility::AssignMode;
 use crate::queue::world::LiveWorld;
+use crate::host_ops::start_rule::ControlVerb;
+use crate::host_ops::PriorState;
 use crate::queue::QueueChange;
 use crate::RuntimeServices;
 
 use super::assign::{self, AssignRequest};
+use super::dispatch::{self, Handoff};
 use super::repository as jobs_repository;
-use super::{AssignedBy, Job, JobHistory};
+use super::{AssignedBy, Job, JobHistory, JobState, StartConfirmation};
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
 
@@ -96,6 +99,8 @@ pub async fn assign_queue_entry<R: tauri::Runtime>(
     let change = assigned.change();
     if !assigned.replayed {
         publish(&app, &services, &change);
+        // D7: the driver stages every new Job at once, whatever the policy.
+        services.jobs.request_stage(&assigned.job.id);
     }
     Ok(CommandSuccess::new(change))
 }
@@ -151,10 +156,12 @@ pub async fn retry_job<R: tauri::Runtime>(
     Ok(CommandSuccess::new(change))
 }
 
-/// D4 "Cancel before start": the Job ends
+/// D4 "Cancel": before start (`assigned`, `awaitingStart`) the Job ends
 /// `cancelled{cancelledBeforeStart}`, its reservation is released, and its
-/// entry closes. Cancelling a started Job is a host handoff the dispatch
-/// driver's task adds; until then it is `JOB_ACTION_NOT_ALLOWED`.
+/// entry closes. After start (`printing`, `paused`) it is a control
+/// handoff (D7): the Job keeps its state with the cancel op active, and
+/// the tracker proves the end from history. Any other state is
+/// `JOB_ACTION_NOT_ALLOWED`. A replay returns the current rows either way.
 #[tauri::command]
 pub async fn cancel_job<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -165,6 +172,11 @@ pub async fn cancel_job<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<QueueChange>, CommandError> {
     let services = ready(&bootstrap, contract_version)?;
     let job = committed_job(&services, &job_id)?;
+    if matches!(job.state, JobState::Printing | JobState::Paused) {
+        let handoff =
+            dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Cancel).await?;
+        return Ok(finish(&app, &services, handoff));
+    }
     let printer_lock = services.host_ops.printer_lock(&job.printer_id);
     let _serialized = printer_lock.lock().await;
 
@@ -203,5 +215,100 @@ pub async fn get_job_history<R: tauri::Runtime>(
         .map_err(storage_error)?
         .map_err(storage_error)?
         .ok_or_else(|| CommandError::not_found(&job_id))?;
+    let mut history = history;
+    dispatch::present_jobs(&services, std::slice::from_mut(&mut history.job));
     Ok(CommandSuccess::new(history))
+}
+
+/// A handoff's result as the command returns it: the Job with live
+/// `startBlockers`, published unless it was a replay.
+fn finish<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    services: &RuntimeServices<R>,
+    handoff: Handoff,
+) -> CommandSuccess<QueueChange> {
+    let mut change = handoff.change();
+    dispatch::present_change(services, &mut change);
+    if !handoff.replayed {
+        publish(app, services, &change);
+    }
+    CommandSuccess::new(change)
+}
+
+/// D3/D4/D7 "Stage": hands the Job's Slice Revision to P6's upload, from
+/// `assigned` or (staging again) `awaitingStart`. The Host Operation's id
+/// is `<operationId>#hostOperation`.
+#[tauri::command]
+pub async fn stage_job<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let handoff = dispatch::stage_job(&services, operation_id, &job_id).await?;
+    Ok(finish(&app, &services, handoff))
+}
+
+/// D7 "Start": `acknowledgement` must be `"bedClear"` (`VALIDATION`), the
+/// Job `awaitingStart` (`JOB_ACTION_NOT_ALLOWED`), and nothing may block
+/// the start (`JOB_START_BLOCKED`); then P6's start order runs with
+/// `priorState`, and its errors pass through unchanged.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn start_job<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+    prior_state: PriorState,
+    acknowledgement: String,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    if acknowledgement != "bedClear" {
+        return Err(CommandError::validation_at(
+            "acknowledgement",
+            "Confirm that the bed is clear.",
+        ));
+    }
+    let handoff = dispatch::start_job(
+        &services,
+        operation_id,
+        &job_id,
+        prior_state,
+        StartConfirmation::BedClear,
+    )
+    .await?;
+    Ok(finish(&app, &services, handoff))
+}
+
+/// D7 "Pause": P6's pause, through the Job (`printing` only).
+#[tauri::command]
+pub async fn pause_job<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let handoff = dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Pause).await?;
+    Ok(finish(&app, &services, handoff))
+}
+
+/// D7 "Resume": P6's resume, through the Job (`paused` only).
+#[tauri::command]
+pub async fn resume_job<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let handoff =
+        dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Resume).await?;
+    Ok(finish(&app, &services, handoff))
 }

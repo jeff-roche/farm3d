@@ -13,15 +13,15 @@
 //! says. [`open_requirement`] and [`set_requirement_status`] are
 //! Reconciliation Requirements' two writes. The rest are reads.
 //!
-//! `Job.startBlockers` and `Job.allowedActions` are deliberately not part
-//! of the wire type this task builds (`jobs::mod`): `startBlockers` needs
-//! the live Printer status only `jobs::dispatch` (a later task) has, and
-//! `allowedActions`' full D3 table needs retry tracking this task doesn't
-//! touch. That later task adds both fields to `Job` once it exists — see
-//! this task's report. `JobHistory.hostOperations` is left empty for the
-//! same reason: `host_operations.job_id` is decoded only once a later
-//! task (D3/D4's own file list) adds it to `HostOperation`'s wire type and
-//! row mapper.
+//! `Job.allowedActions` is computed here, at decode, from D3's table
+//! ([`super::state::allowed_actions`]) and a successor-entry column in
+//! [`JOB_COLUMNS`]. `Job.startBlockers` needs the live Printer status, so
+//! it decodes empty and `jobs::dispatch::present_jobs` fills it before a
+//! Job leaves the backend. [`update_columns`] is the one write that moves
+//! no state: it bumps `revision` without an event row (D7's outcome
+//! bookkeeping and driver refusals). `JobHistory.hostOperations` is still
+//! left empty: `host_operations.job_id` is not yet on `HostOperation`'s
+//! wire type.
 
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -82,11 +82,17 @@ fn from_json<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqli
 
 // --- jobs ------------------------------------------------------------------
 
+// The last column is computed: whether the Job's Queue Entry already has a
+// successor (a retry or a release replacement), which D3's `retry` action
+// needs. Every query selects these `FROM jobs` unaliased, so the correlated
+// subquery can name `jobs.queue_entry_id`.
 const JOB_COLUMNS: &str = "id, revision, queue_entry_id, slice_revision_id, printer_id, \
      printer_snapshot_json, spool_id, reservation_id, estimate_mg, state, cancel_reason, \
      settlement, settlement_method, assigned_by, start_confirmation, upload_host_operation_id, \
      active_host_operation_id, host_path, max_progress_pct, host_unreachable_since, \
-     last_failure_json, correction_event_id, created_at, updated_at, started_at, ended_at";
+     last_failure_json, correction_event_id, created_at, updated_at, started_at, ended_at, \
+     EXISTS(SELECT 1 FROM queue_entries successor \
+            WHERE successor.origin_entry_id = jobs.queue_entry_id)";
 
 fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     let printer_snapshot_json: String = row.get(5)?;
@@ -107,7 +113,9 @@ fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
             estimated_use_mg: estimated_use_mg(estimate_mg, max_progress_pct),
         });
 
-    Ok(Job {
+    let has_successor: bool = row.get(26)?;
+
+    let mut job = Job {
         id: row.get(0)?,
         revision: row.get(1)?,
         queue_entry_id: row.get(2)?,
@@ -143,7 +151,18 @@ fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         updated_at: row.get(23)?,
         started_at: row.get(24)?,
         ended_at: row.get(25)?,
-    })
+        // Live-status dependent: `jobs::dispatch::present_jobs` fills it
+        // for an `awaitingStart` Job before the Job leaves Rust.
+        start_blockers: Vec::new(),
+        allowed_actions: Vec::new(),
+    };
+    job.allowed_actions = state::allowed_actions(
+        &job,
+        has_successor,
+        chrono::Utc::now(),
+        super::services::JobTimings::default().unreachable_declare_after,
+    );
+    Ok(job)
 }
 
 pub fn load_job(conn: &Connection, id: &str) -> Result<Option<Job>, StorageError> {
@@ -282,6 +301,13 @@ pub struct JobChange {
     pub operation_id: Option<String>,
     pub host_operation_id: Option<String>,
     pub detail: Option<serde_json::Value>,
+    /// Sets `last_failure_json` to NULL (wins over `last_failure`).
+    pub clear_last_failure: bool,
+    /// Sets `upload_host_operation_id` to NULL (D7: a failed re-stage no
+    /// longer trusts the old staged file).
+    pub clear_upload_host_operation_id: bool,
+    /// Sets `active_host_operation_id` to NULL (D7: its op is terminal).
+    pub clear_active_host_operation_id: bool,
 }
 
 fn next_sequence(tx: &Transaction<'_>, job_id: &str) -> Result<i64, RepositoryError> {
@@ -365,6 +391,39 @@ pub fn transition(
     // original print-end time with the settlement or correction time.
     let ended_at = (!current.state.is_terminal() && to.is_terminal()).then(|| now.to_string());
 
+    write_row(tx, job_id, to, settlement, &change, ended_at, clears_unreachable, now)?;
+
+    let sequence = next_sequence(tx, job_id)?;
+    write_event(
+        tx,
+        job_id,
+        sequence,
+        event,
+        Some(current.state),
+        to,
+        change.operation_id.as_deref(),
+        change.host_operation_id.as_deref(),
+        change.detail.as_ref(),
+        now,
+    )?;
+
+    load_job(tx, job_id)?.ok_or_else(|| not_found(job_id))
+}
+
+/// The one UPDATE both [`transition`] and [`update_columns`] run: the new
+/// `state`, `revision + 1`, and `change`'s overlay (`None` leaves a column
+/// unchanged; a `clear_*` flag sets its column to NULL).
+#[allow(clippy::too_many_arguments)]
+fn write_row(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    to: JobState,
+    settlement: Option<Settlement>,
+    change: &JobChange,
+    ended_at: Option<String>,
+    clears_unreachable: bool,
+    now: &str,
+) -> Result<(), RepositoryError> {
     tx.execute(
         "UPDATE jobs SET
              state = ?2,
@@ -374,14 +433,17 @@ pub fn transition(
              settlement = COALESCE(?5, settlement),
              settlement_method = COALESCE(?6, settlement_method),
              start_confirmation = COALESCE(?7, start_confirmation),
-             upload_host_operation_id = COALESCE(?8, upload_host_operation_id),
-             active_host_operation_id = COALESCE(?9, active_host_operation_id),
+             upload_host_operation_id =
+                 CASE WHEN ?20 THEN NULL ELSE COALESCE(?8, upload_host_operation_id) END,
+             active_host_operation_id =
+                 CASE WHEN ?21 THEN NULL ELSE COALESCE(?9, active_host_operation_id) END,
              start_host_operation_id = COALESCE(?10, start_host_operation_id),
              host_path = COALESCE(?11, host_path),
              history_mark = COALESCE(?12, history_mark),
              host_job_id = COALESCE(?13, host_job_id),
              max_progress_pct = COALESCE(?14, max_progress_pct),
-             last_failure_json = COALESCE(?15, last_failure_json),
+             last_failure_json =
+                 CASE WHEN ?22 THEN NULL ELSE COALESCE(?15, last_failure_json) END,
              correction_event_id = COALESCE(?16, correction_event_id),
              started_at = COALESCE(?17, started_at),
              ended_at = COALESCE(?18, ended_at),
@@ -407,23 +469,27 @@ pub fn transition(
             change.started_at,
             ended_at,
             clears_unreachable,
+            change.clear_upload_host_operation_id,
+            change.clear_active_host_operation_id,
+            change.clear_last_failure,
         ],
     )?;
+    Ok(())
+}
 
-    let sequence = next_sequence(tx, job_id)?;
-    write_event(
-        tx,
-        job_id,
-        sequence,
-        event,
-        Some(current.state),
-        to,
-        change.operation_id.as_deref(),
-        change.host_operation_id.as_deref(),
-        change.detail.as_ref(),
-        now,
-    )?;
-
+/// A column update with no state change and no `job_events` row (D7: the
+/// driver's `lastFailure = refused`, and clearing a terminal op's
+/// `active_host_operation_id`). `revision` still goes up, so the Job is
+/// republished. `change`'s event fields (`operation_id`,
+/// `host_operation_id`, `detail`) are ignored: there is no event.
+pub fn update_columns(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    change: JobChange,
+    now: &str,
+) -> Result<Job, RepositoryError> {
+    let current = load_job(tx, job_id)?.ok_or_else(|| not_found(job_id))?;
+    write_row(tx, job_id, current.state, None, &change, None, false, now)?;
     load_job(tx, job_id)?.ok_or_else(|| not_found(job_id))
 }
 
@@ -500,7 +566,7 @@ fn load_requirement(conn: &Connection, id: &str) -> Result<Option<Reconciliation
         .optional()?)
 }
 
-fn requirements_for_job(conn: &Connection, job_id: &str) -> Result<Vec<ReconciliationRequirement>, StorageError> {
+pub fn requirements_for_job(conn: &Connection, job_id: &str) -> Result<Vec<ReconciliationRequirement>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {REQUIREMENT_COLUMNS} FROM reconciliation_requirements WHERE job_id = ?1
          ORDER BY opened_at, id"

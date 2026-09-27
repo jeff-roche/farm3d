@@ -33,9 +33,10 @@ use farm3d_lib::connections::{
 };
 use farm3d_lib::host_ops::api::{self, LinkInTx};
 use farm3d_lib::host_ops::repository as host_ops_repo;
+use farm3d_lib::host_ops::start_rule::ControlVerb;
 use farm3d_lib::host_ops::{
     self, CapabilityFactory, Clock, FaultAction, FaultPoint, HostOperation, HostOperationServices,
-    HostOperationState, HostOpsTimings, SystemClock,
+    HostOperationState, HostOpsTimings, PriorState, SystemClock,
 };
 use farm3d_lib::jobs::PrinterSnapshot;
 use farm3d_lib::library::content::ContentStore;
@@ -593,6 +594,100 @@ fn crash_between_write_ahead_and_send_leaves_a_linked_dispatching_row() {
     let recovered = rig.row(&row.id);
     assert_eq!(recovered.state, HostOperationState::Failed, "{recovered:?}");
     assert_eq!(recovered.job_id.as_deref(), Some(JOB));
+}
+
+/// A link that fails the test if it ever runs (a replay must not run it).
+fn never_link(job_id: &str) -> (String, LinkInTx<'static>) {
+    (
+        job_id.to_string(),
+        Box::new(|_, _| panic!("a replayed operation id re-ran its link")),
+    )
+}
+
+fn marker_count(rig: &Rig) -> i64 {
+    rig.scalar("SELECT COUNT(*) FROM test_link_marker")
+}
+
+/// Task 7 review: a replay returns the stored row without running the
+/// link, and a replay whose stored row belongs to another Job (or to no
+/// Job) is a reused operation id (`VALIDATION` on `operationId`).
+#[test]
+fn a_replayed_linked_operation_never_reruns_its_link_and_must_name_the_same_job() {
+    let rig = Rig::new();
+    seed_active_job(&rig.storage);
+    rig.observe(HostActivity::Idle);
+    let seen = Arc::new(Mutex::new(None));
+    let row = rig
+        .linked_stage("op-r#hostOperation", Some(marker_link(seen)))
+        .expect("a linked stage");
+    rig.wait_settled(&row.id);
+    assert_eq!(marker_count(&rig), 1);
+
+    let replayed = rig
+        .linked_stage("op-r#hostOperation", Some(never_link(JOB)))
+        .expect("a replay");
+    assert_eq!(replayed.id, row.id);
+    assert_eq!(marker_count(&rig), 1, "the link did not run again");
+
+    for link in [Some(never_link("job-someone-else")), None] {
+        let error = serde_json::to_value(
+            rig.linked_stage("op-r#hostOperation", link)
+                .expect_err("another Job's operation id"),
+        )
+        .unwrap();
+        assert_eq!(code(&error), "VALIDATION", "{error}");
+        assert_eq!(error["details"]["fieldPath"], "operationId", "{error}");
+    }
+    assert_eq!(rig.scalar("SELECT COUNT(*) FROM host_operations"), 1);
+    assert_eq!(rig.uploads(), 1);
+}
+
+/// Task 7 review: linked `start` and `control` run their links inside the
+/// write-ahead and carry the Job, as `stage` does.
+#[test]
+fn linked_start_and_control_run_their_links_and_carry_the_job() {
+    let rig = Rig::new();
+    seed_active_job(&rig.storage);
+    rig.observe(HostActivity::Idle);
+    let upload = rig
+        .linked_stage("op-u#hostOperation", Some(marker_link(Arc::new(Mutex::new(None)))))
+        .expect("a linked stage");
+    assert_eq!(rig.wait_settled(&upload.id).state, HostOperationState::Succeeded);
+
+    let seen = Arc::new(Mutex::new(None));
+    let start = tauri::async_runtime::block_on(api::start(
+        rig.host_ops(),
+        "op-s#hostOperation".to_string(),
+        PRINTER.to_string(),
+        upload.id.clone(),
+        PriorState::Ready,
+        Some(marker_link(Arc::clone(&seen))),
+    ))
+    .expect("a linked start");
+    assert_eq!(start.job_id.as_deref(), Some(JOB));
+    assert_eq!(seen.lock().unwrap().as_deref(), Some(start.id.as_str()));
+    assert_eq!(marker_count(&rig), 2);
+    assert_eq!(rig.wait_settled(&start.id).state, HostOperationState::Succeeded);
+
+    rig.manager.apply_observation(
+        PRINTER,
+        ConnectionObservation::Telemetry(telemetry(HostActivity::Printing)),
+        PrinterSetupFacts::complete(),
+    );
+    let seen = Arc::new(Mutex::new(None));
+    let pause = tauri::async_runtime::block_on(api::control(
+        rig.host_ops(),
+        "op-p#hostOperation".to_string(),
+        PRINTER.to_string(),
+        ControlVerb::Pause,
+        Some(marker_link(Arc::clone(&seen))),
+    ))
+    .expect("a linked pause");
+    assert_eq!(pause.job_id.as_deref(), Some(JOB));
+    assert_eq!(pause.host_path, upload.host_path, "the host reports the staged file");
+    assert_eq!(seen.lock().unwrap().as_deref(), Some(pause.id.as_str()));
+    assert_eq!(marker_count(&rig), 3);
+    assert_eq!(rig.wait_settled(&pause.id).state, HostOperationState::Succeeded);
 }
 
 // --- broadcasts -----------------------------------------------------------------

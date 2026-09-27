@@ -153,6 +153,10 @@ type CommandMap = {
   retry_job: [Contracts.RetryJobRequest, Contracts.RetryJobResult];
   cancel_job: [Contracts.CancelJobRequest, Contracts.CancelJobResult];
   get_job_history: [Contracts.GetJobHistoryRequest, Contracts.GetJobHistoryResult];
+  stage_job: [Contracts.StageJobRequest, Contracts.StageJobResult];
+  start_job: [Contracts.StartJobRequest, Contracts.StartJobResult];
+  pause_job: [Contracts.PauseJobRequest, Contracts.PauseJobResult];
+  resume_job: [Contracts.ResumeJobRequest, Contracts.ResumeJobResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

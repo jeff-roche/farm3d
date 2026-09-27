@@ -3,8 +3,14 @@
 //! and `get_job_history`, through the Tauri IPC path; plus the concurrent
 //! assignment races, driven straight through `jobs::assign::assign` from
 //! real threads over one `Storage`.
+//!
+//! P7 Task 8a (spec D3, D4, D7, D9): the Job handoffs to P6 (stage,
+//! start, pause, resume, cancel after start), the dispatch driver, and
+//! `allowedActions`/`startBlockers`, against `FakeMoonraker` through
+//! `p7_dispatch_rig`.
 
 mod common;
+mod p7_dispatch_rig;
 mod p7_rig;
 
 use std::sync::{Arc, Barrier};
@@ -529,7 +535,20 @@ fn retry_creates_a_linked_entry_at_the_end_and_leaves_history_untouched() {
     assert_eq!(retry["policy"], "recommended");
 
     let job_after = rig.call("get_job_history", json!({"jobId": job})).unwrap();
-    assert_eq!(job_after["job"], job_before["job"], "the Job is untouched");
+    // The row is untouched; only the read-time `allowedActions` changes:
+    // `retry` disappears once the Job has been retried (D3).
+    assert_eq!(job_before["job"]["allowedActions"], json!(["retry"]));
+    assert_eq!(job_after["job"]["allowedActions"], json!([]));
+    let without_actions = |job: &Value| {
+        let mut job = job.clone();
+        job.as_object_mut().unwrap().remove("allowedActions");
+        job
+    };
+    assert_eq!(
+        without_actions(&job_after["job"]),
+        without_actions(&job_before["job"]),
+        "the Job is untouched"
+    );
     assert_eq!(job_after["events"], job_before["events"]);
     assert_eq!(job_after["entry"]["closeReason"], "cancelled");
     assert_eq!(
@@ -686,4 +705,560 @@ fn events_carry_no_credential() {
         .unwrap();
     assert!(!persisted.contains(SECRET));
     assert!(!persisted.contains(credential_ref));
+}
+
+// --- Task 8a: handoffs and the dispatch driver ---------------------------------
+
+mod dispatch {
+    use std::time::Duration;
+
+    use farm3d_lib::host_ops::HostOperationState;
+    use farm3d_lib::printers::operational::OperationalState;
+    use farm3d_lib::printers::StartSafety;
+    use serde_json::{json, Value};
+
+    use crate::common::fake_moonraker::{Fault, Route, StartTrace};
+    use crate::p7_dispatch_rig::{boot, id, Driver, Roots, Running, HOST_PATH, PRINTER, SECRET};
+
+    fn strings(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn codes(blockers: &Value) -> Vec<String> {
+        blockers
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|blocker| blocker["code"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn settle() {
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    fn started(start_safety: StartSafety) -> (Roots, Running) {
+        let roots = Roots::new(start_safety);
+        let app = boot(&roots, Driver::Started);
+        (roots, app)
+    }
+
+    #[test]
+    fn assignment_stages_immediately_and_reaches_awaiting_start() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let spool = app.spool();
+
+        let job_id = app.assign(&spool);
+        let job = app.wait_job(&job_id, "awaitingStart");
+
+        assert_eq!(roots.uploads(), 1);
+        let ops = app.ops(&job_id);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].state, HostOperationState::Succeeded);
+        assert_eq!(job["uploadHostOperationId"], json!(ops[0].id));
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        assert_eq!(job["hostPath"], HOST_PATH);
+        assert_eq!(job["lastFailure"], Value::Null);
+        assert_eq!(
+            app.event_kinds(&job_id),
+            ["assigned", "stageHandedOff", "stageSucceeded"]
+        );
+        // D4: the driver's own ids, the Host Operation's derived from it.
+        let ledger = app
+            .text(&format!(
+                "SELECT operation_id FROM job_events WHERE job_id = '{job_id}' AND kind = 'stageHandedOff'"
+            ))
+            .unwrap();
+        assert!(ledger.starts_with("drv-"), "{ledger}");
+        assert_eq!(
+            app.scalar(&format!(
+                "SELECT COUNT(*) FROM operations WHERE id = '{ledger}' AND kind = 'stageJob'"
+            )),
+            1
+        );
+        assert_eq!(
+            app.scalar(&format!(
+                "SELECT COUNT(*) FROM operations WHERE id = '{ledger}#hostOperation' AND kind = 'stageSliceRevision'"
+            )),
+            1
+        );
+        // C1: Rust computes what's offered and what blocks the start.
+        assert_eq!(
+            strings(&job["allowedActions"]),
+            ["stage", "start", "cancel", "release"]
+        );
+        assert_eq!(codes(&job["startBlockers"]), ["SPOOL_NOT_LOADED"]);
+        assert!(job["startBlockers"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Awaiting material: load Spool #"));
+        // The Job was published as it moved.
+        let published: Vec<Value> = app
+            .job_events(&job_id)
+            .iter()
+            .map(|job| job["state"].clone())
+            .collect();
+        assert!(published.contains(&json!("staging")), "{published:?}");
+        assert!(published.contains(&json!("awaitingStart")), "{published:?}");
+        // No second upload, ever.
+        settle();
+        assert_eq!(roots.uploads(), 1);
+    }
+
+    #[test]
+    fn upload_failure_returns_the_job_to_assigned_with_last_failure() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        roots.fake.fault(Route::Upload, Fault::checksum_mismatch());
+        let spool = app.spool();
+
+        let job_id = app.assign(&spool);
+        let upload = app.wait_op(&app.first_op(&job_id).id, |row| {
+            row.state != HostOperationState::Dispatching
+        });
+        assert_eq!(upload.state, HostOperationState::Failed);
+        let job = app.wait_job(&job_id, "assigned");
+        assert_eq!(job["lastFailure"]["kind"], "hostOperationFailed");
+        assert_eq!(job["lastFailure"]["hostOperationId"], json!(upload.id));
+        assert_eq!(job["lastFailure"]["failure"]["code"], "checksumRejected");
+        assert_eq!(job["uploadHostOperationId"], Value::Null);
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        assert_eq!(
+            app.event_kinds(&job_id),
+            ["assigned", "stageHandedOff", "stageFailed"]
+        );
+        assert!(strings(&job["allowedActions"]).contains(&"stage".to_string()));
+
+        // The driver never stages again by itself...
+        settle();
+        assert_eq!(roots.uploads(), 1);
+        // ...the operator does.
+        let change = app.job_command("stage_job", "op-restage", &job_id).unwrap();
+        assert_eq!(change["jobs"][0]["state"], "staging");
+        let job = app.wait_job(&job_id, "awaitingStart");
+        assert_eq!(job["lastFailure"], Value::Null);
+        assert_eq!(roots.uploads(), 2);
+    }
+
+    #[test]
+    fn a_refused_driver_stage_records_last_failure_and_never_retries() {
+        // The Printer goes offline between the assignment and the driver's
+        // stage (its first pass, here).
+        let roots = Roots::new(StartSafety::ConfirmBedClear);
+        let app = boot(&roots, Driver::Off);
+        let spool = app.spool();
+        let job_id = app.assign(&spool);
+        app.status(OperationalState::Offline);
+        farm3d_lib::start_jobs_runtime(&app.services, app.app.handle());
+
+        let job = app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
+        assert_eq!(job["state"], "assigned");
+        assert_eq!(job["lastFailure"]["kind"], "refused");
+        assert_eq!(job["lastFailure"]["code"], "PRINTER_UNREACHABLE");
+        assert!(job["revision"].as_i64().unwrap() > 1, "the revision goes up");
+        assert_eq!(app.event_kinds(&job_id), ["assigned"], "no event row");
+        assert!(app.ops(&job_id).is_empty());
+
+        app.status(OperationalState::Ready);
+        settle();
+        assert_eq!(roots.uploads(), 0, "it never stages again by itself");
+        assert_eq!(app.job(&job_id)["state"], "assigned");
+    }
+
+    #[test]
+    fn start_requires_bed_clear_and_the_loaded_spool() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let spool = app.spool();
+        let job_id = app.assign(&spool);
+        app.wait_job(&job_id, "awaitingStart");
+
+        let refused = app
+            .call(
+                "start_job",
+                json!({"operationId": "op-start", "jobId": job_id, "priorState": "ready",
+                       "acknowledgement": "hostStateUnknown"}),
+            )
+            .unwrap_err();
+        assert_eq!(refused["code"], "VALIDATION", "{refused}");
+        assert_eq!(refused["details"]["fieldPath"], "acknowledgement");
+
+        let blocked = app.start("op-start", &job_id, "ready").unwrap_err();
+        assert_eq!(blocked["code"], "JOB_START_BLOCKED", "{blocked}");
+        assert_eq!(codes(&blocked["details"]["blockers"]), ["SPOOL_NOT_LOADED"]);
+        assert_eq!(blocked["recovery"], json!(["LOAD_SPOOL"]));
+        assert_eq!(
+            app.scalar("SELECT COUNT(*) FROM operations WHERE id LIKE 'op-start%'"),
+            0,
+            "a refusal never burns the id"
+        );
+
+        app.load(&spool);
+        assert_eq!(app.job(&job_id)["startBlockers"], json!([]));
+        let change = app.start("op-start", &job_id, "ready").unwrap();
+        assert_eq!(change["jobs"][0]["state"], "starting");
+        assert_eq!(change["jobs"][0]["startConfirmation"], "bedClear");
+        let job = app.wait_job(&job_id, "printing");
+        assert!(job["startedAt"].is_string());
+        assert_eq!(roots.starts(), 1);
+        assert_eq!(
+            app.event_kinds(&job_id)[3..],
+            ["startHandedOff", "startSucceeded"]
+        );
+        assert_eq!(strings(&job["allowedActions"]), ["pause", "cancel"]);
+        assert_eq!(
+            app.scalar(
+                "SELECT COUNT(*) FROM operations WHERE id = 'op-start#hostOperation' AND kind = 'startStagedArtifact'"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn start_from_finished_requires_prior_state_finished() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        app.status(OperationalState::Finished);
+
+        let refused = app.start("op-ready", &job_id, "ready").unwrap_err();
+        assert_eq!(refused["code"], "START_PRECONDITION_CHANGED", "{refused}");
+        assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+
+        app.start("op-finished", &job_id, "finished").unwrap();
+        app.wait_job(&job_id, "printing");
+        assert_eq!(roots.starts(), 1);
+    }
+
+    #[test]
+    fn unattended_printer_starts_without_confirmation_only_from_ready() {
+        let (roots, app) = started(StartSafety::Unattended);
+        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        app.status(OperationalState::Finished);
+        let spool = app.spool();
+        app.load(&spool);
+        let job_id = app.assign(&spool);
+        app.wait_job(&job_id, "awaitingStart");
+        settle();
+        assert_eq!(roots.starts(), 0, "never from finished");
+        assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+
+        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        app.status(OperationalState::Ready);
+        let job = app.wait_job(&job_id, "printing");
+        assert_eq!(job["startConfirmation"], "unattended");
+        assert_eq!(roots.starts(), 1);
+        let start = app
+            .ops(&job_id)
+            .into_iter()
+            .find(|op| op.kind == farm3d_lib::host_ops::HostOperationKind::Start)
+            .unwrap();
+        let ledger = app
+            .text(&format!(
+                "SELECT operation_id FROM host_operations WHERE id = '{}'",
+                start.id
+            ))
+            .unwrap();
+        assert!(ledger.starts_with("drv-") && ledger.ends_with("#hostOperation"), "{ledger}");
+        settle();
+        assert_eq!(roots.starts(), 1);
+    }
+
+    #[test]
+    fn confirm_bed_clear_printer_never_auto_starts() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        app.status(OperationalState::Ready);
+        settle();
+        assert_eq!(roots.starts(), 0);
+        assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+    }
+
+    #[test]
+    fn start_blockers_are_republished_when_the_printers_status_changes() {
+        let (_roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        let before = app.job_events(&job_id).len();
+
+        app.status(OperationalState::Printing);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let published = app.job_events(&job_id);
+            if published.len() > before
+                && codes(&published.last().unwrap()["startBlockers"]) == ["PRINTER_NOT_READY"]
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{published:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let listed = app.ok("list_queue", json!({}));
+        let job = listed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|job| job["id"] == json!(job_id))
+            .unwrap()
+            .clone();
+        assert_eq!(codes(&job["startBlockers"]), ["PRINTER_NOT_READY"]);
+        assert_eq!(
+            job["startBlockers"][0]["message"],
+            "The printer can't start now: it is printing."
+        );
+    }
+
+    #[test]
+    fn pause_resume_cancel_through_the_job_link_the_host_operations() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.printing();
+
+        let paused = app.job_command("pause_job", "op-pause", &job_id).unwrap();
+        let pause_op = paused["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        assert_eq!(app.row(&pause_op).job_id.as_deref(), Some(job_id.as_str()));
+        app.wait_resolved(&pause_op, HostOperationState::Succeeded);
+        let job = app.wait_job(&job_id, "paused");
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        assert_eq!(strings(&job["allowedActions"]), ["resume", "cancel"]);
+        app.status(OperationalState::Paused);
+
+        app.job_command("resume_job", "op-resume", &job_id).unwrap();
+        app.wait_job(&job_id, "printing");
+        app.status(OperationalState::Printing);
+
+        let cancelled = app.job_command("cancel_job", "op-cancel", &job_id).unwrap();
+        let cancel_op = cancelled["jobs"][0]["activeHostOperationId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(cancelled["jobs"][0]["state"], "printing");
+        assert_eq!(cancelled["entries"], json!([]), "the entry stays open");
+        app.wait_resolved(&cancel_op, HostOperationState::Succeeded);
+        // A succeeded cancel only clears the active op: the tracker proves
+        // the end from history (Task 8b).
+        app.wait_op(&cancel_op, |_| {
+            app.job(&job_id)["activeHostOperationId"] == Value::Null
+        });
+        assert_eq!(app.job(&job_id)["state"], "printing");
+        assert_eq!(
+            app.event_kinds(&job_id)[5..],
+            ["pauseHandedOff", "paused", "resumeHandedOff", "resumed", "cancelHandedOff"]
+        );
+        for (path, count) in [
+            ("/printer/print/pause", 1),
+            ("/printer/print/resume", 1),
+            ("/printer/print/cancel", 1),
+        ] {
+            assert_eq!(roots.count_requests("POST", path), count, "{path}");
+        }
+        for (operation, kind) in [
+            ("op-pause", "pauseJob"),
+            ("op-resume", "resumeJob"),
+            ("op-cancel", "cancelJob"),
+        ] {
+            assert_eq!(
+                app.scalar(&format!(
+                    "SELECT COUNT(*) FROM operations WHERE id = '{operation}' AND kind = '{kind}'"
+                )),
+                1,
+                "{operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_on_another_file_is_job_not_on_printer_and_sends_nothing() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.printing();
+        roots
+            .fake
+            .with_state(|state| state.print_filename = "someone/else.gcode".to_string());
+
+        let refused = app.job_command("pause_job", "op-pause", &job_id).unwrap_err();
+        assert_eq!(refused["code"], "JOB_NOT_ON_PRINTER", "{refused}");
+        assert_eq!(refused["details"]["jobId"], json!(job_id));
+        assert_eq!(refused["details"]["printerId"], PRINTER);
+        assert_eq!(roots.count_requests("POST", "/printer/print/pause"), 0);
+        assert_eq!(
+            app.scalar("SELECT COUNT(*) FROM host_operations WHERE kind = 'pause'"),
+            0
+        );
+        assert_eq!(
+            app.scalar("SELECT COUNT(*) FROM operations WHERE id LIKE 'op-pause%'"),
+            0
+        );
+        assert_eq!(app.job(&job_id)["state"], "printing");
+    }
+
+    #[test]
+    fn job_actions_outside_the_state_table_are_job_action_not_allowed() {
+        let (_roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        for (command, action) in [("pause_job", "pause"), ("resume_job", "resume")] {
+            let refused = app.job_command(command, "op-x", &job_id).unwrap_err();
+            assert_eq!(refused["code"], "JOB_ACTION_NOT_ALLOWED", "{refused}");
+            assert_eq!(refused["details"]["action"], action);
+            assert_eq!(refused["details"]["state"], "awaitingStart");
+        }
+        let missing = app.job_command("stage_job", "op-y", "job-missing").unwrap_err();
+        assert_eq!(missing["code"], "NOT_FOUND");
+    }
+
+    #[test]
+    fn stage_again_from_awaiting_start_after_staged_artifact_invalid() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        let first_upload = app.job(&job_id)["uploadHostOperationId"].clone();
+        roots.fake.with_state(|state| {
+            state.files.clear();
+        });
+
+        let refused = app.start("op-start-1", &job_id, "ready").unwrap_err();
+        assert_eq!(refused["code"], "STAGED_ARTIFACT_INVALID", "{refused}");
+        assert_eq!(app.job(&job_id)["state"], "awaitingStart");
+
+        let change = app.job_command("stage_job", "op-restage", &job_id).unwrap();
+        assert_eq!(change["jobs"][0]["state"], "staging");
+        let job = app.wait_job(&job_id, "awaitingStart");
+        assert_ne!(job["uploadHostOperationId"], first_upload);
+        assert_eq!(roots.uploads(), 2);
+
+        app.start("op-start-2", &job_id, "ready").unwrap();
+        app.wait_job(&job_id, "printing");
+        assert_eq!(roots.starts(), 1);
+    }
+
+    #[test]
+    fn linked_upload_abandoned_via_p6_returns_the_job_to_assigned() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        roots.fake.fault(Route::Upload, Fault::DropMidBody);
+        let spool = app.spool();
+        let job_id = app.assign(&spool);
+        let upload = app.wait_op(&app.first_op(&job_id).id, |row| {
+            row.state == HostOperationState::Uncertain
+        });
+        assert_eq!(app.job(&job_id)["state"], "staging");
+        assert_eq!(app.job(&job_id)["allowedActions"], json!([]));
+
+        // P6's own exits are not JOB_ACTIVE-guarded.
+        app.ok("reconcile_host_operation", json!({"hostOperationId": upload.id}));
+        app.wait_op(&upload.id, |row| {
+            row.state == HostOperationState::Uncertain && row.attempts >= 1
+        });
+        app.ok(
+            "abandon_host_operation",
+            json!({"operationId": "op-abandon", "hostOperationId": upload.id,
+                   "acknowledgement": "hostStateUnknown"}),
+        );
+        let job = app.wait_job(&job_id, "assigned");
+        assert_eq!(job["lastFailure"]["kind"], "hostOperationAbandoned");
+        assert_eq!(job["lastFailure"]["hostOperationId"], json!(upload.id));
+        assert_eq!(job["activeHostOperationId"], Value::Null);
+        assert_eq!(
+            app.event_kinds(&job_id),
+            ["assigned", "stageHandedOff", "stageFailed"]
+        );
+    }
+
+    #[test]
+    fn abandoned_start_makes_the_job_outcome_unknown_with_a_requirement() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.awaiting_start();
+        roots
+            .fake
+            .fault(Route::Start, Fault::ApplyStartThenDrop(StartTrace::PrintingOnly));
+
+        let change = app.start("op-start", &job_id, "ready").unwrap();
+        let start_op = change["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        app.wait_op(&start_op, |row| row.state == HostOperationState::Uncertain);
+        roots.fake.set_reachable(false);
+        app.ok("reconcile_host_operation", json!({"hostOperationId": start_op}));
+        app.wait_op(&start_op, |row| {
+            row.state == HostOperationState::Uncertain && row.attempts >= 1
+        });
+        app.ok(
+            "abandon_host_operation",
+            json!({"operationId": "op-abandon", "hostOperationId": start_op,
+                   "acknowledgement": "hostStateUnknown"}),
+        );
+
+        let job = app.wait_job(&job_id, "outcomeUnknown");
+        assert_eq!(strings(&job["allowedActions"]), ["declareOutcome"]);
+        assert_eq!(job["settlement"], "open", "the reservation stays active");
+        let requirements = app.history(&job_id)["requirements"].clone();
+        assert_eq!(requirements.as_array().unwrap().len(), 1);
+        assert_eq!(requirements[0]["kind"], "jobOutcomeUnknown");
+        assert_eq!(requirements[0]["status"], "pending");
+        assert_eq!(roots.starts(), 1, "no second start");
+        roots.fake.set_reachable(true);
+    }
+
+    #[test]
+    fn job_commands_replay_and_reuse_follow_the_operations_ledger() {
+        let (roots, app) = started(StartSafety::ConfirmBedClear);
+        roots.fake.fault(Route::Upload, Fault::checksum_mismatch());
+        let spool = app.spool();
+        app.load(&spool);
+        let job_id = app.assign(&spool);
+        app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
+
+        let first = app.job_command("stage_job", "op-stage", &job_id).unwrap();
+        app.wait_job(&job_id, "awaitingStart");
+        let events = app.job_events(&job_id).len();
+        let replayed = app.job_command("stage_job", "op-stage", &job_id).unwrap();
+        assert_eq!(replayed["jobs"][0]["id"], first["jobs"][0]["id"]);
+        assert_eq!(replayed["jobs"][0]["state"], "awaitingStart", "the current rows");
+        assert_eq!(roots.uploads(), 2, "a replay never re-stages");
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
+
+        // The same id for another request is VALIDATION on operationId.
+        for (command, body) in [
+            ("pause_job", json!({"operationId": "op-stage", "jobId": job_id})),
+            ("stage_job", json!({"operationId": "op-stage", "jobId": "job-other"})),
+            (
+                "start_job",
+                json!({"operationId": "op-stage", "jobId": job_id, "priorState": "ready",
+                       "acknowledgement": "bedClear"}),
+            ),
+        ] {
+            let reused = app.call(command, body).unwrap_err();
+            assert_eq!(reused["code"], "VALIDATION", "{command}: {reused}");
+            assert_eq!(reused["details"]["fieldPath"], "operationId", "{command}");
+        }
+        // A Job command never reuses the Host Operation's derived id.
+        let derived = app
+            .job_command("stage_job", "op-stage#hostOperation", &job_id)
+            .unwrap_err();
+        assert_eq!(derived["code"], "VALIDATION", "{derived}");
+
+        app.start("op-go", &job_id, "ready").unwrap();
+        app.wait_job(&job_id, "printing");
+        let replayed = app.start("op-go", &job_id, "ready").unwrap();
+        assert_eq!(replayed["jobs"][0]["state"], "printing");
+        assert_eq!(roots.starts(), 1, "a replayed start sends nothing");
+    }
+
+    #[test]
+    fn dispatch_rows_and_events_never_carry_the_credential() {
+        let (_roots, app) = started(StartSafety::ConfirmBedClear);
+        let job_id = app.printing();
+        app.job_command("pause_job", "op-pause", &job_id).unwrap();
+        app.wait_job(&job_id, "paused");
+        let history = app.history(&job_id).to_string();
+        assert!(!history.contains(SECRET));
+        for event in app.events.lock().unwrap().iter() {
+            assert!(!event.contains(SECRET), "event leaks the secret");
+        }
+        let persisted: String = app
+            .text(
+                "SELECT COALESCE((SELECT group_concat(COALESCE(last_failure_json, '')) FROM jobs), '')
+                     || (SELECT group_concat(COALESCE(detail_json, '') || COALESCE(operation_id, '')) FROM job_events)",
+            )
+            .unwrap();
+        assert!(!persisted.contains(SECRET));
+        let _ = id;
+    }
 }

@@ -36,9 +36,9 @@ const P5_COMMAND_COUNT: usize = 21;
 /// lists them) and Task 9's 8 (`tests/p6_host_ops.rs`).
 const P6_COMMAND_COUNT: usize = 2 + 8;
 
-/// Commands P7 added after P6: Task 6's 11 (`tests/p7_queue.rs` and
-/// `tests/p7_jobs.rs` drive them).
-const P7_COMMAND_COUNT: usize = 11;
+/// Commands P7 added after P6: Task 6's 11 plus Task 8a's 4
+/// (`tests/p7_queue.rs` and `tests/p7_jobs.rs` drive them).
+const P7_COMMAND_COUNT: usize = 11 + 4;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

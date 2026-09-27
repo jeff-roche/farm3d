@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 100] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 104] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -444,9 +444,13 @@ contracts![
         "GetJobHistoryRequest",
         "GetJobHistoryResult"
     ),
+    ("stage_job", "StageJobRequest", "StageJobResult"),
+    ("start_job", "StartJobRequest", "StartJobResult"),
+    ("pause_job", "PauseJobRequest", "PauseJobResult"),
+    ("resume_job", "ResumeJobRequest", "ResumeJobResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 100] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 104] {
     &COMMAND_CONTRACTS
 }
 
@@ -668,7 +672,15 @@ export type RetryJobResult = CommandSuccess<QueueChange>;
 export type CancelJobRequest = ContractRequest & { operationId: string; jobId: string };
 export type CancelJobResult = CommandSuccess<QueueChange>;
 export type GetJobHistoryRequest = ContractRequest & { jobId: string };
-export type GetJobHistoryResult = CommandSuccess<JobHistory>;"#.to_string()
+export type GetJobHistoryResult = CommandSuccess<JobHistory>;
+export type StageJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type StageJobResult = CommandSuccess<QueueChange>;
+export type StartJobRequest = ContractRequest & { operationId: string; jobId: string; priorState: PriorState; acknowledgement: "bedClear" };
+export type StartJobResult = CommandSuccess<QueueChange>;
+export type PauseJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type PauseJobResult = CommandSuccess<QueueChange>;
+export type ResumeJobRequest = ContractRequest & { operationId: string; jobId: string };
+export type ResumeJobResult = CommandSuccess<QueueChange>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)

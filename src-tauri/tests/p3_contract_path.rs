@@ -911,8 +911,8 @@ const INVENTORY_COMMANDS: [&str; 10] = [
 #[test]
 fn every_inventory_command_is_registered_with_a_contract() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
-    // P7 Task 6's 11.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11);
+    // P7 Task 6's 11, plus P7 Task 8a's 4.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4);
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     for command in INVENTORY_COMMANDS {
         assert!(

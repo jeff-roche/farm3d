@@ -129,6 +129,24 @@ pub(super) fn replayed_row<R: tauri::Runtime>(
         .ok_or_else(|| CommandError::not_found(operation_id))
 }
 
+/// A replay of a (possibly) linked write: the stored row, provided it was
+/// written for the same Job as `link` names (or, with no link, for no
+/// Job). The link never runs on a replay. A stored row of another Job is a
+/// reused operation id (`VALIDATION` on `operationId`), never that Job's
+/// row returned as this one's.
+fn replayed_linked_row<R: tauri::Runtime>(
+    services: &HostOperationServices<R>,
+    operation_id: &str,
+    link: &Option<(String, LinkInTx<'_>)>,
+) -> Result<HostOperation, CommandError> {
+    let row = replayed_row(services, operation_id)?;
+    let job_id = link.as_ref().map(|(job_id, _)| job_id.as_str());
+    if row.job_id.as_deref() != job_id {
+        return Err(repository_error(RepositoryError::OperationIdReused));
+    }
+    Ok(row)
+}
+
 fn archived_error() -> CommandError {
     CommandError::validation_at("printerId", "Unarchive this Printer first.")
 }
@@ -352,7 +370,7 @@ pub async fn stage<R: tauri::Runtime>(
         OperationKind::StageSliceRevision,
         &digest,
     )? {
-        return replayed_row(services, &operation_id);
+        return replayed_linked_row(services, &operation_id, &link);
     }
     let printer = writable_printer(services, &printer_id, CapabilityKey::Upload)?;
     let config = connection_of(&printer)?;
@@ -494,7 +512,7 @@ pub async fn start<R: tauri::Runtime>(
         OperationKind::StartStagedArtifact,
         &digest,
     )? {
-        return replayed_row(services, &operation_id);
+        return replayed_linked_row(services, &operation_id, &link);
     }
     // 2–4.
     let printer = writable_printer(services, &printer_id, CapabilityKey::Start)?;
@@ -660,7 +678,7 @@ pub async fn control<R: tauri::Runtime>(
         printer_id: &printer_id,
     });
     if is_replay(services, &operation_id, operation_kind, &digest)? {
-        return replayed_row(services, &operation_id);
+        return replayed_linked_row(services, &operation_id, &link);
     }
     let printer = writable_printer(services, &printer_id, capability)?;
     let config = connection_of(&printer)?;

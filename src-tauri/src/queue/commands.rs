@@ -220,6 +220,8 @@ pub async fn list_queue<R: tauri::Runtime>(
         })
         .map_err(storage_error)?
         .map_err(CommandError::from_repository)?;
+    let mut snapshot = snapshot;
+    crate::jobs::dispatch::present_jobs(&services, &mut snapshot.jobs);
     Ok(CommandSuccess::new(snapshot))
 }
 
