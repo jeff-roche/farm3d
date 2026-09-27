@@ -79,7 +79,43 @@ describe("ReorderHandle", () => {
     expect(live?.textContent).toBe("Moved Bracket v3 to position 3 of 4");
   });
 
-  it("a pointer drag across two rows emits one move", async () => {
+  it("announces a committed pointer-drag move in the live region", async () => {
+    const onMove = vi.fn();
+    render(() => <ReorderHandle label="Bracket v3" index={1} count={5} onMove={onMove} />);
+    const handle = getHandle("Bracket v3");
+    vi.spyOn(handle, "getBoundingClientRect").mockReturnValue({ height: 32 } as DOMRect);
+
+    await fireEvent.pointerDown(handle, { pointerId: 1, clientY: 100, button: 0 });
+    await fireEvent.pointerMove(window, { pointerId: 1, clientY: 170 });
+    await fireEvent.pointerUp(window, { pointerId: 1, clientY: 170 });
+
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toBe("Moved Bracket v3 to position 4 of 5");
+  });
+
+  it("ignores a pointerdown while a drag is already active", async () => {
+    const onMove = vi.fn();
+    render(() => <ReorderHandle label="Bracket v3" index={1} count={5} onMove={onMove} />);
+    const handle = getHandle("Bracket v3");
+    vi.spyOn(handle, "getBoundingClientRect").mockReturnValue({ height: 32 } as DOMRect);
+
+    await fireEvent.pointerDown(handle, { pointerId: 1, clientY: 100, button: 0 });
+    await fireEvent.pointerMove(window, { pointerId: 1, clientY: 170 }); // -> target index 3
+
+    // A second pointerdown mid-drag must be ignored, not restart the drag
+    // (which would reset the start position) or add a duplicate listener
+    // set (which would fire onMove twice for one pointerup).
+    await fireEvent.pointerDown(handle, { pointerId: 2, clientY: 0, button: 0 });
+
+    await fireEvent.pointerUp(window, { pointerId: 1, clientY: 170 });
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove).toHaveBeenCalledWith(1, 3);
+  });
+
+  // No `[data-reorder-row]` ancestor in any of these three — they exercise
+  // the fallback path (the handle's own measured height as a uniform unit).
+  it("a pointer drag across two rows emits one move (fallback: no data-reorder-row ancestor)", async () => {
     const onMove = vi.fn();
     render(() => <ReorderHandle label="Bracket v3" index={1} count={5} onMove={onMove} />);
     const handle = getHandle("Bracket v3");
@@ -93,7 +129,7 @@ describe("ReorderHandle", () => {
     expect(onMove).toHaveBeenCalledWith(1, 3);
   });
 
-  it("clamps a pointer drag that overshoots the list", async () => {
+  it("clamps a pointer drag that overshoots the list (fallback path)", async () => {
     const onMove = vi.fn();
     render(() => <ReorderHandle label="Bracket v3" index={1} count={3} onMove={onMove} />);
     const handle = getHandle("Bracket v3");
@@ -105,6 +141,62 @@ describe("ReorderHandle", () => {
 
     expect(onMove).toHaveBeenCalledTimes(1);
     expect(onMove).toHaveBeenCalledWith(1, 2);
+  });
+
+  describe("row geometry (data-reorder-row)", () => {
+    function ThreeRowList(props: { onMove: (from: number, to: number) => void }) {
+      return (
+        <div>
+          <div data-reorder-row>
+            <ReorderHandle label="Row A" index={0} count={3} onMove={props.onMove} />
+          </div>
+          <div data-reorder-row>Row B</div>
+          <div data-reorder-row>Row C</div>
+        </div>
+      );
+    }
+
+    // Rows of different heights: mid 10, mid 60, mid 120.
+    function mockThreeRowRects() {
+      const rows = Array.from(document.querySelectorAll("[data-reorder-row]"));
+      const specs = [
+        { top: 0, height: 20 },
+        { top: 20, height: 80 },
+        { top: 100, height: 40 },
+      ];
+      rows.forEach((row, i) => {
+        vi.spyOn(row, "getBoundingClientRect").mockReturnValue(specs[i] as DOMRect);
+      });
+    }
+
+    it("lands on the middle row by midpoint, not a uniform step", async () => {
+      const onMove = vi.fn();
+      render(() => <ThreeRowList onMove={onMove} />);
+      mockThreeRowRects();
+      const handle = getHandle("Row A");
+
+      // Between row A's midpoint (10) and row B's midpoint (60): one row passed.
+      await fireEvent.pointerDown(handle, { pointerId: 1, clientY: 5, button: 0 });
+      await fireEvent.pointerMove(window, { pointerId: 1, clientY: 30 });
+      await fireEvent.pointerUp(window, { pointerId: 1, clientY: 30 });
+
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove).toHaveBeenCalledWith(0, 1);
+    });
+
+    it("clamps to the last row when the pointer overshoots", async () => {
+      const onMove = vi.fn();
+      render(() => <ThreeRowList onMove={onMove} />);
+      mockThreeRowRects();
+      const handle = getHandle("Row A");
+
+      await fireEvent.pointerDown(handle, { pointerId: 1, clientY: 5, button: 0 });
+      await fireEvent.pointerMove(window, { pointerId: 1, clientY: 500 });
+      await fireEvent.pointerUp(window, { pointerId: 1, clientY: 500 });
+
+      expect(onMove).toHaveBeenCalledTimes(1);
+      expect(onMove).toHaveBeenCalledWith(0, 2);
+    });
   });
 
   it("Escape during a drag cancels and emits nothing", async () => {
@@ -155,7 +247,7 @@ describe("ReorderHandle", () => {
     expect(moveToBottom.closest('[role="menuitem"]')).toHaveAttribute("data-disabled");
   });
 
-  it("disabled blocks keyboard and pointer moves and hides the menu", async () => {
+  it("disabled blocks keyboard and pointer moves on the handle", async () => {
     const onMove = vi.fn();
     render(() => <ReorderHandle label="Bracket v3" index={1} count={4} onMove={onMove} disabled />);
     const handle = getHandle("Bracket v3");
@@ -166,6 +258,18 @@ describe("ReorderHandle", () => {
     await fireEvent.pointerUp(window, { pointerId: 1, clientY: 500 });
 
     expect(onMove).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Move Bracket v3")).not.toBeInTheDocument();
+  });
+
+  it("disabled keeps the menu trigger present but inert, not hidden", async () => {
+    render(() => <ReorderHandle label="Bracket v3" index={1} count={4} onMove={vi.fn()} disabled />);
+
+    // Present, not removed from the tree.
+    const trigger = screen.getByLabelText("Move Bracket v3");
+    expect(trigger).toBeInTheDocument();
+    expect(trigger.closest('[aria-disabled="true"]')).not.toBeNull();
+
+    // Doesn't open on pointerdown.
+    await fireEvent.pointerDown(trigger, { pointerType: "mouse", button: 0 });
+    expect(screen.queryByText("Move to top")).not.toBeInTheDocument();
   });
 });

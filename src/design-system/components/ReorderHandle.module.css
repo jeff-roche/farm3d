@@ -47,6 +47,17 @@
   color: var(--f3d-color-text);
 }
 
+/* The actual `[data-disabled]`/`[aria-disabled]` element is Kobalte's own
+   trigger span, one level up from `.menuTrigger` (our `trigger` content) —
+   same dimmed treatment as `.handle:disabled`, no hover, no pointer
+   affordance. */
+[data-disabled] > .menuTrigger,
+[aria-disabled="true"] > .menuTrigger {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .dropIndicator {
   position: absolute;
   left: 0;

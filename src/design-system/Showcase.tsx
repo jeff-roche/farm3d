@@ -498,7 +498,8 @@ export function Showcase() {
 
 /** A small reorderable list — each row gets its own `ReorderHandle`, driven
  *  by keyboard (Alt+ArrowUp/Down, Alt+Home/End), its companion menu, or a
- *  pointer drag. */
+ *  pointer drag. Each `<li>` carries `data-reorder-row`, so a drag reads
+ *  real per-row geometry instead of `ReorderHandle`'s own-height fallback. */
 function ReorderHandleDemo() {
   const [items, setItems] = createSignal(["Bracket v3", "Hinge clip", "Enclosure lid", "Mount plate"]);
 
@@ -515,7 +516,7 @@ function ReorderHandleDemo() {
     <ol class={styles.column} style={{ "list-style": "none", margin: 0, padding: 0 }}>
       <For each={items()}>
         {(label, index) => (
-          <li class={styles.row}>
+          <li class={styles.row} data-reorder-row>
             <ReorderHandle label={label} index={index()} count={items().length} onMove={move} />
             <span>{label}</span>
           </li>

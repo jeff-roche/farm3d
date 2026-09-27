@@ -19,12 +19,16 @@ export interface DropdownMenuProps {
   /** Rendered as the content of Kobalte's own trigger element — pass text/icon content, not another button. */
   trigger: JSX.Element;
   items: DropdownMenuEntry[];
+  /** Keeps the trigger present but inert (no open on pointerdown/keydown, `aria-disabled`) rather than removing it. */
+  disabled?: boolean;
 }
 
 export function DropdownMenu(props: DropdownMenuProps) {
   return (
     <KDropdownMenu>
-      <KDropdownMenu.Trigger as="span">{props.trigger}</KDropdownMenu.Trigger>
+      <KDropdownMenu.Trigger as="span" disabled={props.disabled}>
+        {props.trigger}
+      </KDropdownMenu.Trigger>
       <KDropdownMenu.Portal>
         <KDropdownMenu.Content class={styles.content}>
           <For each={props.items}>
