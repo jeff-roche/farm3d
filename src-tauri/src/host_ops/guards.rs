@@ -278,6 +278,7 @@ mod tests {
                 host: "192.0.2.1".to_string(),
                 port: 7125,
             },
+            job_id: None,
         }
     }
 

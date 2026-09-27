@@ -206,6 +206,10 @@ struct CachedHostFacts {
     observed_at: String,
 }
 
+/// The in-process change broadcast's capacity (P7 D4). A subscriber that
+/// falls further behind than this sees `Lagged` and re-reads.
+const CHANGE_BROADCAST_CAPACITY: usize = 256;
+
 /// P6's Host Operation services (spec "Module layout"): the repository's
 /// callers, the executor, the reconciler, the `hostOperations` stream, the
 /// host-facts cache, the per-Printer locks, and the clock.
@@ -234,6 +238,8 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     retry_attempts_run: AtomicUsize,
     /// How many retry timers were scheduled (diagnostics, tests).
     retry_timers_scheduled: AtomicUsize,
+    /// P7 D4/D6: every published row, in-process, in publish order.
+    changes: tokio::sync::broadcast::Sender<HostOperation>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -275,6 +281,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             before_outcome_publish: Mutex::new(None),
             retry_attempts_run: AtomicUsize::new(0),
             retry_timers_scheduled: AtomicUsize::new(0),
+            changes: tokio::sync::broadcast::channel(CHANGE_BROADCAST_CAPACITY).0,
         }
     }
 
@@ -346,11 +353,25 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         });
     }
 
-    /// Emits one event per row. Call only after the rows' changes committed.
+    /// Emits one event per row, and sends each row on the in-process
+    /// change broadcast. Call only after the rows' changes committed, and
+    /// (as every caller does) under the Printer's lock where a concurrent
+    /// commit could reorder them, so both go out in commit order.
     pub(crate) fn publish(&self, rows: &[HostOperation]) {
         if let Some(app) = self.app.get() {
             self.stream.publish(app, rows);
         }
+        for row in rows {
+            // An error only means nobody is subscribed.
+            let _ = self.changes.send(row.clone());
+        }
+    }
+
+    /// P7 D6/D7: a receiver of every Host Operation row published from now
+    /// on (write-ahead, mark-sent, outcomes, reconciliation, abandon), in
+    /// publish order. Never sent on a replay.
+    pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<HostOperation> {
+        self.changes.subscribe()
     }
 
     /// D5 "Serialization": the one lock per Printer that write commands and

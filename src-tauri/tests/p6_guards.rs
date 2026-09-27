@@ -82,6 +82,7 @@ fn new_upload(operation_id: &str, printer_id: &str) -> NewHostOperation {
         host_path: "farm3d/slr-a.gcode".to_string(),
         history_mark: None,
         endpoint: endpoint(),
+        job_id: None,
     }
 }
 

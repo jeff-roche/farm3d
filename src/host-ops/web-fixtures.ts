@@ -263,6 +263,7 @@ export function buildWebHostOpsFixture(): WebHostOpsFixture {
       dispatchedAt: "2026-09-23T10:00:01Z",
       uncertainSince: null,
       resolvedAt: "2026-09-23T10:00:05Z",
+      jobId: null,
     },
     {
       id: WEB_HOST_OPS_FAILED_OPERATION,
@@ -286,6 +287,7 @@ export function buildWebHostOpsFixture(): WebHostOpsFixture {
       dispatchedAt: "2026-09-24T09:00:01Z",
       uncertainSince: null,
       resolvedAt: "2026-09-24T09:00:02Z",
+      jobId: null,
     },
     {
       id: WEB_HOST_OPS_UNCERTAIN_OPERATION,
@@ -309,6 +311,7 @@ export function buildWebHostOpsFixture(): WebHostOpsFixture {
       dispatchedAt: "2026-09-24T10:59:01Z",
       uncertainSince: "2026-09-24T10:59:30Z",
       resolvedAt: null,
+      jobId: null,
     },
   ];
 

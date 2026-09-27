@@ -87,6 +87,7 @@ function mockRow(overrides: Partial<HostOperation>): HostOperation {
     dispatchedAt: null,
     uncertainSince: null,
     resolvedAt: null,
+    jobId: null,
     ...overrides,
   };
 }

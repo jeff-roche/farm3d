@@ -1319,6 +1319,7 @@ impl ReadOnlyApp {
                 host: "127.0.0.1".to_string(),
                 port: gate.local.port(),
             },
+            job_id: None,
         };
         let since = (chrono::Utc::now() - chrono::Duration::from_std(age).unwrap())
             .format("%Y-%m-%dT%H:%M:%SZ")

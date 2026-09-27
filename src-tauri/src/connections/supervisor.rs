@@ -147,13 +147,20 @@ pub type OnlineHook = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct StatusMap {
     state: Mutex<StatusState>,
     online_hook: Mutex<Option<OnlineHook>>,
+    /// P7 D6/D7: the id of each Printer whose status changed, in-process.
+    status_changes: tokio::sync::broadcast::Sender<String>,
 }
+
+/// The in-process status broadcast's capacity (P7). A subscriber that
+/// falls further behind sees `Lagged` and re-reads.
+const STATUS_BROADCAST_CAPACITY: usize = 256;
 
 impl Default for StatusMap {
     fn default() -> Self {
         Self {
             state: Mutex::new(StatusState::default()),
             online_hook: Mutex::new(None),
+            status_changes: tokio::sync::broadcast::channel(STATUS_BROADCAST_CAPACITY).0,
         }
     }
 }
@@ -167,6 +174,12 @@ fn becomes_online(previous: Option<&PrinterStatus>, next: &PrinterStatus) -> boo
 impl StatusMap {
     fn set_online_hook(&self, hook: OnlineHook) {
         *self.online_hook.lock().expect("online hook lock") = Some(hook);
+    }
+
+    /// Sent with every `printer.status.changed` envelope, after the map
+    /// holds the new status. An error only means nobody is subscribed.
+    fn notify_changed(&self, id: &str) {
+        let _ = self.status_changes.send(id.to_string());
     }
 
     fn notify_online(&self, id: &str) {
@@ -252,6 +265,7 @@ impl StatusMap {
             state.hydrated.remove(id);
         }
         drop(state);
+        self.notify_changed(id);
         if online {
             self.notify_online(id);
         }
@@ -285,6 +299,7 @@ impl StatusMap {
             state.hydrated.remove(id);
         }
         drop(state);
+        self.notify_changed(id);
         if online {
             self.notify_online(id);
         }
@@ -914,6 +929,13 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
     /// earlier hook.
     pub fn set_online_hook(&self, hook: OnlineHook) {
         self.statuses.set_online_hook(hook);
+    }
+
+    /// P7 D6/D7: a receiver of the id of every Printer whose status
+    /// changes from now on, sent where `printer.status.changed` is emitted
+    /// (after the status map holds the new status).
+    pub fn subscribe_status(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.statuses.status_changes.subscribe()
     }
 
     pub async fn reconciliation_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
