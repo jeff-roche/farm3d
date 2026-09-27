@@ -719,7 +719,8 @@ mod dispatch {
 
     use crate::common::fake_moonraker::{Fault, Route, StartTrace};
     use crate::p7_dispatch_rig::{
-        boot, id, Driver, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR, WAIT,
+        boot, boot_tuned, id, no_poll, status_of, Driver, Roots, Running, HOST_PATH, PRINTER,
+        SECRET, SLR, WAIT,
     };
 
     fn strings(value: &Value) -> Vec<String> {
@@ -912,7 +913,13 @@ mod dispatch {
     #[test]
     fn an_offline_printer_defers_the_driver_stage_until_it_is_online() {
         let roots = Roots::new(StartSafety::ConfirmBedClear);
-        let app = boot(&roots, Driver::Off);
+        let app = boot_tuned(
+            &roots,
+            Driver::Off,
+            status_of(OperationalState::Ready),
+            no_poll(),
+            None,
+        );
         let spool = app.spool();
         let job_id = app.assign(&spool);
         app.status(OperationalState::Offline);
@@ -924,8 +931,10 @@ mod dispatch {
         assert_eq!(job["lastFailure"], Value::Null);
         assert!(app.ops(&job_id).is_empty());
 
+        // The status change stages it: the driver's poll never ran again.
         app.status(OperationalState::Ready);
-        app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
+        app.wait_job(&job_id, "awaitingStart");
+        assert_eq!(app.services.jobs.resyncs(), 1, "no poll ran after the first pass");
         app.quiesce();
         assert_eq!(roots.uploads(), 1);
     }
@@ -1473,8 +1482,8 @@ mod tracking {
 
     use crate::common::fake_moonraker::{Fault, FakeMoonraker, Route, StartTrace};
     use crate::p7_dispatch_rig::{
-        boot, boot_tuned, fast, id, status_of, Driver, ManualClock, Roots, Running, HOST_PATH,
-        PRINTER, SECRET, SLR, WAIT,
+        boot_tuned, fast, id, no_poll, status_of, Driver, ManualClock, Roots, Running,
+        HOST_PATH, PRINTER, SECRET, SLR, WAIT,
     };
 
     fn strings(value: &Value) -> Vec<String> {
@@ -1568,17 +1577,18 @@ mod tracking {
         assert_eq!(roots.uploads(), 1);
     }
 
-    /// A status is a hint that triggers a check at once (D7): with the
-    /// production 10 s poll, an ended status on our file still ends the Job
-    /// well inside that.
+    /// A status is a hint that triggers a check at once (D7). The driver's
+    /// poll never comes after its first pass here, so only the hint can
+    /// have read the history that ended the Job.
     #[test]
     fn an_ended_status_on_our_file_checks_history_at_once() {
         let roots = roots();
-        let app = boot(&roots, Driver::Started);
+        let app = boot_tuned(&roots, Driver::Started, ready(), no_poll(), None);
         let job_id = app.printing();
         roots.fake.finish_print("completed");
         app.mirror(&roots.fake);
-        app.wait_job_within(&job_id, "completed", Duration::from_secs(5));
+        app.wait_job(&job_id, "completed");
+        assert_eq!(app.services.jobs.resyncs(), 1, "no poll ran after the first pass");
     }
 
     /// A status alone is never proof: finished on our file with history

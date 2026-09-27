@@ -32,7 +32,7 @@ use common::fake_moonraker::FakeMoonraker;
 use farm3d_lib::host_ops::Clock;
 use farm3d_lib::printers::repository::PrinterRepository;
 use p7_dispatch_rig::{
-    boot, boot_tuned, boot_with, connecting, fast, id, status_from, status_of, Driver,
+    boot, boot_tuned, connecting, fast, id, no_poll, status_from, status_of, Driver,
     ManualClock, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR,
 };
 use std::sync::Arc;
@@ -498,7 +498,7 @@ fn restart_after_assign_stages_once_when_the_printer_connects_late() {
     let job_id = app.assign(&spool);
     crash(app);
 
-    let app = boot_with(&roots, Driver::Started, connecting());
+    let app = boot_tuned(&roots, Driver::Started, connecting(), no_poll(), None);
     app.wait_first_pass();
     app.quiesce();
     let job = app.job(&job_id);
@@ -506,10 +506,11 @@ fn restart_after_assign_stages_once_when_the_printer_connects_late() {
     assert_eq!(job["lastFailure"], Value::Null, "not reachable yet is a deferral");
     assert!(app.ops(&job_id).is_empty());
 
-    // The status change stages it, well before the driver's 10 s poll.
+    // The status change stages it: the driver's poll never ran again.
     app.status(OperationalState::Ready);
-    let job = app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
+    let job = app.wait_job(&job_id, "awaitingStart");
     assert_eq!(job["lastFailure"], Value::Null);
+    assert_eq!(app.services.jobs.resyncs(), 1, "no poll ran after the first pass");
     app.quiesce();
     app.status(OperationalState::Ready);
     app.quiesce();

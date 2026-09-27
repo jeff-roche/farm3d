@@ -355,6 +355,16 @@ impl Clock for ManualClock {
     }
 }
 
+/// A history poll (the driver's resync) that never comes during a test:
+/// after the first pass, only a wake can move a Job, so a test that ends
+/// with `resyncs() == 1` proves the wake did it.
+pub fn no_poll() -> JobTimings {
+    JobTimings {
+        history_poll: Duration::from_secs(3600),
+        ..JobTimings::default()
+    }
+}
+
 /// Short tracker timings: a 200 ms history poll, the production limit of
 /// three inconclusive polls, and the production 30 minutes before a
 /// declare (tests move a [`ManualClock`] instead of waiting).
@@ -823,15 +833,12 @@ impl Running {
         self.ok("get_job_history", json!({"jobId": job_id}))
     }
 
-    /// Waits until the Job's stored state is `state`.
+    /// Waits until the Job's stored state is `state`. To prove a wake (not
+    /// the driver's poll) moved the Job, boot with [`no_poll`] and check
+    /// `resyncs()` afterwards: a deadline shorter than the poll proves
+    /// nothing once a slow machine can reach the poll first.
     pub fn wait_job(&self, job_id: &str, state: &str) -> Value {
-        self.wait_job_within(job_id, state, WAIT)
-    }
-
-    /// [`Running::wait_job`] with its own deadline: shorter than the
-    /// driver's 10 s poll, it proves a wake (not the poll) moved the Job.
-    pub fn wait_job_within(&self, job_id: &str, state: &str, within: Duration) -> Value {
-        let deadline = Instant::now() + within;
+        let deadline = Instant::now() + WAIT;
         loop {
             // One SQL read per round; the presented Job only at the end.
             let stored = self.text(&format!("SELECT state FROM jobs WHERE id = '{job_id}'"));
