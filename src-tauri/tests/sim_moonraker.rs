@@ -1673,3 +1673,106 @@ async fn p6_capability_detection_on_every_simulator_variant() {
 
     sim.reset();
 }
+
+// --- P7: the tracker's failed and cancelled verdicts ----------------------------------
+//
+// The Job tracker (P7 spec D7) ends a Job from the host's history, never
+// from its live status. These tests prove its two unhappy verdicts against
+// real Moonraker history: a print cancelled through P6's cancel, and one
+// ended by a Klipper shutdown (M112). Each runs the production
+// `job_history` read and the tracker's pure `verdict_from_history` over it,
+// pinning the history job exactly as the tracker would (the start row's
+// `history_mark` and `dispatched_at`).
+
+use farm3d_lib::jobs::tracker::{verdict_from_history, Observed, TrackedJob, TrackerVerdict};
+
+/// Stages and starts `long_gcode(tag)` through P6, waits until the
+/// simulator is printing it, and returns the running app (kept alive for
+/// the caller's control writes), the Job-shaped view of the start, and the
+/// host path.
+fn p7_printing(sim: &MoonrakerSim, rig: &SimRig, tag: &str) -> (SimRunning, TrackedJob) {
+    let slr = rig.slice_revision(&long_gcode(tag));
+    let running = rig.boot();
+    let upload = running.staged(sim, &format!("op-stage-{tag}"), &slr);
+    let start = running.start(sim, &format!("op-start-{tag}"), &upload);
+    let row = running.wait_settled(&start);
+    assert_eq!(row.state, HostOperationState::Succeeded, "{row:?}");
+    wait_for_print_state(sim, &["printing"]);
+    let dispatched_at = chrono::DateTime::parse_from_rfc3339(
+        row.dispatched_at.as_deref().expect("a sent start"),
+    )
+    .expect("an RFC 3339 dispatched_at");
+    let tracked = TrackedJob {
+        host_path: host_path_of(&slr),
+        history_mark: row.history_mark.expect("the start's history mark") as u64,
+        host_job_id: None,
+        earliest_start_epoch_s: Some(dispatched_at.timestamp() as f64 - 30.0),
+    };
+    (running, tracked)
+}
+
+/// The tracker's verdict once the history job has left `in_progress`: the
+/// production history read, then the pure verdict (never from status).
+fn p7_final_verdict(sim: &MoonrakerSim, tracked: &TrackedJob) -> (String, TrackerVerdict) {
+    let adapter = sim_capabilities(sim, None);
+    let observed = Observed {
+        same_endpoint: true,
+        reports_our_file: false,
+    };
+    sim::wait_until("the history job to end", P6_WAIT, || {
+        let history = block_on(adapter.job_history(HistoryQuery {
+            since_epoch_s: None,
+            limit: 50,
+        }))
+        .expect("job history");
+        let (pinned, verdict) = verdict_from_history(tracked, &history, observed);
+        let pinned = pinned?;
+        let job = history.iter().find(|job| job.job_id == pinned)?;
+        (job.status != "in_progress").then(|| (job.status.clone(), verdict))
+    })
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// A print cancelled through P6's cancel ends `cancelled` in history, and
+/// the tracker's verdict is `Cancelled` (the Job's `cancelledByOperator`
+/// path).
+#[test]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+fn p7_a_cancelled_print_gives_the_tracker_a_cancelled_verdict() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    let rig = SimRig::new(&sim, sim_timings());
+    let (running, tracked) = p7_printing(&sim, &rig, "p7-cancel");
+
+    running.observe_host(&sim);
+    let cancel = running.control("cancel", "op-cancel-p7");
+    assert_eq!(
+        running.wait_settled(&cancel).state,
+        HostOperationState::Succeeded
+    );
+
+    let (status, verdict) = p7_final_verdict(&sim, &tracked);
+    assert_eq!(status, "cancelled");
+    assert_eq!(verdict, TrackerVerdict::Cancelled);
+    sim.reset();
+}
+
+/// An emergency stop mid-print (M112, the simulator only) ends the history
+/// job `klippy_shutdown`, and the tracker's verdict is `Failed`.
+#[test]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+fn p7_an_emergency_stop_gives_the_tracker_a_failed_verdict() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    let rig = SimRig::new(&sim, sim_timings());
+    let (_running, tracked) = p7_printing(&sim, &rig, "p7-shutdown");
+
+    sim.emergency_stop();
+
+    let (status, verdict) = p7_final_verdict(&sim, &tracked);
+    assert_eq!(status, "klippy_shutdown");
+    assert_eq!(verdict, TrackerVerdict::Failed);
+    sim.reset();
+}

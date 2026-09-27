@@ -7,15 +7,22 @@
 //! recovery, then the runtimes. Every boot after the first is a restart
 //! (`p6_tracer.rs`'s pattern).
 //!
+//! `p7_tracer.rs` also points the rig's Printer at the Moonraker simulator
+//! instead of the fake ([`Roots::on_host`]), with its own G-code and
+//! timings ([`RigTimings`]); [`WriteCounts`] counts the uploads and starts
+//! farm3d sends, whichever host is behind the adapter.
+//!
 //! Each test crate uses a different subset, hence the `dead_code` allow.
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use farm3d_lib::connections::capabilities::{
-    ArtifactStaging, CapabilityEvidence, CapabilityKey, CapabilityMap, CapabilityState, EvidenceTier, HostFacts,
-    HostStateQuery, PrintControl, PrinterCapabilities, UnsupportedReason,
+    ArtifactStaging, CapabilityEvidence, CapabilityKey, CapabilityMap, CapabilityState,
+    CommandFailure, EvidenceTier, HostFacts, HostStateQuery, LocateOutcome, PrintControl,
+    PrinterCapabilities, StagedArtifact, UnsupportedReason,
 };
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
@@ -76,6 +83,72 @@ const POLL: Duration = Duration::from_millis(50);
 struct SimFactory {
     upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
     tier: Arc<Mutex<EvidenceTier>>,
+    moonraker: MoonrakerTimings,
+    writes: Arc<WriteCounts>,
+}
+
+/// How many uploads and starts farm3d has sent through the adapter, counted
+/// just before each request goes out. For a host that keeps no request log
+/// (the simulator), this is the only count of uploads there is.
+#[derive(Default, Debug)]
+pub struct WriteCounts {
+    uploads: AtomicUsize,
+    starts: AtomicUsize,
+}
+
+impl WriteCounts {
+    pub fn uploads(&self) -> usize {
+        self.uploads.load(Ordering::SeqCst)
+    }
+
+    pub fn starts(&self) -> usize {
+        self.starts.load(Ordering::SeqCst)
+    }
+}
+
+/// The production adapter, with every upload and start counted.
+struct Counted {
+    inner: MoonrakerCapabilities,
+    writes: Arc<WriteCounts>,
+}
+
+#[async_trait::async_trait]
+impl ArtifactStaging for Counted {
+    async fn upload(
+        &self,
+        artifact: &StagedArtifact,
+        body: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+    ) -> Result<(), CommandFailure> {
+        self.writes.uploads.fetch_add(1, Ordering::SeqCst);
+        self.inner.upload(artifact, body).await
+    }
+
+    async fn locate(
+        &self,
+        artifact: &StagedArtifact,
+    ) -> Result<LocateOutcome, farm3d_lib::connections::ConnectionError> {
+        self.inner.locate(artifact).await
+    }
+}
+
+#[async_trait::async_trait]
+impl PrintControl for Counted {
+    async fn start(&self, host_path: &str) -> Result<(), CommandFailure> {
+        self.writes.starts.fetch_add(1, Ordering::SeqCst);
+        self.inner.start(host_path).await
+    }
+
+    async fn pause(&self) -> Result<(), CommandFailure> {
+        self.inner.pause().await
+    }
+
+    async fn resume(&self) -> Result<(), CommandFailure> {
+        self.inner.resume().await
+    }
+
+    async fn cancel(&self) -> Result<(), CommandFailure> {
+        self.inner.cancel().await
+    }
 }
 
 /// The adapter's timeouts against the in-process fake. No test here needs
@@ -95,12 +168,17 @@ fn rig_moonraker_timings() -> MoonrakerTimings {
     }
 }
 
-fn adapter(
-    config: &ConnectionConfig,
-    key: Option<zeroize::Zeroizing<String>>,
-) -> Option<MoonrakerCapabilities> {
-    (config.kind == MOONRAKER_KIND)
-        .then(|| MoonrakerCapabilities::new(config, key, rig_moonraker_timings()))
+impl SimFactory {
+    fn adapter(
+        &self,
+        config: &ConnectionConfig,
+        key: Option<zeroize::Zeroizing<String>>,
+    ) -> Option<Counted> {
+        (config.kind == MOONRAKER_KIND).then(|| Counted {
+            inner: MoonrakerCapabilities::new(config, key, self.moonraker),
+            writes: Arc::clone(&self.writes),
+        })
+    }
 }
 
 impl CapabilityFactory for SimFactory {
@@ -139,7 +217,8 @@ impl CapabilityFactory for SimFactory {
         config: &ConnectionConfig,
         key: Option<zeroize::Zeroizing<String>>,
     ) -> Option<Box<dyn ArtifactStaging>> {
-        adapter(config, key).map(|adapter| Box::new(adapter) as Box<dyn ArtifactStaging>)
+        self.adapter(config, key)
+            .map(|adapter| Box::new(adapter) as Box<dyn ArtifactStaging>)
     }
 
     fn control(
@@ -147,7 +226,8 @@ impl CapabilityFactory for SimFactory {
         config: &ConnectionConfig,
         key: Option<zeroize::Zeroizing<String>>,
     ) -> Option<Box<dyn PrintControl>> {
-        adapter(config, key).map(|adapter| Box::new(adapter) as Box<dyn PrintControl>)
+        self.adapter(config, key)
+            .map(|adapter| Box::new(adapter) as Box<dyn PrintControl>)
     }
 
     fn host_state(
@@ -155,13 +235,16 @@ impl CapabilityFactory for SimFactory {
         config: &ConnectionConfig,
         key: Option<zeroize::Zeroizing<String>>,
     ) -> Option<Box<dyn HostStateQuery>> {
-        adapter(config, key).map(|adapter| Box::new(adapter) as Box<dyn HostStateQuery>)
+        (config.kind == MOONRAKER_KIND).then(|| {
+            Box::new(MoonrakerCapabilities::new(config, key, self.moonraker))
+                as Box<dyn HostStateQuery>
+        })
     }
 }
 
 /// A short verification window, and automatic retries an hour out so none
 /// races a test's own steps.
-fn host_ops_timings() -> HostOpsTimings {
+fn rig_host_ops_timings() -> HostOpsTimings {
     HostOpsTimings {
         verify_window: Duration::from_millis(800),
         verify_poll_interval: Duration::from_millis(50),
@@ -175,6 +258,26 @@ fn unused_factory(
     _key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<Box<dyn PrinterConnection>> {
     None
+}
+
+/// The adapter's and host operations' timings, and how long any one wait
+/// on the running app may take. [`RigTimings::default`] suits the
+/// in-process fake; a slower host (the simulator) needs longer ones.
+#[derive(Clone, Copy)]
+pub struct RigTimings {
+    pub moonraker: MoonrakerTimings,
+    pub host_ops: HostOpsTimings,
+    pub wait: Duration,
+}
+
+impl Default for RigTimings {
+    fn default() -> Self {
+        Self {
+            moonraker: rig_moonraker_timings(),
+            host_ops: rig_host_ops_timings(),
+            wait: WAIT,
+        }
+    }
 }
 
 pub fn gcode() -> Vec<u8> {
@@ -192,13 +295,12 @@ fn profile_snapshot() -> ProfileSnapshot {
     )
 }
 
-/// A farm3d Slice Revision (PLA 1.75, 0.4 mm, 12.5 g) whose G-code is in
-/// the content store, so an upload has real bytes to send.
-fn seed_slice_revision(storage: &Arc<Storage>) {
-    let bytes = gcode();
+/// A farm3d Slice Revision (PLA 1.75, 0.4 mm, 12.5 g) whose G-code,
+/// `bytes`, is in the content store, so an upload has real bytes to send.
+fn seed_slice_revision(storage: &Arc<Storage>, bytes: &[u8]) {
     let content = ContentStore::open(storage.paths().content_root()).unwrap();
     let staged = content
-        .stage_bytes(&bytes, "seed-dispatch", "part.gcode")
+        .stage_bytes(bytes, "seed-dispatch", "part.gcode")
         .unwrap();
     let sha256 = staged.sha256.clone();
     let size = bytes.len() as i64;
@@ -265,7 +367,13 @@ pub struct Roots {
     pub paths: StoragePaths,
     pub lease: MetadataRootLease,
     credentials: tempfile::TempDir,
+    /// The in-process host. Idle when the Printer points elsewhere
+    /// ([`Roots::on_host`]).
     pub fake: FakeMoonraker,
+    /// The uploads and starts farm3d has sent, whichever host is behind
+    /// the Printer.
+    pub writes: Arc<WriteCounts>,
+    pub timings: RigTimings,
     /// When set, the Printer's `upload` capability is unsupported.
     pub upload_unsupported: Arc<std::sync::atomic::AtomicBool>,
     /// The evidence tier every supported capability carries (`sim` by
@@ -277,6 +385,18 @@ impl Roots {
     /// One Moonraker Printer on the fake (one Material Slot, the given
     /// Start-safety rule) and the rig's Slice Revision.
     pub fn new(start_safety: StartSafety) -> Self {
+        Self::on_host(start_safety, None, &gcode(), RigTimings::default())
+    }
+
+    /// [`Roots::new`], with the Printer's Connection `target` (the fake,
+    /// with its API key, when `None`), the Slice Revision's G-code
+    /// `bytes`, and `timings`.
+    pub fn on_host(
+        start_safety: StartSafety,
+        target: Option<ConnectionConfig>,
+        bytes: &[u8],
+        timings: RigTimings,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let paths =
             StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
@@ -288,8 +408,10 @@ impl Roots {
             .set(CREDENTIAL_REF, SECRET)
             .unwrap();
         let storage = Arc::new(Storage::open(paths.clone(), &lease).unwrap());
-        let mut config = fake.config();
-        config.credential_ref = Some(CREDENTIAL_REF.to_string());
+        let config = target.unwrap_or_else(|| ConnectionConfig {
+            credential_ref: Some(CREDENTIAL_REF.to_string()),
+            ..fake.config()
+        });
         PrinterRepository::new(Arc::clone(&storage))
             .create_with_layout(
                 StoredPrinter {
@@ -303,13 +425,15 @@ impl Roots {
                 &[],
             )
             .unwrap();
-        seed_slice_revision(&storage);
+        seed_slice_revision(&storage, bytes);
         Self {
             _temp: temp,
             paths,
             lease,
             credentials,
             fake,
+            writes: Arc::default(),
+            timings,
             upload_unsupported: Arc::default(),
             evidence_tier: Arc::new(Mutex::new(EvidenceTier::Sim)),
         }
@@ -384,6 +508,8 @@ pub struct Running {
     pub services: Arc<RuntimeServices<MockRuntime>>,
     pub storage: Arc<Storage>,
     pub events: Arc<Mutex<Vec<String>>>,
+    /// How long any one wait may take ([`RigTimings::wait`]).
+    pub wait: Duration,
 }
 
 /// Dropping a running app stops its Job runtime. `RuntimeServices` holds
@@ -450,7 +576,10 @@ pub fn boot_prepared(
     let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
         upload_unsupported: Arc::clone(&roots.upload_unsupported),
         tier: Arc::clone(&roots.evidence_tier),
+        moonraker: roots.timings.moonraker,
+        writes: Arc::clone(&roots.writes),
     });
+    let host_ops_timings = roots.timings.host_ops;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let (app, webview, manager, services) = common::runtime_with(
         tauri::generate_handler![
@@ -466,6 +595,7 @@ pub fn boot_prepared(
             farm3d_lib::jobs::commands::resume_job,
             farm3d_lib::jobs::commands::cancel_job,
             farm3d_lib::jobs::commands::release_job,
+            farm3d_lib::jobs::commands::retry_job,
             farm3d_lib::jobs::commands::get_job_history,
             farm3d_lib::jobs::commands::declare_job_outcome,
             farm3d_lib::jobs::commands::settle_job_material,
@@ -475,6 +605,8 @@ pub fn boot_prepared(
             farm3d_lib::host_ops::commands::abandon_host_operation,
             farm3d_lib::spools::commands::move_spool,
             farm3d_lib::spools::commands::spool_history,
+            farm3d_lib::printers::commands::archive_printer,
+            farm3d_lib::printers::commands::delete_printer,
         ],
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
@@ -487,7 +619,7 @@ pub fn boot_prepared(
                 Arc::clone(&services.manager),
                 factory,
                 clock,
-                host_ops_timings(),
+                host_ops_timings,
             ));
             services.jobs = Arc::new(match job_clock {
                 Some(clock) => JobServices::with_clock(timings, clock),
@@ -514,6 +646,7 @@ pub fn boot_prepared(
         services,
         storage,
         events,
+        wait: roots.timings.wait,
     }
 }
 
@@ -536,7 +669,13 @@ pub fn status_of(state: OperationalState) -> PrinterStatus {
 pub fn status_from(fake: &FakeMoonraker) -> PrinterStatus {
     let (print_state, filename, _) = fake.print_state();
     let progress = fake.with_state(|state| state.progress);
-    let mut status = status_of(match print_state.as_str() {
+    status_from_host(&print_state, filename, progress)
+}
+
+/// A Moonraker host's `print_stats.state`, file, and progress as a live
+/// status: Online and fresh.
+pub fn status_from_host(print_state: &str, filename: String, progress: f64) -> PrinterStatus {
+    let mut status = status_of(match print_state {
         "printing" => OperationalState::Printing,
         "paused" => OperationalState::Paused,
         "complete" => OperationalState::Finished,
@@ -592,7 +731,7 @@ impl Running {
 
     /// Waits until the driver's first pass (its first resync) has run.
     pub fn wait_first_pass(&self) {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         while self.services.jobs.resyncs() == 0 {
             assert!(Instant::now() < deadline, "the driver's first pass never ran");
             std::thread::sleep(Duration::from_millis(20));
@@ -604,7 +743,7 @@ impl Running {
     /// nothing of the stopped runtime writes after this returns.
     pub fn stop_runtime(&self) {
         self.services.jobs.stop();
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         while self.services.jobs.running_tasks() > 0 {
             assert!(
                 Instant::now() < deadline,
@@ -619,7 +758,7 @@ impl Running {
     /// (see `JobServices::barrier`).
     fn driver_barrier(&self) {
         let mut done = self.services.jobs.barrier();
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             match done.try_recv() {
                 Ok(()) => return,
@@ -673,7 +812,7 @@ impl Running {
     /// history). One pass may already be running, hence the extra one.
     pub fn wait_passes(&self, count: u64) {
         let target = self.services.jobs.resyncs() + count + 1;
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         while self.services.jobs.resyncs() < target {
             assert!(Instant::now() < deadline, "the driver never ran {count} more passes");
             std::thread::sleep(Duration::from_millis(10));
@@ -709,7 +848,7 @@ impl Running {
     /// Waits until `done` holds, re-checking every [`POLL`]. For conditions
     /// on stored columns, which don't need the presented Job.
     pub fn wait_until(&self, what: &str, done: impl Fn() -> bool) {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         while !done() {
             assert!(Instant::now() < deadline, "timed out waiting until {what}");
             std::thread::sleep(POLL);
@@ -838,7 +977,7 @@ impl Running {
     /// `resyncs()` afterwards: a deadline shorter than the poll proves
     /// nothing once a slow machine can reach the poll first.
     pub fn wait_job(&self, job_id: &str, state: &str) -> Value {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             // One SQL read per round; the presented Job only at the end.
             let stored = self.text(&format!("SELECT state FROM jobs WHERE id = '{job_id}'"));
@@ -857,7 +996,7 @@ impl Running {
 
     /// Waits until `done` holds for the Job as `get_job_history` reports it.
     pub fn wait_job_until(&self, job_id: &str, done: impl Fn(&Value) -> bool) -> Value {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             let job = self.job(job_id);
             if done(&job) {
@@ -875,7 +1014,7 @@ impl Running {
     /// Waits for the Job's first linked Host Operation (the driver's
     /// stage runs in the background).
     pub fn first_op(&self, job_id: &str) -> HostOperation {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             if let Some(op) = self.ops(job_id).into_iter().next() {
                 return op;
@@ -894,7 +1033,7 @@ impl Running {
     }
 
     pub fn wait_op(&self, id: &str, done: impl Fn(&HostOperation) -> bool) -> HostOperation {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + self.wait;
         loop {
             let row = self.row(id);
             if done(&row) {

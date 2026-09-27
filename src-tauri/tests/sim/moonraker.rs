@@ -290,12 +290,18 @@ impl MoonrakerSim {
     /// Queries Klipper objects through the control path, e.g. `"heaters"` or
     /// `"extruder&extruder1"`.
     pub fn query(&self, objects: &str) -> Value {
+        self.try_query(objects)
+            .unwrap_or_else(|error| panic!("query {objects}: {error}"))
+    }
+
+    /// [`MoonrakerSim::query`], with the error returned instead of a panic
+    /// (Klipper answers no object query while it is shut down).
+    pub fn try_query(&self, objects: &str) -> Result<Value, String> {
         http::get_json(
             &self.control,
             &format!("/printer/objects/query?{objects}"),
             &[],
         )
-        .unwrap_or_else(|error| panic!("query {objects}: {error}"))
     }
 
     /// The API key the adapter needs in [`Mode::ApiKey`]; `None` otherwise.
