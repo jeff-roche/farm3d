@@ -20,7 +20,8 @@ use std::time::Duration;
 use common::fake_moonraker::{Fault, Route, StartTrace};
 use farm3d_lib::host_ops::{FaultAction, FaultPoint, HostOperationKind, HostOperationState};
 use farm3d_lib::jobs::assign::{self, AssignRequest};
-use farm3d_lib::jobs::AssignedBy;
+use farm3d_lib::jobs::settlement;
+use farm3d_lib::jobs::{AssignedBy, SettleChoice};
 use farm3d_lib::persistence::{RepositoryError, StorageError};
 use farm3d_lib::printers::now_rfc3339;
 use farm3d_lib::printers::operational::OperationalState;
@@ -656,8 +657,8 @@ fn restart_during_printing_keeps_tracking() {
 }
 
 /// R10: the host completed while farm3d was closed. The first tracker
-/// pass completes the Job once and closes its entry. (Task 9 asserts the
-/// estimate is consumed once.)
+/// pass completes the Job once and closes its entry, consuming the
+/// estimate once.
 #[test]
 fn restart_after_host_completed_completes_once() {
     let roots = roots();
@@ -670,10 +671,12 @@ fn restart_after_host_completed_completes_once() {
     let job = app.wait_job(&job_id, "completed");
     assert_eq!(job["settlement"], "settled");
     assert_eq!(job["settlementMethod"], "estimated");
+    assert_eq!(job["settlementPreview"], Value::Null);
     let entry = entry_of(&app, &job_id);
     assert_eq!(entry["state"], "closed");
     assert_eq!(entry["closeReason"], "completed");
     assert!(requirements(&app, &job_id).is_empty());
+    assert_eq!(reservation_state(&app, &job_id), "consumed");
     crash(app);
 
     let app = fast_boot(&roots);
@@ -681,13 +684,27 @@ fn restart_after_host_completed_completes_once() {
     settle();
     assert_eq!(app.job(&job_id)["state"], "completed");
     assert_eq!(app.count_events(&job_id, "completed"), 1, "completed once");
+    assert_eq!(reservation_state(&app, &job_id), "consumed", "unchanged across restarts");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM spool_amount_events WHERE kind = 'consumption'"),
+        1,
+        "the estimate was consumed exactly once"
+    );
     assert_eq!(roots.starts(), 1);
     assert_eq!(roots.uploads(), 1);
 }
 
-/// R11: the host cancelled or failed while farm3d was closed. (Task 9
-/// asserts the reservation is `unresolved` and one `materialReconciliation`
-/// requirement is `pending`.)
+/// Every `materialReconciliation` requirement on `job_id`.
+fn material_requirements(app: &Running, job_id: &str) -> Vec<Value> {
+    requirements(app, job_id)
+        .into_iter()
+        .filter(|requirement| requirement["kind"] == "materialReconciliation")
+        .collect()
+}
+
+/// R11: the host cancelled or failed while farm3d was closed. The
+/// reservation goes `unresolved` and one `materialReconciliation`
+/// requirement opens, `pending` -- once, even across a second restart.
 #[test]
 fn restart_after_host_failed_opens_one_requirement() {
     for (status, state, cancel_reason) in [
@@ -713,6 +730,11 @@ fn restart_after_host_failed_opens_one_requirement() {
                 .all(|requirement| requirement["kind"] != "jobOutcomeUnknown"),
             "{status}"
         );
+        assert_eq!(reservation_state(&app, &job_id), "unresolved", "{status}");
+        let material = material_requirements(&app, &job_id);
+        assert_eq!(material.len(), 1, "{status}");
+        assert_eq!(material[0]["status"], "pending", "{status}");
+        assert_eq!(material[0]["resolution"], Value::Null, "{status}");
         crash(app);
 
         let app = fast_boot(&roots);
@@ -720,8 +742,114 @@ fn restart_after_host_failed_opens_one_requirement() {
         settle();
         assert_eq!(app.job(&job_id)["state"], state);
         assert_eq!(app.count_events(&job_id, state), 1, "{status}: ended once");
+        assert_eq!(reservation_state(&app, &job_id), "unresolved", "{status}: unchanged");
+        assert_eq!(material_requirements(&app, &job_id).len(), 1, "{status}: opened once");
         assert_eq!(roots.starts(), 1);
     }
+}
+
+/// R12: settlement work is inside the terminal transaction (D4), so
+/// "after the terminal commit, before settlement" can't happen on disk --
+/// a restart right after a failure sees the settlement already `pending`,
+/// the reservation `unresolved`, and one requirement `pending`, and
+/// changes none of it.
+#[test]
+fn restart_after_terminal_keeps_settlement_pending() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.finish_print("klippy_shutdown");
+    let job = app.wait_job(&job_id, "failed");
+    assert_eq!(job["settlement"], "pending");
+    assert_eq!(reservation_state(&app, &job_id), "unresolved");
+    assert_eq!(material_requirements(&app, &job_id).len(), 1);
+    let failed_events = app.count_events(&job_id, "failed");
+    let consumptions = app.scalar("SELECT COUNT(*) FROM spool_amount_events WHERE kind = 'consumption'");
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    settle();
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "failed");
+    assert_eq!(job["settlement"], "pending");
+    assert_eq!(reservation_state(&app, &job_id), "unresolved");
+    assert_eq!(material_requirements(&app, &job_id).len(), 1, "not re-opened");
+    assert_eq!(app.count_events(&job_id, "failed"), failed_events, "not re-run");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM spool_amount_events WHERE kind = 'consumption'"),
+        consumptions,
+        "nothing re-consumed"
+    );
+}
+
+/// R13: a crash inside a settle transaction, before commit -- exactly
+/// R1's pattern, for `jobs::settlement::settle`. Nothing is written, the
+/// id isn't burned, and the same `operationId` settles once afterward.
+#[test]
+fn restart_inside_settle_rolls_back() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.finish_print("klippy_shutdown");
+    app.wait_job(&job_id, "failed");
+
+    let result = app.storage.write_repo(|tx| {
+        settlement::settle(tx, "op-settle", &job_id, &SettleChoice::Estimated, &now_rfc3339())?;
+        Err::<(), _>(crashed_rollback())
+    });
+    assert!(result.is_err());
+    assert_eq!(app.job(&job_id)["settlement"], "pending", "unchanged");
+    assert_eq!(reservation_state(&app, &job_id), "unresolved", "unchanged");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-settle'"),
+        0,
+        "the id is not burned"
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM spool_amount_events WHERE kind = 'consumption'"),
+        0,
+        "no ledger row"
+    );
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    settle();
+    let settled = app.settle("op-settle", &job_id, json!({"kind": "estimated"})).unwrap();
+    assert_eq!(settled["jobs"][0]["settlement"], "settled");
+    assert_eq!(reservation_state(&app, &job_id), "consumed");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM spool_amount_events WHERE kind = 'consumption'"),
+        1,
+        "settled exactly once"
+    );
+}
+
+/// R14: after a defer, a restart keeps the settlement `deferred`, the
+/// requirement `deferred`, and the reservation `unresolved` -- the amount
+/// stays unavailable.
+#[test]
+fn restart_after_defer_keeps_the_amount_unavailable() {
+    let roots = roots();
+    let app = fast_boot(&roots);
+    let job_id = app.printing();
+    roots.fake.finish_print("cancelled");
+    app.wait_job(&job_id, "cancelled");
+    app.settle("op-defer", &job_id, json!({"kind": "defer"})).unwrap();
+    assert_eq!(reservation_state(&app, &job_id), "unresolved");
+    crash(app);
+
+    let app = fast_boot(&roots);
+    app.wait_first_pass();
+    settle();
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "cancelled");
+    assert_eq!(job["settlement"], "deferred");
+    assert_eq!(reservation_state(&app, &job_id), "unresolved", "the amount stays unavailable");
+    let material = material_requirements(&app, &job_id);
+    assert_eq!(material.len(), 1);
+    assert_eq!(material[0]["status"], "deferred");
 }
 
 /// R18: the cancel was sent and its reply lost. After the restart the
@@ -794,6 +922,13 @@ fn restart_after_declare_is_stable() {
         outcome_unknown[0]["resolution"],
         json!({"kind": "declared", "outcome": "failed"})
     );
+    // A declared failure runs the same terminal settlement work as a
+    // tracker-proved one: the reservation is unresolved, and a new
+    // `materialReconciliation` requirement is `pending`.
+    assert_eq!(reservation_state(&app, &job_id), "unresolved");
+    let material = material_requirements(&app, &job_id);
+    assert_eq!(material.len(), 1);
+    assert_eq!(material[0]["status"], "pending");
     assert_eq!(app.count_events(&job_id, "declaredFailed"), 1);
     // The same operationId replays; nothing moves.
     let replayed = app.declare("op-declare", &job_id, "failed").unwrap();

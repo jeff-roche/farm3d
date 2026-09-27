@@ -43,8 +43,8 @@ use farm3d_lib::host_ops::{
 use farm3d_lib::jobs::{
     AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
-    RequirementResolution, RequirementStatus, Settlement, SettlementMethod, SettlementPreview,
-    StartConfirmation,
+    RequirementResolution, RequirementStatus, SettleChoice, Settlement, SettlementMethod,
+    SettlementPreview, StartConfirmation,
 };
 use farm3d_lib::library::commands::{
     DeleteModelResult, DeleteProjectResult, LibraryContentInfo, LibrarySnapshot,
@@ -590,6 +590,7 @@ fn export_registry() -> Vec<Export> {
         export::<RequirementResolution>(),
         export::<ReconciliationRequirement>(),
         export::<JobHistory>(),
+        export::<SettleChoice>(),
     ]
 }
 

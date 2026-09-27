@@ -1,8 +1,8 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
-    // P7's: Task 6's 11, Task 8a's 4, and Task 8b's 1.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1);
+    // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -111,6 +111,8 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "pause_job",
             "resume_job",
             "declare_job_outcome",
+            "settle_job_material",
+            "correct_job_material",
         ]
     );
 }
@@ -270,6 +272,8 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::jobs::commands::pause_job,
             farm3d_lib::jobs::commands::resume_job,
             farm3d_lib::jobs::commands::declare_job_outcome,
+            farm3d_lib::jobs::commands::settle_job_material,
+            farm3d_lib::jobs::commands::correct_job_material,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -568,6 +572,14 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         (
             "declare_job_outcome",
             json!({"operationId": "o", "jobId": "j", "outcome": "failed", "acknowledgement": "hostStateUnknown"}),
+        ),
+        (
+            "settle_job_material",
+            json!({"operationId": "o", "jobId": "j", "choice": {"kind": "estimated"}}),
+        ),
+        (
+            "correct_job_material",
+            json!({"operationId": "o", "jobId": "j", "entry": {"kind": "net", "netMg": 1000, "confidence": "measured"}}),
         ),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());

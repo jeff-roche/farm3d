@@ -16,6 +16,7 @@ pub mod dispatch;
 pub mod recovery;
 pub mod repository;
 pub mod services;
+pub mod settlement;
 pub mod state;
 pub mod tracker;
 
@@ -30,6 +31,7 @@ use crate::contracts::command::ErrorCode;
 use crate::host_ops::HostOperationFailure;
 use crate::printers::CatalogRef;
 use crate::queue::{Blocker, QueueEntry};
+use crate::spools::ledger::AmountEntry;
 
 /// D3: a Job's state. `completed`, `failed`, and `cancelled` are
 /// terminal; every other state is active. A partial unique index allows
@@ -297,6 +299,34 @@ pub struct SettlementPreview {
 /// the Job never printed (`maxProgressPct == 0`).
 pub fn estimated_use_mg(estimate_mg: i64, max_progress_pct: i64) -> i64 {
     (estimate_mg * max_progress_pct + 99) / 100
+}
+
+/// Material settlement's operator choice (spec "Material settlement",
+/// `settle_job_material`'s `choice` argument). `Estimated`/`Measured` are
+/// allowed while settlement is `pending` or `deferred`; `Defer` only from
+/// `pending` (`jobs::settlement::settle`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/SettleChoice.ts"
+)]
+pub enum SettleChoice {
+    Estimated,
+    Measured { entry: AmountEntry },
+    Defer,
+}
+
+/// `JOB_ALREADY_SETTLED`'s `details.reason` (spec "Error codes"): a second
+/// `settle_job_material` on an already-`settled` Job, or a second
+/// `correct_job_material` on a Job that already has a correction.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum SettleFailureReason {
+    Settled,
+    Corrected,
 }
 
 /// A Job as the wire shares it (spec "Backend model" wire types).

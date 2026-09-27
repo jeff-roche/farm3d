@@ -39,6 +39,7 @@ import type { QueueSnapshot } from "../domain/QueueSnapshot";
 import type { RevisionGeometry } from "../domain/RevisionGeometry";
 import type { RevisionThumbnail } from "../domain/RevisionThumbnail";
 import type { SettingsRecord } from "../domain/SettingsRecord";
+import type { SettleChoice } from "../domain/SettleChoice";
 import type { SliceOperationRecord } from "../domain/SliceOperationRecord";
 import type { SliceOptions } from "../domain/SliceOptions";
 import type { SliceRevisionRecord } from "../domain/SliceRevisionRecord";
@@ -299,3 +300,7 @@ export type ResumeJobRequest = ContractRequest & { operationId: string; jobId: s
 export type ResumeJobResult = CommandSuccess<QueueChange>;
 export type DeclareJobOutcomeRequest = ContractRequest & { operationId: string; jobId: string; outcome: DeclaredOutcome; acknowledgement: "hostStateUnknown" };
 export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;
+export type SettleJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; choice: SettleChoice };
+export type SettleJobMaterialResult = CommandSuccess<QueueChange>;
+export type CorrectJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; entry: AmountEntry };
+export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;

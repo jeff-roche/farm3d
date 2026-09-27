@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 105] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 107] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -453,9 +453,19 @@ contracts![
         "DeclareJobOutcomeRequest",
         "DeclareJobOutcomeResult"
     ),
+    (
+        "settle_job_material",
+        "SettleJobMaterialRequest",
+        "SettleJobMaterialResult"
+    ),
+    (
+        "correct_job_material",
+        "CorrectJobMaterialRequest",
+        "CorrectJobMaterialResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 105] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 107] {
     &COMMAND_CONTRACTS
 }
 
@@ -687,7 +697,11 @@ export type PauseJobResult = CommandSuccess<QueueChange>;
 export type ResumeJobRequest = ContractRequest & { operationId: string; jobId: string };
 export type ResumeJobResult = CommandSuccess<QueueChange>;
 export type DeclareJobOutcomeRequest = ContractRequest & { operationId: string; jobId: string; outcome: DeclaredOutcome; acknowledgement: "hostStateUnknown" };
-export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;"#.to_string()
+export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;
+export type SettleJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; choice: SettleChoice };
+export type SettleJobMaterialResult = CommandSuccess<QueueChange>;
+export type CorrectJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; entry: AmountEntry };
+export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -781,6 +795,7 @@ export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;"#.to_string()
         visitor.visit::<crate::host_ops::HostOperation>();
         visitor.visit::<crate::host_ops::PriorState>();
         visitor.visit::<crate::jobs::DeclaredOutcome>();
+        visitor.visit::<crate::jobs::SettleChoice>();
         visitor.visit::<crate::queue::QueueSnapshot>();
         visitor.visit::<crate::queue::QueueChange>();
         visitor.visit::<crate::queue::DispatchPolicy>();

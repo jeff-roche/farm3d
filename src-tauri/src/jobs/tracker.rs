@@ -642,25 +642,45 @@ pub struct SettlementEffects {
     pub spool_ids: Vec<String>,
 }
 
-/// **Task 9 hook.** The material work D4's "Tracker terminal" and
-/// "Declare" rows put in the terminal transaction, run by [`end_job`]
-/// right after the Job's terminal transition (which already set the
-/// settlement *state*: `settled/estimated` for `Completed` and
-/// `DeclaredCompleted`, `pending` for the failed and cancelled events):
+/// The material work D4's "Tracker terminal" and "Declare" rows put in the
+/// terminal transaction, run by [`end_job`] right after the Job's terminal
+/// transition (which already set the settlement *state*: `settled/
+/// estimated` for `Completed` and `DeclaredCompleted`, `pending` for the
+/// failed and cancelled events):
 ///
-/// - completed: `reservations::consume(estimate)` (one `Consumption`);
-/// - failed or cancelled: `reservations::mark_unresolved`, and a
-///   `materialReconciliation` requirement (`pending`).
-///
-/// Task 8b ends Jobs without touching the reservation; Task 9 fills this
-/// in (spec "Material settlement").
+/// - completed: [`settlement::on_completed`] (`reservations::consume` the
+///   full estimate, one `Consumption`);
+/// - failed or cancelled: [`settlement::on_failed_or_cancelled`]
+///   (`reservations::mark_unresolved`, and a `materialReconciliation`
+///   requirement, `pending`).
 pub(crate) fn settle_terminal_material(
     tx: &Transaction<'_>,
     job: &Job,
     now: &str,
 ) -> Result<SettlementEffects, RepositoryError> {
-    let _ = (tx, job, now);
-    Ok(SettlementEffects::default())
+    match job.state {
+        JobState::Completed => {
+            super::settlement::on_completed(tx, job, now)?;
+            Ok(SettlementEffects {
+                requirements: Vec::new(),
+                spool_ids: vec![job.spool_id.clone()],
+            })
+        }
+        JobState::Failed | JobState::Cancelled => {
+            super::settlement::on_failed_or_cancelled(tx, job, now)?;
+            let requirement = jobs_repository::requirements_for_job(tx, &job.id)?
+                .into_iter()
+                .find(|requirement| requirement.kind == RequirementKind::MaterialReconciliation)
+                .expect("on_failed_or_cancelled just opened it");
+            Ok(SettlementEffects {
+                requirements: vec![requirement],
+                spool_ids: vec![job.spool_id.clone()],
+            })
+        }
+        // `end_job`'s caller already rejected a non-terminal event before
+        // this runs.
+        _ => Ok(SettlementEffects::default()),
+    }
 }
 
 /// D4 "Tracker terminal" (and "Declare"): the Job's terminal `event`, its

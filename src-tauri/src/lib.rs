@@ -27,8 +27,8 @@ use host_ops::commands::{
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
 };
 use jobs::commands::{
-    assign_queue_entry, cancel_job, declare_job_outcome, get_job_history, pause_job, release_job,
-    resume_job, retry_job, stage_job, start_job,
+    assign_queue_entry, cancel_job, correct_job_material, declare_job_outcome, get_job_history,
+    pause_job, release_job, resume_job, retry_job, settle_job_material, stage_job, start_job,
 };
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
@@ -153,7 +153,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 105] = [
+pub const COMMAND_NAMES: [&str; 107] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -259,6 +259,8 @@ pub const COMMAND_NAMES: [&str; 105] = [
     "pause_job",
     "resume_job",
     "declare_job_outcome",
+    "settle_job_material",
+    "correct_job_material",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -760,6 +762,8 @@ pub fn run() {
             pause_job,
             resume_job,
             declare_job_outcome,
+            settle_job_material,
+            correct_job_material,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

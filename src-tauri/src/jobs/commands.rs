@@ -2,8 +2,8 @@
 //! `release_job`, `retry_job`, `cancel_job`, and `get_job_history`, which
 //! need no host, and the handoffs `stage_job`, `start_job`, `pause_job`,
 //! `resume_job`, and `cancel_job` after start (Task 8a), and
-//! `declare_job_outcome` (Task 8b, with the tracker). Settlement comes
-//! with its own task.
+//! `declare_job_outcome` (Task 8b, with the tracker), and
+//! `settle_job_material`/`correct_job_material` (Task 9, `jobs::settlement`).
 //!
 //! The host-free writes take the Printer lock first (D4) and run one
 //! `Storage::write_repo` transaction from `jobs::assign`. The handoffs go
@@ -32,8 +32,9 @@ use crate::RuntimeServices;
 use super::assign::{self, AssignRequest};
 use super::dispatch::{self, Handoff};
 use super::repository as jobs_repository;
+use super::settlement;
 use super::tracker;
-use super::{AssignedBy, Job, JobHistory, JobState, StartConfirmation};
+use super::{AssignedBy, Job, JobHistory, JobState, SettleChoice, StartConfirmation};
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
 
@@ -350,6 +351,62 @@ pub async fn declare_job_outcome<R: tauri::Runtime>(
     let mut change = declared.change;
     dispatch::present_change(&services, &mut change);
     if !declared.replayed {
+        publish(&app, &services, &change);
+    }
+    Ok(CommandSuccess::new(change))
+}
+
+/// D4 "Settle / defer" (spec "Material settlement"): `settleMaterial` on a
+/// failed or cancelled Job whose settlement is `pending` or `deferred`.
+#[tauri::command]
+pub async fn settle_job_material<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+    choice: SettleChoice,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let job = committed_job(&services, &job_id)?;
+    let printer_lock = services.host_ops.printer_lock(&job.printer_id);
+    let _serialized = printer_lock.lock().await;
+
+    let now = now_rfc3339();
+    let settled = services
+        .storage
+        .write_repo(|tx| settlement::settle(tx, &operation_id, &job_id, &choice, &now))
+        .map_err(CommandError::from_repository)?;
+    let change = settled.change();
+    if !settled.replayed {
+        publish(&app, &services, &change);
+    }
+    Ok(CommandSuccess::new(change))
+}
+
+/// D4 "Correct" (spec "Material settlement"): `correctMaterial` on a
+/// `completed` Job that hasn't been corrected yet.
+#[tauri::command]
+pub async fn correct_job_material<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    job_id: String,
+    entry: crate::spools::ledger::AmountEntry,
+) -> Result<CommandSuccess<QueueChange>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let job = committed_job(&services, &job_id)?;
+    let printer_lock = services.host_ops.printer_lock(&job.printer_id);
+    let _serialized = printer_lock.lock().await;
+
+    let now = now_rfc3339();
+    let corrected = services
+        .storage
+        .write_repo(|tx| settlement::correct(tx, &operation_id, &job_id, &entry, &now))
+        .map_err(CommandError::from_repository)?;
+    let change = corrected.change();
+    if !corrected.replayed {
         publish(&app, &services, &change);
     }
     Ok(CommandSuccess::new(change))

@@ -230,6 +230,13 @@ pub enum RepositoryError {
         job_id: String,
         retry_entry_id: String,
     },
+    /// P7 settlement: a second `settle_job_material` on an already-`settled`
+    /// Job (`reason: settled`), or a second `correct_job_material`
+    /// (`reason: corrected`). Nothing was written. `JOB_ALREADY_SETTLED`.
+    JobAlreadySettled {
+        job_id: String,
+        reason: crate::jobs::SettleFailureReason,
+    },
     /// P7 D8: a `spools::reservations` primitive refused inside a Job
     /// transaction. Carries what the caller knows beyond the primitive's
     /// own error, so the command's message and `details` can name the

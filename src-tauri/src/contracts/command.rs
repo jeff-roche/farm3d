@@ -1391,6 +1391,17 @@ impl CommandError {
         .with_string_details(&[("jobId", job_id), ("printerId", printer_id)])
     }
 
+    /// P7 settlement `JOB_ALREADY_SETTLED`.
+    pub fn job_already_settled(job_id: &str, reason: crate::jobs::SettleFailureReason) -> Self {
+        use crate::jobs::SettleFailureReason;
+        let message = match reason {
+            SettleFailureReason::Settled => "This Job's material is already settled.",
+            SettleFailureReason::Corrected => "This Job already has a correction.",
+        };
+        Self::typed(ErrorCode::JobAlreadySettled, message, vec![RecoveryCode::Reload], false)
+            .with_string_details(&[("jobId", job_id), ("reason", &crate::spools::encode_enum(reason))])
+    }
+
     /// P7 D2 `JOB_ALREADY_RETRIED`.
     pub fn job_already_retried(job_id: &str, retry_entry_id: &str) -> Self {
         Self::typed(
@@ -1584,6 +1595,9 @@ impl CommandError {
                 job_id,
                 retry_entry_id,
             } => Self::job_already_retried(&job_id, &retry_entry_id),
+            RepositoryError::JobAlreadySettled { job_id, reason } => {
+                Self::job_already_settled(&job_id, reason)
+            }
             RepositoryError::Reservation {
                 spool_id,
                 spool_number,

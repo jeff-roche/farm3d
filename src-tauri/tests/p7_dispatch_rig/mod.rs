@@ -48,6 +48,7 @@ use farm3d_lib::spools::{
     SpoolFields,
 };
 use farm3d_lib::RuntimeServices;
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::Listener;
@@ -415,10 +416,13 @@ pub fn boot_tuned(
             farm3d_lib::jobs::commands::release_job,
             farm3d_lib::jobs::commands::get_job_history,
             farm3d_lib::jobs::commands::declare_job_outcome,
+            farm3d_lib::jobs::commands::settle_job_material,
+            farm3d_lib::jobs::commands::correct_job_material,
             farm3d_lib::queue::commands::explain_queue_entry,
             farm3d_lib::host_ops::commands::reconcile_host_operation,
             farm3d_lib::host_ops::commands::abandon_host_operation,
             farm3d_lib::spools::commands::move_spool,
+            farm3d_lib::spools::commands::spool_history,
         ],
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
@@ -616,6 +620,13 @@ impl Running {
 
     /// A Spool in storage, PLA 1.75, 1 kg on it.
     pub fn spool(&self) -> String {
+        self.spool_sized(1_000_000)
+    }
+
+    /// A Spool in storage, PLA 1.75, `nominal_mg` on it (Task 9: sized
+    /// tightly against the rig's fixed 12.5 g estimate for the
+    /// over-reservation tests).
+    pub fn spool_sized(&self, nominal_mg: i64) -> String {
         let fields = SpoolFields {
             manufacturer: "Polymaker".to_string(),
             product: None,
@@ -624,13 +635,13 @@ impl Running {
             color_name: "Black".to_string(),
             color_hex: None,
             diameter: FilamentDiameter::D175,
-            nominal_mg: 1_000_000,
-            low_threshold_mg: 10_000,
+            nominal_mg,
+            low_threshold_mg: (nominal_mg / 10).max(1),
             tare_id: None,
             notes: None,
         };
         let entry = AmountEntry::Net {
-            net_mg: 1_000_000,
+            net_mg: nominal_mg,
             confidence: AmountConfidence::Estimated,
         };
         self.storage
@@ -641,20 +652,26 @@ impl Running {
 
     /// Loads `spool_id` into the Printer's one slot through `move_spool`.
     pub fn load(&self, spool_id: &str) {
-        let (revision, slot_id): (i64, String) = self
+        let (revision, slot_id, occupant): (i64, String, Option<String>) = self
             .storage
             .read(|connection| {
+                let slot_id: String = connection.query_row(
+                    "SELECT id FROM material_slots WHERE printer_id = ?1",
+                    [PRINTER],
+                    |row| row.get(0),
+                )?;
                 Ok((
                     connection.query_row(
                         "SELECT revision FROM spools WHERE id = ?1",
                         [spool_id],
                         |row| row.get(0),
                     )?,
+                    slot_id.clone(),
                     connection.query_row(
-                        "SELECT id FROM material_slots WHERE printer_id = ?1",
-                        [PRINTER],
+                        "SELECT id FROM spools WHERE slot_id = ?1",
+                        [&slot_id],
                         |row| row.get(0),
-                    )?,
+                    ).optional()?,
                 ))
             })
             .unwrap();
@@ -664,7 +681,7 @@ impl Running {
                 "operationId": format!("load-{}", uuid::Uuid::new_v4()),
                 "spoolId": spool_id,
                 "expectedSpoolRevision": revision,
-                "destination": {"kind": "slot", "slotId": slot_id, "expectedOccupantSpoolId": null},
+                "destination": {"kind": "slot", "slotId": slot_id, "expectedOccupantSpoolId": occupant},
             }),
         );
     }
@@ -839,8 +856,14 @@ impl Running {
     /// A Job staged and awaiting start, with its Spool loaded: the Job id.
     pub fn awaiting_start(&self) -> String {
         let spool = self.spool();
-        self.load(&spool);
-        let job = self.assign(&spool);
+        self.awaiting_start_with(&spool)
+    }
+
+    /// [`Running::awaiting_start`] against an existing Spool (Task 9: the
+    /// settlement tests size their own Spools).
+    pub fn awaiting_start_with(&self, spool_id: &str) -> String {
+        self.load(spool_id);
+        let job = self.assign(spool_id);
         self.wait_job(&job, "awaitingStart");
         job
     }
@@ -848,12 +871,68 @@ impl Running {
     /// A Job printing (started by the operator), its history job pinned
     /// by the tracker's check on entering `printing`: the Job id.
     pub fn printing(&self) -> String {
-        let job = self.awaiting_start();
+        let spool = self.spool();
+        self.printing_with(&spool)
+    }
+
+    /// [`Running::printing`] against an existing Spool.
+    pub fn printing_with(&self, spool_id: &str) -> String {
+        let job = self.awaiting_start_with(spool_id);
         self.start(&format!("start-{job}"), &job, "ready")
             .expect("start_job");
         self.wait_job(&job, "printing");
         self.wait_until("pinned", || self.count_events(&job, "hostJobPinned") == 1);
         self.status(OperationalState::Printing);
         job
+    }
+
+    /// `settle_job_material`.
+    pub fn settle(&self, operation_id: &str, job_id: &str, choice: Value) -> Result<Value, Value> {
+        self.call(
+            "settle_job_material",
+            json!({"operationId": operation_id, "jobId": job_id, "choice": choice}),
+        )
+    }
+
+    /// `correct_job_material`.
+    pub fn correct(&self, operation_id: &str, job_id: &str, entry: Value) -> Result<Value, Value> {
+        self.call(
+            "correct_job_material",
+            json!({"operationId": operation_id, "jobId": job_id, "entry": entry}),
+        )
+    }
+
+    /// A reservation's stored `state` (Task 9: not on the Job's wire type).
+    pub fn reservation_state(&self, reservation_id: &str) -> String {
+        self.text(&format!(
+            "SELECT state FROM spool_reservations WHERE id = '{reservation_id}'"
+        ))
+        .unwrap()
+    }
+
+    /// A Spool's stored `current_mg`.
+    pub fn spool_current_mg(&self, spool_id: &str) -> i64 {
+        self.scalar(&format!("SELECT current_mg FROM spools WHERE id = '{spool_id}'"))
+    }
+
+    /// `spool_history`'s ledger rows (Task 9: to check `isCorrection`).
+    pub fn amount_events(&self, spool_id: &str) -> Vec<Value> {
+        self.ok("spool_history", json!({"spoolId": spool_id}))["amountEvents"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// How many captured stream events of `event_type` name `subject_id`
+    /// (Task 9: counting `queue.job.changed`/`queue.requirement.changed`/
+    /// `spool.changed` for the exactly-once publish tests).
+    pub fn count_stream_events(&self, event_type: &str, subject_id: &str) -> usize {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|text| serde_json::from_str::<Value>(text).unwrap())
+            .filter(|event| event["type"] == event_type && event["subject"]["id"] == subject_id)
+            .count()
     }
 }

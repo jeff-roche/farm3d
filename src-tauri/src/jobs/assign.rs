@@ -206,7 +206,7 @@ fn assigned_by_operation(
     })
 }
 
-fn reservation_error(
+pub(crate) fn reservation_error(
     world_spool_number: Option<i64>,
     spool_id: &str,
     reservation_id: Option<&str>,
@@ -222,7 +222,7 @@ fn reservation_error(
     }
 }
 
-fn spool_number(tx: &Transaction<'_>, spool_id: &str) -> Option<i64> {
+pub(crate) fn spool_number(tx: &Transaction<'_>, spool_id: &str) -> Option<i64> {
     tx.query_row(
         "SELECT spool_number FROM spools WHERE id = ?1",
         [spool_id],
