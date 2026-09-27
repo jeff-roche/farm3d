@@ -334,6 +334,15 @@ fn write_ahead<R: tauri::Runtime>(
     Ok(row)
 }
 
+/// Lets the executor `write_ahead` just spawned start now. Spawned from a
+/// runtime worker, it waits in that worker's LIFO slot, which other workers
+/// can't steal from, until this task yields. Without this, it waited for
+/// all the caller's remaining synchronous work (its publish and SQLite
+/// reads), seconds on a loaded machine.
+async fn started_executor() {
+    tokio::task::yield_now().await;
+}
+
 fn live_status<R: tauri::Runtime>(
     services: &HostOperationServices<R>,
     printer_id: &str,
@@ -417,6 +426,7 @@ pub async fn stage<R: tauri::Runtime>(
         connection_changed_error,
         link,
     )?;
+    started_executor().await;
     Ok(row)
 }
 
@@ -624,6 +634,7 @@ pub async fn start<R: tauri::Runtime>(
         },
         link,
     )?;
+    started_executor().await;
     Ok(row)
 }
 
@@ -743,6 +754,7 @@ pub async fn control<R: tauri::Runtime>(
         connection_changed_error,
         link,
     )?;
+    started_executor().await;
     Ok(row)
 }
 

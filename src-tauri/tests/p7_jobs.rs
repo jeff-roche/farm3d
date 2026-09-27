@@ -718,7 +718,9 @@ mod dispatch {
     use serde_json::{json, Value};
 
     use crate::common::fake_moonraker::{Fault, Route, StartTrace};
-    use crate::p7_dispatch_rig::{boot, id, Driver, Roots, Running, HOST_PATH, PRINTER, SECRET};
+    use crate::p7_dispatch_rig::{
+        boot, id, Driver, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR, WAIT,
+    };
 
     fn strings(value: &Value) -> Vec<String> {
         value
@@ -873,6 +875,39 @@ mod dispatch {
         settle();
         assert_eq!(roots.uploads(), 0, "it never stages again by itself");
         assert_eq!(app.job(&job_id)["state"], "assigned");
+    }
+
+    /// A handoff made from a runtime task (the driver's, or an async
+    /// command's) starts its executor even while that task goes on with
+    /// synchronous work. The caller here blocks its worker until the upload
+    /// has reached the host: without the handoff yielding, the executor
+    /// waited in that worker's LIFO slot, which no other worker steals from,
+    /// and the upload never went out.
+    #[test]
+    fn a_handoff_starts_its_executor_while_the_caller_keeps_its_worker() {
+        let roots = Roots::new(StartSafety::ConfirmBedClear);
+        let app = boot(&roots, Driver::Off);
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (handed_off, handoff) = std::sync::mpsc::channel();
+        let host_ops = std::sync::Arc::clone(&app.services.host_ops);
+        tauri::async_runtime::spawn(async move {
+            let row = farm3d_lib::host_ops::api::stage(
+                &host_ops,
+                "op-raw-stage".to_string(),
+                PRINTER.to_string(),
+                SLR.to_string(),
+                None,
+            )
+            .await;
+            let _ = handed_off.send(row.map(|row| row.id));
+            // The caller's remaining synchronous work, holding its worker
+            // past the test's own wait for the upload.
+            let _ = released.recv_timeout(2 * WAIT);
+        });
+        let upload = handoff.recv_timeout(WAIT).unwrap().expect("the stage handed off");
+        app.wait_until("the upload reached the host", || roots.uploads() == 1);
+        let _ = release.send(());
+        app.wait_resolved(&upload, HostOperationState::Succeeded);
     }
 
     /// Review Important 1: a Printer that isn't reachable yet defers the
