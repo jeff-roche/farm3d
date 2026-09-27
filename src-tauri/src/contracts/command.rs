@@ -728,18 +728,64 @@ impl CommandError {
     /// P6 D7 `CONNECTION_IN_USE`: `set_printer_connection` or
     /// `clear_printer_connection` would change the endpoint, or clear the
     /// Connection or its credential, while `host_operation_id` is
-    /// unresolved.
-    pub fn connection_in_use(printer_id: &str, host_operation_id: &str) -> Self {
-        Self::typed(
-            ErrorCode::ConnectionInUse,
-            "Finish or abandon the pending printer operation before changing this Connection.",
-            vec![RecoveryCode::OpenPrinterJob],
+    /// unresolved. P7 ruling R5(b): when that operation is linked to a
+    /// Job (`job_id`), `details` also carries `jobId`, `recovery` is
+    /// `OPEN_JOB`, and the message is the Job one -- an active Job with no
+    /// unresolved Host Operation never reaches this at all.
+    pub fn connection_in_use(printer_id: &str, host_operation_id: &str, job_id: Option<&str>) -> Self {
+        match job_id {
+            Some(job_id) => {
+                let mut error = Self::typed(
+                    ErrorCode::ConnectionInUse,
+                    "This Printer's Job is waiting on a printer operation. Let it finish, or \
+                     abandon the check from the Job, before changing this Connection.",
+                    vec![RecoveryCode::OpenJob],
+                    false,
+                );
+                error.details = Some(BTreeMap::from([
+                    (
+                        "printerId".to_string(),
+                        JsonValue::String(printer_id.to_string()),
+                    ),
+                    (
+                        "hostOperationId".to_string(),
+                        JsonValue::String(host_operation_id.to_string()),
+                    ),
+                    ("jobId".to_string(), JsonValue::String(job_id.to_string())),
+                ]));
+                error
+            }
+            None => Self::typed(
+                ErrorCode::ConnectionInUse,
+                "Finish or abandon the pending printer operation before changing this Connection.",
+                vec![RecoveryCode::OpenPrinterJob],
+                false,
+            )
+            .with_string_details(&[
+                ("printerId", printer_id),
+                ("hostOperationId", host_operation_id),
+            ]),
+        }
+    }
+
+    /// P7 D8 `JOBS_EXIST`: `import_printers` while any Job exists, or any
+    /// open Queue Entry is pinned to a Printer. Each list is at most 20.
+    pub fn jobs_exist(printer_ids: &[String], job_ids: &[String], queue_entry_ids: &[String]) -> Self {
+        let strings = |values: &[String]| {
+            JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
+        };
+        let mut error = Self::typed(
+            ErrorCode::JobsExist,
+            "Printers with Job history can't be replaced by an import.",
+            vec![],
             false,
-        )
-        .with_string_details(&[
-            ("printerId", printer_id),
-            ("hostOperationId", host_operation_id),
-        ])
+        );
+        error.details = Some(BTreeMap::from([
+            ("printerIds".to_string(), strings(printer_ids)),
+            ("jobIds".to_string(), strings(job_ids)),
+            ("queueEntryIds".to_string(), strings(queue_entry_ids)),
+        ]));
+        error
     }
 
     /// P6 D7/D9 `HOST_OPERATION_PENDING`: these Printers have these
@@ -1614,11 +1660,17 @@ impl CommandError {
             RepositoryError::ConnectionInUse {
                 printer_id,
                 host_operation_id,
-            } => Self::connection_in_use(&printer_id, &host_operation_id),
+                job_id,
+            } => Self::connection_in_use(&printer_id, &host_operation_id, job_id.as_deref()),
             RepositoryError::HostOperationsPending {
                 printer_ids,
                 host_operation_ids,
             } => Self::host_operation_pending(&printer_ids, &host_operation_ids),
+            RepositoryError::JobsExist {
+                printer_ids,
+                job_ids,
+                queue_entry_ids,
+            } => Self::jobs_exist(&printer_ids, &job_ids, &queue_entry_ids),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
@@ -1869,6 +1921,7 @@ mod tests {
         let in_use = CommandError::from_repository(RepositoryError::ConnectionInUse {
             printer_id: "prn-a".to_string(),
             host_operation_id: "hop-a".to_string(),
+            job_id: None,
         });
         assert_eq!(in_use.code, ErrorCode::ConnectionInUse);
         assert_eq!(
@@ -1880,6 +1933,24 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&in_use.details).unwrap(),
             serde_json::json!({"printerId": "prn-a", "hostOperationId": "hop-a"})
+        );
+
+        let job_in_use = CommandError::from_repository(RepositoryError::ConnectionInUse {
+            printer_id: "prn-a".to_string(),
+            host_operation_id: "hop-a".to_string(),
+            job_id: Some("job-a".to_string()),
+        });
+        assert_eq!(job_in_use.code, ErrorCode::ConnectionInUse);
+        assert_eq!(
+            job_in_use.message,
+            "This Printer's Job is waiting on a printer operation. Let it finish, or abandon \
+             the check from the Job, before changing this Connection."
+        );
+        assert_eq!(job_in_use.recovery, vec![RecoveryCode::OpenJob]);
+        assert!(!job_in_use.retryable);
+        assert_eq!(
+            serde_json::to_value(&job_in_use.details).unwrap(),
+            serde_json::json!({"printerId": "prn-a", "hostOperationId": "hop-a", "jobId": "job-a"})
         );
 
         let pending = CommandError::from_repository(RepositoryError::HostOperationsPending {

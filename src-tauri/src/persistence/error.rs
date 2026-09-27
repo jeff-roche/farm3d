@@ -149,10 +149,13 @@ pub enum RepositoryError {
     /// P6 D7: the Connection change would change the endpoint, or clear the
     /// Connection or its credential, while `printer_id` has the unresolved
     /// Host Operation `host_operation_id`. Nothing was written.
-    /// `CONNECTION_IN_USE`.
+    /// `CONNECTION_IN_USE`. P7 ruling R5(b): `job_id` is the unresolved
+    /// row's own `job_id`, when it has one — an active Job with no
+    /// unresolved Host Operation never reaches this variant.
     ConnectionInUse {
         printer_id: String,
         host_operation_id: String,
+        job_id: Option<String>,
     },
     /// P6 D7: a Printers import while these Printers have these unresolved
     /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`. The
@@ -236,6 +239,17 @@ pub enum RepositoryError {
     JobAlreadySettled {
         job_id: String,
         reason: crate::jobs::SettleFailureReason,
+    },
+    /// P7 D8: `import_printers` (`replace_all`) while any Job exists, or
+    /// any open Queue Entry is pinned to a Printer (`manual_printer_id`).
+    /// `replace_all` deletes every Printer, and `jobs.printer_id` is `ON
+    /// DELETE RESTRICT`, so any Job -- even a finished one -- would make
+    /// the delete fail mid-import; this is checked up front instead.
+    /// Nothing was written. `JOBS_EXIST`. Each list is capped at 20.
+    JobsExist {
+        printer_ids: Vec<String>,
+        job_ids: Vec<String>,
+        queue_entry_ids: Vec<String>,
     },
     /// P7 D8: a `spools::reservations` primitive refused inside a Job
     /// transaction. Carries what the caller knows beyond the primitive's

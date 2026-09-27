@@ -630,6 +630,13 @@ impl PrinterRepository {
             if crate::spools::repository::any_loaded(transaction)? {
                 return Err(RepositoryError::SpoolsLoadedForImport);
             }
+            // P7 D8: any Job at all, or any open Queue Entry pinned to a
+            // Printer, rejects the whole import up front (`JOBS_EXIST`) --
+            // `jobs.printer_id` is `ON DELETE RESTRICT`, so even a
+            // finished Job would otherwise make the delete below fail
+            // mid-import. Checked before the (narrower) unresolved Host
+            // Operation guard, since this one is decisive on its own.
+            crate::jobs::guards::check_import(transaction)?;
             // P6 D7: an unresolved Host Operation anywhere rejects the whole
             // import. Terminal rows go with the Printers the import
             // replaces (owner decision 5), before `printer_id`'s

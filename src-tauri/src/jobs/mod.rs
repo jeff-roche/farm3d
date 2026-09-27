@@ -13,6 +13,7 @@
 pub mod assign;
 pub mod commands;
 pub mod dispatch;
+pub mod guards;
 pub mod recovery;
 pub mod repository;
 pub mod services;

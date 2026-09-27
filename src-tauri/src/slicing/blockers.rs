@@ -3,8 +3,10 @@
 //! - [`SliceRevisionDeletionBlocker`]: what may block deleting a Slice
 //!   Revision. P6 registers
 //!   `host_ops::guards::UnresolvedHostOperationBlocksRevisionDeletion`
-//!   (an unresolved upload or start uses it); P7 registers Queue Entries
-//!   and Jobs here.
+//!   (an unresolved upload or start uses it); P7 registers
+//!   `jobs::guards::QueueOrJobBlocksRevisionDeletion` here (spec D8:
+//!   `QUEUE_REFERENCES_REVISION`, any Queue Entry or Job referencing the
+//!   revision, in any state).
 //! - [`SliceRevisionsBlockModelDeletion`]: the P4 `ModelDeletionBlocker`
 //!   P5 registers, because a Model's Slice Revisions `RESTRICT` its
 //!   deletion.
@@ -28,7 +30,10 @@ pub trait SliceRevisionDeletionBlocker: Send + Sync {
 
 /// Every registered source, in the order their blockers are reported.
 pub fn slice_revision_blocker_sources() -> &'static [&'static dyn SliceRevisionDeletionBlocker] {
-    &[&crate::host_ops::guards::UnresolvedHostOperationBlocksRevisionDeletion]
+    &[
+        &crate::host_ops::guards::UnresolvedHostOperationBlocksRevisionDeletion,
+        &crate::jobs::guards::QueueOrJobBlocksRevisionDeletion,
+    ]
 }
 
 /// Every blocker `sources` report for deleting `slice_revision_id`.
