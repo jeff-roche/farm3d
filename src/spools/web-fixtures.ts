@@ -128,6 +128,23 @@ function buildWebSpools(): SpoolRecord[] {
       facets: { loaded: false, reserved: false, low: false, confidence: "estimated", reconciliation: false },
       createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-18T00:00:00Z",
     },
+    // 9. Needs reconciliation: an unresolved reservation from P7's deferred
+    // Job (`queue/web-fixtures.ts`'s `WEB_QUEUE_JOB_DEFERRED`) outlives the
+    // Spool's own measured weight, so it's over-reserved (P7's Spool
+    // inventory chip and "Over-reserved" marker, neither of which `just
+    // web` otherwise demonstrates).
+    {
+      id: "spl-web-9", revision: 1, spoolNumber: 9,
+      manufacturer: "Polymaker", product: "PolyLite PLA", materialFamily: "PLA",
+      colorName: "Sunset Orange", diameter: "1.75",
+      nominalMg: 1_000_000, lowThresholdMg: 10_000,
+      lifecycle: "active",
+      location: { kind: "storage", storageLabel: "Shelf A3" },
+      availability: { currentMg: 20_000, reservedMg: 25_000, availableMg: -5_000 },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: true },
+      lastMeasuredAt: "2026-09-20T00:00:00Z",
+      createdAt: "2026-06-01T00:00:00Z", updatedAt: "2026-09-20T00:00:00Z",
+    },
   ];
 }
 

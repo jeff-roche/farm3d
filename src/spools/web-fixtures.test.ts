@@ -5,10 +5,10 @@ import { WEB_FIXTURE_EQUIPPED_PRINTER_ID, WEB_FIXTURE_EQUIPPED_SLOT_ID } from ".
 describe("buildWebInventoryFixture", () => {
   const fixture = buildWebInventoryFixture();
 
-  it("has 8 Spools with unique ids and sequential, unique spool numbers", () => {
-    expect(fixture.spools).toHaveLength(8);
-    expect(new Set(fixture.spools.map((s) => s.id)).size).toBe(8);
-    expect(fixture.spools.map((s) => s.spoolNumber).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  it("has 9 Spools with unique ids and sequential, unique spool numbers", () => {
+    expect(fixture.spools).toHaveLength(9);
+    expect(new Set(fixture.spools.map((s) => s.id)).size).toBe(9);
+    expect(fixture.spools.map((s) => s.spoolNumber).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("has 2 tares with unique ids and case-insensitively unique names", () => {
@@ -58,11 +58,20 @@ describe("buildWebInventoryFixture", () => {
     expect(archived[0].location.kind).toBe("storage");
   });
 
-  it("has three more active Spools beyond the loaded, low, and reserved ones", () => {
+  it("has three more active Spools beyond the loaded, low, reserved, and reconciliation ones", () => {
     const plainActive = fixture.spools.filter(
-      (s) => s.lifecycle === "active" && !s.facets.loaded && !s.facets.reserved && !s.facets.low,
+      (s) => s.lifecycle === "active" && !s.facets.loaded && !s.facets.reserved && !s.facets.low && !s.facets.reconciliation,
     );
     expect(plainActive).toHaveLength(3);
+  });
+
+  it("has exactly one Spool needing reconciliation, over-reserved by an unresolved reservation", () => {
+    const needsReconciliation = fixture.spools.filter((s) => s.facets.reconciliation);
+    expect(needsReconciliation).toHaveLength(1);
+    const [spool] = needsReconciliation;
+    expect(spool.lifecycle).toBe("active");
+    expect(spool.availability.availableMg).toBe(spool.availability.currentMg - spool.availability.reservedMg);
+    expect(spool.availability.availableMg).toBeLessThan(0);
   });
 
   it("gives every OTHER-family Spool a materialOther, and no other family one", () => {
