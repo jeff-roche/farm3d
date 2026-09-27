@@ -485,11 +485,13 @@ fn code(error: &Value) -> &str {
     error["code"].as_str().unwrap_or_default()
 }
 
+/// Waits until the executor reaches the fault point. A `Crash` fault makes
+/// the executor return right after it signals, with no write in between,
+/// so the row is final once this returns.
 fn wait_fired(fired: Receiver<()>) {
     fired
         .recv_timeout(Duration::from_secs(10))
         .expect("the fault point was reached");
-    std::thread::sleep(Duration::from_millis(100));
 }
 
 // --- the Job link --------------------------------------------------------------
@@ -703,11 +705,19 @@ fn subscribe_changes_sees_every_published_row_in_commit_order() {
     let id = staged["id"].as_str().unwrap().to_string();
     let settled = rig.wait_settled(&id);
     assert_eq!(settled.state, HostOperationState::Succeeded);
-    std::thread::sleep(Duration::from_millis(100));
 
+    // Receive until the settled row, the last one published for the op.
     let mut seen = Vec::new();
-    while let Ok(row) = changes.try_recv() {
-        seen.push(row);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seen.last() != Some(&settled) {
+        match changes.try_recv() {
+            Ok(row) => seen.push(row),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                assert!(Instant::now() < deadline, "never got {settled:?}: {seen:?}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("the broadcast failed: {error:?}"),
+        }
     }
     let published = rig.host_operation_events();
     assert!(seen.len() >= 3, "write-ahead, mark-sent, outcome: {seen:?}");
