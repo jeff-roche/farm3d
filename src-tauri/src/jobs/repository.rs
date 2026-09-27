@@ -349,7 +349,13 @@ pub fn transition(
     let settlement = state::settlement_after(event);
     let clears_unreachable = matches!(current.state, JobState::Printing | JobState::Paused)
         && !matches!(to, JobState::Printing | JobState::Paused);
-    let ended_at = to.is_terminal().then(|| now.to_string());
+    // Only the *first* move into a terminal state sets `ended_at`.
+    // `MaterialSettled`/`MaterialDeferred` (`failed`/`cancelled` ->
+    // unchanged) and `MaterialCorrected` (`completed` -> unchanged) all
+    // keep an already-terminal state, so `to.is_terminal()` alone would
+    // be true again on every one of those calls and overwrite the
+    // original print-end time with the settlement or correction time.
+    let ended_at = (!current.state.is_terminal() && to.is_terminal()).then(|| now.to_string());
 
     tx.execute(
         "UPDATE jobs SET
@@ -986,5 +992,59 @@ mod tests {
         assert_eq!(history.events[2].kind, JobEventKind::StageFailed);
         assert_eq!(history.reservations.len(), 1);
         assert_eq!(history.reservations[0].id, job.reservation_id);
+    }
+
+    /// Fix round 1: a Job's `ended_at` must be set exactly once, on the
+    /// first move into a terminal state. `MaterialSettled`,
+    /// `MaterialDeferred` (`failed`/`cancelled` -> unchanged), and
+    /// `MaterialCorrected` (`completed` -> unchanged) all *keep* a
+    /// terminal state — `to.is_terminal()` is true again on each of
+    /// those calls, so recomputing `ended_at` from `to` alone
+    /// overwrites the original print-end time with the settlement or
+    /// correction time.
+    #[test]
+    fn settling_an_already_terminal_job_does_not_move_its_ended_at() {
+        let rig = rig();
+        let job = insert_test_job(&rig);
+
+        let cancelled = rig
+            .storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    &job.id,
+                    JobEventKind::CancelledBeforeStart,
+                    JobChange {
+                        cancel_reason: Some(CancelReason::CancelledBeforeStart),
+                        ..JobChange::default()
+                    },
+                    NOW,
+                )
+            })
+            .expect("cancel before start");
+        assert_eq!(cancelled.state, JobState::Cancelled);
+        let ended_at_at_cancellation = cancelled.ended_at.clone().expect("ended_at set on cancel");
+
+        let settled = rig
+            .storage
+            .write_repo(|tx| {
+                transition(
+                    tx,
+                    &job.id,
+                    JobEventKind::MaterialSettled,
+                    JobChange {
+                        settlement_method: Some(SettlementMethod::Estimated),
+                        ..JobChange::default()
+                    },
+                    "2026-02-01T01:00:00.000Z",
+                )
+            })
+            .expect("settle");
+
+        assert_eq!(
+            settled.ended_at,
+            Some(ended_at_at_cancellation),
+            "settling an already-terminal Job must not move ended_at to the settlement time"
+        );
     }
 }
