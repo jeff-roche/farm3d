@@ -16,7 +16,7 @@ use ts_rs::TS;
 use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
 
-use super::ledger::{self, AmountEvent, AmountEventKind, LedgerSnapshot};
+use super::ledger::{self, AmountEntry, AmountEvent, AmountEventKind, LedgerSnapshot};
 use super::{decode_enum, encode_enum, repository, AmountConfidence, Availability, SpoolLifecycle};
 
 /// D8: `holder_kind`/`holder_id` are opaque to P3. P7 uses
@@ -98,13 +98,20 @@ impl From<rusqlite::Error> for ReservationError {
     }
 }
 
-/// `ledger::append` (used by [`consume`]) and `repository::load_spool`
-/// return `RepositoryError`. `Storage` passes through unchanged. Every other
-/// variant collapses to `Storage(OperationFailed)`, which loses its detail.
-/// [`consume`]'s guards make them unlikely: it rejects a negative `used_mg`
-/// and clamps `afterMg` to `0..=currentMg`, so `append` should not reject
-/// the amount, and it loads the Spool first, so `append`'s own `NotFound`
-/// should not occur. Nothing here enforces that beyond those guards.
+/// `ledger::append` (used by [`consume`] and [`consume_measured`]),
+/// `ledger::resolve_entry` (used by [`consume_measured`]), and
+/// `repository::load_spool` return `RepositoryError`. `Storage` passes
+/// through unchanged. Every other variant collapses to
+/// `Storage(OperationFailed)`, which loses its detail. [`consume`]'s guards
+/// make them unlikely: it rejects a negative `used_mg` and clamps `afterMg`
+/// to `0..=currentMg`, so `append` should not reject the amount, and it
+/// loads the Spool first, so `append`'s own `NotFound` should not occur.
+/// [`consume_measured`] has no equivalent guard on its caller-supplied
+/// `entry` -- an out-of-range amount or an unknown `tareId` genuinely does
+/// collapse into this generic `Storage` case rather than surfacing as
+/// `Validation`, a known gap left for the command layer that calls it
+/// (P7 Task 9) to close, e.g. by validating `entry` itself first. Nothing
+/// here enforces that beyond those guards.
 impl From<RepositoryError> for ReservationError {
     fn from(error: RepositoryError) -> Self {
         match error {
@@ -353,4 +360,83 @@ pub fn history(tx: &Transaction<'_>, spool_id: &str) -> Result<Vec<Reservation>,
         .query_map([spool_id], decode_reservation)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// P7: every reservation held by `holder`, in any state, oldest first.
+/// `holder_kind`/`holder_id` are opaque to P3 (see [`ReservationHolder`]'s
+/// doc comment) -- this is the query a Job's own history (`JobHistory.
+/// reservations`, `("job", jobId)`) reads instead of `spool_id`, since a
+/// Job's reservation may outlive the Spool it was reserved against being
+/// looked up any other way (e.g. after the Spool itself is deleted from a
+/// later view, though nothing in P3/P7 currently deletes a Spool row).
+pub fn for_holder(
+    tx: &Transaction<'_>,
+    holder: &ReservationHolder,
+) -> Result<Vec<Reservation>, StorageError> {
+    let mut statement = tx.prepare(&format!(
+        "SELECT {RESERVATION_COLUMNS} FROM spool_reservations
+         WHERE holder_kind = ?1 AND holder_id = ?2
+         ORDER BY created_at, id"
+    ))?;
+    let rows = statement
+        .query_map(params![holder.kind, holder.id], decode_reservation)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// P7 D8/D4 (settlement's `measured` choice): settles an `active`/
+/// `unresolved` reservation against a measured *remaining* amount --
+/// unlike [`consume`], which takes how much was *used*, `entry` here is
+/// resolved (via [`ledger::resolve_entry`], so a `Scale` entry's tare
+/// lookup works exactly like every other amount entry) into how much
+/// filament is left on the Spool right now. Moves the reservation to
+/// `consumed` and appends exactly one ledger row, always kind
+/// `Measurement` and confidence `Measured` regardless of what `entry`'s own
+/// `Net.confidence` said -- a settle-by-measurement is definitionally a
+/// real measurement. The row's `before_mg`/`after_mg` (set by
+/// [`ledger::append`] from the ledger itself, not from `entry`) are what a
+/// caller derives `usedMg = max(0, before_mg - after_mg)` from: "used" is
+/// current minus remaining, clamped at zero for an over-measurement.
+/// `note` is attached as-is (never a shortfall note -- unlike [`consume`],
+/// there is nothing to clamp: `after_mg` is exactly the remaining amount
+/// the caller measured, whatever it is). Any current state other than
+/// `active`/`unresolved` is [`ReservationError::InvalidTransition`].
+pub fn consume_measured(
+    tx: &Transaction<'_>,
+    reservation_id: &str,
+    entry: &AmountEntry,
+    note: Option<&str>,
+) -> Result<AmountEvent, ReservationError> {
+    let reservation = load_reservation(tx, reservation_id)?;
+    if !matches!(
+        reservation.state,
+        ReservationState::Active | ReservationState::Unresolved
+    ) {
+        return Err(ReservationError::InvalidTransition {
+            from: reservation.state,
+        });
+    }
+
+    let (remaining_mg, _confidence, mut snapshot) = ledger::resolve_entry(tx, entry)?;
+    snapshot.reservation_id = Some(reservation_id.to_string());
+    snapshot.note = note.map(str::to_string);
+
+    let event = ledger::append(
+        tx,
+        &reservation.spool_id,
+        AmountEventKind::Measurement,
+        remaining_mg,
+        AmountConfidence::Measured,
+        snapshot,
+    )?;
+
+    tx.execute(
+        "UPDATE spool_reservations SET state = ?2, settled_at = ?3 WHERE id = ?1",
+        params![
+            reservation_id,
+            encode_enum(ReservationState::Consumed),
+            now_rfc3339(),
+        ],
+    )?;
+    Ok(event)
 }

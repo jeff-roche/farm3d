@@ -56,13 +56,13 @@ vi.mock("./screens/AppShell", () => ({
   AppShell: (props: {
     title: string;
     printerRoster: { count: number };
-    lowSpoolCount?: number;
+    attentionSpoolCount?: number;
     children: JSX.Element;
   }) => (
     <div>
       <h1>{props.title}</h1>
       <output aria-label="Printer count">{props.printerRoster.count}</output>
-      <output aria-label="Low Spools">{props.lowSpoolCount}</output>
+      <output aria-label="Attention Spools">{props.attentionSpoolCount}</output>
       {props.children}
     </div>
   ),
@@ -168,11 +168,12 @@ const inventory = vi.hoisted(() => ({
 }));
 vi.mock("./spools/spool-store", async () => {
   const { createStore } = await import("solid-js/store");
-  const [spoolState, setSpoolState] = createStore({ spools: [] as { id: string; facets: { low: boolean } }[] });
+  const [spoolState, setSpoolState] = createStore({ spools: [] as { id: string; facets: { low: boolean; reconciliation: boolean } }[] });
   inventory.reset = () => setSpoolState("spools", []);
   inventory.onLoad = () => setSpoolState("spools", [
-    { id: "spl-low", facets: { low: true } },
-    { id: "spl-ok", facets: { low: false } },
+    { id: "spl-low", facets: { low: true, reconciliation: false } },
+    { id: "spl-reconciliation", facets: { low: false, reconciliation: true } },
+    { id: "spl-ok", facets: { low: false, reconciliation: false } },
   ]);
   return { spoolState, ensureInventoryLoaded: inventory.ensureInventoryLoaded };
 });
@@ -365,11 +366,11 @@ describe("App", () => {
     expect(screen.getByText("Monitor")).toBeInTheDocument();
   });
 
-  it("loads the Spool inventory at startup, so the low-Spool badge counts without visiting Spools", async () => {
+  it("loads the Spool inventory at startup, so the attention-Spool badge counts (low or reconciliation) without visiting Spools", async () => {
     const { default: App } = await import("./App");
     render(() => <App />);
 
-    await waitFor(() => expect(screen.getByLabelText("Low Spools")).toHaveTextContent("1"));
+    await waitFor(() => expect(screen.getByLabelText("Attention Spools")).toHaveTextContent("2"));
     expect(inventory.ensureInventoryLoaded).toHaveBeenCalledTimes(1);
   });
 

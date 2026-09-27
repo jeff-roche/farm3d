@@ -147,6 +147,9 @@ pub struct SpoolFacets {
     pub loaded: bool,
     pub reserved: bool,
     pub low: bool,
+    /// P7 D8: true whenever the Spool has an `unresolved` reservation (a
+    /// failed/cancelled Job whose material settlement is still open).
+    pub reconciliation: bool,
     pub confidence: AmountConfidence,
 }
 

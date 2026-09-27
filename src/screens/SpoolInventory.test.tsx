@@ -58,7 +58,7 @@ function spool(overrides: Partial<SpoolRecord> = {}): SpoolRecord {
     lifecycle: "active",
     location: { kind: "storage", storageLabel: null },
     availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
-    facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+    facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
     createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
     ...overrides,
   };
@@ -93,7 +93,7 @@ describe("SpoolInventory", () => {
       spool({ id: "spl-1", spoolNumber: 1 }),
       spool({
         id: "spl-2", spoolNumber: 2,
-        facets: { loaded: false, reserved: false, low: true, confidence: "estimated" },
+        facets: { loaded: false, reserved: false, low: true, confidence: "estimated", reconciliation: false },
       }),
     ]);
     render(() => <SpoolInventory />);
@@ -114,6 +114,35 @@ describe("SpoolInventory", () => {
     await fireEvent.click(estimatedChip);
     expect(screen.queryByText("#1")).not.toBeInTheDocument();
     expect(screen.getByText("#2")).toBeInTheDocument();
+  });
+
+  it("narrows the rows with the 'Needs reconciliation' chip", async () => {
+    setSpools([
+      spool({ id: "spl-1", spoolNumber: 1 }),
+      spool({
+        id: "spl-2", spoolNumber: 2,
+        facets: { loaded: false, reserved: true, low: false, confidence: "measured", reconciliation: true },
+      }),
+    ]);
+    render(() => <SpoolInventory />);
+
+    const chip = screen.getByRole("button", { name: "Needs reconciliation" });
+    await fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("#1")).not.toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
+  });
+
+  it("shows an over-reserved warning when a Spool's availableMg is negative", () => {
+    setSpools([
+      spool({
+        id: "spl-1", spoolNumber: 1,
+        availability: { currentMg: 100_000, reservedMg: 300_000, availableMg: -200_000 },
+        facets: { loaded: false, reserved: true, low: false, confidence: "measured", reconciliation: false },
+      }),
+    ]);
+    render(() => <SpoolInventory />);
+    expect(screen.getByText("Over-reserved")).toBeInTheDocument();
   });
 
   it("shows 'No Spools match' and Clear filters when the filters exclude everything", async () => {

@@ -18,7 +18,7 @@ const LOADED_SPOOL: SpoolRecord = {
   nominalMg: 1_000_000, lowThresholdMg: 100_000, lifecycle: "active",
   location: { kind: "slot", slotId: "slt-main", printerId: "prn-1" },
   availability: { currentMg: 612_000, reservedMg: 200_000, availableMg: 412_000 },
-  facets: { loaded: true, reserved: true, low: true, confidence: "estimated" },
+  facets: { loaded: true, reserved: true, low: true, confidence: "estimated", reconciliation: false },
   createdAt: "", updatedAt: "",
 };
 

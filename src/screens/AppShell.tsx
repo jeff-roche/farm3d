@@ -12,8 +12,9 @@ export interface AppShellProps {
   operationalRosters: readonly PrinterRosterModel[];
   adapterHealth: AdapterHealth;
   lastLiveEventAt?: string;
-  /** Count of `low` Spools, forwarded to the ActivityBar's Spools badge. */
-  lowSpoolCount?: number;
+  /** Count of Spools needing attention (`low` or `reconciliation`),
+   *  forwarded to the ActivityBar's Spools badge. */
+  attentionSpoolCount?: number;
   children: JSX.Element;
 }
 
@@ -88,7 +89,7 @@ export function AppShell(props: AppShellProps) {
         </div>
       </header>
 
-      <ActivityBar active={props.active} onSelect={props.onSelect} lowSpoolCount={props.lowSpoolCount} />
+      <ActivityBar active={props.active} onSelect={props.onSelect} attentionSpoolCount={props.attentionSpoolCount} />
 
       <main class={styles.content}>{props.children}</main>
 

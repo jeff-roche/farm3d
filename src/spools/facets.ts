@@ -6,7 +6,7 @@ import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
  *  Rust-derived field already on `SpoolRecord.facets` -- this module
  *  composes filters over them, and never recomputes any of them itself
  *  (global constraint: the frontend never derives facets). */
-export type SpoolFacetKey = "loaded" | "reserved" | "low" | "measured" | "estimated";
+export type SpoolFacetKey = "loaded" | "reserved" | "low" | "measured" | "estimated" | "reconciliation";
 
 export interface SpoolFilter {
   lifecycle: "active" | "empty" | "archived" | "all";
@@ -37,6 +37,9 @@ function matchesFacets(spool: SpoolRecord, facets: Set<SpoolFacetKey>): boolean 
         break;
       case "low":
         if (!spool.facets.low) return false;
+        break;
+      case "reconciliation":
+        if (!spool.facets.reconciliation) return false;
         break;
       case "measured":
         if (spool.facets.confidence !== "measured") return false;

@@ -5,4 +5,9 @@ import type { AmountConfidence } from "./AmountConfidence";
  * D9: derived, orthogonal facets the frontend filters on. Rust is the only
  * thing that computes these — the frontend never re-derives them.
  */
-export type SpoolFacets = { loaded: boolean, reserved: boolean, low: boolean, confidence: AmountConfidence, };
+export type SpoolFacets = { loaded: boolean, reserved: boolean, low: boolean,
+/**
+ * P7 D8: true whenever the Spool has an `unresolved` reservation (a
+ * failed/cancelled Job whose material settlement is still open).
+ */
+reconciliation: boolean, confidence: AmountConfidence, };

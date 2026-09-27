@@ -49,7 +49,7 @@ function spool(overrides: Partial<SpoolRecord>): SpoolRecord {
     nominalMg: 1_000_000, lowThresholdMg: 100_000, lifecycle: "active",
     location: { kind: "storage", storageLabel: null },
     availability: { currentMg: 812_000, reservedMg: 0, availableMg: 812_000 },
-    facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+    facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
     createdAt: "", updatedAt: "",
     ...overrides,
   };

@@ -424,6 +424,7 @@ function webMoveSpool(
     facets: webFacets(
       spool.lifecycle, spool.availability.currentMg, spool.lowThresholdMg,
       spool.facets.confidence, nextLocation.kind === "slot", spool.availability.reservedMg,
+      spool.facets.reconciliation,
     ),
   };
   const results: SpoolRecord[] = [moved];
@@ -442,6 +443,7 @@ function webMoveSpool(
       facets: webFacets(
         occupant.lifecycle, occupant.availability.currentMg, occupant.lowThresholdMg,
         occupant.facets.confidence, false, occupant.availability.reservedMg,
+        occupant.facets.reconciliation,
       ),
     });
   }
@@ -578,8 +580,18 @@ function webFacets(
   confidence: AmountConfidence,
   loaded: boolean,
   reservedMg: number,
+  // P7 D8: web mode has no reservation command to create/settle one (P3
+  // exposes none either), so this is always whatever the Spool already
+  // had -- never independently computed here.
+  reconciliation: boolean,
 ): SpoolRecord["facets"] {
-  return { loaded, reserved: reservedMg > 0, low: lifecycle === "active" && currentMg <= lowThresholdMg, confidence };
+  return {
+    loaded,
+    reserved: reservedMg > 0,
+    low: lifecycle === "active" && currentMg <= lowThresholdMg,
+    reconciliation,
+    confidence,
+  };
 }
 
 async function webCreateSpool(fields: SpoolFields, initialAmount: AmountEntry, storageLabel?: string): Promise<SpoolRecord> {
@@ -595,7 +607,7 @@ async function webCreateSpool(fields: SpoolFields, initialAmount: AmountEntry, s
     lifecycle: "active",
     location: { kind: "storage", storageLabel: storageLabel ?? null },
     availability: { currentMg: mg, reservedMg: 0, availableMg: mg },
-    facets: webFacets("active", mg, fields.lowThresholdMg, confidence, false, 0),
+    facets: webFacets("active", mg, fields.lowThresholdMg, confidence, false, 0, false),
     lastMeasuredAt: confidence === "measured" ? now : undefined,
     createdAt: now,
     updatedAt: now,
@@ -633,7 +645,7 @@ export async function updateSpool(id: string, patch: SpoolFields): Promise<Spool
     const updated: SpoolRecord = {
       ...existing,
       ...patch,
-      facets: webFacets(existing.lifecycle, existing.availability.currentMg, patch.lowThresholdMg, existing.facets.confidence, existing.facets.loaded, existing.availability.reservedMg),
+      facets: webFacets(existing.lifecycle, existing.availability.currentMg, patch.lowThresholdMg, existing.facets.confidence, existing.facets.loaded, existing.availability.reservedMg, existing.facets.reconciliation),
       revision: existing.revision + 1,
       updatedAt: new Date().toISOString(),
     };
@@ -664,7 +676,7 @@ export async function recordAmount(id: string, entry: AmountEntry, note?: string
     const updated: SpoolRecord = {
       ...existing,
       availability: { currentMg: mg, reservedMg: existing.availability.reservedMg, availableMg: mg - existing.availability.reservedMg },
-      facets: webFacets(existing.lifecycle, mg, existing.lowThresholdMg, confidence, existing.facets.loaded, existing.availability.reservedMg),
+      facets: webFacets(existing.lifecycle, mg, existing.lowThresholdMg, confidence, existing.facets.loaded, existing.availability.reservedMg, existing.facets.reconciliation),
       lastMeasuredAt: new Date().toISOString(),
       revision: existing.revision + 1,
       updatedAt: new Date().toISOString(),
@@ -700,7 +712,7 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
       lifecycle: "empty",
       location,
       availability: { ...existing.availability, currentMg: 0, availableMg: -existing.availability.reservedMg },
-      facets: webFacets("empty", 0, existing.lowThresholdMg, "measured", location.kind === "slot", existing.availability.reservedMg),
+      facets: webFacets("empty", 0, existing.lowThresholdMg, "measured", location.kind === "slot", existing.availability.reservedMg, existing.facets.reconciliation),
       lastMeasuredAt: now,
       revision: existing.revision + 1,
       updatedAt: now,
@@ -708,7 +720,7 @@ function webSetLifecycle(id: string, action: SpoolLifecycleAction, storageLabel?
   } else if (action === "reactivate") {
     updated = {
       ...existing, lifecycle: "active",
-      facets: webFacets("active", existing.availability.currentMg, existing.lowThresholdMg, existing.facets.confidence, existing.facets.loaded, existing.availability.reservedMg),
+      facets: webFacets("active", existing.availability.currentMg, existing.lowThresholdMg, existing.facets.confidence, existing.facets.loaded, existing.availability.reservedMg, existing.facets.reconciliation),
       revision: existing.revision + 1, updatedAt: now,
     };
   } else if (action === "archive") {

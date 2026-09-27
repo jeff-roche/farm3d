@@ -25,7 +25,7 @@ function spool(overrides: Partial<SpoolRecord>): SpoolRecord {
     nominalMg: 1_000_000, lowThresholdMg: 100_000, lifecycle: "active",
     location: { kind: "slot", slotId: "slt-own-1", printerId: "prn-1" },
     availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
-    facets: { loaded: true, reserved: false, low: false, confidence: "measured" },
+    facets: { loaded: true, reserved: false, low: false, confidence: "measured", reconciliation: false },
     createdAt: "", updatedAt: "",
     ...overrides,
   };

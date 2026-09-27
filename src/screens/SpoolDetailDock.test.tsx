@@ -38,7 +38,7 @@ const ESTIMATED_SPOOL: SpoolRecord = {
   lifecycle: "active",
   location: { kind: "storage", storageLabel: "Shelf A2" },
   availability: { currentMg: 612_000, reservedMg: 0, availableMg: 612_000 },
-  facets: { loaded: false, reserved: false, low: false, confidence: "estimated" },
+  facets: { loaded: false, reserved: false, low: false, confidence: "estimated", reconciliation: false },
   createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-09-10T00:00:00Z",
 };
 
@@ -91,6 +91,29 @@ describe("SpoolDetailDock", () => {
     expect(titles[1]).toContain("Unloaded to");
     expect(titles[2]).toContain("Consumed 594 g");
     expect(titles[3]).toContain("Initial");
+  });
+
+  it("renders reservations in the Timeline, each with its holder label", async () => {
+    const withReservations: SpoolHistory = {
+      ...HISTORY,
+      reservations: [
+        {
+          id: "rsv-1", spoolId: "spl-1", holder: { kind: "job", id: "job-1" },
+          amountMg: 250_000, state: "active", operationId: "op-1",
+          createdAt: "2026-09-11T00:00:00Z",
+        },
+        {
+          id: "rsv-2", spoolId: "spl-1", holder: { kind: "job", id: "job-2" },
+          amountMg: 100_000, state: "unresolved", operationId: "op-2",
+          createdAt: "2026-09-13T00:00:00Z",
+        },
+      ],
+    };
+    loadHistory.mockResolvedValue(withReservations);
+    render(() => <SpoolDetailDock spool={ESTIMATED_SPOOL} mode="inline" onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Reserved 250 g for Job")).toBeInTheDocument();
+    expect(screen.getByText("Reserved (unresolved) 100 g for Job")).toBeInTheDocument();
   });
 
   it("re-fetches history when the Spool's revision changes, showing the new event", async () => {

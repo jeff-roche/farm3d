@@ -351,6 +351,15 @@ pub enum ErrorCode {
     ControlNotAllowed,
     /// P6 D9: the staged file is gone from the host or no longer matches.
     StagedArtifactInvalid,
+    /// P7 D8: `ReservationError::InsufficientAvailable`, raised as a
+    /// backstop when a Job's own gates already should have caught it.
+    InsufficientMaterial,
+    /// P7 D8: `ReservationError::SpoolNotReservable` -- the Spool isn't
+    /// `active`.
+    SpoolNotReservable,
+    /// P7 D8: `ReservationError::InvalidTransition` -- the reservation's
+    /// state changed since the caller last read it.
+    ReservationState,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -1278,9 +1287,84 @@ impl CommandError {
     }
 }
 
+/// P7's mapping for `spools::reservations::ReservationError` (D8), for a
+/// command that calls a reservation primitive directly (Task 6's
+/// `assign_queue_entry`, Task 9's `settle_job_material`/
+/// `correct_job_material`). `ReservationError` itself carries only what
+/// P3's primitives compute in-flight -- `availableMg`, the Spool's
+/// `lifecycle`, the reservation's prior `state` -- never a Spool's number,
+/// a Spool id, or a reservation id (P3 Task 4's tests match its variants
+/// verbatim, so this task doesn't add fields to them). A caller that also
+/// knows the Spool's number/id or the reservation's id enriches `details`
+/// itself once it has this `CommandError` back.
+impl From<crate::spools::reservations::ReservationError> for CommandError {
+    fn from(error: crate::spools::reservations::ReservationError) -> Self {
+        use crate::spools::encode_enum;
+        use crate::spools::reservations::ReservationError;
+
+        match error {
+            ReservationError::InsufficientAvailable { available_mg } => {
+                let mut error = Self::typed(
+                    ErrorCode::InsufficientMaterial,
+                    "This Spool no longer has enough material available.",
+                    vec![RecoveryCode::Reload],
+                    false,
+                );
+                error.details = Some(BTreeMap::from([(
+                    "availableMg".to_string(),
+                    JsonValue::Number(
+                        JsonNumber::try_from(available_mg)
+                            .expect("availableMg is bounded by weight::CURRENT_MG_RANGE"),
+                    ),
+                )]));
+                error
+            }
+            ReservationError::SpoolNotReservable { lifecycle } => {
+                let lifecycle_text = encode_enum(lifecycle);
+                let mut error = Self::typed(
+                    ErrorCode::SpoolNotReservable,
+                    format!("This Spool is {lifecycle_text} and can't be reserved."),
+                    vec![RecoveryCode::Reload],
+                    false,
+                );
+                error.details = Some(BTreeMap::from([(
+                    "lifecycle".to_string(),
+                    JsonValue::String(lifecycle_text),
+                )]));
+                error
+            }
+            ReservationError::InvalidTransition { from } => {
+                let mut error = Self::typed(
+                    ErrorCode::ReservationState,
+                    "The reservation changed. Reload.",
+                    vec![RecoveryCode::Reload],
+                    false,
+                );
+                error.details = Some(BTreeMap::from([(
+                    "state".to_string(),
+                    JsonValue::String(encode_enum(from)),
+                )]));
+                error
+            }
+            ReservationError::InvalidAmount => {
+                Self::validation_at("amountMg", "The submitted value is invalid.")
+            }
+            ReservationError::NotFound => Self::typed(
+                ErrorCode::NotFound,
+                "This reservation no longer exists.",
+                vec![RecoveryCode::Reload],
+                false,
+            ),
+            ReservationError::Storage(storage_error) => {
+                Self::from_repository(crate::persistence::RepositoryError::Storage(storage_error))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CommandError, ErrorCode, JsonValue, RecoveryCode};
+    use super::{CommandError, ErrorCode, JsonNumber, JsonValue, RecoveryCode};
     use crate::persistence::{RepositoryError, StorageError};
 
     #[test]
@@ -1430,6 +1514,51 @@ mod tests {
                 "hostOperationIds": ["hop-a", "hop-b"],
             })
         );
+    }
+
+    #[test]
+    fn reservation_errors_map_to_the_new_p7_codes() {
+        use crate::spools::reservations::{ReservationError, ReservationState};
+        use crate::spools::SpoolLifecycle;
+
+        let insufficient: CommandError =
+            ReservationError::InsufficientAvailable { available_mg: -1_000 }.into();
+        assert_eq!(insufficient.code, ErrorCode::InsufficientMaterial);
+        assert_eq!(insufficient.recovery, vec![RecoveryCode::Reload]);
+        assert!(!insufficient.retryable);
+        assert_eq!(
+            insufficient.details.unwrap().get("availableMg"),
+            Some(&JsonValue::Number(JsonNumber::try_from(-1_000_i64).unwrap()))
+        );
+
+        let not_reservable: CommandError = ReservationError::SpoolNotReservable {
+            lifecycle: SpoolLifecycle::Empty,
+        }
+        .into();
+        assert_eq!(not_reservable.code, ErrorCode::SpoolNotReservable);
+        assert_eq!(
+            not_reservable.message,
+            "This Spool is empty and can't be reserved."
+        );
+        assert_eq!(
+            not_reservable.details.unwrap().get("lifecycle"),
+            Some(&JsonValue::String("empty".to_string()))
+        );
+
+        let state: CommandError = ReservationError::InvalidTransition {
+            from: ReservationState::Consumed,
+        }
+        .into();
+        assert_eq!(state.code, ErrorCode::ReservationState);
+        assert_eq!(state.message, "The reservation changed. Reload.");
+        assert_eq!(
+            state.details.unwrap().get("state"),
+            Some(&JsonValue::String("consumed".to_string()))
+        );
+
+        let not_found: CommandError = ReservationError::NotFound.into();
+        assert_eq!(not_found.code, ErrorCode::NotFound);
+        assert_eq!(not_found.recovery, vec![RecoveryCode::Reload]);
     }
 
     #[test]

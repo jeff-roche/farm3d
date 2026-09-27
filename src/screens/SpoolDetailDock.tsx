@@ -12,6 +12,8 @@ import type { ResolvedPrinter } from "../printers/types";
 import type { AmountEvent } from "../generated/contracts/domain/AmountEvent";
 import type { AmountEventKind } from "../generated/contracts/domain/AmountEventKind";
 import type { MovementReason } from "../generated/contracts/domain/MovementReason";
+import type { Reservation } from "../generated/contracts/domain/Reservation";
+import type { ReservationState } from "../generated/contracts/domain/ReservationState";
 import type { SpoolHistory } from "../generated/contracts/command/SpoolHistory";
 import type { SpoolLocationSnapshot } from "../generated/contracts/domain/SpoolLocationSnapshot";
 import type { SpoolMovement } from "../generated/contracts/domain/SpoolMovement";
@@ -36,6 +38,26 @@ const MOVEMENT_VERB: Record<MovementReason, string> = {
   load: "Loaded", unload: "Unloaded", displaced: "Displaced", relocate: "Moved",
   consumed: "Marked empty, unloaded", printerArchived: "Moved off an archived Printer",
 };
+
+/** P7 D8: `holder.kind` is opaque to P3 -- only `"job"` exists on the wire
+ *  today (plus the debug-fixture-only `"debug"` seed), so this maps the
+ *  one real case to its display label and falls back to the raw kind for
+ *  anything else, rather than guessing at future holder kinds. */
+const RESERVATION_HOLDER_LABEL: Record<string, string> = { job: "Job" };
+
+const RESERVATION_STATE_LABEL: Record<ReservationState, string> = {
+  active: "Reserved", unresolved: "Reserved (unresolved)", released: "Released", consumed: "Consumed",
+};
+
+function reservationItem(r: Reservation): TimelineItem {
+  const holderLabel = RESERVATION_HOLDER_LABEL[r.holder.kind] ?? r.holder.kind;
+  return {
+    id: `reservation-${r.id}`,
+    at: r.createdAt,
+    title: `${RESERVATION_STATE_LABEL[r.state]} ${formatGrams(r.amountMg, 0)} for ${holderLabel}`,
+    marker: "muted",
+  };
+}
 
 function destinationLabel(snapshot: SpoolLocationSnapshot, printerRecords: ResolvedPrinter[]): string {
   if (snapshot.slotId) {
@@ -82,6 +104,7 @@ function historyTimelineItems(history: SpoolHistory | null, printerRecords: Reso
   const items = [
     ...history.movements.map((m) => movementItem(m, printerRecords)),
     ...history.amountEvents.map(amountItem),
+    ...history.reservations.map(reservationItem),
   ];
   return items.sort((a, b) => b.at.localeCompare(a.at));
 }
@@ -219,6 +242,7 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
         <div class={styles.facetChips}>
           <Show when={props.spool.facets.low}><span class={styles.chip}>Low</span></Show>
           <Show when={props.spool.facets.reserved}><span class={styles.chip}>Reserved</span></Show>
+          <Show when={props.spool.facets.reconciliation}><span class={styles.chip}>Needs reconciliation</span></Show>
         </div>
       </section>
 

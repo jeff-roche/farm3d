@@ -25,14 +25,14 @@ describe("ActivityBar", () => {
     expect(onSelect).toHaveBeenCalledWith("spools");
   });
 
-  it("marks Spools current when active, and shows no badge with a zero low count", () => {
-    render(() => <ActivityBar active="spools" onSelect={vi.fn()} lowSpoolCount={0} />);
+  it("marks Spools current when active, and shows no badge with a zero attention count", () => {
+    render(() => <ActivityBar active="spools" onSelect={vi.fn()} attentionSpoolCount={0} />);
     expect(screen.getByRole("button", { name: "Spools" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows a badge equal to the number of low Spools", () => {
-    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} lowSpoolCount={3} />);
-    expect(screen.getByRole("button", { name: "Spools (3 low)" })).toBeInTheDocument();
+  it("shows a badge equal to the number of Spools needing attention (low or reconciliation)", () => {
+    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} attentionSpoolCount={3} />);
+    expect(screen.getByRole("button", { name: "Spools (3 need attention)" })).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 });

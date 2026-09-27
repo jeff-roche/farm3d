@@ -9,9 +9,9 @@ export type ScreenId = "monitor" | "library" | "spools";
 export interface ActivityBarProps {
   active: ScreenId;
   onSelect: (screen: ScreenId) => void;
-  /** Count of `low` Spools (P3 design: "The badge counts `low` Spools").
-   *  Omitted or 0 renders no badge. */
-  lowSpoolCount?: number;
+  /** Count of Spools needing attention: `low` or `reconciliation` (P7 Task
+   *  4 brief). Omitted or 0 renders no badge. */
+  attentionSpoolCount?: number;
 }
 
 export function ActivityBar(props: ActivityBarProps) {
@@ -35,15 +35,15 @@ export function ActivityBar(props: ActivityBarProps) {
       </IconButton>
       <div class={styles.iconWrap}>
         <IconButton
-          aria-label={(props.lowSpoolCount ?? 0) > 0 ? `Spools (${props.lowSpoolCount} low)` : "Spools"}
+          aria-label={(props.attentionSpoolCount ?? 0) > 0 ? `Spools (${props.attentionSpoolCount} need attention)` : "Spools"}
           aria-current={props.active === "spools" ? "page" : undefined}
           active={props.active === "spools"}
           onClick={() => props.onSelect("spools")}
         >
           <IconDisc size={18} />
         </IconButton>
-        <Show when={(props.lowSpoolCount ?? 0) > 0}>
-          <span class={styles.badge} aria-hidden="true">{props.lowSpoolCount}</span>
+        <Show when={(props.attentionSpoolCount ?? 0) > 0}>
+          <span class={styles.badge} aria-hidden="true">{props.attentionSpoolCount}</span>
         </Show>
       </div>
       <div class={styles.spacer} />

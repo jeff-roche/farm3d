@@ -285,7 +285,7 @@ function App() {
       operationalRosters={shell().operationalRosters}
       adapterHealth={shell().adapterHealth}
       lastLiveEventAt={shell().lastLiveEventAt}
-      lowSpoolCount={spoolState.spools.filter((spool) => spool.facets.low).length}
+      attentionSpoolCount={spoolState.spools.filter((spool) => spool.facets.low || spool.facets.reconciliation).length}
     >
       <Show when={printerStoreCommandError()?.code === "HOST_OPERATION_PENDING" ? printerStoreCommandError() : undefined}>
         {(error) => (
