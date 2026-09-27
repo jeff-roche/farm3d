@@ -740,10 +740,6 @@ mod dispatch {
             .collect()
     }
 
-    fn settle() {
-        std::thread::sleep(Duration::from_millis(400));
-    }
-
     fn started(start_safety: StartSafety) -> (Roots, Running) {
         let roots = Roots::new(start_safety);
         let app = boot(&roots, Driver::Started);
@@ -808,7 +804,7 @@ mod dispatch {
         assert!(published.contains(&json!("staging")), "{published:?}");
         assert!(published.contains(&json!("awaitingStart")), "{published:?}");
         // No second upload, ever.
-        settle();
+        app.quiesce();
         assert_eq!(roots.uploads(), 1);
     }
 
@@ -836,7 +832,7 @@ mod dispatch {
         assert!(strings(&job["allowedActions"]).contains(&"stage".to_string()));
 
         // The driver never stages again by itself...
-        settle();
+        app.quiesce();
         assert_eq!(roots.uploads(), 1);
         // ...the operator does.
         let change = app.job_command("stage_job", "op-restage", &job_id).unwrap();
@@ -872,7 +868,7 @@ mod dispatch {
             .upload_unsupported
             .store(false, std::sync::atomic::Ordering::SeqCst);
         app.status(OperationalState::Ready);
-        settle();
+        app.quiesce();
         assert_eq!(roots.uploads(), 0, "it never stages again by itself");
         assert_eq!(app.job(&job_id)["state"], "assigned");
     }
@@ -922,7 +918,7 @@ mod dispatch {
         app.status(OperationalState::Offline);
         farm3d_lib::start_jobs_runtime(&app.services, app.app.handle());
         app.wait_first_pass();
-        settle();
+        app.quiesce();
         let job = app.job(&job_id);
         assert_eq!(job["state"], "assigned");
         assert_eq!(job["lastFailure"], Value::Null);
@@ -930,7 +926,7 @@ mod dispatch {
 
         app.status(OperationalState::Ready);
         app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
-        settle();
+        app.quiesce();
         assert_eq!(roots.uploads(), 1);
     }
 
@@ -1009,7 +1005,7 @@ mod dispatch {
         app.load(&spool);
         let job_id = app.assign(&spool);
         app.wait_job(&job_id, "awaitingStart");
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 0, "never from finished");
         assert_eq!(app.job(&job_id)["state"], "awaitingStart");
 
@@ -1030,7 +1026,7 @@ mod dispatch {
             ))
             .unwrap();
         assert!(ledger.starts_with("drv-") && ledger.ends_with("#hostOperation"), "{ledger}");
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 1);
     }
 
@@ -1039,7 +1035,7 @@ mod dispatch {
         let (roots, app) = started(StartSafety::ConfirmBedClear);
         let job_id = app.awaiting_start();
         app.status(OperationalState::Ready);
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 0);
         assert_eq!(app.job(&job_id)["state"], "awaitingStart");
     }
@@ -1285,12 +1281,15 @@ mod dispatch {
 
         let first = app.job_command("stage_job", "op-stage", &job_id).unwrap();
         app.wait_job(&job_id, "awaitingStart");
+        // The driver publishes `awaitingStart` after its commit: count once
+        // everything already under way has been published.
+        app.quiesce();
         let events = app.job_events(&job_id).len();
         let replayed = app.job_command("stage_job", "op-stage", &job_id).unwrap();
         assert_eq!(replayed["jobs"][0]["id"], first["jobs"][0]["id"]);
         assert_eq!(replayed["jobs"][0]["state"], "awaitingStart", "the current rows");
         assert_eq!(roots.uploads(), 2, "a replay never re-stages");
-        std::thread::sleep(Duration::from_millis(100));
+        app.quiesce();
         assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
 
         // The same id for another request is VALIDATION on operationId.
@@ -1347,7 +1346,7 @@ mod dispatch {
         roots.fake.with_state(|state| state.print_state = "complete".to_string());
         app.status(OperationalState::Finished);
         let job_id = app.awaiting_start();
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 0);
         job_id
     }
@@ -1380,7 +1379,7 @@ mod dispatch {
         roots.fake.with_state(|state| state.print_state = "standby".to_string());
         for _ in 0..3 {
             app.status(OperationalState::Ready);
-            settle();
+            app.quiesce();
         }
         assert_eq!(roots.starts(), 0, "a refused unattended start is not retried");
         let job = app.job(&job_id);
@@ -1424,7 +1423,7 @@ mod dispatch {
             0,
             "the claim rolled back with the link"
         );
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 0);
     }
 
@@ -1453,7 +1452,7 @@ mod dispatch {
         assert_eq!(job["lastFailure"]["kind"], "refused");
         assert_eq!(job["lastFailure"]["code"], "START_PRECONDITION_CHANGED");
         assert_eq!(start_ops(&app, &job_id), 0);
-        settle();
+        app.quiesce();
         assert_eq!(roots.starts(), 0);
     }
 }
@@ -1994,12 +1993,13 @@ mod tracking {
         assert_eq!(requirement["kind"], "jobOutcomeUnknown");
         assert_eq!(requirement["status"], "resolved");
         assert_eq!(requirement["resolution"], json!({"kind": "declared", "outcome": "completed"}));
+        app.quiesce();
         let events = app.job_events(&job_id).len();
 
         let replayed = app.declare("op-declare", &job_id, "completed").unwrap();
         assert_eq!(replayed["jobs"][0]["id"], json!(job_id));
         assert_eq!(replayed["jobs"][0]["state"], "completed");
-        std::thread::sleep(Duration::from_millis(200));
+        app.quiesce();
         assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
         let reused = app.declare("op-declare", &job_id, "failed").unwrap_err();
         assert_eq!(reused["code"], "VALIDATION");
@@ -2020,8 +2020,7 @@ mod tracking {
         let roots = roots();
         let app = fast_app(&roots);
         let job_id = app.awaiting_start();
-        app.services.jobs.stop();
-        std::thread::sleep(Duration::from_millis(200));
+        app.stop_runtime();
         app.start("op-start", &job_id, "ready").unwrap();
         let start = app
             .ops(&job_id)
@@ -2046,8 +2045,7 @@ mod tracking {
         let roots = roots();
         let app = fast_app(&roots);
         let job_id = app.awaiting_start();
-        app.services.jobs.stop();
-        std::thread::sleep(Duration::from_millis(200));
+        app.stop_runtime();
         app.start("op-start", &job_id, "ready").unwrap();
         let start = app
             .ops(&job_id)

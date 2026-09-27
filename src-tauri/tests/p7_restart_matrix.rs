@@ -42,17 +42,19 @@ fn roots() -> Roots {
     Roots::new(StartSafety::ConfirmBedClear)
 }
 
+/// Waits until the executor reached the injected fault point. It fires
+/// just before the executor returns, and a `Crash` writes nothing more.
 fn wait_fired(fired: Receiver<()>) {
     fired
         .recv_timeout(Duration::from_secs(10))
         .expect("the fault point was reached");
-    std::thread::sleep(Duration::from_millis(100));
 }
 
-/// Stops the old runtime's driver and drops everything, as a crash would.
+/// Stops the old runtime and drops everything, as a crash would. The
+/// driver and the evaluator have finished before the next boot, so the
+/// old runtime can't write while the new one runs.
 fn crash(app: Running) {
-    app.services.jobs.stop();
-    std::thread::sleep(Duration::from_millis(100));
+    app.stop_runtime();
     drop(app);
 }
 
@@ -90,10 +92,6 @@ fn op_of_kind(app: &Running, job_id: &str, kind: HostOperationKind) -> farm3d_li
         .into_iter()
         .rfind(|op| op.kind == kind)
         .unwrap_or_else(|| panic!("a {kind:?} op for {job_id}"))
-}
-
-fn settle() {
-    std::thread::sleep(Duration::from_millis(400));
 }
 
 #[test]
@@ -142,7 +140,7 @@ fn restart_inside_assign_rolls_back_everything() {
     );
     let job_id = id(&change["jobs"][0]);
     app.wait_job(&job_id, "awaitingStart");
-    settle();
+    app.quiesce();
     assert_eq!(roots.uploads(), 1);
     assert_eq!(roots.starts(), 0);
 }
@@ -163,13 +161,13 @@ fn restart_after_assign_stages_once() {
     assert_eq!(job["lastFailure"], Value::Null);
     assert_eq!(entry_of(&app, &job_id)["state"], "assigned");
     assert_eq!(reservation_state(&app, &job_id), "active");
-    settle();
+    app.quiesce();
     assert_eq!(roots.uploads(), 1, "the driver staged once");
     crash(app);
 
     // Another restart never stages it again.
     let app = boot(&roots, Driver::Started);
-    settle();
+    app.quiesce();
     assert_eq!(app.job(&job_id)["state"], "awaitingStart");
     assert_eq!(roots.uploads(), 1);
     assert_eq!(roots.starts(), 0);
@@ -202,7 +200,7 @@ fn restart_before_upload_send_returns_the_job_to_assigned() {
     assert_eq!(job["activeHostOperationId"], Value::Null);
     assert_eq!(entry_of(&app, &job_id)["state"], "assigned");
     assert_eq!(reservation_state(&app, &job_id), "active");
-    settle();
+    app.quiesce();
     assert_eq!(app.ops(&job_id).len(), 1, "nothing re-staged by itself");
     assert_eq!(roots.uploads(), 0);
 }
@@ -238,7 +236,7 @@ fn restart_during_upload_reconciles_then_awaits_start() {
     let job = app.wait_job(&job_id, "awaitingStart");
     assert_eq!(job["uploadHostOperationId"], json!(upload.id));
     assert_eq!(app.row(&upload.id).state, HostOperationState::Succeeded);
-    settle();
+    app.quiesce();
     assert_eq!(roots.uploads(), 1, "no duplicate upload");
     assert_eq!(roots.starts(), 0);
 }
@@ -253,7 +251,7 @@ fn restart_after_upload_success_applies_the_outcome() {
     // upload's outcome before the crash.
     app.job_command("stage_job", "op-stage", &job_id).unwrap();
     let upload = app.wait_resolved(&app.first_op(&job_id).id, HostOperationState::Succeeded);
-    settle();
+    app.quiesce();
     assert_eq!(app.job(&job_id)["state"], "staging");
     crash(app);
 
@@ -291,7 +289,7 @@ fn restart_before_start_send_returns_to_awaiting_start() {
     assert_eq!(job["lastFailure"]["failure"]["code"], "neverSent");
     assert_eq!(entry_of(&app, &job_id)["state"], "assigned");
     assert_eq!(reservation_state(&app, &job_id), "active");
-    settle();
+    app.quiesce();
     assert_eq!(roots.starts(), 0, "no start sent");
     assert_eq!(roots.uploads(), 1);
 }
@@ -320,7 +318,7 @@ fn restart_after_start_reply_lost_reconciles_without_a_second_start() {
     let job = app.wait_job(&job_id, "printing");
     assert!(job["startedAt"].is_string());
     assert_eq!(app.row(&start.id).state, HostOperationState::Succeeded);
-    settle();
+    app.quiesce();
     assert_eq!(roots.starts(), 1, "no second start");
     assert_eq!(roots.uploads(), 1);
 }
@@ -330,8 +328,7 @@ fn restart_after_start_success_applies_the_outcome() {
     let roots = roots();
     let app = boot(&roots, Driver::Started);
     let job_id = app.awaiting_start();
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     app.start("op-start", &job_id, "ready").unwrap();
     let start = app.wait_resolved(
         &op_of_kind(&app, &job_id, HostOperationKind::Start).id,
@@ -408,7 +405,7 @@ fn restart_after_release_keeps_the_replacement_in_place() {
         )),
         Some(format!("queued:{}", old_entry["position"]))
     );
-    settle();
+    app.quiesce();
     assert_eq!(app.scalar("SELECT COUNT(*) FROM jobs"), 1, "nothing assigned by itself");
     assert_eq!(roots.uploads(), 1);
     assert_eq!(roots.starts(), 0);
@@ -419,8 +416,7 @@ fn restart_after_abandoned_start_is_outcome_unknown() {
     let roots = roots();
     let app = boot(&roots, Driver::Started);
     let job_id = app.awaiting_start();
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     roots
         .fake
         .fault(Route::Start, Fault::ApplyStartThenDrop(StartTrace::PrintingOnly));
@@ -458,7 +454,7 @@ fn restart_after_abandoned_start_is_outcome_unknown() {
     crash(app);
     // Recovery is idempotent: a second restart opens nothing more.
     let app = boot(&roots, Driver::Started);
-    settle();
+    app.quiesce();
     assert_eq!(
         app.scalar("SELECT COUNT(*) FROM reconciliation_requirements"),
         1
@@ -472,8 +468,7 @@ fn restart_after_pause_success_applies_the_outcome() {
     let roots = roots();
     let app = boot(&roots, Driver::Started);
     let job_id = app.printing();
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     app.job_command("pause_job", "op-pause", &job_id).unwrap();
     let pause = app.wait_resolved(
         &op_of_kind(&app, &job_id, HostOperationKind::Pause).id,
@@ -505,7 +500,7 @@ fn restart_after_assign_stages_once_when_the_printer_connects_late() {
 
     let app = boot_with(&roots, Driver::Started, connecting());
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     let job = app.job(&job_id);
     assert_eq!(job["state"], "assigned");
     assert_eq!(job["lastFailure"], Value::Null, "not reachable yet is a deferral");
@@ -515,9 +510,9 @@ fn restart_after_assign_stages_once_when_the_printer_connects_late() {
     app.status(OperationalState::Ready);
     let job = app.wait_job_within(&job_id, "awaitingStart", Duration::from_secs(5));
     assert_eq!(job["lastFailure"], Value::Null);
-    settle();
+    app.quiesce();
     app.status(OperationalState::Ready);
-    settle();
+    app.quiesce();
     assert_eq!(roots.uploads(), 1, "staged exactly once");
     assert_eq!(app.ops(&job_id).len(), 1);
     assert_eq!(roots.starts(), 0);
@@ -553,9 +548,9 @@ fn restart_before_unattended_start_send_never_starts_again() {
     let job = app.wait_job(&job_id, "awaitingStart");
     assert_eq!(job["lastFailure"]["failure"]["code"], "neverSent");
     app.status(OperationalState::Ready);
-    settle();
+    app.quiesce();
     app.status(OperationalState::Ready);
-    settle();
+    app.quiesce();
     assert_eq!(app.job(&job_id)["state"], "awaitingStart");
     assert_eq!(roots.starts(), 0, "no start by itself after a failed one");
     assert_eq!(
@@ -589,9 +584,9 @@ fn restart_after_unattended_start_reply_lost_never_starts_again() {
     }
     app.wait_job(&job_id, "printing");
     app.status(OperationalState::Ready);
-    settle();
+    app.quiesce();
     app.status(OperationalState::Ready);
-    settle();
+    app.quiesce();
     assert_eq!(roots.starts(), 1, "only the original start");
     assert_eq!(
         app.ops(&job_id).iter().filter(|op| op.kind == HostOperationKind::Start).count(),
@@ -619,8 +614,7 @@ fn restart_during_printing_keeps_tracking() {
     let job_id = app.awaiting_start();
     // The start's outcome is applied only by the next boot's recovery, so
     // the Job restarts printing and unpinned.
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     app.start("op-start", &job_id, "ready").unwrap();
     app.wait_resolved(
         &op_of_kind(&app, &job_id, HostOperationKind::Start).id,
@@ -681,7 +675,7 @@ fn restart_after_host_completed_completes_once() {
 
     let app = fast_boot(&roots);
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     assert_eq!(app.job(&job_id)["state"], "completed");
     assert_eq!(app.count_events(&job_id, "completed"), 1, "completed once");
     assert_eq!(reservation_state(&app, &job_id), "consumed", "unchanged across restarts");
@@ -739,7 +733,7 @@ fn restart_after_host_failed_opens_one_requirement() {
 
         let app = fast_boot(&roots);
         app.wait_first_pass();
-        settle();
+        app.quiesce();
         assert_eq!(app.job(&job_id)["state"], state);
         assert_eq!(app.count_events(&job_id, state), 1, "{status}: ended once");
         assert_eq!(reservation_state(&app, &job_id), "unresolved", "{status}: unchanged");
@@ -769,7 +763,7 @@ fn restart_after_terminal_keeps_settlement_pending() {
 
     let app = fast_boot(&roots);
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     let job = app.job(&job_id);
     assert_eq!(job["state"], "failed");
     assert_eq!(job["settlement"], "pending");
@@ -815,7 +809,7 @@ fn restart_inside_settle_rolls_back() {
 
     let app = fast_boot(&roots);
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     let settled = app.settle("op-settle", &job_id, json!({"kind": "estimated"})).unwrap();
     assert_eq!(settled["jobs"][0]["settlement"], "settled");
     assert_eq!(reservation_state(&app, &job_id), "consumed");
@@ -842,7 +836,7 @@ fn restart_after_defer_keeps_the_amount_unavailable() {
 
     let app = fast_boot(&roots);
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     let job = app.job(&job_id);
     assert_eq!(job["state"], "cancelled");
     assert_eq!(job["settlement"], "deferred");
@@ -863,8 +857,7 @@ fn restart_after_cancel_reply_lost_ends_cancelled_once() {
     let job_id = app.printing();
     // The crash point: the cancel was sent (the host applied it) and
     // nothing after the send ran, the tracker included.
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     let fired = app
         .services
         .host_ops
@@ -904,7 +897,7 @@ fn restart_after_declare_is_stable() {
 
     let app = fast_boot(&roots);
     app.wait_first_pass();
-    settle();
+    app.quiesce();
     let job = app.job(&job_id);
     assert_eq!(job["state"], "failed");
     assert_eq!(job["settlement"], "pending");
@@ -1010,8 +1003,7 @@ fn endpoint_change_during_printing_never_pins_a_job_on_the_new_host() {
     let roots = roots();
     let app = boot(&roots, Driver::Started);
     let job_id = app.awaiting_start();
-    app.services.jobs.stop();
-    settle();
+    app.stop_runtime();
     app.start("op-start", &job_id, "ready").unwrap();
     app.wait_resolved(
         &op_of_kind(&app, &job_id, HostOperationKind::Start).id,

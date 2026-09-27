@@ -7,7 +7,6 @@
 mod common;
 mod p7_dispatch_rig;
 
-use std::time::Duration;
 
 use farm3d_lib::jobs::estimated_use_mg;
 use farm3d_lib::printers::operational::OperationalState;
@@ -382,6 +381,7 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
 
     let first = app.settle("op-settle", &job_id, ESTIMATED()).unwrap();
     assert_eq!(first["jobs"][0]["settlement"], "settled");
+    app.quiesce();
     let job_events_before = app.count_stream_events("queue.job.changed", &job_id);
     let ledger_before = app
         .amount_events(&spool_id)
@@ -392,7 +392,7 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
     let replayed = app.settle("op-settle", &job_id, ESTIMATED()).unwrap();
     assert_eq!(replayed["jobs"][0]["id"], json!(job_id));
     assert_eq!(replayed["jobs"][0]["settlement"], "settled");
-    std::thread::sleep(Duration::from_millis(200));
+    app.quiesce();
     assert_eq!(
         app.count_stream_events("queue.job.changed", &job_id),
         job_events_before,
@@ -415,7 +415,9 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
 #[test]
 fn cancelled_before_start_needs_no_settlement_and_releases_the_reservation() {
     let roots = roots();
-    let app = fast_boot(&roots);
+    // The driver stays off, so nothing stages the Job before the cancel:
+    // with it on, a stage that wins the race makes the cancel refused.
+    let app = boot_tuned(&roots, Driver::Off, status_of(OperationalState::Ready), fast(), None);
     let spool = app.spool();
     let job_id = app.assign(&spool);
     let reservation_id = reservation_id_of(&app.job(&job_id));
@@ -476,11 +478,13 @@ fn every_settlement_path_publishes_job_spool_and_requirement_changes_once() {
     // Path 1: automatic completion (the tracker's terminal transaction).
     let completed_job = app.printing();
     let completed_spool = app.job(&completed_job)["spoolId"].as_str().unwrap().to_string();
+    app.quiesce();
     let before_job = app.count_stream_events("queue.job.changed", &completed_job);
     let before_spool = app.count_stream_events("spool.changed", &completed_spool);
     roots.fake.finish_print("completed");
     app.wait_job(&completed_job, "completed");
-    std::thread::sleep(Duration::from_millis(200));
+    // The driver publishes after the tracker's commit.
+    app.quiesce();
     assert_eq!(
         app.count_stream_events("queue.job.changed", &completed_job) - before_job,
         1,
@@ -501,6 +505,7 @@ fn every_settlement_path_publishes_job_spool_and_requirement_changes_once() {
     let failed_spool = app.job(&failed_job)["spoolId"].as_str().unwrap().to_string();
     roots.fake.finish_print("klippy_shutdown");
     app.wait_job(&failed_job, "failed");
+    app.quiesce();
     let requirement_id = material_requirement(&app, &failed_job)["id"].as_str().unwrap().to_string();
     assert_eq!(app.count_stream_events("queue.requirement.changed", &requirement_id), 1);
 
@@ -520,6 +525,7 @@ fn every_settlement_path_publishes_job_spool_and_requirement_changes_once() {
     let deferred_spool = app.job(&deferred_job)["spoolId"].as_str().unwrap().to_string();
     roots.fake.finish_print("cancelled");
     app.wait_job(&deferred_job, "cancelled");
+    app.quiesce();
     let deferred_requirement_id =
         material_requirement(&app, &deferred_job)["id"].as_str().unwrap().to_string();
     let before_job = app.count_stream_events("queue.job.changed", &deferred_job);

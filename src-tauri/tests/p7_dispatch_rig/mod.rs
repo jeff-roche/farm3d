@@ -589,6 +589,64 @@ impl Running {
         }
     }
 
+    /// Stops the Job runtime, as a crash would, and waits until its tasks
+    /// (the driver, and the evaluator's task and pumps) have all ended, so
+    /// nothing of the stopped runtime writes after this returns.
+    pub fn stop_runtime(&self) {
+        self.services.jobs.stop();
+        let deadline = Instant::now() + WAIT;
+        while self.services.jobs.running_tasks() > 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the stopped runtime still has {} tasks",
+                self.services.jobs.running_tasks()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Waits until the driver has handled everything sent to it so far
+    /// (see `JobServices::barrier`).
+    fn driver_barrier(&self) {
+        let mut done = self.services.jobs.barrier();
+        let deadline = Instant::now() + WAIT;
+        loop {
+            match done.try_recv() {
+                Ok(()) => return,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    panic!("the driver stopped before the barrier")
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+            assert!(Instant::now() < deadline, "the driver never reached the barrier");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Waits until everything already set in motion has run: the driver has
+    /// handled every change sent to it, no Host Operation is still being
+    /// dispatched or reconciled, and the evaluator is idle. A negative
+    /// check after this ("no second upload") can't be beaten by work still
+    /// on its way. With the driver off, only the Host Operations are waited
+    /// for.
+    pub fn quiesce(&self) {
+        let running = self.services.jobs.running_tasks() > 0;
+        if running {
+            self.driver_barrier();
+        }
+        self.wait_until("no Host Operation in flight", || {
+            self.scalar(
+                "SELECT COUNT(*) FROM host_operations WHERE state IN ('dispatching', 'reconciling')",
+            ) == 0
+        });
+        if running {
+            // An op resolving wakes the driver again, and whatever it did
+            // may have poked the evaluator.
+            self.driver_barrier();
+            self.wait_until("the evaluator is idle", || self.services.evaluator.is_idle());
+        }
+    }
+
     /// Sets the Printer's live status to `status`.
     pub fn seed(&self, status: PrinterStatus) {
         self.manager.seed(PRINTER, status);
