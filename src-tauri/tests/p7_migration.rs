@@ -159,8 +159,16 @@ struct JobRow<'a> {
     reservation_id: &'a str,
     state: &'a str,
     settlement: &'a str,
+    settlement_method: Option<&'a str>,
     ended_at: Option<&'a str>,
     cancel_reason: Option<&'a str>,
+    upload_host_operation_id: Option<&'a str>,
+    start_host_operation_id: Option<&'a str>,
+    start_confirmation: Option<&'a str>,
+    started_at: Option<&'a str>,
+    history_mark: Option<i64>,
+    host_unreachable_since: Option<&'a str>,
+    correction_event_id: Option<&'a str>,
 }
 
 impl<'a> JobRow<'a> {
@@ -179,8 +187,16 @@ impl<'a> JobRow<'a> {
             reservation_id,
             state: "assigned",
             settlement: "open",
+            settlement_method: None,
             ended_at: None,
             cancel_reason: None,
+            upload_host_operation_id: None,
+            start_host_operation_id: None,
+            start_confirmation: None,
+            started_at: None,
+            history_mark: None,
+            host_unreachable_since: None,
+            correction_event_id: None,
         }
     }
 }
@@ -190,8 +206,11 @@ fn insert_job(connection: &rusqlite::Connection, row: &JobRow<'_>) -> rusqlite::
         "INSERT INTO jobs(
              id, revision, queue_entry_id, slice_revision_id, printer_id, printer_snapshot_json,
              spool_id, reservation_id, estimate_mg, state, cancel_reason, settlement,
-             assigned_by, created_at, updated_at, ended_at
-         ) VALUES (?1, 1, ?2, 'slr-a', ?3, '{}', ?4, ?5, 500000, ?6, ?7, ?8, 'operator', ?9, ?9, ?10)",
+             settlement_method, assigned_by, upload_host_operation_id, start_host_operation_id,
+             start_confirmation, started_at, history_mark, host_unreachable_since,
+             correction_event_id, created_at, updated_at, ended_at
+         ) VALUES (?1, 1, ?2, 'slr-a', ?3, '{}', ?4, ?5, 500000, ?6, ?7, ?8,
+                   ?9, 'operator', ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17, ?18)",
         rusqlite::params![
             row.id,
             row.queue_entry_id,
@@ -201,6 +220,14 @@ fn insert_job(connection: &rusqlite::Connection, row: &JobRow<'_>) -> rusqlite::
             row.state,
             row.cancel_reason,
             row.settlement,
+            row.settlement_method,
+            row.upload_host_operation_id,
+            row.start_host_operation_id,
+            row.start_confirmation,
+            row.started_at,
+            row.history_mark,
+            row.host_unreachable_since,
+            row.correction_event_id,
             NOW,
             row.ended_at,
         ],
@@ -220,6 +247,25 @@ fn insert_host_operation(
          ) VALUES (?1, ?1, ?2, 'upload', 'farm3d/a.gcode', ?3, 200, ?4, 'dispatching', ?5)",
         rusqlite::params![id, printer_id, GCODE_HASH, ENDPOINT, NOW],
     )
+}
+
+/// A terminal (`succeeded`) `host_operations` row for `printer_id`, so more
+/// than one can exist per printer (the partial unique index only limits
+/// *unresolved* rows) — used purely as an FK anchor for
+/// `jobs.upload_host_operation_id`/`start_host_operation_id` in the
+/// active-state CHECK tests, which don't care about the host operation's
+/// own state.
+fn seed_terminal_host_operation(connection: &rusqlite::Connection, id: &str, printer_id: &str) {
+    exec(
+        connection,
+        &format!(
+            "INSERT INTO host_operations(
+                 id, operation_id, printer_id, kind, host_path, gcode_sha256, gcode_size,
+                 endpoint_json, state, created_at)
+             VALUES ('{id}', '{id}', '{printer_id}', 'upload', 'farm3d/a.gcode', '{GCODE_HASH}',
+                     200, '{ENDPOINT}', 'succeeded', '{NOW}');"
+        ),
+    );
 }
 
 /// 1. A fresh database reaches `CURRENT_SCHEMA_VERSION` (8), with a
@@ -487,17 +533,38 @@ fn queue_entry_position_and_successor_are_unique() {
 
 /// 5. `jobs`' `CHECK`s reject invalid rows: id prefix, `state`, the
 ///    cancelled/`cancel_reason` pairing, the terminal/`ended_at`/
-///    `settlement` pairing, and the active-state companion-column
+///    `settlement` pairing, the active-state companion-column
 ///    requirements (`upload_host_operation_id`, `start_confirmation`,
-///    `started_at`/`history_mark`, `start_host_operation_id`).
+///    `started_at`/`history_mark`, `start_host_operation_id`), the
+///    settlement/`settlement_method` and settlement/`cancel_reason`
+///    pairings, and `host_unreachable_since`/`correction_event_id`'s
+///    state restrictions. Every case below also has a passing
+///    counterpart that satisfies the same CHECK, so the assertion is
+///    tied to that one CHECK and not some other constraint.
 #[test]
 fn job_checks_reject_invalid_rows() {
     let (_temp, connection) = migrated();
     seed_printer(&connection, "prn-a");
+    seed_printer(&connection, "prn-b");
+    seed_printer(&connection, "prn-c");
     seed_slice_revision(&connection, "slr-a");
     seed_spool(&connection, "spl-a", 1);
     seed_queue_entry(&connection, "qen-a", "slr-a", 1);
+    seed_queue_entry(&connection, "qen-b", "slr-a", 2);
+    seed_queue_entry(&connection, "qen-c", "slr-a", 3);
+    seed_queue_entry(&connection, "qen-d", "slr-a", 4);
+    seed_queue_entry(&connection, "qen-e", "slr-a", 5);
+    seed_queue_entry(&connection, "qen-f", "slr-a", 6);
     seed_reservation(&connection, "rsv-a", "spl-a", "job-a");
+    seed_reservation(&connection, "rsv-b", "spl-a", "job-b");
+    seed_reservation(&connection, "rsv-c", "spl-a", "job-c");
+    seed_reservation(&connection, "rsv-d", "spl-a", "job-d");
+    seed_reservation(&connection, "rsv-e", "spl-a", "job-e");
+    seed_reservation(&connection, "rsv-f", "spl-a", "job-f");
+    seed_terminal_host_operation(&connection, "hop-b-upload", "prn-b");
+    seed_terminal_host_operation(&connection, "hop-b-start", "prn-b");
+    seed_terminal_host_operation(&connection, "hop-c-upload", "prn-c");
+    seed_terminal_host_operation(&connection, "hop-c-start", "prn-c");
 
     assert_rejected(
         insert_job(
@@ -573,6 +640,180 @@ fn job_checks_reject_invalid_rows() {
         ),
         "an awaitingStart job with no upload_host_operation_id",
     );
+
+    // `(settlement = 'settled') = (settlement_method IS NOT NULL)`.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                state: "completed",
+                settlement: "settled",
+                settlement_method: None,
+                ended_at: Some(NOW),
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "a settled job with no settlement_method",
+    );
+    insert_job(
+        &connection,
+        &JobRow {
+            state: "completed",
+            settlement: "settled",
+            settlement_method: Some("estimated"),
+            ended_at: Some(NOW),
+            ..JobRow::assigned("job-b", "qen-b", "prn-a", "spl-a", "rsv-b")
+        },
+    )
+    .expect("a settled job with settlement_method set");
+
+    // `settlement <> 'notRequired' OR cancel_reason IN ('releasedBeforeStart','cancelledBeforeStart')`.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                state: "cancelled",
+                settlement: "notRequired",
+                cancel_reason: Some("cancelledByOperator"),
+                ended_at: Some(NOW),
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "a notRequired job whose cancel_reason isn't released/cancelledBeforeStart",
+    );
+    insert_job(
+        &connection,
+        &JobRow {
+            state: "cancelled",
+            settlement: "notRequired",
+            cancel_reason: Some("cancelledBeforeStart"),
+            ended_at: Some(NOW),
+            ..JobRow::assigned("job-c", "qen-c", "prn-a", "spl-a", "rsv-c")
+        },
+    )
+    .expect("a notRequired job cancelled before start");
+
+    // `state NOT IN ('starting','printing','paused') OR start_confirmation IS NOT NULL`,
+    // isolated from the neighboring `start_host_operation_id` CHECK below by
+    // setting every other active-state companion column a `starting` row
+    // needs.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                state: "starting",
+                upload_host_operation_id: Some("hop-b-upload"),
+                start_host_operation_id: Some("hop-b-start"),
+                start_confirmation: None,
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "a starting job with no start_confirmation",
+    );
+
+    // `state NOT IN ('starting','printing','paused') OR start_host_operation_id IS NOT NULL`,
+    // isolated the same way (every other companion column present).
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                state: "starting",
+                upload_host_operation_id: Some("hop-b-upload"),
+                start_host_operation_id: None,
+                start_confirmation: Some("bedClear"),
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "a starting job with no start_host_operation_id",
+    );
+    // One valid `starting` row proves both of the above CHECKs are
+    // satisfiable together (`starting` needs neither `started_at`,
+    // `history_mark`, nor `ended_at`).
+    insert_job(
+        &connection,
+        &JobRow {
+            state: "starting",
+            upload_host_operation_id: Some("hop-b-upload"),
+            start_host_operation_id: Some("hop-b-start"),
+            start_confirmation: Some("bedClear"),
+            ..JobRow::assigned("job-d", "qen-d", "prn-b", "spl-a", "rsv-d")
+        },
+    )
+    .expect("a valid starting job");
+
+    // `state NOT IN ('printing','paused') OR (started_at IS NOT NULL AND history_mark IS NOT NULL)`,
+    // isolated by setting every other `printing` companion column
+    // (`upload_host_operation_id`, `start_confirmation`,
+    // `start_host_operation_id`) that a separate CHECK would otherwise
+    // also reject on.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                state: "printing",
+                upload_host_operation_id: Some("hop-c-upload"),
+                start_host_operation_id: Some("hop-c-start"),
+                start_confirmation: Some("bedClear"),
+                started_at: None,
+                history_mark: None,
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "a printing job with no started_at/history_mark",
+    );
+    // One valid `printing` row proves that CHECK is satisfiable, and
+    // doubles as the passing counterpart for `host_unreachable_since`
+    // (below): it's only legal while `printing`/`paused`.
+    insert_job(
+        &connection,
+        &JobRow {
+            state: "printing",
+            upload_host_operation_id: Some("hop-c-upload"),
+            start_host_operation_id: Some("hop-c-start"),
+            start_confirmation: Some("bedClear"),
+            started_at: Some(NOW),
+            history_mark: Some(1),
+            host_unreachable_since: Some(NOW),
+            ..JobRow::assigned("job-e", "qen-e", "prn-c", "spl-a", "rsv-e")
+        },
+    )
+    .expect("a valid printing job, unreachable since NOW");
+
+    // `host_unreachable_since IS NULL OR state IN ('printing','paused')`.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                host_unreachable_since: Some(NOW),
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "an assigned job with host_unreachable_since set",
+    );
+
+    // `correction_event_id IS NULL OR state = 'completed'`.
+    assert_rejected(
+        insert_job(
+            &connection,
+            &JobRow {
+                correction_event_id: Some("jev-fake"),
+                ..JobRow::assigned("job-a", "qen-a", "prn-a", "spl-a", "rsv-a")
+            },
+        ),
+        "an assigned job with correction_event_id set",
+    );
+    insert_job(
+        &connection,
+        &JobRow {
+            state: "completed",
+            settlement: "settled",
+            settlement_method: Some("estimated"),
+            ended_at: Some(NOW),
+            correction_event_id: Some("jev-real"),
+            ..JobRow::assigned("job-f", "qen-f", "prn-a", "spl-a", "rsv-f")
+        },
+    )
+    .expect("a completed job with correction_event_id set");
 
     insert_job(
         &connection,
