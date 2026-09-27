@@ -98,6 +98,24 @@ fn wait_settled(app: &Running) {
     wait_idle(app);
 }
 
+/// Boots with a Spool loaded and the evaluator settled, with no trigger
+/// from the setup still on its way to it. `wait_settled` can't see a
+/// trigger still inside a pump (the load's inventory change, or the
+/// startup pass's host facts), so both happen before the Job runtime
+/// starts: the pumps subscribe then, and never see them. After the first
+/// run and idle, nothing is left to arrive.
+fn boot_loaded_and_settled(roots: &Roots) -> Running {
+    let app = boot(roots, Driver::Off);
+    let spool = app.spool();
+    app.load(&spool);
+    app.wait_until("the host-ops startup pass finished", || {
+        app.services.host_ops.startup_pass_done()
+    });
+    farm3d_lib::start_jobs_runtime(&app.services, app.app.handle());
+    wait_settled(&app);
+    app
+}
+
 fn job_count(app: &Running) -> i64 {
     app.scalar("SELECT COUNT(*) FROM jobs")
 }
@@ -661,10 +679,7 @@ fn no_automatic_assignment_behind_an_unsupported_capability() {
 #[test]
 fn a_failed_run_pokes_once_more_so_a_ready_entry_is_assigned() {
     let roots = roots();
-    let app = boot(&roots, Driver::Started);
-    let spool = app.spool();
-    app.load(&spool);
-    wait_settled(&app);
+    let app = boot_loaded_and_settled(&roots);
     let evaluator = &app.services.evaluator;
     let repokes_before = evaluator.repokes();
     evaluator.fail_next_runs(1);
@@ -682,10 +697,7 @@ fn a_failed_run_pokes_once_more_so_a_ready_entry_is_assigned() {
 #[test]
 fn failed_runs_poke_once_then_stop() {
     let roots = roots();
-    let app = boot(&roots, Driver::Started);
-    let spool = app.spool();
-    app.load(&spool);
-    wait_settled(&app);
+    let app = boot_loaded_and_settled(&roots);
     let evaluator = &app.services.evaluator;
     let (runs_before, repokes_before) = (evaluator.runs(), evaluator.repokes());
     evaluator.fail_next_runs(2);
