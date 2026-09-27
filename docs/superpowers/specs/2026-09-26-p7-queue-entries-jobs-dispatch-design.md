@@ -232,16 +232,24 @@ both retries and release replacements.
   neither negating nor a single `position = position ± 1` works, and no
   row order is promised. Every renumber (move, close, remove, release,
   and a Job reaching a terminal state) is therefore:
-  1. Free the slot the change needs: a closing entry's position becomes
-     NULL; a moving entry is parked at `position + 1000000`.
-  2. Park every other entry that must shift:
+  1. Free the slot the change needs. A closing entry's position becomes
+     NULL. A moving entry is parked in its own range:
+     `SET position = position + 2000000 WHERE id = ?mover`.
+  2. Park every other entry that must shift, in the shift range:
      `UPDATE queue_entries SET position = position + 1000000 WHERE
-     position BETWEEN ?lo AND ?hi`. Its targets (1000001 and up) are all
-     free, so no row collides.
-  3. Write the final values from the parked ones, either in one statement
-     (`SET position = position - 1000000 ± 1 WHERE position > 1000000`,
-     whose targets were freed in step 1 and 2) or one row at a time, then
-     set the moving entry's final position.
+     position BETWEEN ?lo AND ?hi`. The mover is already outside
+     `?lo..?hi` (its position is above 2000000), and the targets
+     (1000001..1999999) are all free, so no row collides.
+  3. Write the shifted rows' final values in one statement that touches
+     only the shift range:
+     `SET position = position - 1000000 + ?delta WHERE position BETWEEN
+     1000001 AND 1999999`, where `?delta` is −1 when the rows move up (a
+     close, a remove, or a move down the list) and +1 when they move down
+     (a move up the list). Its targets were freed in steps 1 and 2.
+  4. Set the mover's final position: `SET position = ?to WHERE id =
+     ?mover`. A close has no mover. A release has no shift (steps 2 and 3
+     are skipped): the released entry is closed first, then the
+     replacement is inserted at the freed position.
 
   This needs fewer than 1 000 000 open entries, which `add_to_queue`'s
   1..50 quantity and a single operator make safe. A test fills a queue
@@ -296,6 +304,14 @@ row with no `from_state`, and is not a transition. Every other kind is:
 | `MaterialSettled` | `failed`, `cancelled` | unchanged | `settle_job_material` (estimated, measured) |
 | `MaterialDeferred` | `failed`, `cancelled` | unchanged | `settle_job_material` (defer) |
 | `MaterialCorrected` | `completed` | unchanged | `correct_job_material` |
+
+**Leaving `printing` or `paused` clears reachability** (ruling R7).
+Every transition whose `from` is `printing` or `paused` and whose `to`
+is neither (`Completed`, `Failed`, `Cancelled`, `OutcomeUnknown`, and the
+three `Declared*`) sets `host_unreachable_since` to NULL in the same
+UPDATE. `jobs::repository::transition` does this itself, whatever
+`JobChange` says, so the CHECK `host_unreachable_since IS NULL OR state IN
+('printing','paused')` always holds. `printing` ⇄ `paused` keeps it.
 
 Every `(state, event)` pair not in this table is illegal and writes
 nothing. `jobs::state::transition` rejects it before any SQL with
@@ -391,7 +407,7 @@ in-process broadcasts go out after commit, never on a replay.**
 | Stage, start, pause, resume, cancel after start (handoff) | P6's write-ahead: its ledger claim (the Host Operation's derived id), the Connection and unresolved-row re-checks, `insert_dispatching` with `job_id` — **and**, through `LinkInTx`, the Job command's own claim, the Job re-check, the Job transition, and its event | Printer (taken by `host_ops::api`) |
 | Host outcome → Job | `jobs::dispatch::apply_host_outcome(tx, &op)`: the Job transition, its event, and for `StartAbandoned` the `jobOutcomeUnknown` requirement. Idempotent: if the Job has already moved past the event, it writes nothing. | Printer |
 | Tracker terminal | Job → terminal with its event; entry → `closed`; renumber. Completed: `reservations::consume(estimate)`, settlement `settled/estimated`. Failed or cancelled: `reservations::mark_unresolved`, settlement `pending`, a `materialReconciliation` requirement (`pending`). | Printer |
-| Tracker progress, pin, reachability | `max_progress_pct`, `inconclusive_checks`, `host_unreachable_since`, `host_job_id` (the pin writes `HostJobPinned`; the others write no event) | Printer |
+| Tracker progress, pin, reachability | `max_progress_pct`, `inconclusive_checks`, `host_unreachable_since` (set by a history poll that could not run, cleared only by a successful history poll or by leaving `printing`/`paused`, D3), `host_job_id` (the pin writes `HostJobPinned`; the others write no event) | Printer |
 | `OutcomeUnknown` (tracker) | Job → `outcomeUnknown`, event, `jobOutcomeUnknown` requirement | Printer |
 | Declare | claim `declareJobOutcome`; Job → terminal; entry → `closed`; renumber; the `jobOutcomeUnknown` requirement, if any, → `resolved` with `{ kind: "declared", outcome }`; then exactly the tracker-terminal settlement work for that outcome | Printer |
 | Settle / defer | claim `settleJobMaterial`; estimated: `consume(ceil(estimateMg × maxProgressPct / 100))`; measured: `consume_measured(entry)`; defer: nothing on the reservation; the Job's settlement; the requirement's status; the event | Printer |
@@ -479,8 +495,8 @@ request counts. Tests live in `src-tauri/tests/p7_restart_matrix.rs`.
 | R18 | Cancel handoff committed, reply lost | Job `printing`, cancel op `dispatching`, sent | op `uncertain` → reconciled; the tracker proves `cancelled{cancelledByOperator}` from history | `restart_after_cancel_reply_lost_ends_cancelled_once` |
 | R19 | Pause `succeeded` committed, not applied | Job `printing`, pause op `succeeded` | Job `paused` | `restart_after_pause_success_applies_the_outcome` |
 | R20 | After declare committed | Job terminal, requirement `resolved`; for failed or cancelled a new `materialReconciliation` `pending` | unchanged | `restart_after_declare_is_stable` |
-| R21 | While a `printing` Job's Printer is unreachable (offline, or every history read fails) | Job `printing`, `host_unreachable_since` set | `host_unreachable_since` is kept across the restart (never reset by it); a successful read clears it; once it is 30 min old, `declare_job_outcome` is allowed from `printing` | `restart_keeps_host_unreachable_since_and_allows_declare_after_30_minutes` |
-| R22 | After a Connection endpoint change during `printing` (no unresolved Host Operation), then a restart | Job `printing`, the Printer's new Connection | the tracker reads history from the new endpoint and pins or completes the Job normally; nothing is written to either endpoint | `endpoint_change_during_printing_moves_tracking_to_the_new_endpoint` |
+| R21 | While a `printing` Job's history polls cannot run (the Printer is offline, or every history query errors, even if status still streams) | Job `printing`, `host_unreachable_since` set | `host_unreachable_since` is kept across the restart (never reset by it); only a successful history poll clears it; once it is 30 min old, `declare_job_outcome` is allowed from `printing` | `restart_keeps_host_unreachable_since_and_allows_declare_after_30_minutes` |
+| R22 | After a Connection endpoint change during `printing` (no unresolved Host Operation), then a restart | Job `printing`, the Printer's new Connection; the start op's recorded endpoint is the old one | the tracker polls the new endpoint; every poll is `Inconclusive` (a same-named job there is never pinned), so the Job becomes `outcomeUnknown` after the limit; nothing is written to either endpoint | `endpoint_change_during_printing_never_pins_a_job_on_the_new_host` |
 
 **Recovery order** (`lib.rs`), before any command is served:
 `slicing::operations::recover_after_restart` → `host_ops::recover_after_restart`
@@ -865,8 +881,10 @@ interval, and a queue of "stage now" requests. On a
     + 1). So a cancel op that resolves after the tracker already made the
     Job `cancelled` only clears the column. It writes no `ControlFailed`,
     even if the op failed, because the Job is terminal.
-  - `StartHandedOff` sets `start_host_operation_id`, which is never
-    cleared (the tracker's pin rule reads its `dispatched_at`).
+  - `StartHandedOff` sets `start_host_operation_id`, overwriting it at
+    every start handoff (a start that failed and was tried again points
+    at the newest start). It is never cleared: the tracker's pin rule
+    reads its `dispatched_at` and `endpoint`.
 - **Start.** `start_job(operationId, jobId, priorState, acknowledgement:
   "bedClear")`:
   1. Replay check.
@@ -908,7 +926,10 @@ interval, and a queue of "stage now" requests. On a
 - **Staging again.** `stage_job` in `awaitingStart` stages the same Slice
   Revision again (`StageHandedOff` → `staging`). The operator uses it
   after a Connection endpoint change or a `STAGED_ARTIFACT_INVALID`
-  start. The driver never does it by itself.
+  start. The driver never does it by itself. A re-stage whose upload fails
+  or is abandoned returns the Job to `assigned` (`StageFailed`), like any
+  failed stage, and `upload_host_operation_id` is cleared then (the old
+  staged file is no longer trusted).
 - **Pause, resume, cancel after start.** `pause_job`, `resume_job`, and
   `cancel_job` (in `printing` or `paused`) call `host_ops::api::control`.
   P6's control rule and host re-read apply unchanged. The link also
@@ -932,8 +953,19 @@ interval, and a queue of "stage now" requests. On a
   poll at once. So does a succeeded cancel op. A status is never proof.
 - **Endpoint.** Each poll builds its `HostStateQuery` from the Printer's
   **current** Connection, like P6's per-operation capability objects. A
-  Connection endpoint change during `printing` (allowed by D8 when no
-  Host Operation is unresolved) moves tracking to the new endpoint.
+  Connection endpoint change during `printing` or `paused` (allowed by D8
+  when no Host Operation is unresolved) moves tracking to the new
+  endpoint, but **history on another endpoint is never proof for this
+  Job**: its job ids and `history_mark` belong to the host the start was
+  sent to. So while the Printer's current endpoint (`kind`, `host`,
+  `port`) differs from the start Host Operation's recorded `endpoint`,
+  every poll is `Inconclusive`: it never pins, never uses an existing pin,
+  and never gives a terminal verdict. A same-named job on a different
+  host is therefore never pinned. Such a poll still counts as a
+  successful history read (it clears `host_unreachable_since`), so the Job
+  reaches `outcomeUnknown` after the inconclusive limit and the operator
+  declares its end. If the endpoint changes back to the recorded one,
+  tracking resumes normally.
 - **Pinning** reuses P6's start rule (b). While `host_job_id` is NULL,
   the first history job (lowest `job_id`) that has `filename ==
   host_path`, **and** `job_id > history_mark`, **and** `start_time_epoch_s
@@ -974,10 +1006,12 @@ interval, and a queue of "stage now" requests. On a
   `JobTimings.inconclusive_limit` (3), the Job becomes `outcomeUnknown`.
   A poll that could not run (the Printer is offline, or the query errors)
   counts as neither.
-- **Unreachable host** (ruling R5). A poll that could not run sets
+- **Unreachable host** (rulings R5, R7). A history poll that could not
+  run (the Printer is offline, or the query errors) sets
   `host_unreachable_since` to now if it is NULL (no event; `revision` + 1;
-  published). Any successful host read (a history poll, or a status
-  observation from the Printer's Connection) sets it back to NULL. Once it
+  published). **Only a successful history poll** sets it back to NULL.
+  Status observations never clear it: a Printer that streams status while
+  every history query fails must still reach the declare exit. Once it
   is at least `JobTimings.unreachable_declare_after` (30 min) old,
   `declareOutcome` appears in the Job's `allowedActions` and
   `declare_job_outcome` is accepted from `printing` or `paused` (D9). The
@@ -1726,7 +1760,9 @@ Each departs from, or sharpens, the plan's Design reference.
     table.
 19. **Ruling R5 (fix round 1).** `declare_job_outcome` is also allowed
     from `printing` or `paused` after 30 minutes without a successful host
-    read (`host_unreachable_since`). An active Job alone never blocks a
+    read (`host_unreachable_since`). Ruling R7 (fix round 2): only a
+    successful history poll clears it, and every transition out of
+    `printing`/`paused` clears it. An active Job alone never blocks a
     Connection change; only an unresolved Host Operation does. `stage_job`
     may stage again from `awaitingStart`.
 20. **Renumbering parks rows at `position + 1000000`** before writing
@@ -1738,7 +1774,9 @@ Each departs from, or sharpens, the plan's Design reference.
     takes the Printer lock.
 23. **The tracker's pin reuses P6's rule (b)**: `job_id > history_mark`
     and `start_time ≥ dispatched_at − 30 s`. The Job keeps
-    `start_host_operation_id` for this.
+    `start_host_operation_id` for this. History read from an endpoint
+    other than the start's is never proof (fix round 2): the Job goes to
+    `outcomeUnknown` instead of pinning a same-named job on another host.
 24. **The fail-safe principle covers a Job's end.** `printing` ⇄ `paused`
     may follow status on the Job's own file.
 

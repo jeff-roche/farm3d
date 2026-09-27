@@ -939,6 +939,8 @@ pub fn history(conn, job_id) -> Result<JobHistory, StorageError>;
 pub fn open_requirements(conn) -> Result<Vec<ReconciliationRequirement>, StorageError>;
 ```
 
+  `transition` sets `host_unreachable_since = NULL` on every move out of
+  `printing`/`paused` (spec D3, ruling R7), whatever `JobChange` says.
   `JobChange` carries the optional column updates for a transition
   (`active_host_operation_id`, `host_path`, `history_mark`,
   `host_job_id`, `last_failure`, `cancel_reason`, `settlement`, and so
@@ -1343,7 +1345,11 @@ pub struct JobServices<R: Runtime> { /* storage, host_ops, manager, queue stream
   - `unreachable_printing_job_can_be_declared_after_30_minutes`
     (ruling R5: `host_unreachable_since`, `allowedActions`, declare from
     `printing`)
-  - `endpoint_change_during_printing_moves_tracking_to_the_new_endpoint`
+  - `endpoint_change_during_printing_never_pins_a_job_on_the_new_host`
+  - `status_stream_without_history_does_not_clear_host_unreachable_since`
+  - `leaving_printing_clears_host_unreachable_since` (ruling R7: the
+    repository `transition` clears it on every move out of
+    `printing`/`paused`, so a declare from `printing` passes the CHECK)
   - `pin_requires_start_time_after_dispatch_minus_30_s`
   - `stage_again_from_awaiting_start_after_staged_artifact_invalid`
   - `linked_upload_abandoned_via_p6_returns_the_job_to_assigned`
