@@ -479,9 +479,12 @@ pub(crate) fn no_compatible_spool_message(facts: &SliceFacts) -> String {
 
 /// D5's `INSUFFICIENT_MATERIAL` message states grams, not raw milligrams
 /// (`"No matching Spool has <estimate> g available."`) — `detail` still
-/// carries the best `availableMg` as a raw mg figure.
+/// carries the best `availableMg` as a raw mg figure. Whole grams, as the
+/// frontend's tables show them, rounded up so the message never states
+/// less than the estimate needs.
 pub(crate) fn insufficient_material_message(estimate_mg: i64) -> String {
-    format!("No matching Spool has {} g available.", estimate_mg / 1000)
+    let grams = (estimate_mg.max(0) + 999) / 1000;
+    format!("No matching Spool has {grams} g available.")
 }
 
 struct Gate4Passed {
@@ -1956,6 +1959,22 @@ pub(crate) mod tests {
         assert_eq!(
             result.printers[0].blockers[0].code,
             BlockerCode::NoCompatibleSpool
+        );
+    }
+
+    #[test]
+    fn insufficient_material_rounds_a_fractional_gram_estimate_up() {
+        assert_eq!(
+            insufficient_material_message(12_345),
+            "No matching Spool has 13 g available."
+        );
+        assert_eq!(
+            insufficient_material_message(12_000),
+            "No matching Spool has 12 g available."
+        );
+        assert_eq!(
+            insufficient_material_message(1),
+            "No matching Spool has 1 g available."
         );
     }
 
