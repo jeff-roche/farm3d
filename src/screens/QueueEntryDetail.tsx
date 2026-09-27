@@ -10,20 +10,19 @@ import {
   dispatchPreferenceLabel,
   estimateSourceLabel,
   jobEventKindLabel,
-  jobStateLabel,
   queueViewLabel,
   requirementKindLabel,
+  requirementStatusLabel,
 } from "../queue/presentation";
 import {
   explainQueueEntry,
   getJobHistory,
   queue,
   removeQueueEntry,
-  retryJob,
   updateQueueEntry,
   type UpdateQueueEntryPatch,
 } from "../queue/queue-store";
-import type { Blocker, Candidate, DispatchPolicy, DispatchPreference, QueueEntry, RequirementStatus } from "../queue/types";
+import type { Blocker, Candidate, DispatchPolicy, DispatchPreference, QueueEntry } from "../queue/types";
 import {
   estimateRows,
   FACT_KEYS,
@@ -34,6 +33,7 @@ import {
 } from "../slicing/revision-presentation";
 import { loadSliceRevision } from "../slicing/slicing-store";
 import { formatGrams } from "../spools/weight";
+import { JobPanel } from "./JobPanel";
 import { goTo, QueueRecoveryButton, showQueueEntry } from "./QueueRecoveryButton";
 import styles from "./QueueEntryDetail.module.css";
 
@@ -41,20 +41,13 @@ export interface QueueEntryDetailProps {
   entry: QueueEntry;
   mode: "inline" | "overlay";
   onClose: () => void;
-  /** Opens assignment for an entry (the Job dialog). Without it, **Assign…**
-   *  shows but stays disabled with its reason. */
+  /** Opens assignment for an entry (`AssignJobDialog`). It also backs the
+   *  `ASSIGN_MANUALLY` recovery. */
   onAssign?: (entryId: string) => void;
 }
 
 const POLICIES: DispatchPolicy[] = ["manual", "recommended", "automatic"];
 const PREFERENCES: DispatchPreference[] = ["loadedFirst", "leastRecentlyUsed"];
-const ASSIGN_LATER_REASON = "Assigning arrives in a later version.";
-const REQUIREMENT_STATUS_LABEL: Record<RequirementStatus, string> = {
-  pending: "Pending",
-  deferred: "Deferred",
-  resolved: "Resolved",
-};
-
 function entryTitle(entry: QueueEntry): string {
   return entry.display.plateLabel ? `${entry.display.modelName} — ${entry.display.plateLabel}` : entry.display.modelName;
 }
@@ -159,7 +152,6 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
   const [error, setError] = createSignal<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = createSignal(false);
   let removeTrigger: HTMLButtonElement | undefined;
-  const assignReasonId = createUniqueId();
   const summary = () => queue.eligibility(props.entry.id);
   const job = () => queue.jobFor(props.entry.id);
   const allowed = (action: QueueEntry["allowedActions"][number]) => props.entry.allowedActions.includes(action);
@@ -193,18 +185,6 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
     if (props.entry.policy !== "manual") await updateQueueEntry(props.entry.id, props.entry.revision, { policy: "manual" });
     props.onAssign?.(props.entry.id);
   }, "The entry couldn't be switched to Manual.");
-
-  const retryable = () => {
-    const held = job();
-    return props.entry.state === "closed" && held?.allowedActions.includes("retry") ? held : undefined;
-  };
-  const retry = () => void run(async () => {
-    const held = retryable();
-    if (!held) return;
-    const change = await retryJob(held.id);
-    const created = change.entries[0];
-    if (created) showQueueEntry(created.id);
-  }, "The Job couldn't be retried.");
 
   const pinnedToPrinter = () => props.entry.requiresManualPrinterSelection || props.entry.manualPrinterId !== null;
 
@@ -275,13 +255,7 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
       </Show>
 
       <Show when={props.entry.state !== "queued" && job()}>
-        {(held) => (
-          <Section title="Job">
-            <p class={styles.text}>
-              {jobStateLabel(held().state)} on {held().printerSnapshot.name}
-            </p>
-          </Section>
-        )}
+        {(held) => <JobPanel job={held()} />}
       </Show>
 
       <Section title="Dispatch">
@@ -310,13 +284,8 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
       </Section>
 
       <div class={styles.actions}>
-        <Show when={allowed("assign")}>
-          <Button
-            variant="primary"
-            disabled={!props.onAssign || pending()}
-            aria-describedby={props.onAssign ? undefined : assignReasonId}
-            onClick={() => props.onAssign?.(props.entry.id)}
-          >
+        <Show when={allowed("assign") && props.onAssign}>
+          <Button variant="primary" disabled={pending()} onClick={() => props.onAssign?.(props.entry.id)}>
             Assign…
           </Button>
         </Show>
@@ -325,13 +294,7 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
             Remove…
           </Button>
         </Show>
-        <Show when={retryable()}>
-          <Button variant="secondary" disabled={pending()} onClick={retry}>Retry</Button>
-        </Show>
       </div>
-      <Show when={allowed("assign") && !props.onAssign}>
-        <p id={assignReasonId} class={styles.muted}>{ASSIGN_LATER_REASON}</p>
-      </Show>
       <Show when={error()}>{(message) => <p class={styles.error} role="alert">{message()}</p>}</Show>
       <AlertDialog
         title="Remove this Queue Entry?"
@@ -461,7 +424,7 @@ function HistoryTab(props: { entry: QueueEntry }) {
                         <li>
                           <SeverityMarker
                             severity={requirement.status === "resolved" ? "resolved" : "warning"}
-                            label={`${requirementKindLabel(requirement.kind)}: ${REQUIREMENT_STATUS_LABEL[requirement.status]}`}
+                            label={`${requirementKindLabel(requirement.kind)}: ${requirementStatusLabel(requirement.status)}`}
                           />
                         </li>
                       )}

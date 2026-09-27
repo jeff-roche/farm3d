@@ -7,6 +7,8 @@ import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
 import { PrinterCompactRow } from "./PrinterCompactRow";
 import { PrinterDetailDock, type DockFocusRequest } from "./PrinterDetailDock";
+import { MonitorQueueDock } from "./MonitorQueueDock";
+import { queue } from "../queue/queue-store";
 import styles from "./PrinterDashboard.module.css";
 
 // The batch dialog loads on first use, keeping it out of the main chunk.
@@ -43,7 +45,25 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   let selectionTrigger: HTMLButtonElement | undefined;
   let focusTimer: number | undefined;
   const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
+  /** The Job chosen in the Queue preview (spec: "selecting a Job opens
+   *  `JobPanel`"). A Printer selection takes the dock over. */
+  const [selectedJobId, setSelectedJobId] = createSignal<string | null>(null);
+  const selectedJob = () => {
+    const id = selectedJobId();
+    return id ? queue.job(id) : undefined;
+  };
+  /** Narrow widths: the preview is an overlay, opened from the toolbar. */
+  const [queueOverlayOpen, setQueueOverlayOpen] = createSignal(false);
+  let queueTrigger: HTMLElement | null = null;
+  const showQueueDock = () =>
+    !props.store.selectedPrinter() && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
+  const closeQueueDock = () => {
+    setQueueOverlayOpen(false);
+    setSelectedJobId(null);
+    queueMicrotask(() => queueTrigger?.focus());
+  };
   const selectPrinter = (id: string) => {
+    setSelectedJobId(null);
     props.store.setSelectedPrinterId(id);
     props.onSelectionChange?.(id);
   };
@@ -88,6 +108,12 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
     <div class={styles.dashboard}>
       <MonitorToolbar
         store={props.store}
+        onShowQueue={dockMode() === "overlay"
+          ? () => {
+            queueTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            setQueueOverlayOpen(true);
+          }
+          : undefined}
         onAddPrinter={() => setWizardOpen(true)}
         onAddPrinters={openBatchDialog}
         onImport={props.onImport}
@@ -184,6 +210,15 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           focusRequest={dockFocus()}
           onFocusHandled={() => setDockFocus(undefined)}
         />
+        <Show when={showQueueDock()}>
+          <MonitorQueueDock
+            mode={dockMode()}
+            job={selectedJob()}
+            onSelectJob={setSelectedJobId}
+            onBack={() => setSelectedJobId(null)}
+            onClose={closeQueueDock}
+          />
+        </Show>
       </div>
       <PrinterSetupWizard
         open={wizardOpen()}

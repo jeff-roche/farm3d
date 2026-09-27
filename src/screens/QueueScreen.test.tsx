@@ -21,6 +21,16 @@ vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], tares: [] };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+vi.mock("../host-ops/host-operations-store", async () =>
+  (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("../host-ops/capabilities-store", async () =>
+  (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
 
 function openQueue() {
   navigation.navigate({ version: 1, destination: "queue" }, { availableDestinations: ["queue"], availableIds: [] });
@@ -67,7 +77,7 @@ describe("QueueScreen", () => {
     loadWebQueueFixture();
     render(() => <QueueScreen />);
     // The default tab is the whole open Queue, in order.
-    expect(bodyRows()).toHaveLength(5);
+    expect(bodyRows()).toHaveLength(6);
 
     fireEvent.click(screen.getByRole("tab", { name: /^Awaiting operator/ }));
     await waitFor(() => expect(bodyRows()).toHaveLength(3));
@@ -299,7 +309,7 @@ describe("QueueScreen", () => {
     expect(screen.getByText("The Queue may be out of date")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
-    expect(bodyRows()).toHaveLength(5);
+    expect(bodyRows()).toHaveLength(6);
   });
 
   it("keeps the policy filter on a filtered-empty view and offers one way out", async () => {
@@ -335,5 +345,38 @@ describe("QueueScreen", () => {
       { availableDestinations: ["queue"], availableIds: [printingJob.id] },
     );
     await waitFor(() => expect(rowFor(/Four-tool/)).toHaveAttribute("aria-selected", "true"));
+  });
+
+  it("opens Assign from an entry's dock and assigns through assign_queue_entry", async () => {
+    loadWebQueueFixture();
+    queueStoreMock.explainQueueEntry.mockResolvedValue({
+      entryId: WEB_QUEUE_ENTRY_BRACKET_IDS[0], verdict: "awaitingOperator", blockers: [], printers: [],
+      evaluatedAt: "2026-09-25T00:00:00Z",
+      candidates: [{
+        printerId: "prn-4", printerName: "Moonraker — Bay 4", rank: 1,
+        spool: { spoolId: "spl-web-1", spoolNumber: 1, loadedOnPrinter: false, availableMg: 812_000 },
+        spoolOptions: [{ spoolId: "spl-web-1", spoolNumber: 1, loadedOnPrinter: false, availableMg: 812_000 }],
+        loadedMatch: false, lastUsedAt: null, manualFactsAcknowledgementRequired: false,
+      }],
+    });
+    render(() => <QueueScreen />);
+    fireEvent.click(rowFor(/Copy 1 of 3/));
+    const assign = await screen.findByRole("button", { name: "Assign…" });
+    expect(assign).toBeEnabled();
+    expect(screen.queryByText("Assigning arrives in a later version.")).toBeNull();
+    fireEvent.click(assign);
+    const dialog = await screen.findByRole("dialog", { name: "Assign to a Printer" });
+    await within(dialog).findByLabelText("1 · Moonraker — Bay 4");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Assign" }));
+    await waitFor(() => expect(queueStoreMock.assignQueueEntry)
+      .toHaveBeenCalledWith(WEB_QUEUE_ENTRY_BRACKET_IDS[0], "prn-4", "spl-web-1", undefined));
+  });
+
+  it("shows the Job's panel in the dock of an assigned entry", async () => {
+    loadWebQueueFixture();
+    render(() => <QueueScreen />);
+    fireEvent.click(rowFor(/Four-tool/));
+    const panel = await screen.findByRole("region", { name: "Job" });
+    expect(within(panel).getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 });

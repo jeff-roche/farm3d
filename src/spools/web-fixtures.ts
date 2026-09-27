@@ -1,6 +1,10 @@
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { Tare } from "../generated/contracts/domain/Tare";
 import { WEB_FIXTURE_EQUIPPED_PRINTER_ID, WEB_FIXTURE_EQUIPPED_SLOT_ID } from "../printers/printer-store";
+import { WEB_HOST_OPS_PRINTER_FINISHED } from "../host-ops/web-fixtures";
+
+/** P7's awaiting-start Job's Spool (`queue/web-fixtures.ts`). */
+export const WEB_QUEUE_AWAITING_START_SPOOL_ID = "spl-web-10";
 
 /** `just web`'s Spool inventory seed data -- no Rust backend, so this
  *  stands in for the Farm's persisted Spools/tares (P3 design's Frontend
@@ -144,6 +148,21 @@ function buildWebSpools(): SpoolRecord[] {
       facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: true },
       lastMeasuredAt: "2026-09-20T00:00:00Z",
       createdAt: "2026-06-01T00:00:00Z", updatedAt: "2026-09-20T00:00:00Z",
+    },
+    // 10. Loaded on the host-ops fixture's Finished Printer and reserved by
+    // P7's awaiting-start Job (`queue/web-fixtures.ts`), so that Job has no
+    // start blockers and `just web` can show its Start confirmation.
+    {
+      id: WEB_QUEUE_AWAITING_START_SPOOL_ID, revision: 1, spoolNumber: 10,
+      manufacturer: "Prusament", product: "PLA", materialFamily: "PLA",
+      colorName: "Azure Blue", colorHex: "#2F6FB5", diameter: "1.75",
+      nominalMg: 1_000_000, lowThresholdMg: 100_000,
+      lifecycle: "active",
+      location: { kind: "slot", slotId: `slt-web-${WEB_HOST_OPS_PRINTER_FINISHED}`, printerId: WEB_HOST_OPS_PRINTER_FINISHED },
+      availability: { currentMg: 750_000, reservedMg: 38_600, availableMg: 711_400 },
+      facets: { loaded: true, reserved: true, low: false, confidence: "measured", reconciliation: false },
+      lastMeasuredAt: "2026-09-22T00:00:00Z",
+      createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-25T09:30:00Z",
     },
   ];
 }

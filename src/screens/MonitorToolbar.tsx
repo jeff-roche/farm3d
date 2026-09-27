@@ -9,6 +9,8 @@ export interface MonitorToolbarProps {
   onAddPrinters?: () => void;
   onImport?: () => void;
   onExport?: () => void;
+  /** Opens the Queue preview where it isn't docked (narrow widths). */
+  onShowQueue?: () => void;
 }
 
 const filters: readonly { value: MonitorFilter; label: string }[] = [
@@ -75,6 +77,9 @@ export function MonitorToolbar(props: MonitorToolbarProps) {
         />
       </div>
       <div class={styles.actions}>
+        <Show when={props.onShowQueue}>
+          <Button variant="ghost" size="sm" onClick={() => props.onShowQueue?.()}>Queue preview</Button>
+        </Show>
         <Show when={props.onImport}>
           <Button variant="ghost" size="sm" onClick={() => props.onImport?.()}>Import</Button>
         </Show>

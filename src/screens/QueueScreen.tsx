@@ -13,12 +13,13 @@ import {
   settlementLabel,
   startBlockerLabel,
 } from "../queue/presentation";
-import { moveQueueEntry, queue, refreshQueue } from "../queue/queue-store";
+import { moveQueueEntry, queue, refreshQueue, updateQueueEntry } from "../queue/queue-store";
 import type { DispatchPolicy, Job, QueueEntry } from "../queue/types";
 import { viewOf, type QueueView } from "../queue/views";
 import { formatPrintTime } from "../slicing/revision-presentation";
 import { materialLabel } from "../spools/materials";
 import { formatGrams } from "../spools/weight";
+import { AssignJobDialog } from "./AssignJobDialog";
 import { QueueEntryDetail } from "./QueueEntryDetail";
 import { goTo, QueueRecoveryButton } from "./QueueRecoveryButton";
 import styles from "./QueueScreen.module.css";
@@ -97,7 +98,7 @@ function jobSeverity(job: Job): SeverityMarkerProps["severity"] {
 
 /** State, blockers, and settlement pair an icon, text, and color (spec
  *  "Accessibility and adaptation"). */
-function StateCell(props: { entry: QueueEntry }) {
+function StateCell(props: { entry: QueueEntry; onAssignManually: (entry: QueueEntry) => void }) {
   const job = () => queue.jobFor(props.entry.id);
   const summary = () => queue.eligibility(props.entry.id);
   return (
@@ -114,7 +115,7 @@ function StateCell(props: { entry: QueueEntry }) {
                 {(blocker) => (
                   <>
                     <span class={styles.blocker}>{blocker().message}</span>
-                    <QueueRecoveryButton blocker={blocker()} />
+                    <QueueRecoveryButton blocker={blocker()} onAssignManually={() => props.onAssignManually(props.entry)} />
                   </>
                 )}
               </Show>
@@ -170,6 +171,27 @@ export function QueueScreen() {
   };
   onCleanup(clearSettleTimer);
   const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
+  /** The entry `AssignJobDialog` is open for. */
+  const [assigningId, setAssigningId] = createSignal<string | null>(null);
+  const assigning = () => {
+    const id = assigningId();
+    return id ? queue.entry(id) : undefined;
+  };
+  let assignTrigger: HTMLElement | null = null;
+  const openAssign = (entryId: string) => {
+    assignTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setAssigningId(entryId);
+  };
+  /** `ASSIGN_MANUALLY` from a row: switch the entry to Manual, then open Assign. */
+  const assignManually = (entry: QueueEntry) => {
+    setActionError(null);
+    const switched = entry.policy === "manual"
+      ? Promise.resolve()
+      : updateQueueEntry(entry.id, entry.revision, { policy: "manual" }).then(() => undefined);
+    switched.then(() => openAssign(entry.id), (error: unknown) => {
+      setActionError(isCommandError(error) ? error.message : "The entry couldn't be switched to Manual.");
+    });
+  };
   let workspace: HTMLDivElement | undefined;
 
   onMount(() => {
@@ -303,7 +325,7 @@ export function QueueScreen() {
     { id: "material", header: "Material", cell: materialText },
     { id: "estimate", header: "Estimate", align: "end", cell: estimateText },
     { id: "destination", header: "Destination", cell: (entry) => destinationText(entry, queue.jobFor(entry.id)) },
-    { id: "state", header: "State", cell: (entry) => <StateCell entry={entry} /> },
+    { id: "state", header: "State", cell: (entry) => <StateCell entry={entry} onAssignManually={assignManually} /> },
     { id: "policy", header: "Policy", cell: (entry) => dispatchPolicyLabel(entry.policy) },
   ];
 
@@ -424,7 +446,17 @@ export function QueueScreen() {
           </Show>
         </div>
         <Show when={selectedEntry()}>
-          {(entry) => <QueueEntryDetail entry={entry()} mode={dockMode()} onClose={() => select(null)} />}
+          {(entry) => <QueueEntryDetail entry={entry()} mode={dockMode()} onClose={() => select(null)} onAssign={openAssign} />}
+        </Show>
+        <Show when={assigning()}>
+          {(entry) => (
+            <AssignJobDialog
+              open
+              onOpenChange={(open) => !open && setAssigningId(null)}
+              entry={entry()}
+              returnFocus={() => (assignTrigger?.isConnected ? assignTrigger : null)}
+            />
+          )}
         </Show>
       </div>
     </div>

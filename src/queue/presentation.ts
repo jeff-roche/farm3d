@@ -18,6 +18,7 @@ import type {
   JobState,
   RecoveryCode,
   RequirementKind,
+  RequirementStatus,
   Settlement,
 } from "./types";
 
@@ -106,6 +107,16 @@ const REQUIREMENT_KIND_LABEL = {
 
 export function requirementKindLabel(kind: RequirementKind): string {
   return REQUIREMENT_KIND_LABEL[kind];
+}
+
+const REQUIREMENT_STATUS_LABEL = {
+  pending: "Pending",
+  deferred: "Deferred",
+  resolved: "Resolved",
+} satisfies Record<RequirementStatus, string>;
+
+export function requirementStatusLabel(status: RequirementStatus): string {
+  return REQUIREMENT_STATUS_LABEL[status];
 }
 
 const JOB_EVENT_KIND_LABEL = {

@@ -17,6 +17,17 @@ import { QueueEntryDetail } from "./QueueEntryDetail";
 
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
+vi.mock("../spools/spool-store", () => ({
+  get spoolState() {
+    return { spools: [], tares: [] };
+  },
+  ensureInventoryLoaded: () => Promise.resolve(),
+}));
+vi.mock("../host-ops/host-operations-store", async () =>
+  (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("../host-ops/capabilities-store", async () =>
+  (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
+vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
 
 beforeEach(() => {
   resetQueueStoreMock();
@@ -148,7 +159,7 @@ describe("QueueEntryDetail", () => {
   it("shows the Job timeline and lineage links on the History tab", async () => {
     loadWebQueueFixture();
     const entry = queueStoreMock.queue.entry(WEB_QUEUE_ENTRY_HISTORY_DEFERRED)!;
-    queueStoreMock.getJobHistory.mockResolvedValueOnce(jobHistory({
+    const history = jobHistory({
       job: job({ id: WEB_QUEUE_JOB_DEFERRED }),
       entry,
       lineage: [entry, queueEntry({ id: "qen-sibling", lineageId: entry.lineageId, copyIndex: 2, copyCount: 2 })],
@@ -156,12 +167,27 @@ describe("QueueEntryDetail", () => {
         id: "jev-1", jobId: WEB_QUEUE_JOB_DEFERRED, sequence: 1, kind: "failed", fromState: "printing", toState: "failed",
         operationId: null, hostOperationId: null, detail: null, at: "2026-09-24T09:09:00Z",
       }],
-    }));
+    });
+    // Twice: the Dispatch tab's JobPanel reads the same history first.
+    queueStoreMock.getJobHistory.mockResolvedValueOnce(history).mockResolvedValueOnce(history);
     renderDetail(WEB_QUEUE_ENTRY_HISTORY_DEFERRED);
     fireEvent.click(screen.getByRole("tab", { name: "History" }));
     const timeline = await screen.findByRole("list", { name: /^Job timeline/ });
     expect(within(timeline).getByText("Failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Copy 2 of 2" }));
     expect(window.location.hash).toBe("#nav=v1/queue/job/qen-sibling");
+  });
+
+  it("offers ASSIGN_MANUALLY: switches the entry to Manual, then opens Assign", async () => {
+    setQueueStoreState({ entries: [queueEntry({ id: "qen-1", revision: 3, policy: "automatic" })], eligibility: [eligibilitySummary({ verdict: "blocked" })] });
+    queueStoreMock.explainQueueEntry.mockResolvedValueOnce(queueEntryEligibility({
+      verdict: "blocked",
+      blockers: [{ code: "NEEDS_MANUAL_PRINTER", message: "This Slice needs a Printer chosen by hand.", detail: null, recovery: "ASSIGN_MANUALLY", printerIds: [] }],
+    }));
+    const onAssign = vi.fn();
+    renderDetail("qen-1", { onAssign });
+    fireEvent.click(await screen.findByRole("button", { name: "Assign manually" }));
+    await waitFor(() => expect(queueStoreMock.updateQueueEntry).toHaveBeenCalledWith("qen-1", 3, { policy: "manual" }));
+    await waitFor(() => expect(onAssign).toHaveBeenCalledWith("qen-1"));
   });
 });

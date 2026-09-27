@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildWebInventoryFixture } from "./web-fixtures";
+import { buildWebInventoryFixture, WEB_QUEUE_AWAITING_START_SPOOL_ID } from "./web-fixtures";
+import { WEB_HOST_OPS_PRINTER_FINISHED } from "../host-ops/web-fixtures";
 import { WEB_FIXTURE_EQUIPPED_PRINTER_ID, WEB_FIXTURE_EQUIPPED_SLOT_ID } from "../printers/printer-store";
 
 describe("buildWebInventoryFixture", () => {
   const fixture = buildWebInventoryFixture();
 
-  it("has 9 Spools with unique ids and sequential, unique spool numbers", () => {
-    expect(fixture.spools).toHaveLength(9);
-    expect(new Set(fixture.spools.map((s) => s.id)).size).toBe(9);
-    expect(fixture.spools.map((s) => s.spoolNumber).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  it("has 10 Spools with unique ids and sequential, unique spool numbers", () => {
+    expect(fixture.spools).toHaveLength(10);
+    expect(new Set(fixture.spools.map((s) => s.id)).size).toBe(10);
+    expect(fixture.spools.map((s) => s.spoolNumber).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
   it("has 2 tares with unique ids and case-insensitively unique names", () => {
@@ -18,8 +19,8 @@ describe("buildWebInventoryFixture", () => {
     expect(new Set(names).size).toBe(2);
   });
 
-  it("has exactly one active, loaded, measured Spool, loaded on the equipped Printer's slot", () => {
-    const loaded = fixture.spools.filter((s) => s.facets.loaded);
+  it("has exactly one active, loaded, measured Spool on the equipped Printer's slot", () => {
+    const loaded = fixture.spools.filter((s) => s.facets.loaded && s.id !== WEB_QUEUE_AWAITING_START_SPOOL_ID);
     expect(loaded).toHaveLength(1);
     const [spool] = loaded;
     expect(spool.lifecycle).toBe("active");
@@ -41,8 +42,8 @@ describe("buildWebInventoryFixture", () => {
     expect(spool.availability.currentMg).toBeLessThanOrEqual(spool.lowThresholdMg);
   });
 
-  it("has exactly one reserved Spool, with availability accounting for the reservation", () => {
-    const reserved = fixture.spools.filter((s) => s.facets.reserved);
+  it("has exactly one debug-seeded reserved Spool, with availability accounting for the reservation", () => {
+    const reserved = fixture.spools.filter((s) => s.facets.reserved && s.id !== WEB_QUEUE_AWAITING_START_SPOOL_ID);
     expect(reserved).toHaveLength(1);
     const [spool] = reserved;
     expect(spool.availability.reservedMg).toBeGreaterThan(0);
@@ -56,6 +57,13 @@ describe("buildWebInventoryFixture", () => {
     expect(archived).toHaveLength(1);
     expect(empty[0].location.kind).toBe("storage");
     expect(archived[0].location.kind).toBe("storage");
+  });
+
+  it("has P7's awaiting-start Job's Spool loaded on the Finished host-ops Printer and reserved", () => {
+    const spool = fixture.spools.find((s) => s.id === WEB_QUEUE_AWAITING_START_SPOOL_ID)!;
+    expect(spool.location).toEqual({ kind: "slot", slotId: `slt-web-${WEB_HOST_OPS_PRINTER_FINISHED}`, printerId: WEB_HOST_OPS_PRINTER_FINISHED });
+    expect(spool.facets.loaded && spool.facets.reserved).toBe(true);
+    expect(spool.availability.availableMg).toBe(spool.availability.currentMg - spool.availability.reservedMg);
   });
 
   it("has three more active Spools beyond the loaded, low, reserved, and reconciliation ones", () => {

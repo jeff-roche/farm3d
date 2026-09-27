@@ -1,9 +1,11 @@
 import {
   buildWebHostOpsFixture,
   WEB_HOST_OPS_PRINTER_FAILED,
+  WEB_HOST_OPS_PRINTER_FINISHED,
   WEB_HOST_OPS_PRINTER_OCTOPRINT,
   WEB_HOST_OPS_PRINTER_READY_MULTI,
   WEB_HOST_OPS_PRINTER_READY_SINGLE,
+  WEB_HOST_OPS_STAGED_OPERATION,
   WEB_HOST_OPS_UPLOAD_FAILED_PRINT,
   WEB_HOST_OPS_UPLOAD_READY_MULTI,
 } from "../host-ops/web-fixtures";
@@ -37,9 +39,11 @@ import type {
  *  persistence: web-mode writes are refused by the store
  *  (`needsDesktopError`) rather than faked.
  *
- *  Five open entries: three linked copies (an `Add to Queue` of quantity
- *  3), one blocked entry, and one `assigned` entry whose Job is
- *  `printing` (on the host-ops fixture's own already-printing Printer).
+ *  Six open entries: three linked copies (an `Add to Queue` of quantity
+ *  3), one blocked entry, one `assigned` entry whose Job is `printing` (on
+ *  the host-ops fixture's own already-printing Printer), and one whose Job
+ *  is `awaitingStart` with no start blockers (staged on the Finished
+ *  Printer, its Spool loaded there), so the Start confirmation shows.
  *  One closed entry carries a `failed` Job whose material settlement was
  *  deferred, with an open `materialReconciliation` Requirement. */
 export interface WebQueueFixture {
@@ -55,6 +59,12 @@ export const WEB_QUEUE_ENTRY_BRACKET_IDS = ["qen-web-bracket-1", "qen-web-bracke
 export const WEB_QUEUE_ENTRY_BLOCKED = "qen-web-blocked";
 export const WEB_QUEUE_ENTRY_PRINTING = "qen-web-printing";
 export const WEB_QUEUE_JOB_PRINTING = "job-web-printing";
+export const WEB_QUEUE_ENTRY_AWAITING_START = "qen-web-awaiting-start";
+/** Matches `host-ops/web-fixtures.ts`'s staged upload's `jobId`. */
+export const WEB_QUEUE_JOB_AWAITING_START = "job-web-awaiting-start";
+/** Matches `spools/web-fixtures.ts`'s Spool #10, loaded on the Finished
+ *  Printer (a literal, as `WEB_QUEUE_DEFERRED_SPOOL_ID` is). */
+export const WEB_QUEUE_AWAITING_START_SPOOL_ID = "spl-web-10";
 export const WEB_QUEUE_ENTRY_HISTORY_DEFERRED = "qen-web-history-deferred";
 export const WEB_QUEUE_JOB_DEFERRED = "job-web-deferred";
 export const WEB_QUEUE_REQUIREMENT_DEFERRED = "rqr-web-deferred";
@@ -225,6 +235,78 @@ function printingJob(): Job {
   };
 }
 
+function finishedPrinterSnapshot(): PrinterSnapshot {
+  return { ...failedPrinterSnapshot(), name: "Finished — Bay 7", location: "Bay 7" };
+}
+
+function awaitingStartEntry(): QueueEntry {
+  return {
+    id: WEB_QUEUE_ENTRY_AWAITING_START,
+    revision: 2,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    lineageId: "qln-web-awaiting-start",
+    copyIndex: 1,
+    copyCount: 1,
+    originEntryId: null,
+    originKind: null,
+    state: "assigned",
+    closeReason: null,
+    position: 6,
+    policy: "manual",
+    preference: "loadedFirst",
+    estimate: { amountMg: 38_600, source: "sliceEstimate" },
+    manualPrinterId: null,
+    jobId: WEB_QUEUE_JOB_AWAITING_START,
+    requiresManualPrinterSelection: false,
+    // D2: an `assigned` entry can only move.
+    allowedActions: ["move"],
+    display: bracketDisplay(5_412),
+    createdAt: "2026-09-23T09:55:00Z",
+    updatedAt: "2026-09-23T10:00:00Z",
+    closedAt: null,
+  };
+}
+
+/** D7: staged (`StageSucceeded` set `uploadHostOperationId` and
+ *  `hostPath`), its Spool loaded on its Printer, the Printer `finished`
+ *  with fresh telemetry, and nothing unresolved there -- so Rust's
+ *  `startBlockers` is empty and D3 lists `stage` (again), `start`,
+ *  `cancel`, and `release`. `activeHostOperationId` cleared when the
+ *  upload resolved. */
+function awaitingStartJob(): Job {
+  return {
+    id: WEB_QUEUE_JOB_AWAITING_START,
+    revision: 3,
+    queueEntryId: WEB_QUEUE_ENTRY_AWAITING_START,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    printerId: WEB_HOST_OPS_PRINTER_FINISHED,
+    printerSnapshot: finishedPrinterSnapshot(),
+    spoolId: WEB_QUEUE_AWAITING_START_SPOOL_ID,
+    reservationId: "rsv-web-awaiting-start",
+    estimateMg: 38_600,
+    state: "awaitingStart",
+    cancelReason: null,
+    settlement: "open",
+    settlementMethod: null,
+    settlementPreview: null,
+    corrected: false,
+    assignedBy: "operator",
+    startConfirmation: null,
+    uploadHostOperationId: WEB_HOST_OPS_STAGED_OPERATION,
+    activeHostOperationId: null,
+    hostPath: "farm3d/enclosure-lid.gcode",
+    maxProgressPct: 0,
+    hostUnreachableSince: null,
+    lastFailure: null,
+    startBlockers: [],
+    allowedActions: ["stage", "start", "cancel", "release"],
+    createdAt: "2026-09-23T10:00:00Z",
+    updatedAt: "2026-09-23T10:00:05Z",
+    startedAt: null,
+    endedAt: null,
+  };
+}
+
 function historyDeferredEntry(): QueueEntry {
   return {
     id: WEB_QUEUE_ENTRY_HISTORY_DEFERRED,
@@ -347,8 +429,10 @@ function blockedEligibility(): EligibilitySummary {
  *  shares mutable state with a previous load or with this module's own
  *  literals (mirrors `host-ops/web-fixtures.ts`). */
 export function buildWebQueueFixture(): WebQueueFixture {
-  const entries: QueueEntry[] = [...linkedCopies(), blockedEntry(), printingEntry(), historyDeferredEntry()];
-  const jobs: Job[] = [printingJob(), deferredJob()];
+  const entries: QueueEntry[] = [
+    ...linkedCopies(), blockedEntry(), printingEntry(), awaitingStartEntry(), historyDeferredEntry(),
+  ];
+  const jobs: Job[] = [printingJob(), awaitingStartJob(), deferredJob()];
   const requirements: ReconciliationRequirement[] = [deferredRequirement()];
   const eligibility: EligibilitySummary[] = [
     ...WEB_QUEUE_ENTRY_BRACKET_IDS.map(bracketEligibility),

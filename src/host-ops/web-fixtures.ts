@@ -54,6 +54,9 @@ export interface WebHostOpsPrinter {
   printerVariant: string;
   connection: ConnectionConfig;
   status: PrinterStatus;
+  /** A Spool loaded in the Printer's one "Main" slot (P7's awaiting-start
+   *  Job needs its Spool loaded to have no start blockers). */
+  loadedSpoolId?: string;
 }
 
 function webStatus(state: OperationalState, telemetry: Partial<PrinterStatus["telemetry"]> = {}): PrinterStatus {
@@ -121,6 +124,9 @@ export const WEB_HOST_OPS_PRINTERS: WebHostOpsPrinter[] = [
     vendor: "Elegoo", model: "Elegoo Centauri Carbon", printerVariant: "0.4",
     connection: moonrakerConnection("192.0.2.24"),
     status: webStatus("finished", { jobName: "farm3d/enclosure-lid.gcode", progress: 1 }),
+    // Matches `spools/web-fixtures.ts`'s Spool #10 (a literal here, like
+    // the Job ids below, to keep `host-ops` free of other domains).
+    loadedSpoolId: "spl-web-10",
   },
   {
     id: WEB_HOST_OPS_PRINTER_FAILED, name: "Failed — Bay 8",
@@ -279,7 +285,9 @@ export function buildWebHostOpsFixture(): WebHostOpsFixture {
       dispatchedAt: "2026-09-23T10:00:01Z",
       uncertainSince: null,
       resolvedAt: "2026-09-23T10:00:05Z",
-      jobId: null,
+      // P7's awaiting-start Job (`queue/web-fixtures.ts`'s
+      // `WEB_QUEUE_JOB_AWAITING_START`) staged this upload.
+      jobId: "job-web-awaiting-start",
     },
     {
       id: WEB_HOST_OPS_FAILED_OPERATION,

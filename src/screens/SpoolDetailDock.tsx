@@ -1,5 +1,5 @@
 import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { createEffect, createSignal, on, Show } from "solid-js";
+import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { Button, ColorSwatch, DropdownMenu, Timeline } from "../design-system";
 import type { DropdownMenuEntry } from "../design-system";
 import type { TimelineItem } from "../design-system";
@@ -18,8 +18,13 @@ import type { SpoolHistory } from "../generated/contracts/command/SpoolHistory";
 import type { SpoolLocationSnapshot } from "../generated/contracts/domain/SpoolLocationSnapshot";
 import type { SpoolMovement } from "../generated/contracts/domain/SpoolMovement";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
+import { requirementKindLabel, requirementStatusLabel } from "../queue/presentation";
+import { queue } from "../queue/queue-store";
+import type { Job } from "../queue/types";
 import { MoveSpoolDialog } from "./MoveSpoolDialog";
+import { showQueueEntry } from "./QueueRecoveryButton";
 import { RecordAmountDialog } from "./RecordAmountDialog";
+import { SettleMaterialDialog } from "./SettleMaterialDialog";
 import { SpoolFormDialog } from "./SpoolFormDialog";
 import styles from "./SpoolDetailDock.module.css";
 
@@ -55,6 +60,10 @@ function reservationItem(r: Reservation): TimelineItem {
     id: `reservation-${r.id}`,
     at: r.createdAt,
     title: `${RESERVATION_STATE_LABEL[r.state]} ${formatGrams(r.amountMg, 0)} for ${holderLabel}`,
+    // P7: a Job's reservation links to that Job in the Queue.
+    detail: r.holder.kind === "job"
+      ? <Button variant="ghost" size="sm" onClick={() => showQueueEntry(r.holder.id)}>Open the Job</Button>
+      : undefined,
     marker: "muted",
   };
 }
@@ -139,6 +148,14 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
   const [moveOpen, setMoveOpen] = createSignal(false);
   const [editOpen, setEditOpen] = createSignal(false);
   const [actionError, setActionError] = createSignal<string | null>(null);
+  const [settling, setSettling] = createSignal<Job | null>(null);
+  let settleTrigger: HTMLButtonElement | undefined;
+
+  /** P7: the open material Reconciliation Requirements on this Spool
+   *  (the `reconciliation` facet's cause), each settled from here
+   *  (`SETTLE_MATERIAL`). */
+  const requirements = () => queue.requirements()
+    .filter((requirement) => requirement.spoolId === props.spool.id && requirement.kind === "materialReconciliation");
 
   /** Re-fetched on every revision bump, not just a new id: a move, amount
    *  entry, or lifecycle change bumps the Spool's revision in place, and
@@ -244,6 +261,34 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
           <Show when={props.spool.facets.reserved}><span class={styles.chip}>Reserved</span></Show>
           <Show when={props.spool.facets.reconciliation}><span class={styles.chip}>Needs reconciliation</span></Show>
         </div>
+        <For each={requirements()}>
+          {(requirement) => {
+            const job = () => queue.job(requirement.jobId);
+            return (
+              <div class={styles.requirement}>
+                <span class={styles.requirementText}>
+                  {requirementKindLabel(requirement.kind)}: {requirementStatusLabel(requirement.status)}
+                  <Show when={job()}>{(held) => <> · Job on {held().printerSnapshot.name}</>}</Show>
+                </span>
+                <Show when={job()?.allowedActions.includes("settleMaterial") ? job() : undefined}>
+                  {(held) => (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={(event: MouseEvent) => {
+                        settleTrigger = event.currentTarget as HTMLButtonElement;
+                        setSettling(held());
+                      }}
+                    >
+                      Settle…
+                    </Button>
+                  )}
+                </Show>
+                <Button variant="ghost" size="sm" onClick={() => showQueueEntry(requirement.jobId)}>Open the Job</Button>
+              </div>
+            );
+          }}
+        </For>
       </section>
 
       <section class={styles.section}>
@@ -271,6 +316,16 @@ function DockContent(props: { spool: SpoolRecord; overlay: boolean; onClose: () 
       <RecordAmountDialog open={recordOpen()} onOpenChange={setRecordOpen} spool={props.spool} />
       <MoveSpoolDialog open={moveOpen()} onOpenChange={setMoveOpen} spool={props.spool} />
       <SpoolFormDialog open={editOpen()} onOpenChange={setEditOpen} spool={props.spool} />
+      <Show when={settling()}>
+        {(job) => (
+          <SettleMaterialDialog
+            open
+            onOpenChange={(open) => !open && setSettling(null)}
+            job={job()}
+            returnFocus={() => settleTrigger}
+          />
+        )}
+      </Show>
     </div>
   );
 }
