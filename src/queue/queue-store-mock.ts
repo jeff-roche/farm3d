@@ -149,6 +149,11 @@ export function setQueueStoreState(patch: Partial<Omit<MockQueueState, "status" 
   if (patch.nextAutomaticAction) setState("nextAutomaticAction", patch.nextAutomaticAction);
 }
 
+/** Sets the load status and stream sync state the screens react to. */
+export function setQueueStoreStatus(status: MockQueueState["status"], syncState: MockQueueState["syncState"] = "current"): void {
+  setState({ status, syncState });
+}
+
 /** Loads `web-fixtures.ts`'s Queue into the mock, and returns the full
  *  fixture for the test to read from too. */
 export function loadWebQueueFixture(): WebQueueFixture {

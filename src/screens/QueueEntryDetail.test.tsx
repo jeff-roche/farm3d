@@ -85,16 +85,25 @@ describe("QueueEntryDetail", () => {
     await waitFor(() => expect(queueStoreMock.updateQueueEntry).toHaveBeenCalledWith("qen-1", 4, { policy: "automatic" }));
   });
 
-  it("removes a queued entry, and offers no Remove when Rust doesn't allow it", async () => {
+  it("asks before removing: Cancel sends nothing, Remove sends the command", async () => {
     setQueueStoreState({ entries: [queueEntry({ id: "qen-1", revision: 2 })], eligibility: [eligibilitySummary()] });
     renderDetail("qen-1");
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(queueStoreMock.removeQueueEntry).toHaveBeenCalledWith("qen-1", 2));
-    cleanup();
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    let confirm = await screen.findByRole("alertdialog", { name: "Remove this Queue Entry?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep it" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(queueStoreMock.removeQueueEntry).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    confirm = await screen.findByRole("alertdialog", { name: "Remove this Queue Entry?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(queueStoreMock.removeQueueEntry).toHaveBeenCalledWith("qen-1", 2));
+  });
+
+  it("offers no Remove or Assign… when Rust doesn't allow them", () => {
     setQueueStoreState({ entries: [queueEntry({ id: "qen-2", state: "assigned", allowedActions: ["move"], jobId: "job-1" })], jobs: [job({ queueEntryId: "qen-2" })] });
     renderDetail("qen-2");
-    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove…" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Assign…" })).toBeNull();
   });
 
@@ -104,7 +113,9 @@ describe("QueueEntryDetail", () => {
       contractVersion: 1, code: "CONFLICT", message: "This Queue Entry changed. Reload.", recovery: ["RELOAD"], retryable: false,
     });
     renderDetail("qen-1");
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    const confirm = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("This Queue Entry changed. Reload.");
   });
 

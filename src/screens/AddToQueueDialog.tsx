@@ -53,7 +53,12 @@ export function AddToQueueDialog(props: AddToQueueDialogProps) {
 
   const needsManualPrinter = () => props.revision.requiresManualPrinterSelection;
   const sliceGrams = () => (props.revision.kind === "farm3d" ? props.revision.estimates?.filamentGrams ?? null : null);
-  const claimGrams = () => props.revision.claimedEstimates?.filamentGrams ?? null;
+  /** The file's claimed grams, when there's a usable one: a claim of 0 g
+   *  (or less) can't be accepted, so it counts as no claim. */
+  const claimGrams = () => {
+    const grams = props.revision.claimedEstimates?.filamentGrams ?? null;
+    return grams !== null && grams > 0 ? grams : null;
+  };
   const needsEstimate = () => sliceGrams() === null;
   /** With no claim to accept, entering an amount is the only way. */
   const effectiveChoice = (): EstimateChoice | null => (claimGrams() === null ? "entered" : choice());

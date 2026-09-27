@@ -104,6 +104,23 @@ describe("AddToQueueDialog", () => {
     ));
   });
 
+  it("treats a zero-gram claim as no claim, so entering an amount still works", async () => {
+    const revision = external();
+    revision.claimedEstimates!.filamentGrams = 0;
+    revision.requiresManualPrinterSelection = false;
+    const { dialog } = renderDialog(revision);
+    expect(within(dialog).queryByLabelText(/Use the file's claim/)).toBeNull();
+    const add = within(dialog).getByRole("button", { name: "Add 1 copy" });
+    expect(add).toHaveAccessibleDescription("Enter the material this print uses.");
+    fireEvent.input(within(dialog).getByRole("textbox", { name: "Material (g)" }), { target: { value: "12.5" } });
+    await waitFor(() => expect(add).toBeEnabled());
+    fireEvent.click(add);
+    await waitFor(() => expect(queueStoreMock.addToQueue).toHaveBeenCalledWith(
+      WEB_SLICING_REVISION_EXTERNAL, 1, "recommended", "loadedFirst",
+      { materialEstimate: { amountMg: 12_500, source: "operatorEntered" } },
+    ));
+  });
+
   it("shows a refusal inline and stays open", async () => {
     queueStoreMock.addToQueue.mockRejectedValueOnce({
       contractVersion: 1, code: "VALIDATION", message: "Choose between 1 and 50 copies.", recovery: ["EDIT_FIELDS"], retryable: false,

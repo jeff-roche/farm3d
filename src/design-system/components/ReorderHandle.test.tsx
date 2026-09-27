@@ -79,6 +79,21 @@ describe("ReorderHandle", () => {
     expect(live?.textContent).toBe("Moved Bracket v3 to position 3 of 4");
   });
 
+  it("announces with the caller's announce text when given, e.g. an absolute position", async () => {
+    const onMove = vi.fn();
+    render(() => (
+      <ReorderHandle
+        label="Bracket v3"
+        index={0}
+        count={2}
+        onMove={onMove}
+        announce={(from, to) => `Moved Bracket v3 from ${from} to position ${to === 1 ? 5 : 2} of 7`}
+      />
+    ));
+    await fireEvent.keyDown(getHandle("Bracket v3"), { key: "ArrowDown", altKey: true });
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("Moved Bracket v3 from 0 to position 5 of 7");
+  });
+
   it("announces a committed pointer-drag move in the live region", async () => {
     const onMove = vi.fn();
     render(() => <ReorderHandle label="Bracket v3" index={1} count={5} onMove={onMove} />);

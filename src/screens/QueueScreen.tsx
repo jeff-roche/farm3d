@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { Button, Chip, DataTable, ReorderHandle, SeverityMarker, Tabs } from "../design-system";
 import type { DataTableColumn, SeverityMarkerProps, TabItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
@@ -13,7 +13,7 @@ import {
   settlementLabel,
   startBlockerLabel,
 } from "../queue/presentation";
-import { moveQueueEntry, queue } from "../queue/queue-store";
+import { moveQueueEntry, queue, refreshQueue } from "../queue/queue-store";
 import type { DispatchPolicy, Job, QueueEntry } from "../queue/types";
 import { viewOf, type QueueView } from "../queue/views";
 import { formatPrintTime } from "../slicing/revision-presentation";
@@ -156,6 +156,9 @@ export function QueueScreen() {
   const [policies, setPolicies] = createSignal<ReadonlySet<DispatchPolicy>>(new Set());
   const [hoveredLineage, setHoveredLineage] = createSignal<string | null>(null);
   const [actionError, setActionError] = createSignal<string | null>(null);
+  /** The move in flight: every handle waits for it, so a second move is
+   *  never sent against positions that are about to change. */
+  const [pendingMove, setPendingMove] = createSignal<{ entryId: string; revision: number } | null>(null);
   const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
   let workspace: HTMLDivElement | undefined;
 
@@ -212,15 +215,29 @@ export function QueueScreen() {
   /** A `ReorderHandle` move within the visible rows, sent as the target
    *  row's own (absolute) position -- Rust renumbers everything else. */
   function move(from: number, to: number) {
+    if (pendingMove()) return;
     const list = rows();
     const entry = list[from];
     const toPosition = list[to]?.position;
     if (!entry || toPosition == null) return;
     setActionError(null);
+    setPendingMove({ entryId: entry.id, revision: entry.revision });
     moveQueueEntry(entry.id, entry.revision, toPosition).catch((error: unknown) => {
+      setPendingMove(null);
       setActionError(isCommandError(error) ? error.message : "The entry couldn't be moved.");
+      // A stale revision or a state change: backfill now rather than wait.
+      if (isCommandError(error) && error.recovery.includes("RELOAD")) refreshQueue();
     });
   }
+
+  // A move settles when the moved entry's new revision reaches the store
+  // (the command's own copy never overwrites a held row), or when it's gone.
+  createEffect(() => {
+    const pending = pendingMove();
+    if (!pending) return;
+    const current = queue.entry(pending.entryId);
+    if (!current || current.revision !== pending.revision) setPendingMove(null);
+  });
 
   const lineageAt = (target: EventTarget | null): string | null =>
     target instanceof Element ? target.closest("[data-lineage]")?.getAttribute("data-lineage") ?? null : null;
@@ -236,7 +253,9 @@ export function QueueScreen() {
               index={rows().findIndex((row) => row.id === entry.id)}
               count={rows().length}
               onMove={move}
-              disabled={!entry.allowedActions.includes("move")}
+              announce={(_from, to) =>
+                `Moved ${entryName(entry)} to position ${rows()[to]?.position ?? to + 1} of ${queue.entries().length}`}
+              disabled={!entry.allowedActions.includes("move") || pendingMove() !== null}
             />
             <span>{entry.position}</span>
           </span>
@@ -346,6 +365,18 @@ export function QueueScreen() {
           </div>
         )}
       </Show>
+      <Show when={queue.status() === "error"}>
+        <div class={styles.errorBanner} role="alert">
+          <p class={styles.errorMessage}>The Queue couldn't be loaded.</p>
+          <Button variant="ghost" onClick={refreshQueue}>Retry</Button>
+        </div>
+      </Show>
+      <Show when={queue.status() !== "error" && queue.syncState() === "uncertain"}>
+        <div class={styles.staleBanner} role="status">
+          <p class={styles.staleMessage}>The Queue may be out of date</p>
+          <Button variant="ghost" onClick={refreshQueue}>Refresh</Button>
+        </div>
+      </Show>
       <div ref={workspace} class={styles.workspace}>
         <div class={styles.main}>
           <div class={styles.toolbar} role="group" aria-label="Filter by Dispatch Policy">
@@ -358,7 +389,16 @@ export function QueueScreen() {
               )}
             </For>
           </div>
-          <Tabs class={styles.tabs} value={view()} onChange={(value) => setView(value as ScreenView)} items={tabItems} />
+          <Show
+            when={queue.status() === "ready" || allEntries().length > 0}
+            fallback={
+              <Show when={queue.status() !== "error"}>
+                <p class={styles.loadingNotice} role="status">Loading the Queue…</p>
+              </Show>
+            }
+          >
+            <Tabs class={styles.tabs} value={view()} onChange={(value) => setView(value as ScreenView)} items={tabItems} />
+          </Show>
         </div>
         <Show when={selectedEntry()}>
           {(entry) => <QueueEntryDetail entry={entry()} mode={dockMode()} onClose={() => select(null)} />}

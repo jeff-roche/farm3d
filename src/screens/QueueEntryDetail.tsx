@@ -1,6 +1,6 @@
 import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { createMemo, createResource, createSignal, createUniqueId, For, Show, type JSX } from "solid-js";
-import { Button, RadioGroup, Select, SeverityMarker, Tabs, Timeline } from "../design-system";
+import { AlertDialog, Button, RadioGroup, Select, SeverityMarker, Tabs, Timeline } from "../design-system";
 import type { TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import {
@@ -157,6 +157,8 @@ function candidateReasons(candidate: Candidate): string[] {
 function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) => void }) {
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = createSignal(false);
+  let removeTrigger: HTMLButtonElement | undefined;
   const assignReasonId = createUniqueId();
   const summary = () => queue.eligibility(props.entry.id);
   const job = () => queue.jobFor(props.entry.id);
@@ -319,12 +321,8 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
           </Button>
         </Show>
         <Show when={allowed("remove")}>
-          <Button
-            variant="secondary"
-            disabled={pending()}
-            onClick={() => void run(() => removeQueueEntry(props.entry.id, props.entry.revision), "The entry couldn't be removed.")}
-          >
-            Remove
+          <Button ref={removeTrigger} variant="secondary" disabled={pending()} onClick={() => setConfirmingRemove(true)}>
+            Remove…
           </Button>
         </Show>
         <Show when={retryable()}>
@@ -335,6 +333,26 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
         <p id={assignReasonId} class={styles.muted}>{ASSIGN_LATER_REASON}</p>
       </Show>
       <Show when={error()}>{(message) => <p class={styles.error} role="alert">{message()}</p>}</Show>
+      <AlertDialog
+        title="Remove this Queue Entry?"
+        description={`${entryTitle(props.entry)} leaves the Queue and can't be put back. Add it to the Queue again to print it.`}
+        open={confirmingRemove()}
+        onOpenChange={setConfirmingRemove}
+        returnFocus={() => removeTrigger}
+      >
+        <div class={styles.dialogActions}>
+          <Button variant="secondary" onClick={() => setConfirmingRemove(false)}>Keep it</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              setConfirmingRemove(false);
+              void run(() => removeQueueEntry(props.entry.id, props.entry.revision), "The entry couldn't be removed.");
+            }}
+          >
+            Remove
+          </Button>
+        </div>
+      </AlertDialog>
     </div>
   );
 }

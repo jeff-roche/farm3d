@@ -14,6 +14,11 @@ export interface ReorderHandleProps {
    *  the position it already holds). */
   onMove: (from: number, to: number) => void;
   disabled?: boolean;
+  /** The live-region text for a committed move from `from` to `to` (both
+   *  0-based, like `onMove`). Defaults to "Moved <label> to position
+   *  <to + 1> of <count>"; a caller whose list is a filtered slice of a
+   *  longer one can name the absolute position instead. */
+  announce?: (from: number, to: number) => string;
 }
 
 function clamp(value: number, count: number): number {
@@ -65,7 +70,7 @@ export function ReorderHandle(props: ReorderHandleProps) {
     const from = props.index;
     if (target === from) return;
     props.onMove(from, target);
-    setAnnouncement(`Moved ${props.label} to position ${target + 1} of ${props.count}`);
+    setAnnouncement(props.announce?.(from, target) ?? `Moved ${props.label} to position ${target + 1} of ${props.count}`);
   }
 
   function onKeyDown(event: KeyboardEvent) {

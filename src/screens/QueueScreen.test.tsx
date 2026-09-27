@@ -6,8 +6,9 @@ import {
   queueStoreMock,
   resetQueueStoreMock,
   setQueueStoreState,
+  setQueueStoreStatus,
 } from "../queue/queue-store-mock";
-import { eligibilitySummary, queueEntry } from "../queue/test-records";
+import { eligibilitySummary, job, queueEntry } from "../queue/test-records";
 import {
   WEB_QUEUE_ENTRY_BLOCKED,
   WEB_QUEUE_ENTRY_BRACKET_IDS,
@@ -90,6 +91,22 @@ describe("QueueScreen", () => {
     await waitFor(() => expect(screen.getByText("No entries in this view")).toBeInTheDocument());
   });
 
+  it("lists an assigned entry whose Job isn't printing under Assigned", async () => {
+    setQueueStoreState({
+      entries: [
+        queueEntry({ id: "qen-queued", position: 1 }),
+        queueEntry({ id: "qen-assigned", position: 2, state: "assigned", jobId: "job-a", allowedActions: ["move"] }),
+      ],
+      jobs: [job({ id: "job-a", queueEntryId: "qen-assigned", state: "awaitingStart" })],
+      eligibility: [eligibilitySummary({ entryId: "qen-queued" })],
+    });
+    render(() => <QueueScreen />);
+    fireEvent.click(screen.getByRole("tab", { name: /^Assigned/ }));
+    await waitFor(() => expect(bodyRows()).toHaveLength(1));
+    expect(bodyRows()[0]).toHaveAttribute("data-entry-id", "qen-assigned");
+    expect(bodyRows()[0]).toHaveTextContent("Awaiting start");
+  });
+
   it("moves an entry down one position with Alt+ArrowDown on its handle", async () => {
     loadWebQueueFixture();
     render(() => <QueueScreen />);
@@ -98,6 +115,65 @@ describe("QueueScreen", () => {
     fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
     await waitFor(() => expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledOnce());
     expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledWith(WEB_QUEUE_ENTRY_BRACKET_IDS[0], 1, 2);
+  });
+
+  it("sends a move inside a filtered view as the target row's absolute position, and announces it", async () => {
+    const blocked = eligibilitySummary({ verdict: "blocked", eligibleCount: 0, candidatePrinterIds: [] });
+    setQueueStoreState({
+      entries: [1, 2, 3, 4, 5].map((position) => queueEntry({
+        id: `qen-${position}`, position, revision: 10 + position,
+        display: { ...queueEntry().display, modelName: `Part ${position}` },
+      })),
+      eligibility: [1, 2, 3, 4, 5].map((position) => (position === 2 || position === 5
+        ? { ...blocked, entryId: `qen-${position}` }
+        : eligibilitySummary({ entryId: `qen-${position}` }))),
+    });
+    render(() => <QueueScreen />);
+    fireEvent.click(screen.getByRole("tab", { name: /^Blocked/ }));
+    await waitFor(() => expect(bodyRows()).toHaveLength(2));
+    fireEvent.keyDown(within(rowFor("Part 2")).getByRole("button", { name: /^Reorder / }), { key: "ArrowDown", altKey: true });
+    await waitFor(() => expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledWith("qen-2", 12, 5));
+    const live = rowFor("Part 2").querySelector('[aria-live="polite"]');
+    expect(live).toHaveTextContent("Moved Part 2 — Plate 1 to position 5 of 5");
+  });
+
+  it("disables every handle while a move is pending, until the moved entry's revision changes", async () => {
+    loadWebQueueFixture();
+    render(() => <QueueScreen />);
+    const first = () => within(rowFor(/Copy 1 of 3/)).getByRole("button", { name: /^Reorder / });
+    fireEvent.keyDown(first(), { key: "ArrowDown", altKey: true });
+    await waitFor(() => expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledOnce());
+    // A second move during the first sends nothing.
+    await waitFor(() => expect(first()).toBeDisabled());
+    fireEvent.keyDown(within(rowFor(/Copy 2 of 3/)).getByRole("button", { name: /^Reorder / }), { key: "ArrowUp", altKey: true });
+    expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledOnce();
+    // The moved entry's new revision arrives: the handles come back.
+    const entries = queueStoreMock.queue.entries().map((entry) =>
+      entry.id === WEB_QUEUE_ENTRY_BRACKET_IDS[0] ? { ...entry, revision: entry.revision + 1 } : entry);
+    setQueueStoreState({ entries: [...entries, ...queueStoreMock.queue.history()] });
+    await waitFor(() => expect(first()).toBeEnabled());
+  });
+
+  it("re-enables the handles and refreshes the Queue when a move is refused as stale", async () => {
+    loadWebQueueFixture();
+    queueStoreMock.moveQueueEntry.mockRejectedValueOnce({
+      contractVersion: 1, code: "CONFLICT", message: "This Queue Entry changed. Reload.", recovery: ["RELOAD"], retryable: false,
+    });
+    render(() => <QueueScreen />);
+    const first = () => within(rowFor(/Copy 1 of 3/)).getByRole("button", { name: /^Reorder / });
+    fireEvent.keyDown(first(), { key: "ArrowDown", altKey: true });
+    expect(await screen.findByRole("alert")).toHaveTextContent("This Queue Entry changed. Reload.");
+    expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
+    expect(first()).toBeEnabled();
+  });
+
+  it("shows a disabled handle for an open entry Rust doesn't let move", () => {
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-fixed", allowedActions: ["assign"] })],
+      eligibility: [eligibilitySummary({ entryId: "qen-fixed" })],
+    });
+    render(() => <QueueScreen />);
+    expect(within(rowFor("Bracket")).getByRole("button", { name: /^Reorder / })).toBeDisabled();
   });
 
   it("maps a move inside a filtered view to the target row's own position", async () => {
@@ -150,6 +226,42 @@ describe("QueueScreen", () => {
     await waitFor(() => expect(rowFor(/Copy 1 of 3/)).toHaveAttribute("data-lineage-highlight"));
     expect(rowFor(/Copy 3 of 3/)).toHaveAttribute("data-lineage-highlight");
     expect(bodyRows().find((row) => row.dataset.entryId === WEB_QUEUE_ENTRY_BLOCKED)).not.toHaveAttribute("data-lineage-highlight");
+  });
+
+  it("highlights the lineage siblings when a row's control takes focus", async () => {
+    loadWebQueueFixture();
+    render(() => <QueueScreen />);
+    fireEvent.focusIn(within(rowFor(/Copy 3 of 3/)).getByRole("button", { name: /^Reorder / }));
+    await waitFor(() => expect(rowFor(/Copy 1 of 3/)).toHaveAttribute("data-lineage-highlight"));
+    expect(rowFor(/Copy 2 of 3/)).toHaveAttribute("data-lineage-highlight");
+    fireEvent.focusOut(within(rowFor(/Copy 3 of 3/)).getByRole("button", { name: /^Reorder / }), { relatedTarget: document.body });
+    await waitFor(() => expect(rowFor(/Copy 1 of 3/)).not.toHaveAttribute("data-lineage-highlight"));
+  });
+
+  it("shows a loading placeholder, not the empty Queue, while the Queue loads", () => {
+    setQueueStoreStatus("loading", "syncing");
+    render(() => <QueueScreen />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the Queue…");
+    expect(screen.queryByText("The Queue is empty")).toBeNull();
+  });
+
+  it("shows a load failure with Retry", () => {
+    setQueueStoreStatus("error", "uncertain");
+    render(() => <QueueScreen />);
+    expect(screen.getByRole("alert")).toHaveTextContent("The Queue couldn't be loaded.");
+    expect(screen.queryByText("The Queue is empty")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
+  });
+
+  it("labels a Queue that may be stale, and offers a refresh", () => {
+    loadWebQueueFixture();
+    setQueueStoreStatus("ready", "uncertain");
+    render(() => <QueueScreen />);
+    expect(screen.getByText("The Queue may be out of date")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
+    expect(bodyRows()).toHaveLength(5);
   });
 
   it("keeps the policy filter on a filtered-empty view and offers one way out", async () => {
