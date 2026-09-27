@@ -166,6 +166,17 @@ impl World {
         })
     }
 
+    /// A `World` from rows already joined (tests of the evaluator's pure
+    /// pass).
+    #[cfg(test)]
+    pub(crate) fn from_parts(printers: Vec<PrinterRow>, spools: Vec<SpoolRecord>) -> World {
+        World {
+            printers,
+            spools,
+            claimed: BTreeSet::new(),
+        }
+    }
+
     /// D5's Printer set for `entry`: the unarchived Printers, plus the
     /// entry's `manualPrinterId` even if archived (gate 0), plus `also`
     /// even if archived — the assign re-check's target, so gate 1 reports

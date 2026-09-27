@@ -997,7 +997,7 @@ impl QueueEntryEligibility {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::catalog::BedShape;
     use crate::connections::capabilities::{CapabilityEvidence, CapabilityMap};
@@ -1017,7 +1017,7 @@ mod tests {
         }
     }
 
-    fn a_profile() -> PrinterProfile {
+    pub(crate) fn a_profile() -> PrinterProfile {
         PrinterProfile {
             bed_shape: a_bed_shape(),
             printable_height_mm: 256.0,
@@ -1050,13 +1050,13 @@ mod tests {
         }
     }
 
-    fn pla_175_facts() -> SliceFacts {
+    pub(crate) fn pla_175_facts() -> SliceFacts {
         Farm3dFacts::new(a_profile_snapshot(), 0.4, MaterialFamily::Pla, None, 1.75)
             .facts()
             .clone()
     }
 
-    fn an_entry(
+    pub(crate) fn an_entry(
         policy: DispatchPolicy,
         preference: DispatchPreference,
         estimate_mg: i64,
@@ -1098,7 +1098,12 @@ mod tests {
         }
     }
 
-    fn a_stored_printer(id: &str, name: &str, archived: bool, adapter: &str) -> StoredPrinter {
+    pub(crate) fn a_stored_printer(
+        id: &str,
+        name: &str,
+        archived: bool,
+        adapter: &str,
+    ) -> StoredPrinter {
         StoredPrinter {
             id: id.to_string(),
             name: name.to_string(),
@@ -1118,18 +1123,21 @@ mod tests {
         }
     }
 
-    fn ready_status() -> PrinterStatus {
+    pub(crate) fn ready_status() -> PrinterStatus {
         let mut status = PrinterStatus::new(ConnectionState::Online);
         status.operational_state = OperationalState::Ready;
         status.freshness = TelemetryFreshness::Fresh;
         status
     }
 
-    fn sim_capabilities(printer_id: &str) -> PrinterCapabilities {
+    pub(crate) fn sim_capabilities(printer_id: &str) -> PrinterCapabilities {
         supported_capabilities(printer_id, EvidenceTier::Sim)
     }
 
-    fn supported_capabilities(printer_id: &str, tier: EvidenceTier) -> PrinterCapabilities {
+    pub(crate) fn supported_capabilities(
+        printer_id: &str,
+        tier: EvidenceTier,
+    ) -> PrinterCapabilities {
         PrinterCapabilities {
             printer_id: printer_id.to_string(),
             adapter_kind: Some("moonraker".to_string()),
@@ -1165,7 +1173,7 @@ mod tests {
         id.trim_start_matches("spl-").parse().unwrap_or(0)
     }
 
-    fn a_pla_spool(
+    pub(crate) fn a_pla_spool(
         id: &str,
         number: i64,
         available_mg: i64,

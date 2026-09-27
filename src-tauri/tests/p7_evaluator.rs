@@ -390,8 +390,10 @@ fn triggers_coalesce_and_runs_never_overlap() {
     release.send(()).unwrap();
     wait_idle(&app);
 
+    // The run in progress, plus exactly one for every trigger that arrived
+    // during it: none is lost, and 100 coalesce into one.
     let runs = evaluator.runs_started() - before;
-    assert!(runs <= 2, "101 pokes ran {runs} times");
+    assert_eq!(runs, 2, "101 pokes ran {runs} times");
     assert_eq!(evaluator.max_concurrent_runs(), 1, "runs never overlap");
     evaluator.on_run_start(None);
 }
@@ -556,4 +558,149 @@ fn failed_job_is_never_retried_automatically() {
     );
     assert_eq!(roots.uploads(), 1);
     assert_eq!(roots.starts(), 1);
+}
+
+/// D6 "Refused assignment": the operator gives the Printer a Job inside
+/// the evaluator's window, so the in-transaction re-check refuses with
+/// `JOB_ACTIVE`. The entry shows that blocker, the run pokes once more, and
+/// then the evaluator goes idle.
+#[test]
+fn a_refused_assignment_records_its_blocker_and_pokes_once_more() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let spool = app.spool();
+    let other = add(&app, "recommended", 1).remove(0);
+    let entry = add(&app, "automatic", 1).remove(0);
+    wait_next(&app, "the entry waits for its Spool", |next| {
+        is_waiting(next, &entry, "SPOOL_NOT_LOADED")
+    });
+    wait_idle(&app);
+    let evaluator = &app.services.evaluator;
+    let (refused_before, repokes_before) = (evaluator.refused_runs(), evaluator.repokes());
+    let (proposed_tx, proposed) = mpsc::channel::<Proposal>();
+    let (go, go_rx) = mpsc::channel::<()>();
+    evaluator.before_assign(Box::new(move |proposal| {
+        let _ = proposed_tx.send(proposal.clone());
+        let _ = go_rx.recv_timeout(WAIT);
+    }));
+
+    app.load(&spool);
+    let proposal = proposed.recv_timeout(WAIT).expect("the evaluator proposed");
+    assert_eq!(proposal.entry_id, entry);
+    app.ok(
+        "assign_queue_entry",
+        json!({
+            "operationId": "op-operator-other",
+            "entryId": other,
+            "printerId": PRINTER,
+            "spoolId": spool,
+        }),
+    );
+    go.send(()).unwrap();
+    wait_idle(&app);
+
+    assert_eq!(
+        evaluator.refused_runs() - refused_before,
+        1,
+        "one refused run"
+    );
+    assert_eq!(
+        evaluator.repokes() - repokes_before,
+        1,
+        "exactly one re-poke"
+    );
+    assert_eq!(job_count(&app), 1, "only the operator's Job");
+    let snapshot = list(&app);
+    let summary = summary(&snapshot, &entry);
+    assert_eq!(summary["verdict"], "blocked");
+    assert_eq!(summary["topBlocker"]["code"], "JOB_ACTIVE");
+    assert!(is_waiting(
+        &snapshot["nextAutomaticAction"],
+        &entry,
+        "JOB_ACTIVE"
+    ));
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) FROM operations WHERE id LIKE 'auto-%'"),
+        0,
+        "the refused assignment burned no id"
+    );
+}
+
+/// Issue #17 end to end: a Printer whose adapter can't upload (OctoPrint's
+/// `notVerified`) never takes an Automatic entry.
+#[test]
+fn no_automatic_assignment_behind_an_unsupported_capability() {
+    let roots = roots();
+    roots
+        .upload_unsupported
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let app = boot(&roots, Driver::Started);
+    let spool = app.spool();
+    app.load(&spool);
+    let entry = add(&app, "automatic", 1).remove(0);
+
+    let next = wait_next(&app, "the entry waits for a capable adapter", |next| {
+        is_waiting(next, &entry, "CAPABILITY_UNSUPPORTED")
+    });
+    assert_eq!(
+        next["blocker"]["detail"],
+        "Uploads are switched off in this test."
+    );
+    wait_idle(&app);
+    assert_eq!(job_count(&app), 0);
+    let snapshot = list(&app);
+    assert_eq!(
+        summary(&snapshot, &entry)["topBlocker"]["code"],
+        "CAPABILITY_UNSUPPORTED"
+    );
+    assert_eq!(roots.uploads(), 0);
+}
+
+/// A run that fails (a storage error) pokes once more, so a ready
+/// Automatic entry isn't stranded until some unrelated change.
+#[test]
+fn a_failed_run_pokes_once_more_so_a_ready_entry_is_assigned() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let spool = app.spool();
+    app.load(&spool);
+    wait_settled(&app);
+    let evaluator = &app.services.evaluator;
+    let repokes_before = evaluator.repokes();
+    evaluator.fail_next_runs(1);
+
+    let entry = add(&app, "automatic", 1).remove(0);
+
+    let job = wait_one_job(&app);
+    assert_eq!(job["queueEntryId"], json!(entry));
+    wait_idle(&app);
+    assert_eq!(evaluator.repokes() - repokes_before, 1);
+}
+
+/// The failure re-poke is bounded: two failed runs in a row poke once,
+/// then the evaluator waits for the next real trigger.
+#[test]
+fn failed_runs_poke_once_then_stop() {
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let spool = app.spool();
+    app.load(&spool);
+    wait_settled(&app);
+    let evaluator = &app.services.evaluator;
+    let (runs_before, repokes_before) = (evaluator.runs(), evaluator.repokes());
+    evaluator.fail_next_runs(2);
+
+    add(&app, "automatic", 1);
+    wait_idle(&app);
+
+    assert_eq!(
+        evaluator.runs() - runs_before,
+        2,
+        "the failed run and its one retry"
+    );
+    assert_eq!(evaluator.repokes() - repokes_before, 1);
+    assert_eq!(job_count(&app), 0, "nothing ran after the second failure");
+
+    evaluator.poke(Trigger::QueueChanged);
+    wait_one_job(&app);
 }

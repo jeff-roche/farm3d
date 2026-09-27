@@ -455,6 +455,13 @@ pub struct Evaluator {
     runs: AtomicU64,
     on_run_start: Mutex<Option<RunHook>>,
     before_assign: Mutex<Option<AssignHook>>,
+    /// Runs whose assignment the in-transaction re-check refused.
+    refused_runs: AtomicU64,
+    /// Times a run poked the evaluator once more after a refusal or a
+    /// failure.
+    repokes: AtomicU64,
+    /// Test hook: how many of the next runs fail as a storage error would.
+    injected_failures: AtomicU64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -482,6 +489,9 @@ impl Default for Evaluator {
             runs: AtomicU64::new(0),
             on_run_start: Mutex::new(None),
             before_assign: Mutex::new(None),
+            refused_runs: AtomicU64::new(0),
+            repokes: AtomicU64::new(0),
+            injected_failures: AtomicU64::new(0),
         }
     }
 }
@@ -536,6 +546,30 @@ impl Evaluator {
     /// the evaluator takes the Printer lock to assign.
     pub fn before_assign(&self, hook: AssignHook) {
         *lock(&self.before_assign) = Some(hook);
+    }
+
+    /// Test hook: runs that saw a refusal.
+    pub fn refused_runs(&self) -> u64 {
+        self.refused_runs.load(Ordering::SeqCst)
+    }
+
+    /// Test hook: re-pokes after a refusal or a failed run.
+    pub fn repokes(&self) -> u64 {
+        self.repokes.load(Ordering::SeqCst)
+    }
+
+    /// Test hook: the next `count` runs fail as a storage error would.
+    pub fn fail_next_runs(&self, count: u64) {
+        self.injected_failures.store(count, Ordering::SeqCst);
+    }
+
+    /// Whether this run should fail, per [`Evaluator::fail_next_runs`].
+    fn take_injected_failure(&self) -> bool {
+        self.injected_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
     }
 
     fn run_before_assign(&self, proposal: &Proposal) {
@@ -711,6 +745,23 @@ fn pump<T: Clone + Send + 'static>(
     });
 }
 
+/// D6: after a run that needs another look (a refusal, or a failed run),
+/// poke once more — but not again after a second such run in a row, so a
+/// lasting refusal or failure can't loop.
+#[derive(Default)]
+struct Retry {
+    repoked: bool,
+}
+
+impl Retry {
+    /// Whether to poke once more after a run.
+    fn after_run(&mut self, needs_retry: bool) -> bool {
+        let poke = needs_retry && !self.repoked;
+        self.repoked = needs_retry;
+        poke
+    }
+}
+
 async fn wait_for_true(receiver: &mut watch::Receiver<bool>) -> bool {
     receiver.wait_for(|done| *done).await.is_ok()
 }
@@ -730,9 +781,7 @@ async fn run_task<R: tauri::Runtime>(
         _ = stop.wait_for(|stopped| *stopped) => return,
         ready = gates => if !ready { return },
     }
-    // Set after a run that saw refusals poked once more; cleared by a run
-    // without refusals, so a lasting refusal can't loop.
-    let mut repoked = false;
+    let mut retry = Retry::default();
     loop {
         tokio::select! {
             biased;
@@ -756,7 +805,12 @@ async fn run_task<R: tauri::Runtime>(
         }
         let evaluator = Arc::clone(&services.evaluator);
         evaluator.begin_run(drained);
-        match run_once(&services).await {
+        let result = if evaluator.take_injected_failure() {
+            Err(RepositoryError::Storage(StorageError::OperationFailed))
+        } else {
+            run_once(&services).await
+        };
+        let needs_retry = match result {
             Ok(run) => {
                 if evaluator.remember(&run) {
                     if let Some(app) = services.jobs.app() {
@@ -765,17 +819,23 @@ async fn run_task<R: tauri::Runtime>(
                             .publish_eligibility(app, &run.summaries, &run.next);
                     }
                 }
-                if run.refused.is_empty() {
-                    repoked = false;
-                } else if !repoked {
-                    // D6: a refusal pokes once more; the next run re-reads.
-                    repoked = true;
-                    evaluator.poke(Trigger::QueueChanged);
+                if !run.refused.is_empty() {
+                    evaluator.refused_runs.fetch_add(1, Ordering::SeqCst);
                 }
+                !run.refused.is_empty()
             }
             // Repository errors carry no credential (D2), so neither does
-            // this. The next trigger runs again.
-            Err(error) => eprintln!("farm3d: automatic evaluator: a run failed: {error:?}"),
+            // this.
+            Err(error) => {
+                eprintln!("farm3d: automatic evaluator: a run failed: {error:?}");
+                true
+            }
+        };
+        // D6: a refusal pokes once more, and so does a failed run, so a
+        // ready Automatic entry isn't stranded until an unrelated change.
+        if retry.after_run(needs_retry) {
+            evaluator.repokes.fetch_add(1, Ordering::SeqCst);
+            evaluator.poke(Trigger::QueueChanged);
         }
         evaluator.end_run();
     }
@@ -858,6 +918,186 @@ mod tests {
             filament_diameter_mm: Fact::absent(),
         };
         PassEntry { entry, facts }
+    }
+
+    // --- the pure pass ---------------------------------------------------------
+
+    use crate::queue::eligibility::tests as fixtures;
+    use crate::queue::world::PrinterRow;
+    use crate::spools::SpoolLocation;
+
+    /// A Printer that passes gates 1-3 with Spool `spool_id` (900 g)
+    /// loaded, and no durable Job.
+    fn loaded_printer(id: &str, spool_id: &str) -> (PrinterRow, crate::spools::SpoolRecord) {
+        let number = spool_id.trim_start_matches("spl-").parse().unwrap();
+        let spool = fixtures::a_pla_spool(
+            spool_id,
+            number,
+            900_000,
+            SpoolLocation::Slot {
+                slot_id: format!("slot-{id}"),
+                printer_id: id.to_string(),
+            },
+        );
+        let row = PrinterRow {
+            stored: fixtures::a_stored_printer(id, id, false, "moonraker"),
+            profile: fixtures::a_profile(),
+            status: Some(fixtures::ready_status()),
+            capabilities: fixtures::sim_capabilities(id),
+            active_job: false,
+            foreign_host_op: false,
+            last_used_at: None,
+            loaded_spool_ids: vec![spool_id.to_string()],
+        };
+        (row, spool)
+    }
+
+    fn world_of(printers: &[(&str, &str)]) -> World {
+        let (rows, spools) = printers
+            .iter()
+            .map(|(id, spool)| loaded_printer(id, spool))
+            .unzip();
+        World::from_parts(rows, spools)
+    }
+
+    fn queued(id: &str, position: i64, policy: DispatchPolicy) -> PassEntry {
+        let mut entry = fixtures::an_entry(policy, DispatchPreference::LoadedFirst, 100_000);
+        entry.id = id.to_string();
+        entry.position = Some(position);
+        PassEntry {
+            entry,
+            facts: fixtures::pla_175_facts(),
+        }
+    }
+
+    fn pass(
+        world: &World,
+        entries: &[PassEntry],
+        claimed: &[&str],
+        refused: &[(&str, Blocker)],
+    ) -> PassResult {
+        evaluate_pass(
+            &PassInput {
+                world,
+                entries,
+                now: "2026-09-27T00:00:00Z",
+            },
+            &claimed.iter().map(|id| id.to_string()).collect(),
+            &refused
+                .iter()
+                .map(|(id, blocker)| (id.to_string(), blocker.clone()))
+                .collect(),
+        )
+    }
+
+    fn summary_of<'a>(result: &'a PassResult, entry_id: &str) -> &'a EligibilitySummary {
+        result
+            .summaries
+            .iter()
+            .find(|summary| summary.entry_id == entry_id)
+            .expect("a summary")
+    }
+
+    #[test]
+    fn the_pass_proposes_the_first_automatic_entry_in_order() {
+        let world = world_of(&[("prn-a", "spl-1")]);
+        let entries = [
+            queued("qen-r", 1, DispatchPolicy::Recommended),
+            queued("qen-m", 2, DispatchPolicy::Manual),
+            queued("qen-1", 3, DispatchPolicy::Automatic),
+            queued("qen-2", 4, DispatchPolicy::Automatic),
+        ];
+
+        let result = pass(&world, &entries, &[], &[]);
+
+        assert_eq!(
+            result.proposal,
+            Some(Proposal {
+                entry_id: "qen-1".to_string(),
+                printer_id: "prn-a".to_string(),
+                spool_id: "spl-1".to_string(),
+            })
+        );
+        let order: Vec<&str> = result
+            .summaries
+            .iter()
+            .map(|summary| summary.entry_id.as_str())
+            .collect();
+        assert_eq!(order, ["qen-r", "qen-m", "qen-1", "qen-2"]);
+        assert_eq!(
+            summary_of(&result, "qen-r").verdict,
+            EligibilityVerdict::AwaitingOperator
+        );
+        assert_eq!(
+            summary_of(&result, "qen-1").verdict,
+            EligibilityVerdict::Ready
+        );
+    }
+
+    /// No Printer here has a durable Job: only `claimed` can block it.
+    #[test]
+    fn a_claimed_printer_is_never_offered_again_in_the_same_run() {
+        let world = world_of(&[("prn-a", "spl-1"), ("prn-b", "spl-2")]);
+        let entries = [queued("qen-2", 2, DispatchPolicy::Automatic)];
+
+        let one_left = pass(&world, &entries, &["prn-a"], &[]);
+        assert_eq!(
+            one_left.proposal.as_ref().map(|p| p.printer_id.as_str()),
+            Some("prn-b")
+        );
+        assert_eq!(
+            summary_of(&one_left, "qen-2").candidate_printer_ids,
+            ["prn-b"]
+        );
+
+        let none_left = pass(&world, &entries, &["prn-a", "prn-b"], &[]);
+        assert_eq!(none_left.proposal, None);
+        let summary = summary_of(&none_left, "qen-2");
+        assert_eq!(summary.verdict, EligibilityVerdict::Blocked);
+        assert_eq!(summary.eligible_count, 0);
+        let top = summary.top_blocker.as_ref().expect("a blocker");
+        assert_eq!(top.code, BlockerCode::JobActive);
+        assert_eq!(top.printer_ids, ["prn-a", "prn-b"]);
+    }
+
+    #[test]
+    fn a_refused_entry_is_skipped_and_a_later_one_takes_the_unclaimed_printer() {
+        let world = world_of(&[("prn-a", "spl-1")]);
+        let entries = [
+            queued("qen-1", 1, DispatchPolicy::Automatic),
+            queued("qen-2", 2, DispatchPolicy::Automatic),
+        ];
+        let refusal = blocker(BlockerCode::InsufficientMaterial);
+
+        let result = pass(&world, &entries, &[], &[("qen-1", refusal.clone())]);
+
+        assert_eq!(
+            result.proposal,
+            Some(Proposal {
+                entry_id: "qen-2".to_string(),
+                printer_id: "prn-a".to_string(),
+                spool_id: "spl-1".to_string(),
+            })
+        );
+        let skipped = summary_of(&result, "qen-1");
+        assert_eq!(skipped.verdict, EligibilityVerdict::Blocked);
+        assert_eq!(skipped.eligible_count, 0);
+        assert!(skipped.candidate_printer_ids.is_empty());
+        assert_eq!(skipped.top_blocker.as_ref(), Some(&refusal));
+    }
+
+    #[test]
+    fn a_retry_pokes_once_then_stops_until_a_clean_run() {
+        let mut retry = Retry::default();
+        assert!(!retry.after_run(false), "a clean run pokes nothing");
+        assert!(
+            retry.after_run(true),
+            "the first refused or failed run pokes"
+        );
+        assert!(!retry.after_run(true), "the second in a row doesn't");
+        assert!(!retry.after_run(true));
+        assert!(!retry.after_run(false), "a clean run resets");
+        assert!(retry.after_run(true), "so the next one pokes again");
     }
 
     #[test]
