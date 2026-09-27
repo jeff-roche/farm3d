@@ -775,6 +775,17 @@ time.**
   exactly that. Once the evaluator has completed a run, `list_queue`
   returns the evaluator's cached summaries and `nextAutomaticAction`
   instead (Task 10).
+- **Cache-or-compute, once the evaluator has run.** For every `queued`
+  entry, `list_queue` reuses the last run's summary when one exists for
+  that entry id, matched by id only, not by revision. An entry that was
+  `queued` at the last run and has since been edited (for example a
+  policy or manual-Printer change) keeps showing its last-run summary
+  until the evaluator's next run replaces it — the edit's `QueueChanged`
+  trigger pokes that run, but `list_queue` doesn't wait for it. An entry
+  with no summary in the last run (queued since, so new to the evaluator)
+  gets one computed synchronously right then, exactly as it did before
+  the evaluator's first run. An entry no longer `queued` never appears,
+  whether or not the last run still names it.
 - **Triggers** (`Trigger`):
 
   | Trigger | Source |
@@ -849,12 +860,16 @@ interval, and a queue of "stage now" requests. On a
 - **Staging.** After each committed assignment, and on its first pass for
   every `assigned` Job with no `lastFailure` and no upload op (R2), the
   driver calls `jobs::dispatch::stage_job` with a `drv-*` id, whatever the
-  policy. If P6 refuses before writing a row (for example
-  `PRINTER_UNREACHABLE`), the driver records `lastFailure = { kind:
-  "refused", code, message }` on the `assigned` Job in its own
-  transaction. The state doesn't change and no event row is written, but
-  `revision` goes up and the Job is published. **It never stages again
-  by itself.** The operator uses **Stage** (`stage_job`) or **Release**.
+  policy. Ruling R13/decision 25 governs the refusal: if P6 refuses
+  because the Printer isn't reachable yet (`PRINTER_UNREACHABLE`,
+  `TIMEOUT`, or `HOST_OPERATION_PENDING`), the driver records nothing and
+  tries staging again on the Printer's next status change, the next
+  inventory change, or the next poll. Any other refusal before writing a
+  row records `lastFailure = { kind: "refused", code, message }` on the
+  `assigned` Job in its own transaction. The state doesn't change and no
+  event row is written, but `revision` goes up and the Job is published.
+  **It never stages again by itself after a recorded `lastFailure`.** The
+  operator uses **Stage** (`stage_job`) or **Release**.
 - **`apply_host_outcome(tx, op, now)`**, pure over the transaction,
   idempotent:
 
@@ -996,10 +1011,20 @@ interval, and a queue of "stage now" requests. On a
   at all. The Job ends `cancelled` either way. A still-unresolved cancel
   op keeps reconciling on its own (P6), and its resolution later only
   clears `active_host_operation_id`.
-- **Progress.** `max_progress_pct = max(max_progress_pct,
+- **Progress (revised ruling R22, supersedes an earlier round's
+  attempt).** `max_progress_pct = max(max_progress_pct,
   floor(telemetry.progress × 100))`, written only when it grows by a
   whole percent, and only while the reported file is the Job's
-  `host_path`.
+  `host_path` **and** the host reports it printing or paused. An ended
+  status never counts, even once the Job is pinned (`host_job_id` set):
+  the driver pins the Job from history before it reads the tracker's
+  cached status, so a pinned Job can still see a stale printing/paused
+  frame or an ended one from a previous run of the same file, and only
+  the in-progress case is safe to trust. Accepted residual risk: a print
+  that ends while farm3d is disconnected settles a `settlementPreview`
+  estimate from the last progress observed live, undercharging the
+  Spool. The operator sees the preview and can choose "Enter measured
+  remaining weight" instead of accepting the estimate.
 - **Paused and printing** are also followed from status on our file
   (`Paused` / `Resumed` events).
 - **Unprovable outcome.** Each `Inconclusive` poll adds one to
@@ -1787,6 +1812,23 @@ Each departs from, or sharpens, the plan's Design reference.
     tried again on the next status change or poll. Any other refusal
     records `lastFailure{refused}`. For an unattended start, that turns
     off auto-start for the Job until it is staged again.
+26. **No-Printer fallback: `topBlocker` stays `null`.** When an Automatic
+    entry has no Printer to consider at all, `EligibilitySummary::of`
+    still reports `topBlocker: None` — `blockers` is only ever populated
+    per-candidate, and there is no candidate to blame. `nextAutomaticAction`
+    still needs a `Blocker` for its `waiting` variant, so `next_action`
+    substitutes a `SETUP_INCOMPLETE` blocker (`no_printer_blocker`,
+    "No Printer is set up to take this entry.") there only. A caller
+    reading a summary's `topBlocker` in isolation sees `null`; the
+    explanation lives in `nextAutomaticAction.blocker` instead.
+27. **The lineage id is derived from `operationId`, not a random v4.**
+    `add_to_queue`'s `derived_lineage_id` hashes the operation id
+    (SHA-256, formatted into the `qln-<uuid-shaped>` form) instead of
+    generating a fresh UUID, mirroring P5's `derived_revision_id`
+    pattern. Reason: idempotent replay — a retried `add_to_queue` command
+    with the same `operationId` must find the same lineage (and, via
+    `lineage_originals`, the same rows) it created the first time, not a
+    second one.
 
 ## Residual risks
 
