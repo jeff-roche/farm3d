@@ -10,12 +10,14 @@
 //! `QueueSnapshot`, the eligibility types, events, and commands are later
 //! tasks (see the module layout table in the design spec).
 
+pub mod eligibility;
 pub mod repository;
 pub mod state;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::contracts::command::RecoveryCode;
 use crate::spools::MaterialFamily;
 
 /// D2: a Queue Entry's state. A closed entry always has a [`CloseReason`]
@@ -180,4 +182,129 @@ pub struct QueueEntry {
     pub created_at: String,
     pub updated_at: String,
     pub closed_at: Option<String>,
+}
+
+/// D5: why a Printer failed a gate for a Queue Entry, or (start blockers
+/// only, D7/D8) why an `awaitingStart` Job's Printer can't start yet.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[ts(rename_all = "SCREAMING_SNAKE_CASE", export_to = "domain/BlockerCode.ts")]
+pub enum BlockerCode {
+    PrinterArchived,
+    SetupIncomplete,
+    ConnectionError,
+    PrinterOffline,
+    JobActive,
+    HostOperationPending,
+    PrinterBusyExternal,
+    /// Automatic only (D5 gate 1).
+    PrinterNotIdle,
+    PinnedToOtherPrinter,
+    ProfileMismatch,
+    NeedsManualPrinter,
+    CapabilityUnsupported,
+    /// Automatic only (D5 gate 3).
+    AdapterNotProven,
+    NoCompatibleSpool,
+    InsufficientMaterial,
+    /// Automatic only (D5 gate 4).
+    SpoolNotLoaded,
+    /// Start blockers only (D7/D8), never produced by `eligibility::evaluate`
+    /// or `eligibility::check_assignment`.
+    PrinterNotReady,
+}
+
+/// D5: a gate failure blocking one or more Printers for a Queue Entry.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/Blocker.ts")]
+pub struct Blocker {
+    pub code: BlockerCode,
+    pub message: String,
+    pub detail: Option<String>,
+    pub recovery: Option<RecoveryCode>,
+    pub printer_ids: Vec<String>,
+}
+
+/// D5: one Spool an operator (or the ranking) may choose for a Candidate
+/// Printer.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/SpoolOption.ts")]
+pub struct SpoolOption {
+    pub spool_id: String,
+    #[ts(type = "number")]
+    pub spool_number: i64,
+    pub loaded_on_printer: bool,
+    #[ts(type = "number")]
+    pub available_mg: i64,
+}
+
+/// D5: a Printer that passed every gate for a Queue Entry, ranked.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/Candidate.ts")]
+pub struct Candidate {
+    pub printer_id: String,
+    pub printer_name: String,
+    /// 1-based.
+    #[ts(type = "number")]
+    pub rank: i64,
+    pub spool: SpoolOption,
+    pub spool_options: Vec<SpoolOption>,
+    pub loaded_match: bool,
+    pub last_used_at: Option<String>,
+    pub manual_facts_acknowledgement_required: bool,
+}
+
+/// D5: one Printer's eligibility for a Queue Entry — the gate it failed,
+/// when it failed one.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterEligibility.ts")]
+pub struct PrinterEligibility {
+    pub printer_id: String,
+    pub printer_name: String,
+    pub eligible: bool,
+    pub blockers: Vec<Blocker>,
+}
+
+/// D5: an open `queued` entry's overall standing. `assigned` entries have
+/// no verdict.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/EligibilityVerdict.ts")]
+pub enum EligibilityVerdict {
+    Blocked,
+    AwaitingOperator,
+    Ready,
+}
+
+/// D5: `eligibility::evaluate`'s full result for one Queue Entry —
+/// ranked candidates, every considered Printer's own standing, and the
+/// aggregated blockers.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/QueueEntryEligibility.ts")]
+pub struct QueueEntryEligibility {
+    pub entry_id: String,
+    pub verdict: EligibilityVerdict,
+    pub candidates: Vec<Candidate>,
+    pub printers: Vec<PrinterEligibility>,
+    pub blockers: Vec<Blocker>,
+    pub evaluated_at: String,
+}
+
+/// Ruling R3: the small per-entry projection `list_queue` and
+/// `QueueSnapshot` carry instead of the full [`QueueEntryEligibility`].
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/EligibilitySummary.ts")]
+pub struct EligibilitySummary {
+    pub entry_id: String,
+    pub verdict: EligibilityVerdict,
+    #[ts(type = "number")]
+    pub eligible_count: i64,
+    pub top_blocker: Option<Blocker>,
+    pub candidate_printer_ids: Vec<String>,
 }

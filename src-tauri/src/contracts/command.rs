@@ -387,6 +387,19 @@ pub enum RecoveryCode {
     EditPreparation,
     /// P6: open the Printer's Job tab (its pending Host Operation).
     OpenPrinterJob,
+    /// P7 D5: open the Job in Queue (`JOB_ACTIVE`, `CONNECTION_IN_USE` with
+    /// a linked Job).
+    OpenJob,
+    /// P7 D5: open the Printer's setup (`SETUP_INCOMPLETE`).
+    OpenPrinterSetup,
+    /// P7 D5: unarchive the Printer (`PRINTER_ARCHIVED`).
+    UnarchivePrinter,
+    /// P7 D5: open Spools filtered to compatible Spools
+    /// (`NO_COMPATIBLE_SPOOL`, `INSUFFICIENT_MATERIAL`, `SPOOL_NOT_LOADED`).
+    LoadSpool,
+    /// P7 D5: switch the entry to Manual and open Assign
+    /// (`NEEDS_MANUAL_PRINTER`, `ADAPTER_NOT_PROVEN`).
+    AssignManually,
 }
 
 /// The versioned success envelope returned by every command.

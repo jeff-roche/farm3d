@@ -22,6 +22,7 @@
 
 pub mod blockers;
 pub mod commands;
+pub mod compat;
 pub mod events;
 pub mod external;
 pub mod facts;

@@ -93,8 +93,10 @@ use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::{
-    CloseReason, DispatchPolicy, DispatchPreference, EstimateSource, MaterialEstimate, OriginKind,
-    QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryState,
+    Blocker, BlockerCode, Candidate, CloseReason, DispatchPolicy, DispatchPreference,
+    EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, OriginKind,
+    PrinterEligibility, QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryEligibility,
+    QueueEntryState, SpoolOption,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
@@ -554,6 +556,14 @@ fn export_registry() -> Vec<Export> {
         export::<QueueEntryDisplay>(),
         export::<QueueEntryAction>(),
         export::<QueueEntry>(),
+        export::<BlockerCode>(),
+        export::<Blocker>(),
+        export::<SpoolOption>(),
+        export::<Candidate>(),
+        export::<PrinterEligibility>(),
+        export::<EligibilityVerdict>(),
+        export::<QueueEntryEligibility>(),
+        export::<EligibilitySummary>(),
         export::<JobState>(),
         export::<CancelReason>(),
         export::<Settlement>(),
@@ -830,6 +840,11 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::ReloadPreparation,
         RecoveryCode::EditPreparation,
         RecoveryCode::OpenPrinterJob,
+        RecoveryCode::OpenJob,
+        RecoveryCode::OpenPrinterSetup,
+        RecoveryCode::UnarchivePrinter,
+        RecoveryCode::LoadSpool,
+        RecoveryCode::AssignManually,
     ];
 
     assert_eq!(
@@ -854,7 +869,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
                 "CHOOSE_SUPPORTED_ADAPTER", "CHECK_CONNECTION", "CHECK_CREDENTIALS",
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
-                "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB"
+                "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB",
+                "OPEN_JOB", "OPEN_PRINTER_SETUP", "UNARCHIVE_PRINTER", "LOAD_SPOOL",
+                "ASSIGN_MANUALLY"
             ]
         })
     );
