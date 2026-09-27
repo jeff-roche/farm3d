@@ -15,7 +15,7 @@ import {
   WEB_QUEUE_ENTRY_HISTORY_DEFERRED,
   WEB_QUEUE_ENTRY_PRINTING,
 } from "../queue/web-fixtures";
-import { QueueScreen } from "./QueueScreen";
+import { MOVE_SETTLE_TIMEOUT_MS, QueueScreen } from "./QueueScreen";
 
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
@@ -152,6 +152,44 @@ describe("QueueScreen", () => {
       entry.id === WEB_QUEUE_ENTRY_BRACKET_IDS[0] ? { ...entry, revision: entry.revision + 1 } : entry);
     setQueueStoreState({ entries: [...entries, ...queueStoreMock.queue.history()] });
     await waitFor(() => expect(first()).toBeEnabled());
+  });
+
+  describe("when a move's own event is lost", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("refreshes the Queue and re-enables the handles after the bounded wait", async () => {
+      vi.useFakeTimers();
+      loadWebQueueFixture();
+      render(() => <QueueScreen />);
+      const first = () => within(rowFor(/Copy 1 of 3/)).getByRole("button", { name: /^Reorder / });
+      fireEvent.keyDown(first(), { key: "ArrowDown", altKey: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queueStoreMock.moveQueueEntry).toHaveBeenCalledOnce();
+      expect(first()).toBeDisabled();
+
+      await vi.advanceTimersByTimeAsync(MOVE_SETTLE_TIMEOUT_MS - 1);
+      expect(queueStoreMock.refreshQueue).not.toHaveBeenCalled();
+      expect(first()).toBeDisabled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
+      expect(first()).toBeEnabled();
+    });
+
+    it("never refreshes when the moved entry's event arrives", async () => {
+      vi.useFakeTimers();
+      loadWebQueueFixture();
+      render(() => <QueueScreen />);
+      const first = () => within(rowFor(/Copy 1 of 3/)).getByRole("button", { name: /^Reorder / });
+      fireEvent.keyDown(first(), { key: "ArrowDown", altKey: true });
+      await vi.advanceTimersByTimeAsync(0);
+      const entries = queueStoreMock.queue.entries().map((entry) =>
+        entry.id === WEB_QUEUE_ENTRY_BRACKET_IDS[0] ? { ...entry, revision: entry.revision + 1 } : entry);
+      setQueueStoreState({ entries: [...entries, ...queueStoreMock.queue.history()] });
+      expect(first()).toBeEnabled();
+      await vi.advanceTimersByTimeAsync(MOVE_SETTLE_TIMEOUT_MS * 2);
+      expect(queueStoreMock.refreshQueue).not.toHaveBeenCalled();
+    });
   });
 
   it("re-enables the handles and refreshes the Queue when a move is refused as stale", async () => {

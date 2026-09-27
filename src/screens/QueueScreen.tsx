@@ -28,6 +28,10 @@ type ScreenView = "all" | QueueView;
 
 const VIEW_ORDER: ScreenView[] = ["all", "awaitingOperator", "ready", "blocked", "assigned", "printing", "history"];
 const POLICIES: DispatchPolicy[] = ["manual", "recommended", "automatic"];
+/** How long a successful move waits for its own `entryChanged` event
+ *  before backfilling instead: a lost event must not leave every handle
+ *  disabled for good. */
+export const MOVE_SETTLE_TIMEOUT_MS = 5_000;
 
 function screenViewLabel(view: ScreenView): string {
   return view === "all" ? "Queue" : queueViewLabel(view);
@@ -159,6 +163,12 @@ export function QueueScreen() {
   /** The move in flight: every handle waits for it, so a second move is
    *  never sent against positions that are about to change. */
   const [pendingMove, setPendingMove] = createSignal<{ entryId: string; revision: number } | null>(null);
+  let settleTimer: number | undefined;
+  const clearSettleTimer = () => {
+    if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+    settleTimer = undefined;
+  };
+  onCleanup(clearSettleTimer);
   const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
   let workspace: HTMLDivElement | undefined;
 
@@ -221,8 +231,18 @@ export function QueueScreen() {
     const toPosition = list[to]?.position;
     if (!entry || toPosition == null) return;
     setActionError(null);
-    setPendingMove({ entryId: entry.id, revision: entry.revision });
-    moveQueueEntry(entry.id, entry.revision, toPosition).catch((error: unknown) => {
+    const pending = { entryId: entry.id, revision: entry.revision };
+    setPendingMove(pending);
+    moveQueueEntry(entry.id, entry.revision, toPosition).then(() => {
+      if (pendingMove() !== pending) return; // Already settled by its event.
+      settleTimer = window.setTimeout(() => {
+        settleTimer = undefined;
+        if (pendingMove() !== pending) return;
+        // The event never came: backfill, and stop waiting either way.
+        refreshQueue();
+        setPendingMove(null);
+      }, MOVE_SETTLE_TIMEOUT_MS);
+    }, (error: unknown) => {
       setPendingMove(null);
       setActionError(isCommandError(error) ? error.message : "The entry couldn't be moved.");
       // A stale revision or a state change: backfill now rather than wait.
@@ -234,7 +254,10 @@ export function QueueScreen() {
   // (the command's own copy never overwrites a held row), or when it's gone.
   createEffect(() => {
     const pending = pendingMove();
-    if (!pending) return;
+    if (!pending) {
+      clearSettleTimer();
+      return;
+    }
     const current = queue.entry(pending.entryId);
     if (!current || current.revision !== pending.revision) setPendingMove(null);
   });
