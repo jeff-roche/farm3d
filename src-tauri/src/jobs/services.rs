@@ -117,6 +117,13 @@ pub struct JobServices<R: tauri::Runtime> {
     /// When a status hint last triggered a poll, per Job: at most one per
     /// `history_poll`, so a chatty status can't flood the host.
     hinted: Mutex<HashMap<String, std::time::Instant>>,
+    /// Jobs a succeeded pause or resume just moved, with the state it moved
+    /// them to. The cached live status can still show the state before, so
+    /// status-following leaves such a Job alone until a status reports
+    /// that state (see `tracker::observe_status`). Set under the Printer
+    /// lock; dropped once a status reports that state, or the Job is no
+    /// longer active.
+    awaiting_status: Mutex<HashMap<String, JobState>>,
     /// The runtime's live tasks (the driver, and the evaluator's task and
     /// pumps), so a test can wait for a stopped runtime to finish.
     tasks: Arc<std::sync::atomic::AtomicUsize>,
@@ -166,6 +173,7 @@ impl<R: tauri::Runtime> JobServices<R> {
             first_pass: tokio::sync::watch::channel(false).0,
             declare_offered: Mutex::new(HashSet::new()),
             hinted: Mutex::new(HashMap::new()),
+            awaiting_status: Mutex::new(HashMap::new()),
             tasks: Arc::default(),
             barriers,
             barrier_receiver: Mutex::new(Some(barrier_receiver)),
@@ -175,6 +183,18 @@ impl<R: tauri::Runtime> JobServices<R> {
     /// The tracker's "now".
     pub fn now(&self) -> DateTime<Utc> {
         self.clock.now()
+    }
+
+    /// The state a succeeded pause or resume moved `job_id` to, while no
+    /// live status has reported it yet (`awaiting_status`).
+    pub(crate) fn awaiting_status(&self, job_id: &str) -> Option<JobState> {
+        lock(&self.awaiting_status).get(job_id).copied()
+    }
+
+    /// A live status reported the state `job_id`'s pause or resume moved
+    /// it to: status-following applies to it again.
+    pub(crate) fn status_caught_up(&self, job_id: &str) {
+        lock(&self.awaiting_status).remove(job_id);
     }
 
     /// Test hook: `hook` runs once, in the next `start_job` (operator or
@@ -544,13 +564,24 @@ async fn apply_linked_job<R: tauri::Runtime>(
     let _serialized = printer_lock.lock().await;
     let now = now_rfc3339();
     let applied = services.storage.write_repo(|tx| {
-        match host_ops_repository::load(tx, op_id)? {
-            Some(op) => dispatch::apply_host_outcome(tx, &op, &now),
-            None => Ok(None),
-        }
+        let Some(op) = host_ops_repository::load(tx, op_id)? else {
+            return Ok(None);
+        };
+        let before = match op.job_id.as_deref() {
+            Some(job_id) => jobs_repository::load_job(tx, job_id)?.map(|job| job.state),
+            None => None,
+        };
+        Ok(dispatch::apply_host_outcome(tx, &op, &now)?.map(|applied| (op.kind, before, applied)))
     });
     match applied {
-        Ok(Some(applied)) => {
+        Ok(Some((kind, before, applied))) => {
+            // Still under the Printer lock, so status-following can't read
+            // the moved Job before it knows to wait.
+            let moved = before != Some(applied.job.state);
+            if moved && matches!(kind, HostOperationKind::Pause | HostOperationKind::Resume) {
+                lock(&services.jobs.awaiting_status)
+                    .insert(applied.job.id.clone(), applied.job.state);
+            }
             publish(services, applied.change());
             Some(applied.job)
         }
@@ -690,6 +721,7 @@ fn republish_declare_crossings<R: tauri::Runtime>(services: &RuntimeServices<R>,
     let ids: HashSet<&str> = active.iter().map(|job| job.id.as_str()).collect();
     lock(&services.jobs.declare_offered).retain(|id| ids.contains(id.as_str()));
     lock(&services.jobs.hinted).retain(|id, _| ids.contains(id.as_str()));
+    lock(&services.jobs.awaiting_status).retain(|id, _| ids.contains(id.as_str()));
     for job in active {
         let offered = super::state::may_declare_while_unreachable(&job, now, after);
         let known = lock(&services.jobs.declare_offered).contains(&job.id);

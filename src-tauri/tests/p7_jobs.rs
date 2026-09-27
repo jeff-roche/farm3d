@@ -1733,6 +1733,40 @@ mod tracking {
         assert_eq!(posts(&roots.fake), 2, "the upload and the start only");
     }
 
+    /// `job_events` is append-only: a live status that still says
+    /// `printing` after farm3d's own pause was applied is stale, and never
+    /// writes a `resumed` that didn't happen. A later status that reports
+    /// the pause, then a resume on the Printer, is still followed.
+    #[test]
+    fn a_stale_printing_status_after_a_pause_never_writes_resumed() {
+        let roots = roots();
+        let app = fast_app(&roots);
+        let job_id = app.printing();
+        app.mirror(&roots.fake);
+        app.wait_passes(1);
+
+        let paused = app.job_command("pause_job", "op-pause", &job_id).unwrap();
+        let pause_op = paused["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        app.wait_resolved(&pause_op, HostOperationState::Succeeded);
+        app.wait_job_until(&job_id, |job| job["activeHostOperationId"].is_null());
+        // The cached status still reports our file printing.
+        app.quiesce();
+        app.wait_passes(1);
+        assert_eq!(app.count_events(&job_id, "resumed"), 0, "{:?}", app.event_kinds(&job_id));
+        assert_eq!(app.job(&job_id)["state"], "paused");
+
+        app.mirror(&roots.fake);
+        app.quiesce();
+        roots.fake.with_state(|state| {
+            state.print_state = "printing".to_string();
+            state.is_paused = false;
+        });
+        app.mirror(&roots.fake);
+        app.wait_job(&job_id, "printing");
+        assert_eq!(app.count_events(&job_id, "paused"), 1);
+        assert_eq!(app.count_events(&job_id, "resumed"), 1);
+    }
+
     /// Decision 9 and D9: a Job never adopts a print it didn't start.
     #[test]
     fn tracker_never_adopts_a_foreign_print() {

@@ -245,6 +245,18 @@ pub fn reports_print_of(status: Option<&PrinterStatus>, host_path: &str) -> bool
     })
 }
 
+/// Whether `status` shows the file at `host_path` in `state` (`printing`
+/// or `paused`, Online).
+fn status_shows(status: &PrinterStatus, host_path: &str, state: JobState) -> bool {
+    status.connection_state == ConnectionState::Online
+        && status.telemetry.job_name.as_deref() == Some(host_path)
+        && matches!(
+            (state, status.operational_state),
+            (JobState::Printing, OperationalState::Printing)
+                | (JobState::Paused, OperationalState::Paused)
+        )
+}
+
 // --- the tracked Job ---------------------------------------------------------
 
 /// `dispatched_at` is stored to the second: the send happened up to 1 s
@@ -599,6 +611,15 @@ pub(crate) async fn observe_status<R: tauri::Runtime>(
     let Some(status) = services.manager.statuses().remove(&job.printer_id) else {
         return Ok((None, false));
     };
+    // A status that reports the state a succeeded pause or resume moved
+    // the Job to is newer than that op: status-following resumes.
+    if services
+        .jobs
+        .awaiting_status(&job.id)
+        .is_some_and(|state| status_shows(&status, host_path, state))
+    {
+        services.jobs.status_caught_up(&job.id);
+    }
     let hint = status_hint(job.state, host_path, job.max_progress_pct, &status);
     if hint.progress_pct.is_none() && hint.follow.is_none() {
         return Ok((None, hint.check_now));
@@ -630,7 +651,16 @@ pub(crate) async fn observe_status<R: tauri::Runtime>(
                 &now,
             )?);
         }
-        if let Some(event) = hint.follow {
+        // Status-following never reverses farm3d's own pause or resume on
+        // a stale status: not while the op is in flight, and not after it
+        // applied until a status has reported the state it moved the Job
+        // to (`job_events` is append-only; a stale `printing` would write
+        // a `resumed` that never happened).
+        let follow = hint.follow.filter(|_| {
+            job.active_host_operation_id.is_none()
+                && services.jobs.awaiting_status(&job.id).is_none()
+        });
+        if let Some(event) = follow {
             written = Some(jobs_repository::transition(
                 tx,
                 &job.id,
