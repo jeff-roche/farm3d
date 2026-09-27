@@ -1070,9 +1070,14 @@ mod dispatch {
         app.wait_resolved(&cancel_op, HostOperationState::Succeeded);
         // A succeeded cancel only clears the active op; it makes the
         // tracker check history at once, and history proves the end.
-        let job = app.wait_job(&job_id, "cancelled");
+        app.wait_job(&job_id, "cancelled");
+        // The two writes can land in either order: a periodic history poll
+        // can end the Job before the driver applies the cancel op, and the
+        // op's resolution then only clears the column (spec D7, "Clearing
+        // `active_host_operation_id`"). So wait for the clear too.
+        let job = app.wait_job_until(&job_id, |job| job["activeHostOperationId"].is_null());
+        assert_eq!(job["state"], "cancelled");
         assert_eq!(job["cancelReason"], "cancelledByOperator");
-        assert_eq!(job["activeHostOperationId"], Value::Null);
         assert_eq!(
             app.event_kinds(&job_id)[5..],
             [
