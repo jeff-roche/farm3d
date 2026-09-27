@@ -32,21 +32,26 @@ function jobTitle(job: Job): string {
  *  one is chosen there. Inline beside the Printers, or a modal overlay at
  *  narrow widths, like `PrinterDetailDock`. */
 export function MonitorQueueDock(props: MonitorQueueDockProps) {
+  // One stable wrapper: swapping the preview for a Job directly under
+  // Kobalte's `Dialog.Content` (beside its focus-trap sentinels) left the
+  // preview behind.
   const content = (title: (text: string) => JSX.Element) => (
-    <Show when={props.job} fallback={<QueuePreview onSelectJob={props.onSelectJob} />}>
-      {(job) => (
-        <div class={styles.job}>
-          <header class={styles.header}>
-            <div>
-              {title(jobTitle(job()))}
-              <p class={styles.subtitle}>{job().printerSnapshot.name}</p>
-            </div>
-            <Button variant="ghost" size="sm" onClick={props.onBack}>Back to Queue</Button>
-          </header>
-          <JobPanel job={job()} />
-        </div>
-      )}
-    </Show>
+    <div>
+      <Show when={props.job} fallback={<QueuePreview onSelectJob={props.onSelectJob} />}>
+        {(job) => (
+          <div class={styles.job}>
+            <header class={styles.header}>
+              <div>
+                {title(jobTitle(job()))}
+                <p class={styles.subtitle}>{job().printerSnapshot.name}</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={props.onBack}>Back to Queue</Button>
+            </header>
+            <JobPanel job={job()} />
+          </div>
+        )}
+      </Show>
+    </div>
   );
 
   return (

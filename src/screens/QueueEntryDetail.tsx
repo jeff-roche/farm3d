@@ -1,5 +1,5 @@
 import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { createMemo, createResource, createSignal, createUniqueId, For, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, createUniqueId, For, on, Show, type JSX } from "solid-js";
 import { AlertDialog, Button, RadioGroup, Select, SeverityMarker, Tabs, Timeline } from "../design-system";
 import type { TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
@@ -33,6 +33,7 @@ import {
 } from "../slicing/revision-presentation";
 import { loadSliceRevision } from "../slicing/slicing-store";
 import { formatGrams } from "../spools/weight";
+import { AssignJobDialog } from "./AssignJobDialog";
 import { JobPanel } from "./JobPanel";
 import { goTo, QueueRecoveryButton, showQueueEntry } from "./QueueRecoveryButton";
 import styles from "./QueueEntryDetail.module.css";
@@ -41,9 +42,15 @@ export interface QueueEntryDetailProps {
   entry: QueueEntry;
   mode: "inline" | "overlay";
   onClose: () => void;
-  /** Opens assignment for an entry (`AssignJobDialog`). It also backs the
-   *  `ASSIGN_MANUALLY` recovery. */
+  /** Replaces the dock's own `AssignJobDialog` for **Assign…** and the
+   *  `ASSIGN_MANUALLY` recovery. Without it, the dock opens the dialog
+   *  itself, nested in the dock so an overlay dock never covers it. */
   onAssign?: (entryId: string) => void;
+  /** Opens the dock's Assign dialog (a row's `ASSIGN_MANUALLY`). Each new
+   *  object is one request; the dock calls `onAssignRequestHandled` once
+   *  it's open, so a remount (inline/overlay switch) never replays it. */
+  assignRequest?: { entryId: string };
+  onAssignRequestHandled?: () => void;
 }
 
 const POLICIES: DispatchPolicy[] = ["manual", "recommended", "automatic"];
@@ -61,7 +68,14 @@ function errorText(error: unknown, fallback: string): string {
  *  workspace is too narrow for both, like `PrinterDetailDock`. */
 export function QueueEntryDetail(props: QueueEntryDetailProps) {
   const content = () => (
-    <DockContent entry={props.entry} overlay={props.mode === "overlay"} onClose={props.onClose} onAssign={props.onAssign} />
+    <DockContent
+      entry={props.entry}
+      overlay={props.mode === "overlay"}
+      onClose={props.onClose}
+      onAssign={props.onAssign}
+      assignRequest={props.assignRequest}
+      onAssignRequestHandled={props.onAssignRequestHandled}
+    />
   );
   return (
     <Show
@@ -82,6 +96,19 @@ export function QueueEntryDetail(props: QueueEntryDetailProps) {
 
 function DockContent(props: Omit<QueueEntryDetailProps, "mode"> & { overlay: boolean }) {
   const [tab, setTab] = createSignal("dispatch");
+  const [assigning, setAssigning] = createSignal(false);
+  let assignTrigger: HTMLElement | null = null;
+  const assign = (entryId: string) => {
+    if (props.onAssign) return props.onAssign(entryId);
+    assignTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setAssigning(true);
+  };
+  createEffect(on(() => props.assignRequest, (request) => {
+    if (!request || request.entryId !== props.entry.id) return;
+    setTab("dispatch");
+    assign(request.entryId);
+    props.onAssignRequestHandled?.();
+  }));
   const subtitle = () => {
     const parts: string[] = [];
     if (props.entry.copyCount > 1) parts.push(copyLabel(props.entry));
@@ -106,10 +133,16 @@ function DockContent(props: Omit<QueueEntryDetailProps, "mode"> & { overlay: boo
         // Getters: Kobalte mounts only the selected tab, so the Artifact
         // and History tabs load nothing until they're opened.
         items={[
-          { value: "dispatch", label: "Dispatch", get content() { return <DispatchTab entry={props.entry} onAssign={props.onAssign} />; } },
+          { value: "dispatch", label: "Dispatch", get content() { return <DispatchTab entry={props.entry} onAssign={assign} />; } },
           { value: "artifact", label: "Artifact", get content() { return <ArtifactTab entry={props.entry} />; } },
           { value: "history", label: "History", get content() { return <HistoryTab entry={props.entry} />; } },
         ]}
+      />
+      <AssignJobDialog
+        open={assigning()}
+        onOpenChange={setAssigning}
+        entry={props.entry}
+        returnFocus={() => (assignTrigger?.isConnected ? assignTrigger : null)}
       />
     </div>
   );
@@ -147,7 +180,7 @@ function candidateReasons(candidate: Candidate): string[] {
   return reasons;
 }
 
-function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) => void }) {
+function DispatchTab(props: { entry: QueueEntry; onAssign: (entryId: string) => void }) {
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = createSignal(false);
@@ -183,7 +216,7 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
   /** `ASSIGN_MANUALLY`: switch the entry to Manual, then open Assign. */
   const assignManually = () => void run(async () => {
     if (props.entry.policy !== "manual") await updateQueueEntry(props.entry.id, props.entry.revision, { policy: "manual" });
-    props.onAssign?.(props.entry.id);
+    props.onAssign(props.entry.id);
   }, "The entry couldn't be switched to Manual.");
 
   const pinnedToPrinter = () => props.entry.requiresManualPrinterSelection || props.entry.manualPrinterId !== null;
@@ -212,7 +245,7 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
                 <Section title="Blockers">
                   <ul class={styles.list}>
                     <For each={held().blockers}>
-                      {(blocker) => <BlockerLine blocker={blocker} onAssignManually={props.onAssign ? assignManually : undefined} />}
+                      {(blocker) => <BlockerLine blocker={blocker} onAssignManually={assignManually} />}
                     </For>
                   </ul>
                 </Section>
@@ -284,8 +317,8 @@ function DispatchTab(props: { entry: QueueEntry; onAssign?: (entryId: string) =>
       </Section>
 
       <div class={styles.actions}>
-        <Show when={allowed("assign") && props.onAssign}>
-          <Button variant="primary" disabled={pending()} onClick={() => props.onAssign?.(props.entry.id)}>
+        <Show when={allowed("assign")}>
+          <Button variant="primary" disabled={pending()} onClick={() => props.onAssign(props.entry.id)}>
             Assign…
           </Button>
         </Show>

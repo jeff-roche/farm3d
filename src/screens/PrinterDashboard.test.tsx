@@ -192,4 +192,16 @@ describe("PrinterDashboard", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
     expect(await screen.findByRole("dialog", { name: "Queue preview" })).toBeInTheDocument();
   });
+
+  it("replaces the overlay's Queue preview with the chosen Job", async () => {
+    stubWorkspaceWidth(1024);
+    loadWebQueueFixture();
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
+    const dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Four-tool — Bay 5/ }));
+    const job = await screen.findByRole("region", { name: "Job" });
+    expect(within(job).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Next up" })).toBeNull();
+  });
 });

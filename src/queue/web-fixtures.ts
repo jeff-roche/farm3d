@@ -356,7 +356,8 @@ function deferredJob(): Job {
     cancelReason: null,
     settlement: "deferred",
     settlementMethod: null,
-    settlementPreview: { estimatedUseMg: 15_000 },
+    // Spec "Material settlement": ceil(25 000 mg × 8 / 100).
+    settlementPreview: { estimatedUseMg: 2_000 },
     corrected: false,
     assignedBy: "operator",
     startConfirmation: "bedClear",

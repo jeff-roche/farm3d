@@ -19,7 +19,6 @@ import { viewOf, type QueueView } from "../queue/views";
 import { formatPrintTime } from "../slicing/revision-presentation";
 import { materialLabel } from "../spools/materials";
 import { formatGrams } from "../spools/weight";
-import { AssignJobDialog } from "./AssignJobDialog";
 import { QueueEntryDetail } from "./QueueEntryDetail";
 import { goTo, QueueRecoveryButton } from "./QueueRecoveryButton";
 import styles from "./QueueScreen.module.css";
@@ -171,24 +170,18 @@ export function QueueScreen() {
   };
   onCleanup(clearSettleTimer);
   const [dockMode, setDockMode] = createSignal<"inline" | "overlay">("overlay");
-  /** The entry `AssignJobDialog` is open for. */
-  const [assigningId, setAssigningId] = createSignal<string | null>(null);
-  const assigning = () => {
-    const id = assigningId();
-    return id ? queue.entry(id) : undefined;
-  };
-  let assignTrigger: HTMLElement | null = null;
-  const openAssign = (entryId: string) => {
-    assignTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setAssigningId(entryId);
-  };
+  /** A row's `ASSIGN_MANUALLY` asks the entry's dock to open Assign. */
+  const [assignRequest, setAssignRequest] = createSignal<{ entryId: string } | undefined>();
   /** `ASSIGN_MANUALLY` from a row: switch the entry to Manual, then open Assign. */
   const assignManually = (entry: QueueEntry) => {
     setActionError(null);
     const switched = entry.policy === "manual"
       ? Promise.resolve()
       : updateQueueEntry(entry.id, entry.revision, { policy: "manual" }).then(() => undefined);
-    switched.then(() => openAssign(entry.id), (error: unknown) => {
+    switched.then(() => {
+      select(entry.id);
+      setAssignRequest({ entryId: entry.id });
+    }, (error: unknown) => {
       setActionError(isCommandError(error) ? error.message : "The entry couldn't be switched to Manual.");
     });
   };
@@ -446,15 +439,13 @@ export function QueueScreen() {
           </Show>
         </div>
         <Show when={selectedEntry()}>
-          {(entry) => <QueueEntryDetail entry={entry()} mode={dockMode()} onClose={() => select(null)} onAssign={openAssign} />}
-        </Show>
-        <Show when={assigning()}>
           {(entry) => (
-            <AssignJobDialog
-              open
-              onOpenChange={(open) => !open && setAssigningId(null)}
+            <QueueEntryDetail
               entry={entry()}
-              returnFocus={() => (assignTrigger?.isConnected ? assignTrigger : null)}
+              mode={dockMode()}
+              onClose={() => select(null)}
+              assignRequest={assignRequest()}
+              onAssignRequestHandled={() => setAssignRequest(undefined)}
             />
           )}
         </Show>

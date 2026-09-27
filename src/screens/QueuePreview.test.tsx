@@ -49,7 +49,7 @@ describe("QueuePreview", () => {
     expect(open).toHaveTextContent("Deferred");
     fireEvent.click(within(open).getByRole("button", { name: "Settle…" }));
     const dialog = await screen.findByRole("dialog", { name: "Settle material" });
-    expect(within(dialog).getByLabelText("Use estimate (15.0 g)")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Use estimate (2.0 g)")).toBeInTheDocument();
     expect(queueStoreMock.queue.job(WEB_QUEUE_JOB_DEFERRED)?.settlement).toBe("deferred");
   });
 

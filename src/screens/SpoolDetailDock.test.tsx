@@ -203,6 +203,6 @@ describe("SpoolDetailDock", () => {
     expect(screen.getByText(/Deferred/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Settle…" }));
     const dialog = await screen.findByRole("dialog", { name: "Settle material" });
-    expect(dialog).toHaveTextContent("Use estimate (15.0 g)");
+    expect(dialog).toHaveTextContent("Use estimate (2.0 g)");
   });
 });

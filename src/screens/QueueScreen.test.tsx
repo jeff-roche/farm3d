@@ -379,4 +379,19 @@ describe("QueueScreen", () => {
     const panel = await screen.findByRole("region", { name: "Job" });
     expect(within(panel).getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
+
+  it("follows a row's ASSIGN_MANUALLY: switches to Manual, opens the entry, and opens Assign in its dock", async () => {
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-auto", revision: 5, policy: "automatic" })],
+      eligibility: [eligibilitySummary({
+        entryId: "qen-auto", verdict: "blocked", eligibleCount: 0, candidatePrinterIds: [],
+        topBlocker: { code: "NEEDS_MANUAL_PRINTER", message: "This Slice needs a Printer chosen by hand.", detail: null, recovery: "ASSIGN_MANUALLY", printerIds: [] },
+      })],
+    });
+    render(() => <QueueScreen />);
+    fireEvent.click(within(rowFor("Bracket")).getByRole("button", { name: "Assign manually" }));
+    await waitFor(() => expect(queueStoreMock.updateQueueEntry).toHaveBeenCalledWith("qen-auto", 5, { policy: "manual" }));
+    expect(await screen.findByRole("dialog", { name: "Assign to a Printer" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#nav=v1/queue/job/qen-auto");
+  });
 });
