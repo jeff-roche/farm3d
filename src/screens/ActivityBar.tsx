@@ -1,10 +1,10 @@
-import { IconBox, IconDisc, IconPrinter } from "@tabler/icons-solidjs";
+import { IconBox, IconDisc, IconPlaylist, IconPrinter } from "@tabler/icons-solidjs";
 import { Show } from "solid-js";
 import { IconButton } from "../design-system";
 import { SettingsMenu } from "./SettingsMenu";
 import styles from "./ActivityBar.module.css";
 
-export type ScreenId = "monitor" | "library" | "spools";
+export type ScreenId = "monitor" | "queue" | "library" | "spools";
 
 export interface ActivityBarProps {
   active: ScreenId;
@@ -12,6 +12,10 @@ export interface ActivityBarProps {
   /** Count of Spools needing attention: `low` or `reconciliation` (P7 Task
    *  4 brief). Omitted or 0 renders no badge. */
   attentionSpoolCount?: number;
+  /** Queue Entries whose verdict is Blocked or Awaiting operator, plus open
+   *  Reconciliation Requirements (P7 spec "Frontend architecture").
+   *  Omitted or 0 renders no badge. */
+  queueAttentionCount?: number;
 }
 
 export function ActivityBar(props: ActivityBarProps) {
@@ -25,6 +29,20 @@ export function ActivityBar(props: ActivityBarProps) {
       >
         <IconPrinter size={18} />
       </IconButton>
+      <div class={styles.iconWrap}>
+        <IconButton
+          aria-label={(props.queueAttentionCount ?? 0) > 0 ? `Queue (${props.queueAttentionCount} need attention)` : "Queue"}
+          aria-current={props.active === "queue" ? "page" : undefined}
+          active={props.active === "queue"}
+          onClick={() => props.onSelect("queue")}
+        >
+          {/* The umbrella spec's "ordered list entering execution". */}
+          <IconPlaylist size={18} />
+        </IconButton>
+        <Show when={(props.queueAttentionCount ?? 0) > 0}>
+          <span class={styles.badge} aria-hidden="true">{props.queueAttentionCount}</span>
+        </Show>
+      </div>
       <IconButton
         aria-label="Library"
         aria-current={props.active === "library" ? "page" : undefined}

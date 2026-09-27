@@ -1,0 +1,128 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background-color: var(--f3d-color-surface);
+}
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--f3d-color-danger);
+}
+
+.errorMessage {
+  flex: 1;
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-size: var(--f3d-type-body-size);
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding-bottom: 0.5rem;
+}
+
+.toolbarLabel {
+  margin-right: 0.25rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+}
+
+.tabs {
+  min-height: 0;
+}
+
+.tableArea {
+  min-width: 0;
+}
+
+/* Every sibling of the hovered or focused entry's lineage (Copy n of m). */
+.tableArea tr[data-lineage-highlight] {
+  background-color: var(--f3d-color-surface-hover);
+  box-shadow: inset 2px 0 0 var(--f3d-color-accent);
+}
+
+.tableArea tr[data-lineage-highlight][data-selected] {
+  background-color: var(--f3d-color-surface-selected);
+}
+
+.position {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.position > span:last-child {
+  align-self: center;
+}
+
+.name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.copy {
+  padding: 0 0.25rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-label-size);
+}
+
+.state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.blocker {
+  color: var(--f3d-color-text-muted);
+  white-space: normal;
+}
+
+.muted {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 3rem 1rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+  text-align: center;
+}
+
+.empty p {
+  margin: 0;
+}

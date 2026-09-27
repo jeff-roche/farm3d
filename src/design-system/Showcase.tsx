@@ -220,6 +220,7 @@ export function Showcase() {
             { value: "a", label: "Option A" },
             { value: "b", label: "Option B" },
             { value: "c", label: "Option C" },
+            { value: "d", label: "Option D (disabled)", disabled: true },
           ]}
           value={radioValue()}
           onChange={setRadioValue}

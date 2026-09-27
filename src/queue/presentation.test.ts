@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   blockerCodeLabel,
   cancelReasonLabel,
+  closeReasonLabel,
+  copyLabel,
+  dispatchPolicyLabel,
+  dispatchPreferenceLabel,
+  estimateSourceLabel,
+  queueViewLabel,
   jobEventKindLabel,
   jobStateLabel,
   type NewRecoveryCode,
@@ -121,5 +127,25 @@ describe("recoveryCodeLabel", () => {
 
   it("OPEN_JOB has a label (a later task wires its button)", () => {
     expect(recoveryCodeLabel("OPEN_JOB")).toBeTruthy();
+  });
+});
+
+describe("Queue screen labels", () => {
+  it("names every Dispatch Policy, preference, close reason, estimate source, and view", () => {
+    expect(["manual", "recommended", "automatic"].map((p) => dispatchPolicyLabel(p as never)))
+      .toEqual(["Manual", "Recommended", "Automatic"]);
+    expect(dispatchPreferenceLabel("loadedFirst")).toBe("Loaded Spool first");
+    expect(dispatchPreferenceLabel("leastRecentlyUsed")).toBe("Least recently used");
+    expect(["completed", "failed", "cancelled", "released", "removed"].map((r) => closeReasonLabel(r as never)))
+      .toEqual(["Completed", "Failed", "Cancelled", "Released", "Removed"]);
+    expect(estimateSourceLabel("sliceEstimate")).toBe("slice estimate");
+    expect(estimateSourceLabel("fileClaimConfirmed")).toBe("file's claim, confirmed");
+    expect(estimateSourceLabel("operatorEntered")).toBe("entered by hand");
+    expect(queueViewLabel("printing")).toBe("Printing now");
+    expect(queueViewLabel("awaitingOperator")).toBe("Awaiting operator");
+  });
+
+  it("reads a lineage copy as Copy n of m, from Rust's copyIndex and copyCount", () => {
+    expect(copyLabel({ copyIndex: 2, copyCount: 3 })).toBe("Copy 2 of 3");
   });
 });

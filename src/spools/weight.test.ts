@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatGrams, parseGrams } from "./weight";
+import { formatGrams, gramsToMgRoundUp, parseGrams } from "./weight";
 
 describe("parseGrams", () => {
   it("parses one decimal place of grams into integer milligrams", () => {
@@ -69,5 +69,14 @@ describe("formatGrams", () => {
   it("formats zero", () => {
     expect(formatGrams(0, 0)).toBe("0 g");
     expect(formatGrams(0, 1)).toBe("0.0 g");
+  });
+});
+
+describe("gramsToMgRoundUp", () => {
+  it("rounds a fractional gram claim up to the next milligram, as Rust's grams_to_mg_round_up does", () => {
+    expect(gramsToMgRoundUp(1.0001)).toBe(1001);
+    expect(gramsToMgRoundUp(12.3456)).toBe(12_346);
+    expect(gramsToMgRoundUp(2)).toBe(2000);
+    expect(gramsToMgRoundUp(0)).toBe(0);
   });
 });

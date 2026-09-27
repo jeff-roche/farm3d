@@ -250,4 +250,22 @@ describe("DataTable", () => {
 
     expect(screen.getByText("No rows yet")).toBeInTheDocument();
   });
+
+  it("puts each row's rowAttributes on its <tr>, reactively, and leaves undefined ones off", () => {
+    const [marked, setMarked] = createSignal("b");
+    render(() => (
+      <DataTable
+        label="Rows"
+        rows={rows}
+        rowId={(row) => row.id}
+        columns={columns}
+        rowAttributes={(row) => ({ "data-reorder-row": "", "data-marked": marked() === row.id ? "" : undefined })}
+      />
+    ));
+    const bodyRows = screen.getAllByRole("row").slice(1);
+    expect(bodyRows.every((row) => row.hasAttribute("data-reorder-row"))).toBe(true);
+    expect(bodyRows.map((row) => row.hasAttribute("data-marked"))).toEqual([false, true, false]);
+    setMarked("c");
+    expect(bodyRows.map((row) => row.hasAttribute("data-marked"))).toEqual([false, false, true]);
+  });
 });

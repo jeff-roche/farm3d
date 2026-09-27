@@ -30,6 +30,11 @@ export interface DataTableProps<T> {
   onSortChange?: (sort: DataTableSort) => void;
   label: string;
   empty?: JSX.Element;
+  /** Extra `data-*` attributes for a row's `<tr>`, e.g. the
+   *  `data-reorder-row` marker `ReorderHandle`'s drag geometry reads (its
+   *  rows must be siblings under one parent, which every `<tr>` here is).
+   *  An `undefined` value leaves the attribute off. */
+  rowAttributes?: (row: T) => Record<`data-${string}`, string | undefined>;
 }
 
 /** A dense, sortable, keyboard-navigable data grid (ARIA `grid` pattern) for
@@ -176,6 +181,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
 
                 return (
                   <tr
+                    {...props.rowAttributes?.(row)}
                     ref={(el) => rowRefs.set(id(), el)}
                     role="row"
                     class={styles.row}

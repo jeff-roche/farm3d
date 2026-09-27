@@ -4,10 +4,16 @@
  *  Nothing here calls a command or touches a store -- components pass in
  *  the data they already hold, the same way `host-ops/presentation.ts`
  *  does. */
+import type { QueueView } from "./views";
 import type {
   Blocker,
   BlockerCode,
   CancelReason,
+  CloseReason,
+  DispatchPolicy,
+  DispatchPreference,
+  EstimateSource,
+  QueueEntry,
   JobEventKind,
   JobState,
   RecoveryCode,
@@ -156,4 +162,67 @@ const NEW_RECOVERY_CODE_LABEL = {
 
 export function recoveryCodeLabel(code: NewRecoveryCode): string {
   return NEW_RECOVERY_CODE_LABEL[code];
+}
+
+// --- Queue screen (Task 14) -------------------------------------------------
+
+const DISPATCH_POLICY_LABEL = {
+  manual: "Manual",
+  recommended: "Recommended",
+  automatic: "Automatic",
+} satisfies Record<DispatchPolicy, string>;
+
+export function dispatchPolicyLabel(policy: DispatchPolicy): string {
+  return DISPATCH_POLICY_LABEL[policy];
+}
+
+const DISPATCH_PREFERENCE_LABEL = {
+  loadedFirst: "Loaded Spool first",
+  leastRecentlyUsed: "Least recently used",
+} satisfies Record<DispatchPreference, string>;
+
+export function dispatchPreferenceLabel(preference: DispatchPreference): string {
+  return DISPATCH_PREFERENCE_LABEL[preference];
+}
+
+const CLOSE_REASON_LABEL = {
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  released: "Released",
+  removed: "Removed",
+} satisfies Record<CloseReason, string>;
+
+export function closeReasonLabel(reason: CloseReason): string {
+  return CLOSE_REASON_LABEL[reason];
+}
+
+/** Where a Queue Entry's fixed material estimate came from, as the tail of
+ *  "38.6 g (slice estimate)". */
+const ESTIMATE_SOURCE_LABEL = {
+  sliceEstimate: "slice estimate",
+  fileClaimConfirmed: "file's claim, confirmed",
+  operatorEntered: "entered by hand",
+} satisfies Record<EstimateSource, string>;
+
+export function estimateSourceLabel(source: EstimateSource): string {
+  return ESTIMATE_SOURCE_LABEL[source];
+}
+
+const QUEUE_VIEW_LABEL = {
+  awaitingOperator: "Awaiting operator",
+  ready: "Ready",
+  assigned: "Assigned",
+  blocked: "Blocked",
+  printing: "Printing now",
+  history: "History",
+} satisfies Record<QueueView, string>;
+
+export function queueViewLabel(view: QueueView): string {
+  return QUEUE_VIEW_LABEL[view];
+}
+
+/** D1's lineage label: `copyIndex` of `copyCount`, both from Rust. */
+export function copyLabel(entry: Pick<QueueEntry, "copyIndex" | "copyCount">): string {
+  return `Copy ${entry.copyIndex} of ${entry.copyCount}`;
 }

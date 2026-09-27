@@ -1,4 +1,4 @@
-import { For, createSignal, onCleanup, type JSX } from "solid-js";
+import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
 import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
@@ -15,6 +15,11 @@ export interface AppShellProps {
   /** Count of Spools needing attention (`low` or `reconciliation`),
    *  forwarded to the ActivityBar's Spools badge. */
   attentionSpoolCount?: number;
+  /** Forwarded to the ActivityBar's Queue badge. */
+  queueAttentionCount?: number;
+  /** Every active Job (not completed, failed, or cancelled), for the top
+   *  bar's active Job count. Omitted hides the count. */
+  activeJobs?: readonly PrinterRosterEntry[];
   children: JSX.Element;
 }
 
@@ -76,6 +81,17 @@ export function AppShell(props: AppShellProps) {
             printers={rosterEntries(props.printerRoster)}
             onViewAll={viewAll}
           />
+          <Show when={props.activeJobs}>
+            {(jobs) => (
+              <PrinterRoster
+                label="Active Jobs"
+                count={jobs().length}
+                printers={jobs()}
+                emptyLabel="No active Jobs."
+                onViewAll={() => props.onSelect("queue")}
+              />
+            )}
+          </Show>
           <For each={props.operationalRosters}>
             {(roster) => (
               <PrinterRoster
@@ -89,7 +105,12 @@ export function AppShell(props: AppShellProps) {
         </div>
       </header>
 
-      <ActivityBar active={props.active} onSelect={props.onSelect} attentionSpoolCount={props.attentionSpoolCount} />
+      <ActivityBar
+        active={props.active}
+        onSelect={props.onSelect}
+        attentionSpoolCount={props.attentionSpoolCount}
+        queueAttentionCount={props.queueAttentionCount}
+      />
 
       <main class={styles.content}>{props.children}</main>
 
