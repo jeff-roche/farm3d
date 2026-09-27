@@ -180,7 +180,8 @@ pub struct StatusHint {
 
 /// D7's status inputs for a Job in `state` with `host_path`, whose
 /// progress so far is `max_progress_pct`. Only an Online status that
-/// reports the Job's own file says anything. Pure.
+/// reports the Job's own file says anything, and only one that reports it
+/// printing or paused moves the progress. Pure.
 pub fn status_hint(
     state: JobState,
     host_path: &str,
@@ -192,9 +193,18 @@ pub fn status_hint(
     if !ours {
         return StatusHint::default();
     }
+    // Owner decision 5: only this Job's print counts. A host that ended the
+    // previous run of the same file still reports that file and its
+    // progress until the next print begins, so an ended status says nothing
+    // about this Job's progress.
+    let in_progress = matches!(
+        status.operational_state,
+        OperationalState::Printing | OperationalState::Paused
+    );
     let progress_pct = status
         .telemetry
         .progress
+        .filter(|_| in_progress)
         .filter(|progress| progress.is_finite())
         .map(|progress| ((progress * 100.0).floor() as i64).clamp(0, 100))
         .filter(|pct| *pct > max_progress_pct);
@@ -918,6 +928,29 @@ mod tests {
             status_hint(JobState::Printing, OURS, 0, &offline),
             StatusHint::default()
         );
+    }
+
+    /// Owner decision 5: the progress is the highest the host reported for
+    /// this Job. A host that finished, cancelled, or failed the previous
+    /// run of the same file keeps reporting that file and its progress
+    /// until the next print begins, so only a print in progress counts.
+    #[test]
+    fn progress_counts_only_while_our_file_is_printing_or_paused() {
+        use OperationalState::*;
+        let hint = |state| {
+            status_hint(
+                JobState::Printing,
+                OURS,
+                0,
+                &status(state, Some(OURS), Some(1.0)),
+            )
+            .progress_pct
+        };
+        assert_eq!(hint(Printing), Some(100));
+        assert_eq!(hint(Paused), Some(100));
+        for state in [Finished, Cancelled, Failed, Ready, Busy] {
+            assert_eq!(hint(state), None, "{state:?}");
+        }
     }
 
     #[test]
