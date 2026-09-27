@@ -3,11 +3,13 @@
 import type {
   EligibilitySummary,
   Job,
+  JobHistory,
   MaterialEstimate,
   NextAutomaticAction,
   PrinterSnapshot,
   QueueChange,
   QueueEntry,
+  QueueEntryEligibility,
   QueueSnapshot,
   ReconciliationRequirement,
 } from "./types";
@@ -148,4 +150,29 @@ export function queueSnapshot(
 
 export function queueChange(overrides: Partial<QueueChange> = {}): QueueChange {
   return { entries: [], jobs: [], requirements: [], ...overrides };
+}
+
+export function queueEntryEligibility(overrides: Partial<QueueEntryEligibility> = {}): QueueEntryEligibility {
+  return {
+    entryId: "qen-1",
+    verdict: "awaitingOperator",
+    candidates: [],
+    printers: [],
+    blockers: [],
+    evaluatedAt: "2026-09-25T00:00:00Z",
+    ...overrides,
+  };
+}
+
+export function jobHistory(overrides: Partial<JobHistory> = {}): JobHistory {
+  return {
+    job: job(),
+    entry: queueEntry(),
+    lineage: [queueEntry()],
+    events: [],
+    reservations: [],
+    hostOperations: [],
+    requirements: [],
+    ...overrides,
+  };
 }

@@ -1,22 +1,32 @@
 import {
-  WEB_HOST_OPS_FAILED_OPERATION,
+  buildWebHostOpsFixture,
   WEB_HOST_OPS_PRINTER_FAILED,
   WEB_HOST_OPS_PRINTER_OCTOPRINT,
   WEB_HOST_OPS_PRINTER_READY_MULTI,
   WEB_HOST_OPS_PRINTER_READY_SINGLE,
+  WEB_HOST_OPS_UPLOAD_FAILED_PRINT,
+  WEB_HOST_OPS_UPLOAD_READY_MULTI,
 } from "../host-ops/web-fixtures";
+import type { HostOperation } from "../host-ops/types";
 import {
   WEB_SLICING_REVISION_EXTERNAL,
   WEB_SLICING_REVISION_FARM3D,
   WEB_SLICING_REVISION_FARM3D_OLDER,
 } from "../slicing/web-fixtures";
 import type {
+  Candidate,
   EligibilitySummary,
   Job,
+  JobEvent,
+  JobHistory,
   NextAutomaticAction,
+  PrinterEligibility,
   PrinterSnapshot,
   QueueEntry,
+  QueueEntryEligibility,
   ReconciliationRequirement,
+  Reservation,
+  SpoolOption,
 } from "./types";
 
 /** `just web`'s Queue/Job seed data (spec "Frontend architecture"): there
@@ -196,7 +206,11 @@ function printingJob(): Job {
     corrected: false,
     assignedBy: "automatic",
     startConfirmation: "unattended",
-    uploadHostOperationId: null,
+    // D7: `upload_host_operation_id` is set on `StageSucceeded` and never
+    // cleared. `active_host_operation_id` clears once its op (the start
+    // that put this Job in `printing`) resolves -- it's null again by the
+    // time the Job is mid-print.
+    uploadHostOperationId: WEB_HOST_OPS_UPLOAD_READY_MULTI,
     activeHostOperationId: null,
     hostPath: "farm3d/bracket-set.gcode",
     maxProgressPct: 42,
@@ -264,17 +278,20 @@ function deferredJob(): Job {
     corrected: false,
     assignedBy: "operator",
     startConfirmation: "bedClear",
-    uploadHostOperationId: null,
-    activeHostOperationId: WEB_HOST_OPS_FAILED_OPERATION,
+    // One consistent story (D7): the print started fine (this upload
+    // succeeded, then the start op it's linked to also succeeded), ran to
+    // 8%, and the *tracker* later found it `failed` in host history.
+    // `apply_host_outcome` only sets `lastFailure` for a `StageFailed`/
+    // `StartFailed` Host Operation, never for a tracker-discovered
+    // failure, and `active_host_operation_id` clears once its (terminal)
+    // op resolves -- so both are null/absent here, same as any other Job
+    // that made it into `printing` before failing.
+    uploadHostOperationId: WEB_HOST_OPS_UPLOAD_FAILED_PRINT,
+    activeHostOperationId: null,
     hostPath: "farm3d/enclosure-lid.gcode",
     maxProgressPct: 8,
     hostUnreachableSince: null,
-    lastFailure: {
-      kind: "hostOperationFailed",
-      at: "2026-09-24T09:09:00Z",
-      hostOperationId: WEB_HOST_OPS_FAILED_OPERATION,
-      failure: { code: "hostNotReady", message: "Klipper isn't running on the printer." },
-    },
+    lastFailure: null,
     startBlockers: [],
     allowedActions: ["retry", "settleMaterial"],
     createdAt: "2026-09-24T09:00:00Z",
@@ -341,4 +358,116 @@ export function buildWebQueueFixture(): WebQueueFixture {
   // fallback `list_queue` reports before the evaluator has run (D6, R3).
   const nextAutomaticAction: NextAutomaticAction = { kind: "evaluatorNotRunning" };
   return { entries, jobs, requirements, eligibility, nextAutomaticAction };
+}
+
+const WEB_QUEUE_PRINTER_NAMES: Record<string, string> = {
+  [WEB_HOST_OPS_PRINTER_READY_SINGLE]: "Moonraker — Bay 4",
+  [WEB_HOST_OPS_PRINTER_OCTOPRINT]: "OctoPrint — Bay 6",
+};
+
+function printerNameFor(printerId: string): string {
+  return WEB_QUEUE_PRINTER_NAMES[printerId] ?? printerId;
+}
+
+/** A stand-in candidate Spool for `explainWebQueueEntry` -- `list_queue`'s
+ *  own `EligibilitySummary` (what `buildWebQueueFixture` otherwise builds)
+ *  carries no Spool detail, so `explain_queue_entry`'s fuller
+ *  `QueueEntryEligibility` needs one to fill `Candidate.spool`. */
+const WEB_QUEUE_EXPLAIN_SPOOL: SpoolOption = { spoolId: "spl-web-1", spoolNumber: 1, loadedOnPrinter: false, availableMg: 812_000 };
+
+function explainCandidate(printerId: string, rank: number): Candidate {
+  return {
+    printerId,
+    printerName: printerNameFor(printerId),
+    rank,
+    spool: WEB_QUEUE_EXPLAIN_SPOOL,
+    spoolOptions: [WEB_QUEUE_EXPLAIN_SPOOL],
+    loadedMatch: false,
+    lastUsedAt: null,
+    manualFactsAcknowledgementRequired: false,
+  };
+}
+
+/** `explain_queue_entry`'s web-mode answer (fix round 1): built from the
+ *  same `EligibilitySummary` `buildWebQueueFixture()` already carries, so
+ *  the two always agree -- this never runs a fresh eligibility
+ *  computation, which stays Rust's job everywhere (constraint 4). `undefined`
+ *  for an entry with no summary (a `closed`/`assigned` entry, or an
+ *  unknown id), which `queue-store.ts` turns into `NOT_FOUND`. */
+export function explainWebQueueEntry(entryId: string): QueueEntryEligibility | undefined {
+  const fixture = buildWebQueueFixture();
+  const summary = fixture.eligibility.find((s) => s.entryId === entryId);
+  if (!summary) return undefined;
+  const blockers = summary.topBlocker ? [summary.topBlocker] : [];
+  const candidates = summary.candidatePrinterIds.map((printerId, index) => explainCandidate(printerId, index + 1));
+  const eligiblePrinters: PrinterEligibility[] = summary.candidatePrinterIds.map((printerId): PrinterEligibility => ({
+    printerId, printerName: printerNameFor(printerId), eligible: true, blockers: [],
+  }));
+  const blockedPrinters: PrinterEligibility[] = (summary.topBlocker?.printerIds ?? []).map((printerId): PrinterEligibility => ({
+    printerId, printerName: printerNameFor(printerId), eligible: false, blockers,
+  }));
+  return {
+    entryId,
+    verdict: summary.verdict,
+    candidates,
+    printers: [...eligiblePrinters, ...blockedPrinters],
+    blockers,
+    evaluatedAt: "2026-09-25T09:00:00Z",
+  };
+}
+
+function reservationStateFor(job: Job): Reservation["state"] {
+  switch (job.settlement) {
+    case "settled": return "consumed";
+    case "pending":
+    case "deferred": return "unresolved";
+    case "notRequired": return "released";
+    case "open": return "active";
+  }
+}
+
+/** `get_job_history`'s web-mode answer (fix round 1): the Job, its Queue
+ *  Entry, that entry's lineage, its Reconciliation Requirements, and its
+ *  linked Host Operations pulled from `host-ops/web-fixtures.ts` (never
+ *  duplicated here). The events/reservations views are minimal but
+ *  correctly typed -- this task ships no history screen to read them
+ *  (Tasks 14/15); a later task can enrich them once one does.
+ *  `undefined` for an unknown Job id, which `queue-store.ts` turns into
+ *  `NOT_FOUND`. */
+export function jobHistoryForWeb(jobId: string): JobHistory | undefined {
+  const fixture = buildWebQueueFixture();
+  const job = fixture.jobs.find((j) => j.id === jobId);
+  if (!job) return undefined;
+  const entry = fixture.entries.find((e) => e.id === job.queueEntryId);
+  if (!entry) return undefined;
+  const lineage = fixture.entries
+    .filter((e) => e.lineageId === entry.lineageId)
+    .sort((a, b) => a.copyIndex - b.copyIndex);
+  const requirements = fixture.requirements.filter((r) => r.jobId === jobId);
+  const linkedIds = new Set([job.uploadHostOperationId, job.activeHostOperationId].filter((id): id is string => id !== null));
+  const hostOperations: HostOperation[] = buildWebHostOpsFixture().hostOperations.filter((op) => linkedIds.has(op.id));
+  const reservationState = reservationStateFor(job);
+  const reservations: Reservation[] = [{
+    id: job.reservationId,
+    spoolId: job.spoolId,
+    holder: { kind: "job", id: job.id },
+    amountMg: job.estimateMg,
+    state: reservationState,
+    operationId: `${job.id}-assign`,
+    createdAt: job.createdAt,
+    ...(reservationState === "consumed" || reservationState === "released" ? { settledAt: job.updatedAt } : {}),
+  }];
+  const events: JobEvent[] = [{
+    id: `${job.id}-evt-assigned`,
+    jobId: job.id,
+    sequence: 1,
+    kind: "assigned",
+    fromState: null,
+    toState: "assigned",
+    operationId: null,
+    hostOperationId: null,
+    detail: null,
+    at: job.createdAt,
+  }];
+  return { job, entry, lineage, events, reservations, hostOperations, requirements };
 }

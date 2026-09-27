@@ -1,4 +1,8 @@
-import { WEB_SLICING_REVISION_FARM3D } from "../slicing/web-fixtures";
+import {
+  WEB_SLICING_REVISION_EXTERNAL,
+  WEB_SLICING_REVISION_FARM3D,
+  WEB_SLICING_REVISION_FARM3D_OLDER,
+} from "../slicing/web-fixtures";
 import type { ConnectionConfig } from "../printers/types";
 import type {
   AdapterCapabilityRow,
@@ -135,6 +139,18 @@ export const WEB_HOST_OPS_PRINTERS: WebHostOpsPrinter[] = [
 export const WEB_HOST_OPS_STAGED_OPERATION = "hop-web-finished-staged";
 export const WEB_HOST_OPS_FAILED_OPERATION = "hop-web-failed-start";
 export const WEB_HOST_OPS_UNCERTAIN_OPERATION = "hop-web-uncertain-upload";
+/** The succeeded upload behind P7's `queue/web-fixtures.ts` printing Job
+ *  (`job-web-printing`, on `WEB_HOST_OPS_PRINTER_READY_MULTI`): D7's
+ *  `upload_host_operation_id` is set on `StageSucceeded` and never
+ *  cleared, so a Job that's mid-print always has one. */
+export const WEB_HOST_OPS_UPLOAD_READY_MULTI = "hop-web-ready-multi-staged";
+/** As above, for P7's deferred/failed Job (`job-web-deferred`, on
+ *  `WEB_HOST_OPS_PRINTER_FAILED`): the print started (this upload
+ *  succeeded), ran to 8%, and the tracker later found it `failed` in
+ *  history -- D7's `apply_host_outcome` table never sets `lastFailure`
+ *  for a tracker-discovered failure, only for a `StageFailed`/
+ *  `StartFailed` Host Operation, so this Job's own start succeeded too. */
+export const WEB_HOST_OPS_UPLOAD_FAILED_PRINT = "hop-web-failed-printer-staged";
 
 const SIM_EVIDENCE: CapabilityEvidence = {
   source: "sim-runs/2026-09-01T00-00-00Z/manifest.json",
@@ -312,6 +328,58 @@ export function buildWebHostOpsFixture(): WebHostOpsFixture {
       uncertainSince: "2026-09-24T10:59:30Z",
       resolvedAt: null,
       jobId: null,
+    },
+    {
+      id: WEB_HOST_OPS_UPLOAD_READY_MULTI,
+      printerId: WEB_HOST_OPS_PRINTER_READY_MULTI,
+      kind: "upload",
+      state: "succeeded",
+      sliceRevisionId: WEB_SLICING_REVISION_FARM3D_OLDER,
+      sourceHostOperationId: null,
+      gcodeSha256: "2b3c4d5e6f7089a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901abcd23",
+      gcodeSize: 5_012_224,
+      hostPath: "farm3d/bracket-set.gcode",
+      endpoint: endpoint(),
+      failure: null,
+      resolution: { kind: "artifactVerified", reconciled: true },
+      attempts: 0,
+      lastAttempt: null,
+      noLongerPending: false,
+      abandonedAt: null,
+      abandonNote: null,
+      createdAt: "2026-09-25T07:55:00Z",
+      dispatchedAt: "2026-09-25T07:55:01Z",
+      uncertainSince: null,
+      resolvedAt: "2026-09-25T07:56:00Z",
+      // Matches `queue/web-fixtures.ts`'s `WEB_QUEUE_JOB_PRINTING` (a
+      // literal here, not an import, to avoid a `host-ops` <-> `queue`
+      // circular dependency).
+      jobId: "job-web-printing",
+    },
+    {
+      id: WEB_HOST_OPS_UPLOAD_FAILED_PRINT,
+      printerId: WEB_HOST_OPS_PRINTER_FAILED,
+      kind: "upload",
+      state: "succeeded",
+      sliceRevisionId: WEB_SLICING_REVISION_EXTERNAL,
+      sourceHostOperationId: null,
+      gcodeSha256: "3c4d5e6f7089a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901abcd234f",
+      gcodeSize: 1_884_160,
+      hostPath: "farm3d/enclosure-lid.gcode",
+      endpoint: endpoint(),
+      failure: null,
+      resolution: { kind: "artifactVerified", reconciled: true },
+      attempts: 0,
+      lastAttempt: null,
+      noLongerPending: false,
+      abandonedAt: null,
+      abandonNote: null,
+      createdAt: "2026-09-24T08:55:00Z",
+      dispatchedAt: "2026-09-24T08:55:01Z",
+      uncertainSince: null,
+      resolvedAt: "2026-09-24T08:56:00Z",
+      // Matches `queue/web-fixtures.ts`'s `WEB_QUEUE_JOB_DEFERRED`.
+      jobId: "job-web-deferred",
     },
   ];
 

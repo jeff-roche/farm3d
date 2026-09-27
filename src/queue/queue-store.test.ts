@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { eligibilitySummary, job, queueChange, queueEntry, queueSnapshot, reconciliationRequirement } from "./test-records";
+import {
+  eligibilitySummary,
+  job,
+  jobHistory,
+  queueChange,
+  queueEntry,
+  queueEntryEligibility,
+  queueSnapshot,
+  reconciliationRequirement,
+} from "./test-records";
 import type { Job, QueueEntry, QueueEvent } from "./types";
 
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
@@ -246,6 +255,29 @@ describe("startQueue (web)", () => {
     expect(queue.syncState()).toBe("current");
     expect(queue.entry(WEB_QUEUE_ENTRY_BLOCKED)).toBeDefined();
   });
+
+  it("tells one consistent D7 story for the printing and deferred Jobs (fix round 1)", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const { startQueue, queue } = await import("./queue-store");
+    const { WEB_QUEUE_JOB_PRINTING, WEB_QUEUE_JOB_DEFERRED } = await import("./web-fixtures");
+    await startQueue();
+
+    // A Job that's mid-print: its upload succeeded (never cleared, D7)
+    // and its start op is long since terminal (active_host_operation_id
+    // clears once its op resolves).
+    const printing = queue.job(WEB_QUEUE_JOB_PRINTING);
+    expect(printing?.uploadHostOperationId).not.toBeNull();
+    expect(printing?.activeHostOperationId).toBeNull();
+
+    // A Job the tracker found `failed` in host history: `lastFailure` is
+    // reserved for a StageFailed/StartFailed Host Operation (D3/D7), so a
+    // tracker-discovered failure carries none, and its upload still
+    // succeeded (the print did start).
+    const deferred = queue.job(WEB_QUEUE_JOB_DEFERRED);
+    expect(deferred?.uploadHostOperationId).not.toBeNull();
+    expect(deferred?.activeHostOperationId).toBeNull();
+    expect(deferred?.lastFailure).toBeNull();
+  });
 });
 
 describe("derived reads", () => {
@@ -395,5 +427,86 @@ describe("write actions (web)", () => {
     await expect(store.stageJob("job-1")).rejects.toMatchObject({ code: "PERSISTENCE_UNAVAILABLE" });
     await expect(store.settleJobMaterial("job-1", { kind: "defer" })).rejects.toMatchObject({ code: "PERSISTENCE_UNAVAILABLE" });
     expect(tauriMock.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("query wrappers (desktop)", () => {
+  const invoked = (name: string) => tauriMock.invoke.mock.calls.filter(([called]) => called === name).map(([, args]) => args as Record<string, unknown>);
+
+  it("explainQueueEntry invokes explain_queue_entry with just the entryId and returns the payload", async () => {
+    const eligibility = queueEntryEligibility({ entryId: "qen-1", verdict: "blocked" });
+    responders.explain_queue_entry = () => eligibility;
+    const store = await startedStore();
+    await expect(store.explainQueueEntry("qen-1")).resolves.toEqual(eligibility);
+    expect(invoked("explain_queue_entry")).toEqual([{ contractVersion: 1, entryId: "qen-1" }]);
+  });
+
+  it("explainQueueEntry has no operationId and is not retried on a CommandError", async () => {
+    responders.explain_queue_entry = () => { throw commandError("NOT_FOUND", "No such Queue Entry."); };
+    const store = await startedStore();
+    await expect(store.explainQueueEntry("qen-missing")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(invoked("explain_queue_entry")).toHaveLength(1);
+  });
+
+  it("getJobHistory invokes get_job_history with just the jobId and returns the payload", async () => {
+    const history = jobHistory({ job: job({ id: "job-1" }), entry: queueEntry({ id: "qen-1" }) });
+    responders.get_job_history = () => history;
+    const store = await startedStore();
+    await expect(store.getJobHistory("job-1")).resolves.toEqual(history);
+    expect(invoked("get_job_history")).toEqual([{ contractVersion: 1, jobId: "job-1" }]);
+  });
+
+  it("getJobHistory has no operationId and is not retried on a CommandError", async () => {
+    responders.get_job_history = () => { throw commandError("NOT_FOUND", "No such Job."); };
+    const store = await startedStore();
+    await expect(store.getJobHistory("job-missing")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(invoked("get_job_history")).toHaveLength(1);
+  });
+
+  it("retries a transport failure once (mirrors reconcileHostOperation's read pattern)", async () => {
+    let calls = 0;
+    const eligibility = queueEntryEligibility({ entryId: "qen-1" });
+    responders.explain_queue_entry = () => {
+      calls += 1;
+      if (calls === 1) throw new Error("socket closed");
+      return eligibility;
+    };
+    const store = await startedStore();
+    await expect(store.explainQueueEntry("qen-1")).resolves.toEqual(eligibility);
+    expect(invoked("explain_queue_entry")).toHaveLength(2);
+  });
+});
+
+describe("query wrappers (web)", () => {
+  it("explainQueueEntry is served from web-fixtures.ts instead of throwing", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const store = await import("./queue-store");
+    const { WEB_QUEUE_ENTRY_BLOCKED } = await import("./web-fixtures");
+    const result = await store.explainQueueEntry(WEB_QUEUE_ENTRY_BLOCKED);
+    expect(result.entryId).toBe(WEB_QUEUE_ENTRY_BLOCKED);
+    expect(result.verdict).toBe("blocked");
+    expect(tauriMock.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explainQueueEntry rejects NOT_FOUND for an id the fixture doesn't have", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const store = await import("./queue-store");
+    await expect(store.explainQueueEntry("qen-nonexistent")).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("getJobHistory is served from web-fixtures.ts instead of throwing", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const store = await import("./queue-store");
+    const { WEB_QUEUE_JOB_DEFERRED, WEB_QUEUE_ENTRY_HISTORY_DEFERRED } = await import("./web-fixtures");
+    const result = await store.getJobHistory(WEB_QUEUE_JOB_DEFERRED);
+    expect(result.job.id).toBe(WEB_QUEUE_JOB_DEFERRED);
+    expect(result.entry.id).toBe(WEB_QUEUE_ENTRY_HISTORY_DEFERRED);
+    expect(tauriMock.invoke).not.toHaveBeenCalled();
+  });
+
+  it("getJobHistory rejects NOT_FOUND for an id the fixture doesn't have", async () => {
+    tauriMock.isTauri.mockReturnValue(false);
+    const store = await import("./queue-store");
+    await expect(store.getJobHistory("job-nonexistent")).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

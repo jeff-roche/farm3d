@@ -19,10 +19,12 @@ import type {
   DispatchPreference,
   EligibilitySummary,
   Job,
+  JobHistory,
   NextAutomaticAction,
   PriorState,
   QueueChange,
   QueueEntry,
+  QueueEntryEligibility,
   ReconciliationRequirement,
   SettleChoice,
 } from "./types";
@@ -52,6 +54,41 @@ const [state, setState] = createStore<MockQueueState>(initialState());
 
 function emptyChange(): QueueChange {
   return { entries: [], jobs: [], requirements: [] };
+}
+
+/** Minimal-but-valid fallbacks for the two query mocks below, the same
+ *  role `host-ops-store-mock.ts`'s `mockRow` plays. */
+function mockJob(id: string): Job {
+  return {
+    id, revision: 1, queueEntryId: "qen-mock", sliceRevisionId: "slr-mock", printerId: "prn-mock",
+    printerSnapshot: {
+      name: "Mock Printer", location: null, catalogRef: null, adapterKind: null,
+      profile: {
+        bedShape: { kind: "rectangular", widthMm: 200, depthMm: 200, originXMm: 0, originYMm: 0 },
+        printableHeightMm: 200, bedExcludeAreas: [], defaultBedType: "0",
+        nozzleDiameterMm: [0.4], nozzleType: "brass", gcodeFlavor: "marlin2",
+        hasAuxiliaryFan: false, supportsAirFiltration: false, supportsMultiFilament: false,
+        suggestedHostType: null,
+      },
+    },
+    spoolId: "spl-mock", reservationId: "rsv-mock", estimateMg: 0, state: "assigned",
+    cancelReason: null, settlement: "open", settlementMethod: null, settlementPreview: null,
+    corrected: false, assignedBy: "operator", startConfirmation: null,
+    uploadHostOperationId: null, activeHostOperationId: null, hostPath: null, maxProgressPct: 0,
+    hostUnreachableSince: null, lastFailure: null, startBlockers: [], allowedActions: [],
+    createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z", startedAt: null, endedAt: null,
+  };
+}
+
+function mockEntry(id: string): QueueEntry {
+  return {
+    id, revision: 1, sliceRevisionId: "slr-mock", lineageId: "qln-mock", copyIndex: 1, copyCount: 1,
+    originEntryId: null, originKind: null, state: "assigned", closeReason: null, position: 1,
+    policy: "manual", preference: "loadedFirst", estimate: { amountMg: 1, source: "operatorEntered" },
+    manualPrinterId: null, jobId: null, requiresManualPrinterSelection: false, allowedActions: [],
+    display: { modelId: "mdl-mock", modelName: "Mock", plateLabel: null, targetLabel: "Mock", materialFamily: null, materialOther: null, printSeconds: null },
+    createdAt: "2026-09-25T00:00:00Z", updatedAt: "2026-09-25T00:00:00Z", closedAt: null,
+  };
 }
 
 export const queueStoreMock = {
@@ -92,6 +129,14 @@ export const queueStoreMock = {
   declareJobOutcome: vi.fn(async (_jobId: string, _outcome: DeclaredOutcome): Promise<QueueChange> => emptyChange()),
   settleJobMaterial: vi.fn(async (_jobId: string, _choice: SettleChoice): Promise<QueueChange> => emptyChange()),
   correctJobMaterial: vi.fn(async (_jobId: string, _entry: AmountEntry): Promise<QueueChange> => emptyChange()),
+  explainQueueEntry: vi.fn(async (entryId: string): Promise<QueueEntryEligibility> => ({
+    entryId, verdict: "blocked", candidates: [], printers: [], blockers: [], evaluatedAt: "2026-09-25T00:00:00Z",
+  })),
+  getJobHistory: vi.fn(async (jobId: string): Promise<JobHistory> => {
+    const job = mockJob(jobId);
+    const entry = mockEntry(job.queueEntryId);
+    return { job, entry, lineage: [entry], events: [], reservations: [], hostOperations: [], requirements: [] };
+  }),
 };
 
 /** Replaces (a slice of) the mock's state, as events settling into the real

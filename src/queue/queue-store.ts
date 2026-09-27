@@ -1,6 +1,7 @@
 import { createStore, reconcile } from "solid-js/store";
 import { command, desktopAvailable, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { createSequencedStream } from "../ipc/sequenced-stream";
+import type { CommandError } from "../generated/contracts/command/CommandError";
 import { isQueueEvent, isTerminalJobState } from "./types";
 import type {
   AmountEntry,
@@ -9,11 +10,13 @@ import type {
   DispatchPreference,
   EligibilitySummary,
   Job,
+  JobHistory,
   MaterialEstimate,
   NextAutomaticAction,
   PriorState,
   QueueChange,
   QueueEntry,
+  QueueEntryEligibility,
   QueueEvent,
   QueueSnapshot,
   ReconciliationRequirement,
@@ -317,4 +320,38 @@ export function settleJobMaterial(jobId: string, choice: SettleChoice): Promise<
 
 export function correctJobMaterial(jobId: string, entry: AmountEntry): Promise<QueueChange> {
   return write("Correcting a Job's material", (operationId) => command("correct_job_material", { operationId, jobId, entry }));
+}
+
+function notFound(what: string): CommandError {
+  return { contractVersion: 1, code: "NOT_FOUND", message: `${what} was not found.`, recovery: [], retryable: false };
+}
+
+/** `explain_queue_entry`: the full eligibility explanation for one entry
+ *  (D5). Read-only, so it has no `operationId` and never touches the
+ *  store. In web mode it's served from `web-fixtures.ts` instead of
+ *  refusing (fix round 1) -- unlike a write, nothing about it needs the
+ *  desktop app to answer honestly. */
+export function explainQueueEntry(entryId: string): Promise<QueueEntryEligibility> {
+  if (!desktopAvailable()) {
+    return import("./web-fixtures").then(({ explainWebQueueEntry }) => {
+      const result = explainWebQueueEntry(entryId);
+      if (!result) throw notFound(`Queue Entry ${entryId}`);
+      return result;
+    });
+  }
+  return retryOnTransportFailure(() => command("explain_queue_entry", { entryId }));
+}
+
+/** `get_job_history`: one Job's full timeline (D1). Read-only, so it has
+ *  no `operationId` and never touches the store. Web mode as above (fix
+ *  round 1). */
+export function getJobHistory(jobId: string): Promise<JobHistory> {
+  if (!desktopAvailable()) {
+    return import("./web-fixtures").then(({ jobHistoryForWeb }) => {
+      const result = jobHistoryForWeb(jobId);
+      if (!result) throw notFound(`Job ${jobId}`);
+      return result;
+    });
+  }
+  return retryOnTransportFailure(() => command("get_job_history", { jobId }));
 }

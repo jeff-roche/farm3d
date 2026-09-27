@@ -46,6 +46,9 @@ export type { ReconciliationRequirement } from "../generated/contracts/domain/Re
 export type { RequirementKind } from "../generated/contracts/domain/RequirementKind";
 export type { RequirementResolution } from "../generated/contracts/domain/RequirementResolution";
 export type { RequirementStatus } from "../generated/contracts/domain/RequirementStatus";
+export type { Reservation } from "../generated/contracts/domain/Reservation";
+export type { ReservationHolder } from "../generated/contracts/domain/ReservationHolder";
+export type { ReservationState } from "../generated/contracts/domain/ReservationState";
 export type { SettleChoice } from "../generated/contracts/domain/SettleChoice";
 export type { Settlement } from "../generated/contracts/domain/Settlement";
 export type { SettlementMethod } from "../generated/contracts/domain/SettlementMethod";
