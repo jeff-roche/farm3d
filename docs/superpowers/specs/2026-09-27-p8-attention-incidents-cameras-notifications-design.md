@@ -1051,9 +1051,10 @@ The candidate channel from the projector to the service is a `tokio`
 `broadcast` of each committed live pass's `Arc<AppliedChanges>`
 (`AttentionServices::subscribe_applied`), with a capacity of 64 passes;
 the capture hand-off subscribes to the same channel (decision 39). A
-receiver that lags drops the passes it missed (it logs a count) and never
-shows a stale Event late: the Event is still in the center. After `show`
-succeeds, the service writes `notified_at` on each
+notification receiver that lags drops the passes it missed (it logs a
+count) and never shows a stale Event late: the Event is still in the
+center. (The capture consumer instead re-derives the captures it missed
+from storage.) After `show` succeeds, the service writes `notified_at` on each
 Event it covered (no `revision` bump, no event).
 
 ### D7. Commands and events
@@ -2190,7 +2191,10 @@ Each departs from, or sharpens, the plan's Design reference.
     a `broadcast` of 64 committed passes, not an `mpsc` of 256
     candidates.** The notification service and the capture hand-off both
     subscribe to `AttentionServices::subscribe_applied`. A lagging
-    receiver drops what it missed and never shows a stale Event late.
+    notification receiver drops what it missed and never shows a stale
+    Event late; a lagging capture consumer re-derives the captures it
+    missed from storage
+    (`a_lagged_capture_consumer_rederives_the_captures_it_missed`).
 
 ## Residual risks
 
