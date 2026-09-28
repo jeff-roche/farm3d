@@ -7,9 +7,13 @@
 //! - `attention_tracer_runs_against_the_fakes` (CI): `FakeMoonraker` (the
 //!   dispatch rig's host), `FakeCamera` behind a host webcam the fake
 //!   lists, and a `RecordingSink`. The fake speaks HTTP only, so the real
-//!   supervisor never gets it Online; a cut is the fake refusing every
-//!   connection, and a restore stops the supervisor and seeds its live
-//!   status again.
+//!   supervisor never gets it Online: it classifies the fake as
+//!   unreachable whether or not it is cut. So on the fakes the cut and the
+//!   restore are synthetic at the connection layer (the fake refuses every
+//!   connection; a restore stops the supervisor and seeds the live status
+//!   again). They still drive the real supervisor's unreachable `error`
+//!   into the projector; dropping a live connection is the simulator
+//!   run's job.
 //! - `p8_attention_tracer_runs_against_the_simulator` (`#[ignore]`, the
 //!   evidence run `just test-sim` drives): the Moonraker simulator, its
 //!   `[webcam farm3d-sim]`, and the sim camera behind the fault proxy. The
@@ -26,10 +30,14 @@
 //! 1. Seed one Moonraker Printer with a host-webcam camera (`farm3d-sim`),
 //!    `offlineAfterMinutes: 1`, and notifications `follow`. Enable the
 //!    `connectivity` class (off by default; `printer.offline` is in it).
-//!    Set focus to unfocused. A second, connection-less Printer carries
-//!    the seeded-secret camera URL (userinfo, an RFC 5737 host, and a
-//!    query token), so every pass, command, and event runs with it in
-//!    place.
+//!    Set focus to unfocused. A second, connection-less Printer (the
+//!    decoy) has a manual camera URL on the backend's own camera with the
+//!    corpus's userinfo and query token. Its capture is refused before any
+//!    request (a URL with userinfo never reaches the network); then, with
+//!    the userinfo dropped, one capture fetches a real frame through the
+//!    token URL. On the fakes, the webcam list also carries the whole
+//!    corpus URL (with its RFC 5737 host); on the simulator that host is
+//!    scanned for but never seeded.
 //! 2. Cut the Printer. The real supervisor reports `error` with the
 //!    unreachable cause (asserted: the status, its message, and that it
 //!    projects to `printer.offline`, never `printer.connectionError`).
@@ -62,21 +70,22 @@
 //! 11. Pin the snapshot, capture a manual one, age the clock past the
 //!     retention, and run the janitor: the pinned snapshot survives; the
 //!     unpinned manual one is pruned, and its row stays.
-//! 12. Delete the Printer: `INCIDENT_HISTORY_EXISTS`. Archive it: the
-//!     `monitor/printer/<id>` target still resolves, and so does the
-//!     Incident's.
+//! 12. Cut the Printer again until a `printer.offline` Event is open.
+//!     Delete the Printer: `INCIDENT_HISTORY_EXISTS`. Archive it: the open
+//!     Event resolves `conditionCleared` (D8), the `monitor/printer/<id>`
+//!     target still resolves, and so does the Incident's.
 //! 13. At every step: no dedup key has two open Events; nothing of the
 //!     seeded-secret corpus or the camera's endpoint is in any emitted
 //!     event, navigation, notification, notifier log line, or command
 //!     response; and the camera has answered exactly the fetches farm3d was
-//!     asked for (an Incident's capture and one manual capture): no fetch
-//!     without a trigger.
+//!     asked for (the decoy's capture, an Incident's capture, and one manual
+//!     capture): no fetch without a trigger.
 
 mod common;
 mod p7_dispatch_rig;
 mod sim;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -115,7 +124,8 @@ const PAST_GRACE: Duration = Duration::from_secs(61);
 /// Past the default 30-day snapshot retention.
 const PAST_RETENTION: Duration = Duration::from_secs(31 * 24 * 60 * 60);
 
-/// The connection-less Printer that carries the seeded-secret camera URL.
+/// The connection-less Printer whose manual camera URL carries the
+/// corpus's userinfo and query token.
 const DECOY: &str = "prn-decoy";
 
 /// Global constraint 3's seeded-secret corpus (the one `p8_notifications.rs`
@@ -451,7 +461,7 @@ struct Tracer<'b, B: Backend> {
     /// The host view last seeded as the Printer's live status.
     seeded: RefCell<Option<(String, String, u64)>>,
     /// The camera fetches farm3d was asked for so far (step 13).
-    expected_camera_requests: RefCell<usize>,
+    expected_camera_requests: Cell<usize>,
     /// The camera's request count when the run began (the sim camera's
     /// count only grows while its container runs).
     camera_baseline: usize,
@@ -475,7 +485,7 @@ impl<'b, B: Backend> Tracer<'b, B> {
             navigations: Arc::new(Mutex::new(Vec::new())),
             responses: RefCell::new(Vec::new()),
             seeded: RefCell::new(None),
-            expected_camera_requests: RefCell::new(0),
+            expected_camera_requests: Cell::new(0),
             camera_baseline: backend.camera_requests(),
         }
     }
@@ -839,16 +849,21 @@ impl<'b, B: Backend> Tracer<'b, B> {
             scan("a command response", response);
         }
 
+        let answered = self.backend.camera_requests();
+        let expected = self.expected_camera_requests.get();
         assert_eq!(
-            self.backend.camera_requests() - self.camera_baseline,
-            *self.expected_camera_requests.borrow(),
-            "{at}: the camera answered a fetch nothing asked for (or missed one)"
+            answered.checked_sub(self.camera_baseline),
+            Some(expected),
+            "{at}: the camera answered {answered} requests since the run began at \
+             {}; farm3d was asked for {expected} fetches",
+            self.camera_baseline
         );
         self.backend.assert_camera_saw_no_credential();
     }
 
     fn expect_camera_fetch(&self) {
-        *self.expected_camera_requests.borrow_mut() += 1;
+        self.expected_camera_requests
+            .set(self.expected_camera_requests.get() + 1);
     }
 }
 
@@ -927,16 +942,48 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
             ..common::a_stored_printer(DECOY)
         })
         .unwrap();
-    app.storage
-        .write(|tx| {
-            tx.execute(
-                "INSERT INTO printer_cameras(printer_id, source_kind, snapshot_url, updated_at) \
-                 VALUES (?1, 'snapshotUrl', ?2, '2026-09-28T09:00:00.000Z')",
-                rusqlite::params![DECOY, SECRET_URL],
-            )?;
-            Ok(())
-        })
-        .unwrap();
+    // The decoy's camera: the backend's own camera, with the corpus's
+    // userinfo and token. Written as-is (validation refuses userinfo; the
+    // stored row is what's under test).
+    let authority = backend.camera_endpoint();
+    let decoy_url = |userinfo: &str| {
+        format!("http://{userinfo}{authority}/snapshot.jpg?token=tok-P8N-77")
+    };
+    let set_decoy_url = |url: String| {
+        app.storage
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO printer_cameras(printer_id, source_kind, snapshot_url, updated_at) \
+                     VALUES (?1, 'snapshotUrl', ?2, '2026-09-28T09:00:00.000Z') \
+                     ON CONFLICT(printer_id) DO UPDATE SET snapshot_url = excluded.snapshot_url",
+                    rusqlite::params![DECOY, url],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    };
+    set_decoy_url(decoy_url("operator:s3cr3t-P8N@"));
+    // With userinfo, the capture is refused before any request.
+    let refused = t
+        .call(
+            &app,
+            "capture_snapshot",
+            json!({"operationId": "trc-decoy-userinfo", "printerId": DECOY}),
+        )
+        .unwrap_err();
+    assert_eq!(refused["details"]["kind"], "noSnapshotUrl", "{refused}");
+    t.check(&app, "after the decoy's refused capture");
+    // With the token only, one real fetch through the corpus URL.
+    set_decoy_url(decoy_url(""));
+    let decoy = t.ok(
+        &app,
+        "capture_snapshot",
+        json!({"operationId": "trc-decoy", "printerId": DECOY}),
+    );
+    t.expect_camera_fetch();
+    assert_eq!(decoy["trigger"], "manual", "{decoy}");
+    assert_eq!(decoy["printerId"], DECOY, "{decoy}");
+    set_decoy_url(decoy_url("operator:s3cr3t-P8N@"));
     app.services.attention.poke();
     app.attention_pass();
     assert!(!app.services.notifications.focus().is_focused(), "unfocused");
@@ -1020,7 +1067,14 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     // 4. Restart, still cut: the backfill inserts nothing and nothing
     //    notifies, even past the grace again.
     let shown_before = t.sink.shown().len();
+    let before_restart = t.event(&app, &first.id);
     let (app, backfilled) = t.restart(app, PrinterStatus::new(ConnectionState::Offline));
+    // Before supervision restarts: the backfill (and the first pass, with
+    // the reach still inside the new grace) left the open Event as it was.
+    let after_backfill = t.event(&app, &first.id);
+    assert_eq!(after_backfill.revision, before_restart.revision, "{after_backfill:?}");
+    assert_eq!(after_backfill.resolved_at, None, "{after_backfill:?}");
+    assert_eq!(t.open(&app, ConditionKind::PrinterOffline).len(), 1);
     assert!(
         backfilled
             .events
@@ -1309,7 +1363,14 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     assert_eq!(gone["details"]["reason"], "age", "{gone}");
     t.check(&app, "after the janitor");
 
-    // 12. Delete is refused; archive keeps every target resolvable.
+    // 12. An open offline Event; delete is refused; archive resolves it
+    //     and keeps every target resolvable.
+    t.cut(&app);
+    app.attention_pass();
+    t.pass_the_grace(&app);
+    let open_offline = t.open(&app, ConditionKind::PrinterOffline);
+    assert_eq!(open_offline.len(), 1, "{open_offline:?}");
+    let archived_away = open_offline[0].clone();
     let revision = app.scalar(&format!("SELECT revision FROM printers WHERE id = '{PRINTER}'"));
     let refused = t
         .call(&app, "delete_printer", json!({"id": PRINTER, "expectedRevision": revision}))
@@ -1336,8 +1397,18 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
             .is_some(),
         "archived"
     );
+    // Archiving stopped the supervisor (`discard_connection`); the host
+    // comes back only so the simulator is left as it was found.
+    backend.uncut(&t.roots);
     app.services.attention.poke();
     app.attention_pass();
+    let resolved = t.event(&app, &archived_away.id);
+    assert_eq!(
+        resolved.resolution,
+        Some(AttentionResolution::ConditionCleared),
+        "D8: archiving resolves the Printer's open Events: {resolved:?}"
+    );
+    assert_eq!(resolved.recurrence_of.as_deref(), Some(recurrence.id.as_str()));
     let offline_event = t.event(&app, &first.id);
     let exists = app
         .storage
@@ -1365,7 +1436,11 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
 
     // 13. And at the end.
     t.check(&app, "at the end");
-    assert_eq!(*t.expected_camera_requests.borrow(), 2, "one Incident capture and one manual");
+    assert_eq!(
+        t.expected_camera_requests.get(),
+        3,
+        "the decoy's capture, one Incident capture, and one manual"
+    );
 }
 
 // ---------------------------------------------------------------------------
