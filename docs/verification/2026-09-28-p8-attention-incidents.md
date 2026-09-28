@@ -338,9 +338,10 @@ owner).
   Attention center.
 - **Settings export v3 and Printers export v4 are schema bumps** that
   P9's backup format must absorb (a P9 input).
-- **Batch create never pokes the queue evaluator.** Pre-existing and out
-  of P8's scope: batch create sends no `Trigger::PrinterChanged`, so new
-  Printers wait for the evaluator's next trigger.
+- ~~**Batch create never pokes the queue evaluator.**~~ Pre-existing, and
+  fixed after this gate run in `617f8d8`: a batch that creates any Printer
+  now sends `Trigger::PrinterChanged`, like every single-Printer command
+  (`p2_batch.rs` `a_batch_that_creates_a_printer_wakes_the_evaluator`).
 
 ## Follow-ups
 
@@ -360,9 +361,12 @@ owner).
   - Acknowledge and Resolve share one pending flag;
   - the `aria-live` region keeps only the last of several announcements
     made in the same tick.
-- **New in this gate run:** the main JS chunk (603 kB) now trips Vite's
-  600 kB warning. (`p8_setup.rs`'s unused `Rig::err` was removed in the
-  final-review fix wave.)
+- ~~**New in this gate run:** the main JS chunk (603 kB) now trips Vite's
+  600 kB warning.~~ Fixed after this gate run in `bfab050`: the Attention
+  center, the Event and Incident dock detail, and the Notifications and
+  retention dialog load lazily, and the main chunk is 583 kB with no
+  warning (545 kB before P8). (`p8_setup.rs`'s unused `Rig::err` was
+  removed in the final-review fix wave.)
 
 ## Documentation updated in this task
 
