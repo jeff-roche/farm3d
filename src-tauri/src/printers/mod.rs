@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+pub mod alerts;
 pub mod batch;
 pub mod commands;
 pub mod create;

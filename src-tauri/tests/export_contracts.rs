@@ -108,6 +108,7 @@ use farm3d_lib::printers::operational::{
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
+use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode};
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
@@ -654,6 +655,8 @@ fn export_registry() -> Vec<Export> {
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
+        export::<NotificationMode>(),
+        export::<AlertDefaults>(),
     ]
 }
 
