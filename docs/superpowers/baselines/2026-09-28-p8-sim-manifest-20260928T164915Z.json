@@ -1,0 +1,78 @@
+{
+  "recordedAt": "2026-09-28T16:49:15+00:00",
+  "engine": "podman",
+  "repoCommit": "9421414e12d2f8c429f4f4cb809fd030c1becf86",
+  "pins": {
+    "prindCommit": "80600f7d6f0d28d4d249728a054ac546a22743b9",
+    "klipperCommit": "ce7002bedf37e938bb483572949f3703ac6476cb"
+  },
+  "images": [
+    {
+      "ref": "docker.io/library/nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94",
+      "id": "43d9d8c1f8968f09df8c1aa6c136ecc617e62d64fe4c0b24c97de4eb210bd973",
+      "repoDigests": [
+        "docker.io/library/nginx@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94",
+        "docker.io/library/nginx@sha256:8f84ed99befc3891b8f329c5c202785278a2cfb7c25107d57fb2a134a3117433"
+      ]
+    },
+    {
+      "ref": "docker.io/mkuf/moonraker:v0.11.0-1-g1cfb0c4@sha256:c398e6e95def8f4112128ddf51d6dab3a7766e6ea28691e7b42f3bb98622a26d",
+      "id": "0236c28d23bb7b075f8a94e4f42e38a2a29292424a11a409e052ab94fde31fb3",
+      "repoDigests": [
+        "docker.io/mkuf/moonraker@sha256:0cf8693b2e5c356f92f637f0ceff35db86108b483f621503dae9fd5d383de223",
+        "docker.io/mkuf/moonraker@sha256:c398e6e95def8f4112128ddf51d6dab3a7766e6ea28691e7b42f3bb98622a26d"
+      ]
+    },
+    {
+      "ref": "docker.io/octoprint/octoprint:1.11.8@sha256:5ea0181e476597faa2800c991af4ce16903005f46b4c16666a4080ad606310bb",
+      "id": "6190bc936630b2156ae2cb29057f0d5df7b92f2f26d327739c84ff2109226b13",
+      "repoDigests": [
+        "docker.io/octoprint/octoprint@sha256:392bcadf7e5719fe9cbeae607c917a3ebd8915579d593ee9e91809defc15dd6a",
+        "docker.io/octoprint/octoprint@sha256:5ea0181e476597faa2800c991af4ce16903005f46b4c16666a4080ad606310bb"
+      ]
+    },
+    {
+      "ref": "ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e",
+      "id": "3edf5d14625b9aa8ad71d5dd084da1f8a0eb46ee749457549ae91d29d96546aa",
+      "repoDigests": [
+        "ghcr.io/shopify/toxiproxy@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e",
+        "ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8"
+      ]
+    },
+    {
+      "ref": "localhost/farm3d-simulavr:prind-80600f7-klipper-ce7002b",
+      "id": "7c3347af30ceb85c2f7eaf35571fade71c4b53b2e0763b8e8dd3cba5bdffd4ae",
+      "repoDigests": [
+        "localhost/farm3d-simulavr@sha256:d121e6e3b6673f312fa48b531aede3bff58e17477f78c6d9ae50f27971342830"
+      ]
+    }
+  ],
+  "reported": {
+    "moonraker": {
+      "moonraker": {
+        "moonrakerVersion": "v0.11.0-1-g1cfb0c4-prind",
+        "klipperVersion": "v0.13.0-770-gce7002bed-prind"
+      },
+      "moonraker-multi": {
+        "moonrakerVersion": "v0.11.0-1-g1cfb0c4-prind",
+        "klipperVersion": "v0.13.0-770-gce7002bed-prind"
+      }
+    },
+    "octoprintVersion": "1.11.8"
+  },
+  "configSha256": {
+    "compose.yaml": "510ae91f5ccee96be16c0c3649ce5d58d9832e651136e220911bc91c1f0ccc85",
+    "simctl": "9f6f73663b64b40520165ac1a1feefc82051c203e748b854c7f9560b055994f3",
+    "moonraker/klipper-entrypoint.sh": "2afa7510e0708cb44d7cec7597cb7bbb3163968ab4f418f98642333e90e5fbaa",
+    "moonraker/moonraker.conf": "840a590f97de22d57d452b4609702bf007982efec5464a065fbf37a1aaa54571",
+    "moonraker/moonraker-entrypoint.sh": "aa9ae18e677174eeb0a3e5c1374008cc827883c9f09b8efc2930e538bec6fb65",
+    "moonraker/moonraker-multi.conf": "19efa607e4378bf24c3b73b697d6041465c1f4abcfb27bf84ecac47f1921187a",
+    "moonraker/printer.cfg": "2c773413ca070190189bd9444ba6ea5fcae9685dc7505f75d5a630fe9fcbb463",
+    "moonraker/printer-multi.cfg": "abfd33ee8a55cb1efa54218949b828edb95b31e9ad3e6aff133370070fcf2b60",
+    "octoprint/config.yaml": "444b1fefca73aac398f7234ee34b24df572d32aa1ca32835488d9fe5957a286c",
+    "octoprint/entrypoint.sh": "dfd9853636794a739f0f44573231912a10b9f4c9700a8f0a64d4b022d43a7ba3",
+    "toxiproxy/toxiproxy.json": "c7c657efc6e89e14c9bc76daaaa242c6be100f94c89b3243880217079383f8c9",
+    "camera/nginx.conf": "5c71adb5bffd3fdb6aabef5e6086f21f179f9e62dd866545669b38e48e6d682e",
+    "camera/snapshot.jpg": "82d6874538ba8f20fe2d44394f09a4a0528ce86bcc0c3834385f2c5a4a3591d9"
+  }
+}
