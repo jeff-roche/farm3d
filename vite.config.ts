@@ -9,10 +9,14 @@ export default defineConfig(async () => ({
   plugins: [solid()],
 
   build: {
-    // Only the three.js chunk (~557 kB) is above Vite's 500 kB default. It
-    // is loaded lazily, when a 3D viewport first mounts
-    // (src/slicing/viewport/renderer-factory.ts); the main chunk stays
-    // under 500 kB.
+    // The three.js chunk (~557 kB) is above Vite's 500 kB default. It is
+    // loaded lazily, when a 3D viewport first mounts
+    // (src/slicing/viewport/renderer-factory.ts). The main chunk is ~583 kB
+    // (measured on this branch after P8's Attention/Incidents/Notifications
+    // screens were split into their own lazy chunks -- AttentionCenter,
+    // AttentionEventDetail, IncidentDetail, NotificationSettingsDialog --
+    // up from ~545 kB before P8; getting it back under 500 kB would need
+    // trimming pre-existing main-chunk code too, not just P8's additions).
     chunkSizeWarningLimit: 600,
   },
 

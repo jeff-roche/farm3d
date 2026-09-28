@@ -3,8 +3,6 @@ import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { attention } from "../attention/attention-store";
-import { AttentionEventDetail } from "./AttentionEventDetail";
-import { IncidentDetail } from "./IncidentDetail";
 import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
@@ -14,8 +12,11 @@ import { MonitorQueueDock } from "./MonitorQueueDock";
 import { queue } from "../queue/queue-store";
 import styles from "./PrinterDashboard.module.css";
 
-// The batch dialog loads on first use, keeping it out of the main chunk.
+// The batch dialog and the Attention Event/Incident dock detail all load
+// on first use, keeping them out of the main chunk.
 const PrinterBatchDialog = lazy(() => import("./PrinterBatchDialog").then((m) => ({ default: m.PrinterBatchDialog })));
+const AttentionEventDetail = lazy(() => import("./AttentionEventDetail").then((m) => ({ default: m.AttentionEventDetail })));
+const IncidentDetail = lazy(() => import("./IncidentDetail").then((m) => ({ default: m.IncidentDetail })));
 
 export interface PrinterDashboardProps {
   store: MonitorStore;
@@ -229,20 +230,24 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
         />
         <Show when={selectedAttentionEvent()}>
           {(event) => (
-            <AttentionEventDetail
-              event={event()}
-              mode={dockMode()}
-              onClose={() => props.onAttentionEventClose?.()}
-            />
+            <Suspense fallback={<p class={styles.loadingNotice} role="status">Loading…</p>}>
+              <AttentionEventDetail
+                event={event()}
+                mode={dockMode()}
+                onClose={() => props.onAttentionEventClose?.()}
+              />
+            </Suspense>
           )}
         </Show>
         <Show when={props.incidentId}>
           {(incidentId) => (
-            <IncidentDetail
-              incidentId={incidentId()}
-              mode={dockMode()}
-              onClose={() => props.onIncidentClose?.()}
-            />
+            <Suspense fallback={<p class={styles.loadingNotice} role="status">Loading…</p>}>
+              <IncidentDetail
+                incidentId={incidentId()}
+                mode={dockMode()}
+                onClose={() => props.onIncidentClose?.()}
+              />
+            </Suspense>
           )}
         </Show>
         <Show when={showQueueDock()}>

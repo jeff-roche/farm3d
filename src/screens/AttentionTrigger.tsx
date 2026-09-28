@@ -1,12 +1,16 @@
 import { Popover as KPopover } from "@kobalte/core/popover";
-import { createEffect, createSignal, on, Show } from "solid-js";
+import { createEffect, createSignal, lazy, on, Show, Suspense } from "solid-js";
 import { SeverityMarker } from "../design-system";
 import { attention, attentionCenterRequest } from "../attention/attention-store";
 import { attentionSeverityLabel, DEFAULT_ATTENTION_FILTER, type AttentionFilter, type AttentionSeverityFilter } from "../attention/presentation";
 import type { AttentionEvent } from "../attention/types";
 import { navigation, serializeNavigationTarget } from "../navigation/navigation-store";
-import { AttentionCenter } from "./AttentionCenter";
 import styles from "./AttentionTrigger.module.css";
+
+// The Attention center's content loads on first open, keeping it out of
+// the main chunk -- the portalled Popover content already unmounts when
+// closed, so this only defers the chunk fetch to the same moment.
+const AttentionCenter = lazy(() => import("./AttentionCenter").then((m) => ({ default: m.AttentionCenter })));
 
 /** "Attention: N actionable, highest <severity word>" or "Attention:
  *  nothing needs action" (spec "Accessibility and adaptation"). */
@@ -88,13 +92,15 @@ export function AttentionTrigger() {
         </KPopover.Trigger>
         <KPopover.Portal>
           <KPopover.Content class={styles.content}>
-            <AttentionCenter
-              filter={filter()}
-              onFilterChange={setFilter}
-              severityFilter={severityFilter()}
-              onSeverityFilterChange={setSeverityFilter}
-              onSelect={selectEvent}
-            />
+            <Suspense fallback={<p class={styles.loading} role="status">Loading…</p>}>
+              <AttentionCenter
+                filter={filter()}
+                onFilterChange={setFilter}
+                severityFilter={severityFilter()}
+                onSeverityFilterChange={setSeverityFilter}
+                onSelect={selectEvent}
+              />
+            </Suspense>
           </KPopover.Content>
         </KPopover.Portal>
       </KPopover>
