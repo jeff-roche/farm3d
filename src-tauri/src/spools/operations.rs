@@ -74,6 +74,24 @@ pub enum OperationKind {
     SettleJobMaterial,
     /// P7 D4: `correct_job_material`.
     CorrectJobMaterial,
+    /// P8 D9: `mark_attention_read`.
+    MarkAttentionRead,
+    /// P8 D9: `acknowledge_attention_event`.
+    AcknowledgeAttention,
+    /// P8 D9: `resolve_attention_event`.
+    ResolveAttention,
+    /// P8 D9: `add_incident_note`.
+    AddIncidentNote,
+    /// P8 D9: `set_printer_camera`.
+    SetPrinterCamera,
+    /// P8 D9: `clear_printer_camera`.
+    ClearPrinterCamera,
+    /// P8 D9: `capture_snapshot`.
+    CaptureSnapshot,
+    /// P8 D9: `set_snapshot_pinned`.
+    SetSnapshotPinned,
+    /// P8 D9: `set_printer_alert_defaults`.
+    SetPrinterAlertDefaults,
 }
 
 /// What [`claim`] found.

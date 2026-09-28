@@ -2,6 +2,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use farm3d_lib::attention::lifecycle::AckBy;
+use farm3d_lib::attention::{
+    AttentionAction, AttentionBackfill, AttentionChange, AttentionCursor, AttentionDetail,
+    AttentionEvent, AttentionOrigin, AttentionResolution, AttentionSeverity, AttentionSource,
+    AttentionSourceKind, AttentionSubject, ConditionKind, EvidenceOutcome,
+    MaterialReconciliationStatus, NotificationClass, PrinterConnectionErrorCause, ResolutionMode,
+};
+use farm3d_lib::cameras::{
+    CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
+    CameraSource, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam, MediaUsage,
+    PrinterCamera, PruneReason, SnapshotTrigger,
+};
 use farm3d_lib::catalog::commands::{CatalogInfo, CatalogModelSummary, CatalogVariantSummary};
 use farm3d_lib::catalog::resolve::{
     CatalogStatus, ProfileDrift, ProfileResolution, ResolvedPrinter,
@@ -40,6 +52,10 @@ use farm3d_lib::host_ops::{
     HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
     HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
 };
+use farm3d_lib::incidents::{
+    Incident, IncidentDetail, IncidentEntry, IncidentEntryDetail, IncidentEntryKind, IncidentKind,
+    IncidentPage, IncidentState, IncidentTimelineItem,
+};
 use farm3d_lib::jobs::{
     AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
@@ -72,6 +88,7 @@ use farm3d_lib::library::{
     ModelSourceRevisionRecord, ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin,
     SourceState, StorageMode, WatchMode,
 };
+use farm3d_lib::notifications::{NavigateRequest, NotifierStatus, NotifierUnavailableReason};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -591,6 +608,51 @@ fn export_registry() -> Vec<Export> {
         export::<ReconciliationRequirement>(),
         export::<JobHistory>(),
         export::<SettleChoice>(),
+        export::<ConditionKind>(),
+        export::<AttentionSeverity>(),
+        export::<ResolutionMode>(),
+        export::<AttentionResolution>(),
+        export::<AttentionOrigin>(),
+        export::<AttentionSourceKind>(),
+        export::<AttentionSource>(),
+        export::<NotificationClass>(),
+        export::<AttentionSubject>(),
+        export::<PrinterConnectionErrorCause>(),
+        export::<MaterialReconciliationStatus>(),
+        export::<AttentionDetail>(),
+        export::<AttentionAction>(),
+        export::<AttentionEvent>(),
+        export::<AttentionCursor>(),
+        export::<AttentionChange>(),
+        export::<AckBy>(),
+        export::<CameraSourceKind>(),
+        export::<CameraSource>(),
+        export::<PrinterCamera>(),
+        export::<HostWebcam>(),
+        export::<CameraErrorKind>(),
+        export::<CameraHealthState>(),
+        export::<CameraHealth>(),
+        export::<SnapshotTrigger>(),
+        export::<PruneReason>(),
+        export::<EvidenceSkipReason>(),
+        export::<EvidenceOutcome>(),
+        export::<CameraContentType>(),
+        export::<CameraSnapshot>(),
+        export::<MediaUsage>(),
+        export::<FrameHeader>(),
+        export::<AttentionBackfill>(),
+        export::<IncidentState>(),
+        export::<IncidentKind>(),
+        export::<Incident>(),
+        export::<IncidentEntryKind>(),
+        export::<IncidentEntryDetail>(),
+        export::<IncidentEntry>(),
+        export::<IncidentTimelineItem>(),
+        export::<IncidentDetail>(),
+        export::<IncidentPage>(),
+        export::<NotifierUnavailableReason>(),
+        export::<NotifierStatus>(),
+        export::<NavigateRequest>(),
     ]
 }
 

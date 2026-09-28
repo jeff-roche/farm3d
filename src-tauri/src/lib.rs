@@ -1,12 +1,16 @@
+pub mod attention;
 pub mod bootstrap;
+pub mod cameras;
 pub mod catalog;
 pub mod connections;
 pub mod contracts;
 pub mod document_io;
 mod file_links;
 pub mod host_ops;
+pub mod incidents;
 pub mod jobs;
 pub mod library;
+pub mod notifications;
 pub mod persistence;
 pub mod printers;
 pub mod queue;
