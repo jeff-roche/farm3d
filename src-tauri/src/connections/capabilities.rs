@@ -998,8 +998,9 @@ mod tests {
         }
     }
 
-    /// D6 rule 6 still applies over the evidence: the simulator has no
-    /// webcam, so with its host facts `camera` is a host limit.
+    /// D6 rule 6 still applies over the evidence: on a host that lists no
+    /// webcam (the four-toolhead simulator, spike Gate H), `camera` is a
+    /// host limit.
     #[test]
     fn moonraker_host_rules_apply_over_its_evidence() {
         let facts = HostFacts {

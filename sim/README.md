@@ -35,7 +35,8 @@ Needs Linux, Docker or podman with a compose tool (`docker compose`,
 | `moonraker` | `127.0.0.1:27125` | `127.0.0.1:27126` | Klipper on simulavr, one extruder and a heated bed ([`moonraker/printer.cfg`](moonraker/printer.cfg)), behind Moonraker |
 | `moonraker-multi` | `127.0.0.1:27135` | `127.0.0.1:27136` | The same with four toolheads, `extruder` to `extruder3` ([`moonraker/printer-multi.cfg`](moonraker/printer-multi.cfg)) |
 | `octoprint` | `127.0.0.1:25000` | `127.0.0.1:25001` | OctoPrint 1.11.8 with its Virtual Printer attached; API key `farm3d-sim-octoprint-key-0123456789` (a fixture, not a secret) |
-| `toxiproxy` | — | `127.0.0.1:28474` | The fault proxy that owns ports 27125, 27135, and 25000 |
+| `camera` | `127.0.0.1:28080` | `127.0.0.1:28081` | A static snapshot camera (nginx) serving the committed synthetic test pattern [`camera/snapshot.jpg`](camera/snapshot.jpg); see [the sim camera](#the-sim-camera) |
+| `toxiproxy` | — | `127.0.0.1:28474` | The fault proxy that owns ports 27125, 27135, 25000, and 28080 |
 | ElegooLink | in-process | — | A fake SDCP server inside the Rust tests; see [`elegoolink/README.md`](elegoolink/README.md) |
 
 Everything binds loopback only and uses host networking, so the ports are
@@ -47,6 +48,31 @@ readings, heaters cannot really heat (keep targets at 0 or 1 °C, or
 Klipper's heater check shuts it down), and simulavr cannot reset its MCU:
 `FIRMWARE_RESTART` does not recover a shut-down Klipper, so the harness
 restarts the Klipper container instead.
+
+## The sim camera
+
+P8's camera evidence. The single-extruder Moonraker simulator's
+[`moonraker.conf`](moonraker/moonraker.conf) has a `[webcam farm3d-sim]`
+section whose `snapshot_url` is the camera through the fault proxy
+(`http://127.0.0.1:28080/snapshot.jpg`, an absolute URL on the
+Connection's own host). So `server.webcams.list` on `moonraker` now
+answers one webcam (`farm3d-sim`, `mjpegstreamer-adaptive`), and a
+host-webcam camera source on that simulator resolves and fetches a real
+frame. `moonraker-multi` still lists none.
+
+- The image is `nginx`, pinned by digest, with
+  [`camera/nginx.conf`](camera/nginx.conf). It binds 127.0.0.1 only and
+  serves exactly two paths: `/snapshot.jpg` (the test pattern) and
+  `/healthz` (readiness, `204`).
+- `snapshot.jpg` is a generated colour-bar test pattern (320×240, no
+  metadata), never a photo or a frame from real hardware.
+- Every `/snapshot.jpg` request is logged inside the container.
+  `sim/simctl camera-requests` prints how many there have been since the
+  container started, so a test can prove farm3d fetched no frame without
+  a trigger. Compare counts before and after; the count never resets
+  while the container runs.
+- `just sim fault host-down camera` (and `slow`, `cut`, `hang`, `clear`)
+  fault the camera like any other proxied simulator.
 
 ## Driving the simulators
 
@@ -60,10 +86,12 @@ just sim fault host-down octoprint          # the proxy refuses connections
 just sim fault slow moonraker 2000          # 2 s of latency on every response
 just sim fault cut moonraker 400            # close after 400 response bytes
 just sim fault hang moonraker               # connections stay open, nothing arrives
+just sim fault host-down camera             # the camera stops answering
 just sim fault clear                        # remove every fault
 just sim reset                              # clear faults, restore the variant, recover Klipper
 just sim logs moonraker
 just sim manifest
+just sim camera-requests                    # snapshot GETs the camera has answered
 ```
 
 Keep `slow` latency below the adapter's timeouts. Toxiproxy cannot drop a
@@ -92,7 +120,9 @@ key; `sim/simctl env` then also exports `FARM3D_SIM_MOONRAKER_API_KEY`.
 ## The Rust harness
 
 `src-tauri/tests/sim/` is the shared harness, and `sim_moonraker.rs`,
-`sim_octoprint.rs`, and `sim_elegoolink.rs` are the tests. The harness
+`sim_octoprint.rs`, and `sim_elegoolink.rs` are the tests. `just test-sim`
+also runs the tracers' simulator entry points (`p6_tracer.rs`,
+`p7_tracer.rs`, and `p8_tracer.rs`, which uses the sim camera). The harness
 finds the simulators through the `FARM3D_SIM_*` variables that
 `sim/simctl env` prints, and `just test-sim` sets them. Rules every test
 follows:

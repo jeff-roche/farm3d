@@ -13,6 +13,8 @@
 #   27136  Moonraker, four toolheads, direct          <- harness control path
 #   25000  OctoPrint through the fault proxy          <- tests connect here
 #   25001  OctoPrint direct                            <- harness control path
+#   28080  Camera through the fault proxy             <- farm3d fetches here
+#   28081  Camera direct                               <- harness readiness
 #   28474  Toxiproxy API                               <- fault injection
 #
 # Host networking is deliberate: rootless podman without a usable
@@ -142,6 +144,25 @@ services:
       timeout: 3s
       retries: 60
       start_period: 10s
+
+  # --- A static snapshot camera (sim/camera/, P8) ---
+  # Serves the committed synthetic test pattern `snapshot.jpg`. The Moonraker
+  # simulator's `[webcam farm3d-sim]` names it through the fault proxy
+  # (28080). Every snapshot GET is logged inside the container for
+  # `sim/simctl camera-requests`.
+  camera:
+    image: docker.io/library/nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+    network_mode: host
+    entrypoint: ["nginx", "-c", "/farm3d-sim/nginx.conf", "-g", "daemon off;"]
+    init: true
+    stop_grace_period: 3s
+    volumes:
+      - ./camera:/farm3d-sim:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:28081/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
   # --- The fault proxy in front of every simulator (sim/toxiproxy/) ---
   toxiproxy:

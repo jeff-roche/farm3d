@@ -642,6 +642,7 @@ impl CaptureRig {
                 },
                 clock: None,
                 cameras: Some(cameras),
+                notifications: None,
             },
         );
         app.attention_pass();

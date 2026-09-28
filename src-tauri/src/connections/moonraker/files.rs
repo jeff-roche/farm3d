@@ -1190,8 +1190,9 @@ mod tests {
 
     #[test]
     fn webcams_keep_name_and_service_and_discard_urls() {
-        // Synthetic (the simulator has no webcam): Moonraker's webcam entry
-        // shape, with an RFC 5737 address standing in for a LAN one.
+        // Synthetic: Moonraker's webcam entry shape as a real host lists it
+        // (an absolute URL and a relative one), with an RFC 5737 address
+        // standing in for a LAN one.
         let body = json!({"result": {"webcams": [
             {"name": "front", "service": "webrtc-camerastreamer", "enabled": true,
              "stream_url": "http://192.0.2.10/webcam/webrtc",

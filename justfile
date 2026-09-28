@@ -27,7 +27,7 @@ test-orca:
         --test p5_runtime_presets --test p5_geometry --test p5_process --test p5_publish --test p5_slicing --test p5_tracer \
         real_orca -- --ignored --test-threads=1
 
-# Run the ignored A0.1 Moonraker live checks: probe (read-only), watch (read-only), or drive (sends M112/FIRMWARE_RESTART). FARM3D_MOONRAKER_HOST names the instance
+# Run the ignored A0.1 Moonraker live checks: probe (read-only), watch (read-only), camera (read-only: the webcam list and one snapshot GET), or drive (sends M112/FIRMWARE_RESTART). FARM3D_MOONRAKER_HOST names the instance
 moonraker-live mode="probe":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -38,8 +38,9 @@ moonraker-live mode="probe":
     case "{{ mode }}" in
         probe) test=live_probe ;;
         watch) test=live_watch ;;
+        camera) test=live_camera ;;
         drive) test=live_lifecycle_drive ;;
-        *) echo "error: mode must be probe, watch, or drive" >&2; exit 2 ;;
+        *) echo "error: mode must be probe, watch, camera, or drive" >&2; exit 2 ;;
     esac
     cargo test --manifest-path src-tauri/Cargo.toml --test a0_moonraker_live "$test" \
         -- --ignored --exact --nocapture
@@ -161,7 +162,7 @@ test-sim:
     sim/simctl manifest >"$out/manifest.json"
     echo "test-sim: recording to $out"
     cargo test --manifest-path src-tauri/Cargo.toml \
-        --test sim_moonraker --test sim_octoprint --test sim_elegoolink --test p6_tracer --test p7_tracer \
+        --test sim_moonraker --test sim_octoprint --test sim_elegoolink --test p6_tracer --test p7_tracer --test p8_tracer \
         -- --include-ignored --test-threads=1 --nocapture 2>&1 | tee "$out/test.log"
 
 # Fail if a tracked or staged file names one of the owner's private hosts (listed in FARM3D_PRIVATE_HOSTS or an untracked .private-hosts file)

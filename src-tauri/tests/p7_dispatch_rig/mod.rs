@@ -28,10 +28,8 @@ use farm3d_lib::connections::capabilities::{
 };
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
-use farm3d_lib::connections::supervisor::{ConnectionManager, STATUS_EVENT};
-use farm3d_lib::connections::{
-    ConnectionConfig, ConnectionState, PrinterConnection, PrinterStatus, MOONRAKER_KIND,
-};
+use farm3d_lib::connections::supervisor::{build_connection, ConnectionManager, STATUS_EVENT};
+use farm3d_lib::connections::{ConnectionConfig, ConnectionState, PrinterStatus, MOONRAKER_KIND};
 use chrono::{DateTime, Utc};
 use farm3d_lib::host_ops::repository as host_ops_repo;
 use farm3d_lib::jobs::{JobServices, JobTimings};
@@ -253,13 +251,6 @@ fn rig_host_ops_timings() -> HostOpsTimings {
         backoff: |_| Duration::from_secs(3600),
         ..HostOpsTimings::default()
     }
-}
-
-fn unused_factory(
-    _config: &ConnectionConfig,
-    _key: Option<zeroize::Zeroizing<String>>,
-) -> Option<Box<dyn PrinterConnection>> {
-    None
 }
 
 /// The adapter's and host operations' timings, and how long any one wait
@@ -525,6 +516,7 @@ impl Drop for Running {
         self.services.jobs.stop();
         self.services.attention.stop();
         self.services.cameras.stop();
+        self.services.notifications.stop();
     }
 }
 
@@ -586,6 +578,16 @@ pub struct AttentionBoot {
     /// `MediaJanitor`) with these timings, before the projector, as
     /// `build_runtime_services` does; `None` leaves captures off.
     pub cameras: Option<farm3d_lib::cameras::services::CameraTimings>,
+    /// P8 Task 16: `Some` starts the notification runtime over this sink
+    /// and window control, before the projector, as
+    /// `build_runtime_services` does; `None` leaves it off.
+    pub notifications: Option<NotificationBoot>,
+}
+
+/// P8 Task 16: what the notification runtime shows through and raises.
+pub struct NotificationBoot {
+    pub sink: Arc<dyn farm3d_lib::notifications::NotificationSink>,
+    pub control: Arc<dyn farm3d_lib::notifications::activation::WindowControl>,
 }
 
 /// [`boot_tuned`] with the Attention projector as `build_runtime_services`
@@ -642,6 +644,11 @@ fn boot_inner(
     let host_ops_timings = roots.timings.host_ops;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let camera_timings = attention.as_ref().and_then(|boot| boot.cameras);
+    let notification_boot = attention.as_ref().and_then(|boot| {
+        boot.notifications
+            .as_ref()
+            .map(|notifications| (Arc::clone(&notifications.sink), Arc::clone(&notifications.control)))
+    });
     let attention_services = attention.as_ref().map(|boot| {
         Arc::new(AttentionServices::with_clock(
             boot.timings,
@@ -688,11 +695,19 @@ fn boot_inner(
             farm3d_lib::cameras::commands::set_snapshot_pinned,
             farm3d_lib::cameras::commands::media_usage,
             farm3d_lib::connections::commands::printer_statuses,
+            farm3d_lib::cameras::commands::get_printer_camera,
+            farm3d_lib::printers::alerts::get_printer_alert_defaults,
+            farm3d_lib::printers::alerts::set_printer_alert_defaults,
+            farm3d_lib::settings::commands::load_settings,
+            farm3d_lib::settings::commands::save_settings,
         ],
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
         roots.credentials.path().to_path_buf(),
-        unused_factory,
+        // The production adapters. Only P8's tracer ever starts the
+        // supervisor (around its offline cuts); every other rig user seeds
+        // the Printer's live status instead.
+        build_connection,
         move |services| {
             services.host_ops = Arc::new(HostOperationServices::new(
                 Arc::clone(&services.storage),
@@ -732,6 +747,14 @@ fn boot_inner(
             services.cameras.apply_startup_sweep(swept);
             // Before the projector, so its first pass's captures are heard.
             farm3d_lib::start_camera_runtime(&services, app.handle());
+        }
+        if let Some((sink, control)) = notification_boot {
+            // Before `start`, so neither the platform sink nor the main
+            // window is ever reached; before the projector, so its first
+            // live pass is heard.
+            services.notifications.set_sink(sink);
+            services.notifications.set_window_control(control);
+            farm3d_lib::start_notification_runtime(&services, app.handle());
         }
         farm3d_lib::start_attention_runtime(&services, app.handle());
     }

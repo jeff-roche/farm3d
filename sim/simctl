@@ -10,6 +10,8 @@
 #   wait [seconds]     wait until every simulator is ready (default 180)
 #   env                print the FARM3D_SIM_* variables the Rust harness reads
 #   manifest           print a JSON record of images, digests, versions, config hashes
+#   camera-requests    print how many snapshot GETs the sim camera has answered
+#                      since it started (its access log; /healthz is not counted)
 #   reset              clear all faults, restore the moonraker variant, restart any
 #                      Klipper that is not ready, wait
 #   logs <service>     service logs (a compose service name, or simulavr[-multi])
@@ -33,9 +35,10 @@
 #   fault hang <sim>              responses stop arriving; connections stay open
 #   fault clear [sim]             remove every fault (all simulators by default)
 #
-# <sim> is moonraker (one extruder), moonraker-multi (four toolheads), or
-# octoprint; [sim] defaults to moonraker. ElegooLink has no container: its
-# fake SDCP server runs inside the Rust tests (sim/elegoolink/README.md).
+# <sim> is moonraker (one extruder), moonraker-multi (four toolheads),
+# octoprint, or camera (not the klipper-* faults); [sim] defaults to
+# moonraker. ElegooLink has no container: its fake SDCP server runs inside
+# the Rust tests (sim/elegoolink/README.md).
 #
 # Environment:
 #   FARM3D_SIM_ENGINE   docker or podman (default: podman if installed, else docker)
@@ -61,9 +64,14 @@ octoprint_control_url=http://127.0.0.1:25001
 # A published test fixture, not a secret: the simulator listens on loopback.
 octoprint_api_key=farm3d-sim-octoprint-key-0123456789
 toxiproxy_url=http://127.0.0.1:28474
+# The static snapshot camera (P8). farm3d fetches through the proxy; the
+# harness checks readiness on the direct port.
+camera_url=http://127.0.0.1:28080
+camera_control_url=http://127.0.0.1:28081
+camera_access_log=/tmp/farm3d-camera-access.log
 
 moonraker_sims=(moonraker moonraker-multi)
-proxies=(moonraker moonraker-multi octoprint)
+proxies=(moonraker moonraker-multi octoprint camera)
 
 die() {
     echo "simctl: $*" >&2
@@ -123,8 +131,8 @@ moonraker_sim_arg() {
 
 proxy_arg() {
     case "${1:-}" in
-    moonraker | moonraker-multi | octoprint) echo "$1" ;;
-    *) die "name a simulator: moonraker, moonraker-multi, or octoprint" ;;
+    moonraker | moonraker-multi | octoprint | camera) echo "$1" ;;
+    *) die "name a simulator: moonraker, moonraker-multi, octoprint, or camera" ;;
     esac
 }
 
@@ -224,6 +232,20 @@ octoprint_state() {
         json_get "d['current']['state']"
 }
 
+camera_state() {
+    # "ready" once the camera answers its readiness path directly.
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$camera_control_url/healthz" 2>/dev/null)" = 204 ]; then
+        echo ready
+    fi
+}
+
+# How many snapshot GETs the camera has answered since its container
+# started: the lines of its access log (sim/camera/nginx.conf).
+camera_requests() {
+    compose exec -T camera sh -c \
+        "if [ -f $camera_access_log ]; then grep -c '^GET /snapshot.jpg ' $camera_access_log || true; else echo 0; fi"
+}
+
 toxiproxy_version() {
     http "$toxiproxy_url/version" | json_get "d['version'] if isinstance(d, dict) else d"
 }
@@ -238,6 +260,9 @@ readiness() {
     state="$(octoprint_state)"
     printf '%-16s state=%s\n' octoprint "${state:-unreachable}"
     [ "$state" = Operational ] || ready=1
+    state="$(camera_state)"
+    printf '%-16s state=%s\n' camera "${state:-unreachable}"
+    [ "$state" = ready ] || ready=1
     state="$(toxiproxy_version)"
     printf '%-16s version=%s\n' toxiproxy "${state:-unreachable}"
     [ -n "$state" ] || ready=1
@@ -409,7 +434,7 @@ manifest() {
         json_get "json.dumps(d.get('server'))")"
 
     local config_hashes
-    config_hashes="$(cd "$here" && sha256sum compose.yaml simctl moonraker/* octoprint/* toxiproxy/* |
+    config_hashes="$(cd "$here" && sha256sum compose.yaml simctl moonraker/* octoprint/* toxiproxy/* camera/* |
         python3 -c 'import json,sys; print(json.dumps({l.split()[1]: l.split()[0] for l in sys.stdin}))')"
     local repo_commit
     repo_commit="$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -473,6 +498,8 @@ export FARM3D_SIM_OCTOPRINT=$octoprint_url
 export FARM3D_SIM_OCTOPRINT_CONTROL=$octoprint_control_url
 export FARM3D_SIM_OCTOPRINT_API_KEY=$octoprint_api_key
 export FARM3D_SIM_TOXIPROXY=$toxiproxy_url
+export FARM3D_SIM_CAMERA=$camera_url
+export FARM3D_SIM_CAMERA_CONTROL=$camera_control_url
 export FARM3D_SIM_CTL=$here/simctl
 EOF
     if [ "$(moonraker_variant 2>/dev/null || echo default)" = apikey ]; then
@@ -480,6 +507,7 @@ EOF
     fi
     ;;
 manifest) manifest ;;
+camera-requests) camera_requests ;;
 reset)
     clear_all_faults
     variant moonraker default
