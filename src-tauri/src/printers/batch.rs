@@ -1154,6 +1154,11 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
     // ones' alert defaults.
     if rows.iter().any(|row| row.printer.is_some()) {
         services.attention.poke();
+        // A new Printer is schedulable: wake the evaluator too, same as
+        // every single-Printer command (`printers::commands`).
+        services
+            .evaluator
+            .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     }
     Ok(CreatePrintersBatchOutput { batch_id, rows })
 }
