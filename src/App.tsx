@@ -492,6 +492,11 @@ function App() {
                 return selection?.kind === "attention" ? selection.id : null;
               })()}
               onAttentionEventClose={() => navigate({ version: 1, destination: "monitor" })}
+              incidentId={(() => {
+                const selection = navigation.target().selection;
+                return selection?.kind === "incident" ? selection.id : null;
+              })()}
+              onIncidentClose={() => navigate({ version: 1, destination: "monitor" })}
               existingPrinters={printers()}
               onPrinterCreated={() => setIsFirstRun(false)}
               onImport={() => void importPrinters().then(() => {

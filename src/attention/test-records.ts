@@ -9,6 +9,8 @@ import type {
   CameraHealth,
   CameraSnapshot,
   Incident,
+  IncidentDetail,
+  IncidentEntry,
 } from "./types";
 
 export function attentionSubject(overrides: Partial<AttentionSubject> = {}): AttentionSubject {
@@ -120,6 +122,29 @@ export function cameraSnapshot(overrides: Partial<CameraSnapshot> = {}): CameraS
     pinnedAt: null,
     prunedAt: null,
     pruneReason: null,
+    ...overrides,
+  };
+}
+
+export function incidentEntry(overrides: Partial<IncidentEntry> = {}): IncidentEntry {
+  return {
+    id: "iev-1",
+    incidentId: "inc-1",
+    sequence: 1,
+    kind: "opened",
+    detail: { kind: "opened", eventId: "atn-1" },
+    operationId: null,
+    at: "2026-09-25T00:00:00Z",
+    ...overrides,
+  };
+}
+
+export function incidentDetail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
+  return {
+    incident: incident(),
+    timeline: [{ source: "incident", entry: incidentEntry() }],
+    events: [],
+    snapshots: [],
     ...overrides,
   };
 }

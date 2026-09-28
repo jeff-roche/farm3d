@@ -1,0 +1,131 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.previewFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 10rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  background-color: var(--f3d-color-surface);
+}
+
+/* No transition on the preview image: swapping `src` on each polled frame
+   must never fade (spec "Accessibility and adaptation": "Reduced motion:
+   no fade between preview frames" -- satisfied unconditionally, not just
+   under the media query, since there is nothing to disable). */
+.previewImage {
+  max-width: 100%;
+  max-height: 14rem;
+  object-fit: contain;
+}
+
+.previewStatus {
+  margin: 0;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.previewTimestamp {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.historyTitle {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  text-transform: uppercase;
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.historyRow {
+  composes: resetButton focusRing from "../design-system/components/shared.module.css";
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.25rem;
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text);
+  font-size: var(--f3d-type-body-small-size);
+  text-align: left;
+  cursor: pointer;
+}
+.historyRow:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.badge {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--f3d-color-border);
+  border-radius: var(--f3d-radius-sm);
+  color: var(--f3d-color-text-muted);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.empty {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.retention {
+  margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.error {
+  margin: 0;
+  color: var(--f3d-color-danger);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}

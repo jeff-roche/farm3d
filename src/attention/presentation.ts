@@ -10,9 +10,12 @@ import type {
   AttentionSeverity,
   CameraErrorKind,
   CameraHealthState,
+  CameraSnapshot,
   ConditionKind,
+  EvidenceSkipReason,
   IncidentEntryKind,
   PruneReason,
+  SnapshotTrigger,
 } from "./types";
 
 const CONDITION_KIND_LABEL = {
@@ -116,6 +119,40 @@ const PRUNE_REASON_LABEL = {
 
 export function pruneReasonLabel(reason: PruneReason): string {
   return PRUNE_REASON_LABEL[reason];
+}
+
+/** `IncidentEntryDetail`'s `evidenceSkipped.reason` (D3/D11): why a capture
+ *  farm3d attempted didn't produce a Snapshot. Distinct from `PruneReason`
+ *  (which is about an existing row's file being removed later). */
+const EVIDENCE_SKIP_REASON_LABEL = {
+  cameraError: "a camera error",
+  diskCap: "the disk cap",
+  storage: "a storage error",
+} satisfies Record<EvidenceSkipReason, string>;
+
+export function evidenceSkipReasonLabel(reason: EvidenceSkipReason): string {
+  return EVIDENCE_SKIP_REASON_LABEL[reason];
+}
+
+const SNAPSHOT_TRIGGER_LABEL = {
+  incident: "Incident",
+  completion: "Completion",
+  manual: "Manual",
+} satisfies Record<SnapshotTrigger, string>;
+
+export function snapshotTriggerLabel(trigger: SnapshotTrigger): string {
+  return SNAPSHOT_TRIGGER_LABEL[trigger];
+}
+
+function formatFrameTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** Spec "Accessibility and adaptation": "Every image has alt text:
+ *  '<trigger> snapshot of <Printer> at <time>'." */
+export function snapshotAltText(snapshot: CameraSnapshot, printerName: string): string {
+  return `${snapshotTriggerLabel(snapshot.trigger)} snapshot of ${printerName} at ${formatFrameTime(snapshot.capturedAt)}`;
 }
 
 // --- Attention center filters (Task 13) -------------------------------------

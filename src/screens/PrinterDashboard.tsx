@@ -4,6 +4,7 @@ import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { attention } from "../attention/attention-store";
 import { AttentionEventDetail } from "./AttentionEventDetail";
+import { IncidentDetail } from "./IncidentDetail";
 import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
@@ -33,11 +34,13 @@ export interface PrinterDashboardProps {
   onRemovePrinter?: (id: string) => void;
   /** The `attention` Event selected via `monitor/attention/<id>` (App's
    *  navigation target): shows `AttentionEventDetail` in the dock, in
-   *  place of the Printer/Queue content (spec "Frontend architecture").
-   *  An `incident` selection is Task 14's; this leaves today's behavior
-   *  (nothing) for it. */
+   *  place of the Printer/Queue content (spec "Frontend architecture"). */
   attentionEventId?: string | null;
   onAttentionEventClose?: () => void;
+  /** The Incident selected via `monitor/incident/<id>`: shows
+   *  `IncidentDetail` in the dock, the same way. */
+  incidentId?: string | null;
+  onIncidentClose?: () => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
@@ -69,7 +72,7 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
     return id ? attention.event(id) : undefined;
   };
   const showQueueDock = () =>
-    !props.store.selectedPrinter() && !selectedAttentionEvent()
+    !props.store.selectedPrinter() && !selectedAttentionEvent() && !props.incidentId
     && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
   const closeQueueDock = () => {
     setQueueOverlayOpen(false);
@@ -230,6 +233,15 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
               event={event()}
               mode={dockMode()}
               onClose={() => props.onAttentionEventClose?.()}
+            />
+          )}
+        </Show>
+        <Show when={props.incidentId}>
+          {(incidentId) => (
+            <IncidentDetail
+              incidentId={incidentId()}
+              mode={dockMode()}
+              onClose={() => props.onIncidentClose?.()}
             />
           )}
         </Show>

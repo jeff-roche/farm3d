@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { attentionEvent } from "./test-records";
 import {
   attentionSeverityLabel,
+  evidenceSkipReasonLabel,
   matchesAttentionFilter,
   matchesSeverityFilter,
+  snapshotTriggerLabel,
 } from "./presentation";
 import type { AttentionFilter, AttentionSeverityFilter } from "./presentation";
+import type { EvidenceSkipReason } from "./types";
 
 describe("attentionSeverityLabel", () => {
   it("is the plain word, per spec ('Fatal', 'Warning', 'Info')", () => {
@@ -61,5 +64,19 @@ describe("matchesSeverityFilter", () => {
 
   it.each<AttentionSeverityFilter>(["all", "fatal", "warning", "info"])("%s is a total function", (filter) => {
     expect(() => matchesSeverityFilter(filter, attentionEvent())).not.toThrow();
+  });
+});
+
+describe("evidenceSkipReasonLabel", () => {
+  it.each<EvidenceSkipReason>(["cameraError", "diskCap", "storage"])("labels %s", (reason) => {
+    expect(evidenceSkipReasonLabel(reason)).toBeTruthy();
+  });
+});
+
+describe("snapshotTriggerLabel", () => {
+  it("is the plain word ('Incident', 'Completion', 'Manual')", () => {
+    expect(snapshotTriggerLabel("incident")).toBe("Incident");
+    expect(snapshotTriggerLabel("completion")).toBe("Completion");
+    expect(snapshotTriggerLabel("manual")).toBe("Manual");
   });
 });
