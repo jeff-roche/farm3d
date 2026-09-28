@@ -107,6 +107,23 @@ vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: webview.onDragDropEvent }),
 }));
 
+// `farm3d-navigate-v1` (App.tsx's own listener -- every other store's
+// `@tauri-apps/api/event` usage is already replaced by its own mock, e.g.
+// `queue-store-mock`, so this is the only consumer of `listen` left).
+type NavigateEventPayload = { payload: unknown };
+const navigateEvent = vi.hoisted(() => ({
+  handler: undefined as undefined | ((event: NavigateEventPayload) => void),
+  unlisten: vi.fn(),
+  listen: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, cb: (event: NavigateEventPayload) => void) => {
+    navigateEvent.listen(name, cb);
+    if (name === "farm3d-navigate-v1") navigateEvent.handler = cb;
+    return Promise.resolve(navigateEvent.unlisten);
+  },
+}));
+
 /** `vi.resetModules` gives each test a fresh navigation store, so read the
  *  one this test's App imported. */
 async function importAppAndNavigation() {
@@ -164,6 +181,25 @@ type QueueStoreTestModule = typeof import("./queue/queue-store-mock").queueStore
 };
 async function queueStore(): Promise<QueueStoreTestModule> {
   return (await import("./queue/queue-store")) as unknown as QueueStoreTestModule;
+}
+
+// Same pattern for the mocked Attention store.
+vi.mock("./attention/attention-store", async () => {
+  const mock = await import("./attention/attention-store-mock");
+  return {
+    ...mock.attentionStoreMock,
+    setAttentionStoreState: mock.setAttentionStoreState,
+    loadWebAttentionFixture: mock.loadWebAttentionFixture,
+    resetAttentionStoreMock: mock.resetAttentionStoreMock,
+  };
+});
+type AttentionStoreTestModule = typeof import("./attention/attention-store-mock").attentionStoreMock & {
+  setAttentionStoreState: typeof import("./attention/attention-store-mock").setAttentionStoreState;
+  loadWebAttentionFixture: () => ReturnType<typeof import("./attention/attention-store-mock").loadWebAttentionFixture>;
+  resetAttentionStoreMock: () => void;
+};
+async function attentionStore(): Promise<AttentionStoreTestModule> {
+  return (await import("./attention/attention-store")) as unknown as AttentionStoreTestModule;
 }
 
 vi.mock("./screens/QueueScreen", () => ({
@@ -269,6 +305,12 @@ beforeEach(async () => {
   const queueMock = await queueStore();
   queueMock.resetQueueStoreMock();
   queueMock.startQueue.mockReset().mockResolvedValue(() => {});
+  const attentionMock = await attentionStore();
+  attentionMock.resetAttentionStoreMock();
+  attentionMock.startAttention.mockReset().mockResolvedValue(() => {});
+  navigateEvent.handler = undefined;
+  navigateEvent.unlisten.mockReset();
+  navigateEvent.listen.mockReset();
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -388,6 +430,49 @@ describe("App", () => {
     await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
     expect(screen.getByText("Monitor")).toBeInTheDocument();
+  });
+
+  it("is available for a known Attention Event deep link", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/atn-1";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({ events: [attentionEvent({ id: "atn-1" })] });
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+  });
+
+  it("keeps Monitor open and selects nothing else for an unknown deep-linked Attention Event", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/missing";
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("selectionUnavailable"));
+    await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
+    expect(screen.getByText("Monitor")).toBeInTheDocument();
+  });
+
+  it("routes a farm3d-navigate-v1 payload through navigate, changing the hash", async () => {
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigateEvent.handler).toBeDefined());
+    navigateEvent.handler!({
+      payload: {
+        contractVersion: 1,
+        target: { version: 1, destination: "monitor", selection: { kind: "printer", id: "prn-1" } },
+        openAttentionCenter: false,
+      },
+    });
+
+    await waitFor(() => expect(window.location.hash).toBe("#nav=v1/monitor/printer/prn-1"));
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("prn-1"));
   });
 
   it("loads the Spool inventory at startup, so the attention-Spool badge counts (low or reconciliation) without visiting Spools", async () => {

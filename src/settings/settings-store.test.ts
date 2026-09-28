@@ -115,4 +115,35 @@ describe("settings-store", () => {
 
     expect(() => getSettings()).toThrow();
   });
+
+  describe("settings (reactive accessor)", () => {
+    it("is null before loadSettings resolves, then the loaded value, and updates on updateSettings", async () => {
+      tauriMock.isTauri.mockReturnValue(false);
+      const { settings: settingsSignal, loadSettings, updateSettings } = await import("./settings-store");
+
+      expect(settingsSignal()).toBeNull();
+      await loadSettings();
+      expect(settingsSignal()?.themeMode).toBe("system");
+
+      await updateSettings({ themeMode: "farm3d-dark" });
+      expect(settingsSignal()?.themeMode).toBe("farm3d-dark");
+    });
+
+    it("tracks changes from a Solid reactive scope (Task 15's dialog needs this)", async () => {
+      tauriMock.isTauri.mockReturnValue(false);
+      const { createRoot, createEffect } = await import("solid-js");
+      const { settings: settingsSignal, loadSettings, updateSettings } = await import("./settings-store");
+
+      const seen: (string | undefined)[] = [];
+      const dispose = createRoot((d) => {
+        createEffect(() => seen.push(settingsSignal()?.themeMode));
+        return d;
+      });
+      await loadSettings();
+      await updateSettings({ themeMode: "farm3d-dark" });
+      dispose();
+
+      expect(seen).toEqual([undefined, "system", "farm3d-dark"]);
+    });
+  });
 });

@@ -22,6 +22,8 @@ import { startHostOperations } from "./host-ops/host-operations-store";
 import { syncCapabilities } from "./host-ops/capabilities-store";
 import { queue, startQueue } from "./queue/queue-store";
 import { jobStateLabel } from "./queue/presentation";
+import { attention, requestAttentionCenterOpen, startAttention } from "./attention/attention-store";
+import type { NavigateRequest } from "./generated/contracts/domain/NavigateRequest";
 import type { PrinterRosterEntry } from "./design-system";
 import {
   dismissPrinterArchiveNotice,
@@ -96,10 +98,18 @@ function App() {
   // resolves decides for real.
   const libraryPending = () => library.status() === "idle" || library.status() === "loading";
   const queuePending = () => queue.status() === "idle" || queue.status() === "loading";
+  const attentionPending = () => attention.status() === "idle" || attention.status() === "loading";
   // Every Queue Entry and Job the store holds: a Queue selection names
   // either, resolved by prefix (spec "Navigation").
   const queueIds = () => [...queue.entries(), ...queue.history()]
     .flatMap((entry) => (entry.jobId ? [entry.id, entry.jobId] : [entry.id]));
+  // Every Attention Event and Incident the store holds, for `monitor`'s
+  // `attention`/`incident` selections (deep links, `farm3d-navigate-v1`).
+  const attentionIds = () => [
+    ...attention.open().map((event) => event.id),
+    ...attention.resolved().map((event) => event.id),
+    ...attention.openIncidents().map((incident) => incident.id),
+  ];
   const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
     availableDestinations: ["monitor", "queue", "library", "spools"] as NavigationDestination[],
     availableIds: [
@@ -108,8 +118,17 @@ function App() {
       ...library.projects().map((project) => project.id),
       ...library.models().map((model) => model.id),
       ...queueIds(),
+      ...attentionIds(),
       ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
       ...(target.destination === "queue" && target.selection && queuePending() ? [target.selection.id] : []),
+      ...(
+        target.destination === "monitor"
+        && target.selection
+        && (target.selection.kind === "attention" || target.selection.kind === "incident")
+        && attentionPending()
+          ? [target.selection.id]
+          : []
+      ),
     ],
   });
   const reconcileNavigation = () => {
@@ -193,6 +212,31 @@ function App() {
     });
   });
 
+  // `farm3d-navigate-v1` (spec D7/"Events"): a separate, unsequenced event
+  // (its own Tauri channel, not `farm3d-event-v1`) a notification click
+  // emits. Routed through `navigate` like any other selection; opens the
+  // Attention center (Task 13's `AttentionTrigger`, via
+  // `requestAttentionCenterOpen`'s seam) when `openAttentionCenter` is true.
+  onMount(() => {
+    if (!desktopAvailable()) return;
+    let disposed = false;
+    let stopNavigate: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => listen<NavigateRequest>("farm3d-navigate-v1", (event) => {
+      navigate(event.payload.target);
+      if (event.payload.openAttentionCenter) requestAttentionCenterOpen();
+    })).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopNavigate = unlisten;
+    }).catch(() => {
+      // Without the listener, a notification click just raises the window
+      // (Rust's own activation step) without navigating.
+    });
+    onCleanup(() => {
+      disposed = true;
+      stopNavigate?.();
+    });
+  });
+
   onMount(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -200,6 +244,7 @@ function App() {
     let disposeSlicing: (() => void) | undefined;
     let disposeHostOperations: (() => void) | undefined;
     let disposeQueue: (() => void) | undefined;
+    let disposeAttention: (() => void) | undefined;
     let stopCapabilitySync: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
@@ -262,7 +307,8 @@ function App() {
               return;
             }
             disposeHostOperations = disposeOps;
-            // The Queue follows Host Operations (P7).
+            // The Queue follows Host Operations (P7); Attention follows
+            // the Queue (P8).
             return startQueue().then((disposeQueueStream) => {
               if (disposed || generation !== startupGeneration) {
                 disposeQueueStream();
@@ -270,6 +316,14 @@ function App() {
               }
               disposeQueue = disposeQueueStream;
               reconcileNavigation();
+              return startAttention().then((disposeAttentionStream) => {
+                if (disposed || generation !== startupGeneration) {
+                  disposeAttentionStream();
+                  return;
+                }
+                disposeAttention = disposeAttentionStream;
+                reconcileNavigation();
+              });
             });
           });
         });
@@ -306,6 +360,7 @@ function App() {
       disposeSlicing?.();
       disposeHostOperations?.();
       disposeQueue?.();
+      disposeAttention?.();
       stopCapabilitySync?.();
       window.removeEventListener("hashchange", applyFragment);
     });
