@@ -513,6 +513,8 @@ impl<'b, B: Backend> Tracer<'b, B> {
                     sink: Arc::clone(&self.sink) as _,
                     control: Arc::clone(&self.control) as _,
                 }),
+                // The tracer starts the real supervisor around its cuts.
+                real_adapters: true,
             },
         );
         app.services.notifications.focus().set(false);

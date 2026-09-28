@@ -35,6 +35,7 @@ fn attention() -> AttentionBoot {
         clock: None,
         cameras: None,
         notifications: None,
+        real_adapters: false,
     }
 }
 

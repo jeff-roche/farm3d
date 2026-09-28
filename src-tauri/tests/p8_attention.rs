@@ -644,6 +644,7 @@ impl ProjectorRig {
                 clock: Some(clock.clone() as Arc<dyn Clock>),
                 cameras: None,
                 notifications: None,
+                real_adapters: false,
             },
         );
         app.attention_pass();

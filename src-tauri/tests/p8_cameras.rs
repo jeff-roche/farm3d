@@ -1320,6 +1320,7 @@ fn hanging_dispatch_rig() -> (p7_dispatch_rig::Roots, p7_dispatch_rig::Running, 
             clock: None,
             cameras: Some(hanging_timings()),
             notifications: None,
+            real_adapters: false,
         },
     );
     let camera = FakeCamera::start(Answer::Held);

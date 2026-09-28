@@ -29,7 +29,9 @@ use farm3d_lib::connections::capabilities::{
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
 use farm3d_lib::connections::supervisor::{build_connection, ConnectionManager, STATUS_EVENT};
-use farm3d_lib::connections::{ConnectionConfig, ConnectionState, PrinterStatus, MOONRAKER_KIND};
+use farm3d_lib::connections::{
+    ConnectionConfig, ConnectionState, PrinterConnection, PrinterStatus, MOONRAKER_KIND,
+};
 use chrono::{DateTime, Utc};
 use farm3d_lib::host_ops::repository as host_ops_repo;
 use farm3d_lib::jobs::{JobServices, JobTimings};
@@ -252,6 +254,19 @@ fn rig_host_ops_timings() -> HostOpsTimings {
         ..HostOpsTimings::default()
     }
 }
+
+/// The rig's default adapter factory: no adapter at all, so a rig user
+/// that starts the supervisor by mistake sees it fail at once instead of
+/// reaching a host. Only [`AttentionBoot::real_adapters`] opts out.
+fn unused_factory(
+    _config: &ConnectionConfig,
+    _key: Option<zeroize::Zeroizing<String>>,
+) -> Option<Box<dyn PrinterConnection>> {
+    None
+}
+
+type ConnectionFactory =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>;
 
 /// The adapter's and host operations' timings, and how long any one wait
 /// on the running app may take. [`RigTimings::default`] suits the
@@ -582,6 +597,11 @@ pub struct AttentionBoot {
     /// and window control, before the projector, as
     /// `build_runtime_services` does; `None` leaves it off.
     pub notifications: Option<NotificationBoot>,
+    /// `true` gives the supervisor the production adapters
+    /// (`build_connection`), for a test that really starts it (P8's
+    /// tracer, around its offline cuts). `false` keeps the rig's
+    /// no-adapter factory, as every other rig user seeds the live status.
+    pub real_adapters: bool,
 }
 
 /// P8 Task 16: what the notification runtime shows through and raises.
@@ -643,6 +663,12 @@ fn boot_inner(
     });
     let host_ops_timings = roots.timings.host_ops;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let factory_for_manager: ConnectionFactory =
+        if attention.as_ref().is_some_and(|boot| boot.real_adapters) {
+            build_connection
+        } else {
+            unused_factory
+        };
     let camera_timings = attention.as_ref().and_then(|boot| boot.cameras);
     let notification_boot = attention.as_ref().and_then(|boot| {
         boot.notifications
@@ -704,10 +730,7 @@ fn boot_inner(
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
         roots.credentials.path().to_path_buf(),
-        // The production adapters. Only P8's tracer ever starts the
-        // supervisor (around its offline cuts); every other rig user seeds
-        // the Printer's live status instead.
-        build_connection,
+        factory_for_manager,
         move |services| {
             services.host_ops = Arc::new(HostOperationServices::new(
                 Arc::clone(&services.storage),

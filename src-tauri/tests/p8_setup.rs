@@ -137,13 +137,6 @@ impl Rig {
             .unwrap_or_else(|error| panic!("{command} failed: {error}"))
     }
 
-    fn err(&self, command: &str, body: Value) -> Value {
-        match self.call(command, body) {
-            Ok(value) => panic!("{command} succeeded: {value}"),
-            Err(error) => error,
-        }
-    }
-
     /// `create_printer` with `extra` merged into a minimal body.
     fn create(&self, name: &str, extra: Value) -> Result<Value, Value> {
         let mut body = json!({"name": name, "catalogRef": a_ref_json()});

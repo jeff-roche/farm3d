@@ -82,6 +82,7 @@ impl GuardRig {
                 clock: Some(clock.clone() as Arc<dyn Clock>),
                 cameras: Some(CameraTimings::default()),
                 notifications: None,
+                real_adapters: false,
             },
         );
         let url = camera.url("/snapshot");
