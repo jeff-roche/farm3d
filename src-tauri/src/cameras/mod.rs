@@ -51,8 +51,16 @@ pub enum CameraSource {
 
 /// `set_printer_camera`'s argument shape — structurally identical to
 /// [`CameraSource`] (D9 decision: "the wire types" table gives it its own
-/// name for the input side, but it is the same type).
-pub type CameraSourceInput = CameraSource;
+/// name for the input side, but it is the same type). `#[serde(transparent)]`
+/// makes this newtype serialize and deserialize exactly as `CameraSource`
+/// does, so it is a real alias on the wire, not a wrapped object; ts-rs's
+/// own newtype handling (no `#[ts(type = ...)]` override — that would drop
+/// the dependency and leave `CameraSource` unimported) renders it as one on
+/// the TypeScript side too: `export type CameraSourceInput = CameraSource;`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(transparent)]
+#[ts(export_to = "domain/CameraSourceInput.ts")]
+pub struct CameraSourceInput(pub CameraSource);
 
 /// `get_printer_camera`'s result: the only command that returns a manual
 /// URL (global constraint 3's one exception).

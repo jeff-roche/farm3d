@@ -11,8 +11,8 @@ use farm3d_lib::attention::{
 };
 use farm3d_lib::cameras::{
     CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
-    CameraSource, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam, MediaUsage,
-    PrinterCamera, PruneReason, SnapshotTrigger,
+    CameraSource, CameraSourceInput, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam,
+    MediaUsage, PrinterCamera, PruneReason, SnapshotTrigger,
 };
 use farm3d_lib::catalog::commands::{CatalogInfo, CatalogModelSummary, CatalogVariantSummary};
 use farm3d_lib::catalog::resolve::{
@@ -627,6 +627,7 @@ fn export_registry() -> Vec<Export> {
         export::<AckBy>(),
         export::<CameraSourceKind>(),
         export::<CameraSource>(),
+        export::<CameraSourceInput>(),
         export::<PrinterCamera>(),
         export::<HostWebcam>(),
         export::<CameraErrorKind>(),
