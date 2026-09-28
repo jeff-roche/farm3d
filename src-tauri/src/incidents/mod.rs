@@ -8,6 +8,8 @@
 //! import guards, and commands are later tasks (see the module layout
 //! table in the design spec).
 
+pub mod repository;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -200,6 +202,54 @@ pub struct IncidentEntry {
 pub enum IncidentTimelineItem {
     Incident { entry: IncidentEntry },
     Job { event: JobEvent },
+}
+
+impl IncidentEntryDetail {
+    /// The one [`IncidentEntryKind`] this variant is (the D3 "Timeline
+    /// kinds" table is one variant per kind, so a repository write derives
+    /// `kind` from `detail` rather than taking it separately and risking
+    /// the two disagreeing).
+    pub fn kind(&self) -> IncidentEntryKind {
+        match self {
+            IncidentEntryDetail::Opened { .. } => IncidentEntryKind::Opened,
+            IncidentEntryDetail::EventLinked { .. } => IncidentEntryKind::EventLinked,
+            IncidentEntryDetail::Reopened { .. } => IncidentEntryKind::Reopened,
+            IncidentEntryDetail::EventAcknowledged { .. } => IncidentEntryKind::EventAcknowledged,
+            IncidentEntryDetail::EventResolved { .. } => IncidentEntryKind::EventResolved,
+            IncidentEntryDetail::EvidenceCaptured { .. } => IncidentEntryKind::EvidenceCaptured,
+            IncidentEntryDetail::EvidenceSkipped { .. } => IncidentEntryKind::EvidenceSkipped,
+            IncidentEntryDetail::EvidencePruned { .. } => IncidentEntryKind::EvidencePruned,
+            IncidentEntryDetail::EvidencePinned { .. } => IncidentEntryKind::EvidencePinned,
+            IncidentEntryDetail::EvidenceUnpinned { .. } => IncidentEntryKind::EvidenceUnpinned,
+            IncidentEntryDetail::NoteAdded { .. } => IncidentEntryKind::NoteAdded,
+            IncidentEntryDetail::Closed => IncidentEntryKind::Closed,
+        }
+    }
+
+    /// The migration's `attention_event_id` CHECK: `Some` for `opened`,
+    /// `eventLinked`, `reopened`, `eventAcknowledged`, `eventResolved`.
+    pub fn event_id(&self) -> Option<&str> {
+        match self {
+            IncidentEntryDetail::Opened { event_id }
+            | IncidentEntryDetail::EventLinked { event_id }
+            | IncidentEntryDetail::Reopened { event_id }
+            | IncidentEntryDetail::EventAcknowledged { event_id, .. }
+            | IncidentEntryDetail::EventResolved { event_id, .. } => Some(event_id),
+            _ => None,
+        }
+    }
+
+    /// The migration's `snapshot_id` CHECK: `Some` for `evidenceCaptured`,
+    /// `evidencePruned`, `evidencePinned`, `evidenceUnpinned`.
+    pub fn snapshot_id(&self) -> Option<&str> {
+        match self {
+            IncidentEntryDetail::EvidenceCaptured { snapshot_id, .. }
+            | IncidentEntryDetail::EvidencePruned { snapshot_id, .. }
+            | IncidentEntryDetail::EvidencePinned { snapshot_id }
+            | IncidentEntryDetail::EvidenceUnpinned { snapshot_id } => Some(snapshot_id),
+            _ => None,
+        }
+    }
 }
 
 /// `get_incident`/`add_incident_note`'s result.

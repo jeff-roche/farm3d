@@ -262,6 +262,15 @@ pub enum RepositoryError {
         required_mg: Option<i64>,
         error: crate::spools::reservations::ReservationError,
     },
+    /// P8 D2 "Lifecycle rules": `resolve_attention_event` on an Event
+    /// whose `resolution_mode` isn't `manual`
+    /// (`attention::lifecycle::LifecycleError::NotManual`). Nothing was
+    /// written. `ATTENTION_NOT_MANUAL`.
+    AttentionNotManual {
+        event_id: String,
+        condition: crate::attention::ConditionKind,
+        resolution_mode: crate::attention::ResolutionMode,
+    },
     Storage(StorageError),
 }
 

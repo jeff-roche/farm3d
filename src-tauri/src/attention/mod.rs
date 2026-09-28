@@ -13,6 +13,7 @@
 pub mod lifecycle;
 pub mod observe;
 pub mod plan;
+pub mod repository;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

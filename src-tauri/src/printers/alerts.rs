@@ -1,12 +1,23 @@
 //! P8: a Printer's alert defaults (spec "Backend model" module layout,
 //! `printers/alerts.rs`). This file holds the value types the Attention
 //! observer reads (`AlertDefaults`, `OfflineAlertMinutes`,
-//! `NotificationMode`); the `printer_alert_defaults` repository and the
-//! `get`/`set` commands land beside them in a later task.
+//! `NotificationMode`), the `printer_alert_defaults` repository ([`get`],
+//! [`set`]); the `get`/`set` commands land beside them in a later task.
+//!
+//! [`get`] returns the schema's own defaults (`5`, `follow`, both
+//! captures on) when a Printer has no row — D9 "Notes": "No
+//! `printer_alert_defaults` row means the defaults". [`set`] upserts,
+//! bumping `revision` on every call after the first (last-writer-wins, a
+//! single-user app's own settings; see the design spec's "Commands":
+//! `set_printer_alert_defaults` takes no `expectedRevision`).
 
 use chrono::Duration;
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
+
+use crate::persistence::{RepositoryError, StorageError};
+use crate::spools::{decode_enum, encode_enum};
 
 /// The offline grace a Printer's `printer.offline` Condition waits for:
 /// 1, 5, or 15 minutes (`printer_alert_defaults.offline_after_minutes`'s
@@ -101,9 +112,178 @@ impl Default for AlertDefaults {
     }
 }
 
+/// `get_printer_alert_defaults`/`set_printer_alert_defaults`'s result. No
+/// `printer_alert_defaults` row means [`AlertDefaults::default`]
+/// (`revision`/`updatedAt` both `null`).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterAlertDefaults.ts")]
+pub struct PrinterAlertDefaults {
+    pub printer_id: String,
+    #[ts(type = "number | null")]
+    pub revision: Option<i64>,
+    pub alert_defaults: AlertDefaults,
+    pub updated_at: Option<String>,
+}
+
+/// A Printer's alert defaults, or the schema's own defaults when it has no
+/// `printer_alert_defaults` row.
+pub fn get(conn: &Connection, printer_id: &str) -> Result<PrinterAlertDefaults, StorageError> {
+    let row = conn
+        .query_row(
+            "SELECT revision, offline_after_minutes, notifications, snapshot_on_incident,
+                    snapshot_on_completion, updated_at
+             FROM printer_alert_defaults WHERE printer_id = ?1",
+            [printer_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, bool>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    Ok(match row {
+        Some((revision, offline_minutes, notifications_text, snapshot_on_incident, snapshot_on_completion, updated_at)) => {
+            let offline_after_minutes = offline_minutes.map(|minutes| {
+                OfflineAlertMinutes::from_minutes(minutes)
+                    .expect("printer_alert_defaults.offline_after_minutes satisfies its own CHECK")
+            });
+            let notifications: NotificationMode = decode_enum(&notifications_text)
+                .expect("printer_alert_defaults.notifications satisfies its own CHECK");
+            PrinterAlertDefaults {
+                printer_id: printer_id.to_string(),
+                revision: Some(revision),
+                alert_defaults: AlertDefaults {
+                    offline_after_minutes,
+                    notifications,
+                    snapshot_on_incident,
+                    snapshot_on_completion,
+                },
+                updated_at: Some(updated_at),
+            }
+        }
+        None => PrinterAlertDefaults {
+            printer_id: printer_id.to_string(),
+            revision: None,
+            alert_defaults: AlertDefaults::default(),
+            updated_at: None,
+        },
+    })
+}
+
+/// Upserts `printer_id`'s alert defaults: `revision` starts at 1 on the
+/// first call and bumps by one on every later one (last-writer-wins).
+pub fn set(
+    tx: &Transaction<'_>,
+    printer_id: &str,
+    defaults: &AlertDefaults,
+    now: &str,
+) -> Result<PrinterAlertDefaults, RepositoryError> {
+    tx.execute(
+        "INSERT INTO printer_alert_defaults(
+             printer_id, revision, offline_after_minutes, notifications, snapshot_on_incident,
+             snapshot_on_completion, updated_at
+         ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(printer_id) DO UPDATE SET
+             revision = printer_alert_defaults.revision + 1,
+             offline_after_minutes = excluded.offline_after_minutes,
+             notifications = excluded.notifications,
+             snapshot_on_incident = excluded.snapshot_on_incident,
+             snapshot_on_completion = excluded.snapshot_on_completion,
+             updated_at = excluded.updated_at",
+        params![
+            printer_id,
+            defaults.offline_after_minutes.map(OfflineAlertMinutes::minutes),
+            encode_enum(defaults.notifications),
+            defaults.snapshot_on_incident,
+            defaults.snapshot_on_completion,
+            now,
+        ],
+    )?;
+    Ok(get(tx, printer_id)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::{MetadataRootLease, Storage, StoragePaths};
+
+    const NOW: &str = "2026-09-28T12:00:00Z";
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+        let lease = MetadataRootLease::acquire(&paths).unwrap();
+        let storage = Storage::open(paths, &lease).unwrap();
+        (temp, storage)
+    }
+
+    fn seed_printer(tx: &Transaction<'_>, id: &str) {
+        tx.execute_batch(&format!(
+            "INSERT INTO printers(id, revision, name, catalog_vendor, catalog_model,
+               catalog_variant, catalog_model_id, catalog_printer_variant, notes,
+               overrides_json, created_at, updated_at)
+             VALUES ('{id}', 1, 'Printer', '', '', '', '', '', '', '{{}}', '{NOW}', '{NOW}');"
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn get_returns_the_defaults_when_there_is_no_row() {
+        let (_temp, storage) = storage();
+        storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                seed_printer(tx, "prn-a");
+                let defaults = get(tx, "prn-a")?;
+                assert_eq!(defaults.printer_id, "prn-a");
+                assert_eq!(defaults.revision, None);
+                assert_eq!(defaults.updated_at, None);
+                assert_eq!(defaults.alert_defaults, AlertDefaults::default());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn set_upserts_and_bumps_revision_on_every_later_call() {
+        let (_temp, storage) = storage();
+        storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                seed_printer(tx, "prn-a");
+                let muted = AlertDefaults {
+                    offline_after_minutes: None,
+                    notifications: NotificationMode::Muted,
+                    snapshot_on_incident: false,
+                    snapshot_on_completion: false,
+                };
+                let first = set(tx, "prn-a", &muted, NOW)?;
+                assert_eq!(first.revision, Some(1));
+                assert_eq!(first.alert_defaults, muted);
+                assert_eq!(first.updated_at.as_deref(), Some(NOW));
+
+                let follow_fifteen = AlertDefaults {
+                    offline_after_minutes: Some(OfflineAlertMinutes::Fifteen),
+                    notifications: NotificationMode::Follow,
+                    snapshot_on_incident: true,
+                    snapshot_on_completion: true,
+                };
+                let second = set(tx, "prn-a", &follow_fifteen, "2026-09-28T12:05:00Z")?;
+                assert_eq!(second.revision, Some(2));
+                assert_eq!(second.alert_defaults, follow_fifteen);
+
+                let fetched = get(tx, "prn-a")?;
+                assert_eq!(fetched, second);
+                Ok(())
+            })
+            .unwrap();
+    }
 
     #[test]
     fn defaults_are_five_minutes_follow_and_both_captures() {

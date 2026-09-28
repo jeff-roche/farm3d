@@ -1671,6 +1671,10 @@ impl CommandError {
                 job_ids,
                 queue_entry_ids,
             } => Self::jobs_exist(&printer_ids, &job_ids, &queue_entry_ids),
+            // P8 Task 6 wires the real `ATTENTION_NOT_MANUAL` code, message,
+            // and `[RELOAD]` recovery on `resolve_attention_event`; this
+            // placeholder only keeps the match exhaustive until then.
+            RepositoryError::AttentionNotManual { .. } => Self::internal(),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }
