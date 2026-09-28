@@ -23,8 +23,9 @@ pub enum PlannedAction {
         recurrence_of: Option<String>,
         acknowledged: bool,
     },
-    /// A `Present` observation of an open Event: always `last_observed_at`
-    /// and `observation_count + 1`; when `changed`, also `detail`,
+    /// A `Present` observation of an open Event: `last_observed_at` and
+    /// `observation_count + 1` (the projector persists an unchanged one at
+    /// most once a minute, decision 40); when `changed`, also `detail`,
     /// `severity`, and `summary` (re-derived from the Event's own subject
     /// and the new detail) with `revision + 1`. Never the evidence, the
     /// Incident link, or the lifecycle columns.

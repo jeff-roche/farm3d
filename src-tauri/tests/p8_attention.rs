@@ -306,7 +306,7 @@ fn list_attention_orders_open_by_severity_and_resolved_by_recency_with_a_cursor(
 }
 
 #[test]
-fn latest_resolved_by_key_reports_the_newest_resolution() {
+fn latest_resolved_for_keys_reports_the_newest_resolution() {
     let (_temp, storage) = open_storage();
     storage
         .write_repo(|tx| -> Result<(), RepositoryError> {
@@ -323,7 +323,7 @@ fn latest_resolved_by_key_reports_the_newest_resolution() {
                 attention_repo::insert(tx, &condition, Some(&first.id), false, AttentionOrigin::Live, t1)?;
             attention_repo::resolve(tx, &second.id, AttentionResolution::ConditionCleared, t2)?;
 
-            let map = attention_repo::latest_resolved_by_key(connection)?;
+            let map = attention_repo::latest_resolved_for_keys(connection, [condition.dedup_key().as_str()])?;
             assert_eq!(map.get(&condition.dedup_key()), Some(&second.id));
             Ok(())
         })
@@ -547,6 +547,61 @@ fn the_resolved_cursor_is_stable_across_an_identical_resolved_at() {
         .unwrap();
 }
 
+/// Final review M8: a tie group larger than the page. Events resolved
+/// before, at, and after one shared instant page by `resolvedAt` then id,
+/// descending, each exactly once, when the page (7) is smaller than the
+/// tie group (25) and doesn't divide it.
+#[test]
+fn keyset_pages_cross_a_tie_group_larger_than_the_page() {
+    let (_temp, storage) = open_storage();
+    storage
+        .write_repo(|tx| -> Result<(), RepositoryError> {
+            let tie = now();
+            let mut expected: Vec<(DateTime<Utc>, String)> = Vec::new();
+            for i in 0..31 {
+                let printer = format!("prn-{i:02}");
+                seed_printer(tx, &printer, "Voron");
+                let event = attention_repo::insert(
+                    tx,
+                    &printer_offline(&printer, "Voron"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    tie,
+                )?;
+                // Three before the tie, 25 at it, three after.
+                let resolved_at = match i {
+                    0..=2 => tie - chrono::Duration::minutes(3 - i),
+                    28..=30 => tie + chrono::Duration::minutes(i - 27),
+                    _ => tie,
+                };
+                attention_repo::resolve(tx, &event.id, AttentionResolution::ConditionCleared, resolved_at)?;
+                expected.push((resolved_at, event.id));
+            }
+            expected.sort();
+            expected.reverse();
+            let expected: Vec<String> = expected.into_iter().map(|(_, id)| id).collect();
+
+            let mut seen = Vec::new();
+            let mut cursor = None;
+            let mut pages = 0;
+            loop {
+                let (page, next) = attention_repo::list_resolved(tx, cursor.as_ref(), 7)?;
+                assert!(page.len() <= 7);
+                pages += 1;
+                seen.extend(page.into_iter().map(|event| event.id));
+                match next {
+                    Some(next) => cursor = Some(next),
+                    None => break,
+                }
+            }
+            assert_eq!(pages, 5, "31 rows at 7 a page");
+            assert_eq!(seen, expected, "every Event exactly once, in order");
+            Ok(())
+        })
+        .unwrap();
+}
+
 // --- Task 6: the projector over FakeMoonraker ----------------------------------
 
 use farm3d_lib::attention::services::{run_pass, AttentionTimings};
@@ -641,12 +696,15 @@ fn offline_opens_once_amends_quietly_resolves_and_recurs() {
     app.attention_pass();
     let offline = rig.of(ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "still one Event");
-    assert!(
-        offline[0].observation_count > first.observation_count,
-        "{} -> {}",
-        first.observation_count,
-        offline[0].observation_count
-    );
+    assert_eq!(offline[0], first, "inside the minute an unchanged observation writes nothing");
+    // Decision 40: a minute on, the observation is persisted once.
+    rig.clock.advance(Duration::from_secs(60));
+    app.services.attention.poke();
+    app.attention_pass();
+    let offline = rig.of(ConditionKind::PrinterOffline);
+    assert_eq!(offline.len(), 1, "still one Event");
+    assert_eq!(offline[0].observation_count, first.observation_count + 1);
+    assert_ne!(offline[0].last_observed_at, first.last_observed_at);
     assert_eq!(offline[0].revision, first.revision, "an unchanged amendment bumps nothing");
     assert_eq!(
         app.attention_stream("attention.event.changed", &first.id).len(),

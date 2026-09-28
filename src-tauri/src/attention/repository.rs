@@ -210,7 +210,9 @@ pub fn insert(
 /// D2 "Apply": a `PlannedAction::Amend`. Always bumps `last_observed_at`
 /// and `observation_count`; when `changed`, also `detail_json`,
 /// `severity`, `summary`, and `revision`. Never `evidence_json`,
-/// `incident_id`, or the lifecycle columns.
+/// `incident_id`, or the lifecycle columns. The projector calls this for
+/// an unchanged amendment at most once a minute per Event
+/// (`projector::persisted_actions`, decision 40).
 pub fn amend(
     tx: &Transaction<'_>,
     event_id: &str,
@@ -374,22 +376,38 @@ pub fn open_events(conn: &Connection) -> Result<Vec<AttentionEvent>, StorageErro
     Ok(rows)
 }
 
-/// The newest resolved Event id per `dedup_key` — `plan`'s
-/// `latest_resolved` map (D2 "Planner rules").
-pub fn latest_resolved_by_key(conn: &Connection) -> Result<HashMap<String, String>, StorageError> {
-    let mut statement = conn.prepare(
-        "SELECT dedup_key, id FROM attention_events e
-         WHERE resolved_at IS NOT NULL
-           AND id = (
-             SELECT id FROM attention_events e2
-             WHERE e2.dedup_key = e.dedup_key AND e2.resolved_at IS NOT NULL
-             ORDER BY e2.resolved_at DESC, e2.id DESC LIMIT 1
-           )",
-    )?;
-    let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().collect())
+/// How many dedup keys one `IN (…)` binds: far under SQLite's
+/// bound-parameter limit (999 on the oldest builds).
+const KEY_CHUNK: usize = 500;
+
+/// The newest resolved Event id (`resolved_at` descending, then id
+/// descending) for each of `keys` that has one — `plan`'s
+/// `latest_resolved` map (D2 "Planner rules"). The pass asks only for the
+/// keys `plan` can consult, so the read never grows with all of history.
+/// No keys, no query.
+pub fn latest_resolved_for_keys<'k>(
+    conn: &Connection,
+    keys: impl IntoIterator<Item = &'k str>,
+) -> Result<HashMap<String, String>, StorageError> {
+    let keys: Vec<&str> = keys.into_iter().collect();
+    let mut latest = HashMap::new();
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let mut statement = conn.prepare(&format!(
+            "SELECT dedup_key, id FROM attention_events
+             WHERE dedup_key IN ({placeholders}) AND resolved_at IS NOT NULL
+             ORDER BY dedup_key, resolved_at DESC, id DESC"
+        ))?;
+        let rows = statement.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, id) = row?;
+            // The first row per key is its newest resolution.
+            latest.entry(key).or_insert(id);
+        }
+    }
+    Ok(latest)
 }
 
 const SEVERITY_ORDER_SQL: &str =
@@ -838,11 +856,12 @@ mod tests {
     }
 
     #[test]
-    fn latest_resolved_by_key_is_the_newest_per_key() {
+    fn latest_resolved_for_keys_is_the_newest_per_asked_key() {
         let (_temp, storage) = storage();
         storage
             .write_repo(|tx| -> Result<(), RepositoryError> {
                 seed_printer(tx, "prn-a");
+                seed_printer(tx, "prn-b");
                 let condition = printer_offline("prn-a");
                 let first = insert(tx, &condition, None, false, AttentionOrigin::Live, now())?;
                 resolve(tx, &first.id, AttentionResolution::ConditionCleared, now())?;
@@ -859,11 +878,28 @@ mod tests {
                 let even_later = later + chrono::Duration::minutes(10);
                 resolve(tx, &second.id, AttentionResolution::ConditionCleared, even_later)?;
 
-                let map = latest_resolved_by_key(tx)?;
+                // A resolved Event for a key nobody asks about stays out.
+                let other = insert(tx, &printer_offline("prn-b"), None, false, AttentionOrigin::Live, now())?;
+                resolve(tx, &other.id, AttentionResolution::ConditionCleared, now())?;
+
+                let map = latest_resolved_for_keys(
+                    tx,
+                    ["printer.offline:printer:prn-a", "spool.low:spool:spl-none"],
+                )?;
                 assert_eq!(
-                    map.get("printer.offline:printer:prn-a"),
-                    Some(&second.id)
+                    map,
+                    HashMap::from([("printer.offline:printer:prn-a".to_string(), second.id.clone())])
                 );
+                assert!(latest_resolved_for_keys(tx, [])?.is_empty(), "no keys, nothing");
+
+                // More keys than one `IN (…)` binds: the chunks still find it.
+                let many: Vec<String> = (0..2 * KEY_CHUNK + 7)
+                    .map(|i| format!("spool.low:spool:spl-{i}"))
+                    .chain(["printer.offline:printer:prn-a".to_string()])
+                    .collect();
+                let map = latest_resolved_for_keys(tx, many.iter().map(String::as_str))?;
+                assert_eq!(map.get("printer.offline:printer:prn-a"), Some(&second.id));
+                assert_eq!(map.len(), 1);
                 Ok(())
             })
             .unwrap();

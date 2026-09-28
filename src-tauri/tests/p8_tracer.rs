@@ -44,7 +44,8 @@
 //!    Before the grace passes: no Event.
 //! 3. After the grace: exactly one open `printer.offline` Event and one
 //!    notification whose target is `monitor/printer/<id>`. Twenty more
-//!    offline observations: still one Event and one notification.
+//!    offline observations: still one Event and one notification; inside
+//!    the minute none is persisted, and a minute on exactly one is.
 //! 5. Simulate the click: `farm3d-navigate-v1` carries the Printer target,
 //!    and the Event is read. The click comes **before** step 4's restart:
 //!    a restart forgets every outstanding notification (D6 "Click
@@ -1026,7 +1027,8 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     assert_eq!(notification.event_id.as_deref(), Some(first.id.as_str()));
     assert!(notification.body.starts_with("Warning: "), "{}", notification.body);
 
-    // Twenty more offline observations amend quietly.
+    // Twenty more offline observations amend quietly: inside the minute
+    // none is persisted, and a minute on one is (decision 40).
     let mut applied = app.services.attention.subscribe_applied();
     for _ in 0..20 {
         app.services.attention.poke();
@@ -1034,12 +1036,15 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     }
     let offline = t.open(&app, ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "still one Event: {offline:?}");
-    assert!(
-        offline[0].observation_count >= first.observation_count + 20,
-        "{} -> {}",
-        first.observation_count,
-        offline[0].observation_count
-    );
+    assert_eq!(offline[0].observation_count, first.observation_count, "{offline:?}");
+    assert_eq!(offline[0].last_observed_at, first.last_observed_at, "{offline:?}");
+    t.clock.advance(Duration::from_secs(60));
+    app.services.attention.poke();
+    app.attention_pass();
+    let offline = t.open(&app, ConditionKind::PrinterOffline);
+    assert_eq!(offline.len(), 1, "still one Event: {offline:?}");
+    assert_eq!(offline[0].observation_count, first.observation_count + 1, "{offline:?}");
+    assert_ne!(offline[0].last_observed_at, first.last_observed_at, "{offline:?}");
     assert_eq!(offline[0].revision, first.revision, "an unchanged amendment bumps nothing");
     for changes in drain(&mut applied) {
         assert!(changes.notify.is_empty(), "an amendment never notifies: {changes:?}");

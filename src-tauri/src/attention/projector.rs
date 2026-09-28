@@ -16,7 +16,8 @@
 //! neither opens nor resolves a `printer.*` or `job.completed` Event. Its
 //! inserts are `origin: backfill` and yield no capture intent and no
 //! notify candidate. Running it again changes nothing (the second run
-//! plans only unchanged amendments).
+//! plans only unchanged amendments, which a pass persists at most once a
+//! minute per Event: [`persisted_actions`], decision 40).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -44,8 +45,8 @@ use crate::spools::{
 
 use super::lifecycle::AckBy;
 use super::observe::{
-    self, FarmView, JobEndedBy, JobFacts, LatestJob, PrinterFacts, PrinterWatch, SpoolFacts,
-    StatusFacts,
+    self, FarmView, JobEndedBy, JobFacts, LatestJob, Observation, ObservedConditions, PrinterFacts,
+    PrinterWatch, SpoolFacts, StatusFacts,
 };
 use super::plan::{self, PlannedAction};
 use super::repository as attention_repository;
@@ -155,7 +156,6 @@ pub fn pass(
     now: DateTime<Utc>,
 ) -> Result<PassOutcome, RepositoryError> {
     let open = attention_repository::open_events(tx)?;
-    let latest_resolved = attention_repository::latest_resolved_by_key(tx)?;
     let (mut view, context) = read_view(tx, &open, live.catalog)?;
     view.supervisors_started_at = live.supervisors_started_at;
     observe::update_watch(watch, &view.printers, live.statuses, now);
@@ -164,12 +164,67 @@ pub fn pass(
         printer.unreachable_since = watch.unreachable_since(&printer.id);
     }
     let observed = observe::observe(&view, now);
+    let latest_resolved =
+        attention_repository::latest_resolved_for_keys(tx, insertable_keys(&open, &observed))?;
     let actions = plan::plan(&open, &latest_resolved, &observed);
+    let actions = persisted_actions(actions, &open, now);
     let changes = apply(tx, &actions, origin, &view, &context, now)?;
     Ok(PassOutcome {
         changes,
         next_deadline: observe::next_deadline(&view, now),
     })
+}
+
+/// The keys whose latest resolved Event `plan` can consult: every
+/// `Present` observation with no open Event (the only case that may
+/// insert, and so the only one that reads `latest_resolved`).
+fn insertable_keys<'a>(
+    open: &[AttentionEvent],
+    observed: &'a ObservedConditions,
+) -> impl Iterator<Item = &'a str> {
+    let open_keys: HashSet<String> = open.iter().map(|event| event.dedup_key.clone()).collect();
+    observed
+        .iter()
+        .filter(move |(key, observation)| {
+            matches!(observation, Observation::Present(_)) && !open_keys.contains(key.as_str())
+        })
+        .map(|(key, _)| key.as_str())
+}
+
+/// Decision 40: how long after an Event's stored `last_observed_at` an
+/// unchanged amendment is persisted again.
+pub const UNCHANGED_AMEND_INTERVAL: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
+
+/// D2 "Apply" (decision 40): the actions a pass writes. `plan` stays pure
+/// and keeps planning `Amend { changed: false }` for every `Present`
+/// observation of an open Event; this drops each such amendment whose
+/// Event (as read inside the pass's transaction) was last observed less
+/// than [`UNCHANGED_AMEND_INTERVAL`] before `now`. A changed amendment,
+/// and every other action, always stays. An unparseable
+/// `last_observed_at` counts as due, so the write repairs it.
+pub fn persisted_actions(
+    actions: Vec<PlannedAction>,
+    open: &[AttentionEvent],
+    now: DateTime<Utc>,
+) -> Vec<PlannedAction> {
+    let last_observed: HashMap<&str, Option<DateTime<Utc>>> = open
+        .iter()
+        .map(|event| (event.id.as_str(), parse_time(&event.last_observed_at)))
+        .collect();
+    actions
+        .into_iter()
+        .filter(|action| match action {
+            PlannedAction::Amend {
+                event_id,
+                changed: false,
+                ..
+            } => match last_observed.get(event_id.as_str()) {
+                Some(Some(last)) => now - *last >= UNCHANGED_AMEND_INTERVAL,
+                _ => true,
+            },
+            _ => true,
+        })
+        .collect()
 }
 
 /// What [`apply`] needs beyond the [`FarmView`]: each Printer's stored row
@@ -405,17 +460,7 @@ pub fn read_view<'a>(
     job_ids.extend(active_jobs(tx)?);
     job_ids.extend(open.iter().filter_map(|event| event.job_id.clone()));
     job_ids.extend(requirements.iter().map(|requirement| requirement.job_id.clone()));
-    for (id, state, ended_at) in ended_failures(tx)? {
-        let after_epoch = parse_time(&ended_at).is_some_and(|at| at >= attention_epoch);
-        let kind = if state == JobState::Failed {
-            ConditionKind::JobFailed
-        } else {
-            ConditionKind::JobHostCancelled
-        };
-        if after_epoch && !has_event(tx, &dedup_key(kind, &id))? {
-            job_ids.insert(id);
-        }
-    }
+    job_ids.extend(unprojected_failures(tx, attention_epoch)?);
     let mut jobs = Vec::with_capacity(job_ids.len());
     for id in &job_ids {
         if let Some(job) = jobs_repository::load_job(tx, id)? {
@@ -458,13 +503,31 @@ fn active_jobs(tx: &Transaction<'_>) -> Result<Vec<String>, RepositoryError> {
     )
 }
 
-/// Every `failed` or `cancelled{hostCancelled}` Job with an end time.
-fn ended_failures(tx: &Transaction<'_>) -> Result<Vec<(String, JobState, String)>, RepositoryError> {
+/// Every `failed` or `cancelled{hostCancelled}` Job that ended at or after
+/// `epoch` and has no Event (open or resolved) for its `job.failed` /
+/// `job.hostCancelled` key yet. Both filters run in SQL, so the read no
+/// longer grows with every failure the farm has ever projected.
+///
+/// `strftime('%s', ended_at)` is the end's whole second, so the SQL keeps
+/// every row with `ended_at >= epoch` (exactly those, for the whole-second
+/// epoch `attention_epoch` returns); a value SQLite can't parse is NULL and
+/// drops out, as before. The RFC 3339 re-check in Rust keeps the old rule
+/// for anything else (a value SQLite reads but RFC 3339 doesn't, say one
+/// with no offset).
+fn unprojected_failures(
+    tx: &Transaction<'_>,
+    epoch: DateTime<Utc>,
+) -> Result<Vec<String>, RepositoryError> {
     let mut statement = tx
         .prepare(
-            "SELECT id, state, ended_at FROM jobs
+            "SELECT id, ended_at FROM jobs
              WHERE ended_at IS NOT NULL
-               AND (state = ?1 OR (state = ?2 AND cancel_reason = ?3))",
+               AND (state = ?1 OR (state = ?2 AND cancel_reason = ?3))
+               AND CAST(strftime('%s', ended_at) AS INTEGER) >= ?4
+               AND NOT EXISTS (
+                 SELECT 1 FROM attention_events a
+                 WHERE a.dedup_key = (CASE WHEN jobs.state = ?1 THEN ?5 ELSE ?6 END) || jobs.id
+               )",
         )
         .map_err(storage_error)?;
     let rows = statement
@@ -472,36 +535,21 @@ fn ended_failures(tx: &Transaction<'_>) -> Result<Vec<(String, JobState, String)
             params![
                 encode_enum(JobState::Failed),
                 encode_enum(JobState::Cancelled),
-                encode_enum(CancelReason::HostCancelled)
+                encode_enum(CancelReason::HostCancelled),
+                epoch.timestamp(),
+                dedup_key(ConditionKind::JobFailed, ""),
+                dedup_key(ConditionKind::JobHostCancelled, ""),
             ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .map_err(storage_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(storage_error)?;
     Ok(rows
         .into_iter()
-        .filter_map(|(id, state, ended_at)| {
-            decode_enum::<JobState>(&state)
-                .ok()
-                .map(|state| (id, state, ended_at))
-        })
+        .filter(|(_, ended_at)| parse_time(ended_at).is_some_and(|at| at >= epoch))
+        .map(|(id, _)| id)
         .collect())
-}
-
-fn has_event(tx: &Transaction<'_>, key: &str) -> Result<bool, RepositoryError> {
-    tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM attention_events WHERE dedup_key = ?1)",
-        [key],
-        |row| row.get(0),
-    )
-    .map_err(storage_error)
 }
 
 /// D3 "Printer identity": a `printer.hostFailed` Incident's snapshot,
@@ -845,5 +893,267 @@ mod tests {
         let epoch = epoch_from_applied_at("2026-09-28T06:48:56.458Z").unwrap();
         assert!(parse_time("2026-09-28T06:48:56Z").unwrap() >= epoch);
         assert!(parse_time("2026-09-28T06:48:55Z").unwrap() < epoch);
+    }
+
+    /// Final review I1(b): only the failed and host-cancelled Jobs that
+    /// ended at or after the epoch and have no Event (open or resolved)
+    /// yet, with the old epoch rule (the migration's own second counts,
+    /// offsets are honoured), now filtered in SQL.
+    #[test]
+    fn unprojected_failures_are_those_since_the_epoch_with_no_event_yet() {
+        let (_temp, storage) = storage();
+        let hash = "d".repeat(64);
+        let epoch = epoch_from_applied_at("2026-09-28T09:00:00.458Z").unwrap();
+        storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                tx.execute_batch(&format!(
+                    "INSERT INTO printers(id, revision, name, catalog_vendor, catalog_model,
+                       catalog_variant, catalog_model_id, catalog_printer_variant, notes,
+                       overrides_json, created_at, updated_at)
+                     VALUES ('prn-a', 1, 'Voron', '', '', '', '', '', '', '{{}}', '{T0}', '{T0}');
+                     INSERT INTO content_blobs(sha256, size_bytes, created_at)
+                       VALUES ('{hash}', 1, '{T0}');
+                     INSERT INTO library_models(id, revision, name, format, storage_mode, created_at, updated_at)
+                       VALUES ('mdl-a', 1, 'Model', 'gcode', 'managed', '{T0}', '{T0}');
+                     INSERT INTO model_source_revisions(id, model_id, sequence, content_sha256, size_bytes,
+                       format, origin, source_file_name, source_path, captured_at, inspector_version,
+                       inspection_json)
+                       VALUES ('msr-a', 'mdl-a', 1, '{hash}', 1, 'gcode', 'import', 'p.gcode',
+                               '/p.gcode', '{T0}', 1, '{{}}');
+                     INSERT INTO slice_revisions(id, kind, model_id, source_revision_id, gcode_sha256,
+                       gcode_size, target_json, facts_json, requires_manual_printer_selection,
+                       estimates_json, created_at)
+                       VALUES ('slr-a', 'external', 'mdl-a', 'msr-a', '{hash}', 1,
+                               '{{}}', '{{}}', 1, '{{}}', '{T0}');
+                     INSERT INTO spools(id, revision, spool_number, manufacturer, material_family,
+                       color_name, diameter, nominal_mg, current_mg, confidence, lifecycle, created_at,
+                       updated_at)
+                       VALUES ('spl-a', 1, 1, 'Acme', 'PLA', 'Black', '1.75', 1000000, 1000000,
+                               'measured', 'active', '{T0}', '{T0}');"
+                ))?;
+                // (id, state, cancel_reason, ended_at)
+                let jobs = [
+                    ("job-before", "failed", "NULL", "2026-09-28T08:59:59Z"),
+                    ("job-same-second", "failed", "NULL", "2026-09-28T09:00:00Z"),
+                    ("job-projected", "failed", "NULL", "2026-09-28T09:30:00Z"),
+                    ("job-host-cancel", "cancelled", "'hostCancelled'", "2026-09-28T09:30:00Z"),
+                    ("job-operator", "cancelled", "'cancelledByOperator'", "2026-09-28T09:30:00Z"),
+                    ("job-offset", "failed", "NULL", "2026-09-28T09:30:00+02:00"),
+                    ("job-fraction", "failed", "NULL", "2026-09-28T10:00:00.250Z"),
+                    ("job-completed", "completed", "NULL", "2026-09-28T10:30:00Z"),
+                ];
+                for (index, (id, state, cancel_reason, ended_at)) in jobs.iter().enumerate() {
+                    tx.execute_batch(&format!(
+                        "INSERT INTO spool_reservations(id, spool_id, holder_kind, holder_id, amount_mg,
+                           state, operation_id, created_at)
+                           VALUES ('rsv-{id}', 'spl-a', 'job', '{id}', 1000, 'active', 'op-{id}', '{T0}');
+                         INSERT INTO queue_entries(id, revision, slice_revision_id, lineage_id, copy_index,
+                           state, position, policy, preference, estimate_mg, estimate_source, created_at,
+                           updated_at)
+                           VALUES ('qen-{id}', 1, 'slr-a', 'qln-{id}', 1, 'queued', {index} + 1, 'manual',
+                                   'loadedFirst', 1000, 'operatorEntered', '{T0}', '{T0}');
+                         INSERT INTO jobs(id, revision, queue_entry_id, slice_revision_id, printer_id,
+                           printer_snapshot_json, spool_id, reservation_id, estimate_mg, state,
+                           cancel_reason, settlement, assigned_by, created_at, updated_at, ended_at)
+                           VALUES ('{id}', 1, 'qen-{id}', 'slr-a', 'prn-a', '{{}}', 'spl-a', 'rsv-{id}',
+                                   1000, '{state}', {cancel_reason}, 'pending', 'operator',
+                                   '{T0}', '{T0}', '{ended_at}');"
+                    ))?;
+                }
+                // An Event for the key, even a resolved one, means projected.
+                let condition = Condition {
+                    kind: ConditionKind::JobFailed,
+                    source_id: "job-projected".to_string(),
+                    printer_id: Some("prn-a".to_string()),
+                    job_id: Some("job-projected".to_string()),
+                    spool_id: None,
+                    requirement_id: None,
+                    subject: crate::attention::AttentionSubject {
+                        printer_name: Some("Voron".to_string()),
+                        printer_location: None,
+                        job_label: None,
+                        spool_number: None,
+                        spool_label: None,
+                    },
+                    detail: AttentionDetail::JobFailed {
+                        ended_at: "2026-09-28T09:30:00Z".to_string(),
+                    },
+                    acknowledge: false,
+                };
+                let projected =
+                    attention_repository::insert(tx, &condition, None, false, AttentionOrigin::Live, at(0))?;
+                attention_repository::resolve(
+                    tx,
+                    &projected.id,
+                    crate::attention::AttentionResolution::OperatorResolved,
+                    at(0),
+                )?;
+
+                let mut found = unprojected_failures(tx, epoch)?;
+                found.sort();
+                assert_eq!(
+                    found,
+                    ["job-fraction", "job-host-cancel", "job-same-second"],
+                    "before the epoch (by offset too), projected, operator-cancelled, and \
+                     completed Jobs stay out"
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    // --- Decision 40: unchanged amendments persist at most once a minute --
+
+    use crate::attention::{AttentionDetail, AttentionSeverity};
+    use crate::persistence::{MetadataRootLease, StoragePaths};
+
+    const T0: &str = "2026-09-28T12:00:00Z";
+
+    fn at(seconds: i64) -> DateTime<Utc> {
+        T0.parse::<DateTime<Utc>>().unwrap() + chrono::TimeDelta::seconds(seconds)
+    }
+
+    fn amend(event_id: &str, changed: bool) -> PlannedAction {
+        PlannedAction::Amend {
+            event_id: event_id.to_string(),
+            detail: AttentionDetail::SpoolLow {
+                current_mg: 1,
+                low_threshold_mg: 2,
+            },
+            severity: AttentionSeverity::Info,
+            summary: "low".to_string(),
+            changed,
+        }
+    }
+
+    fn open_event(id: &str, last_observed_at: &str) -> AttentionEvent {
+        let (_temp, storage) = storage();
+        seed_low_spool(&storage, 80_000);
+        let mut event = pass_at(&storage, at(0)).events[0].event.clone();
+        event.id = id.to_string();
+        event.last_observed_at = last_observed_at.to_string();
+        event
+    }
+
+    #[test]
+    fn an_unchanged_amend_is_kept_only_a_minute_after_the_last_persisted_observation() {
+        let open = [
+            open_event("att-recent", "2026-09-28T12:00:00Z"),
+            open_event("att-garbled", "not a time"),
+        ];
+        let actions = vec![
+            amend("att-recent", false),
+            amend("att-recent", true),
+            amend("att-garbled", false),
+            PlannedAction::Acknowledge {
+                event_id: "att-recent".to_string(),
+            },
+        ];
+        // 59.999 s later: only the unchanged amendment of the recent Event
+        // is dropped.
+        let kept = persisted_actions(actions.clone(), &open, at(60) - chrono::TimeDelta::milliseconds(1));
+        assert_eq!(kept, actions[1..].to_vec());
+        // Exactly 60 s later: every action is written.
+        assert_eq!(persisted_actions(actions.clone(), &open, at(60)), actions);
+    }
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+        let lease = MetadataRootLease::acquire(&paths).unwrap();
+        let storage = Storage::open(paths, &lease).unwrap();
+        (temp, storage)
+    }
+
+    fn seed_low_spool(storage: &Storage, current_mg: i64) {
+        storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                tx.execute_batch(&format!(
+                    "INSERT INTO spools(id, revision, spool_number, manufacturer, material_family,
+                       color_name, diameter, nominal_mg, current_mg, confidence, lifecycle,
+                       created_at, updated_at)
+                     VALUES ('spl-a', 1, 12, 'Acme', 'PLA', 'Black', '1.75', 1000000, {current_mg},
+                             'measured', 'active', '{T0}', '{T0}');"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn set_current_mg(storage: &Storage, current_mg: i64) {
+        storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                tx.execute("UPDATE spools SET current_mg = ?1 WHERE id = 'spl-a'", [current_mg])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// One live pass at `now` (no Printers, so no statuses matter).
+    fn pass_at(storage: &Storage, now: DateTime<Utc>) -> AppliedChanges {
+        let statuses = HashMap::new();
+        let live = LiveInputs {
+            statuses: &statuses,
+            supervisors_started_at: None,
+            catalog: None,
+        };
+        run(storage, &live, &mut PrinterWatch::default(), AttentionOrigin::Live, now)
+            .unwrap()
+            .changes
+    }
+
+    fn the_event(storage: &Storage) -> AttentionEvent {
+        storage
+            .read(|connection| Ok(attention_repository::open_events(connection)))
+            .unwrap()
+            .unwrap()
+            .pop()
+            .expect("one open Event")
+    }
+
+    #[test]
+    fn a_pass_persists_an_unchanged_amend_once_a_minute_and_a_changed_one_at_once() {
+        let (_temp, storage) = storage();
+        seed_low_spool(&storage, 80_000);
+        let inserted = pass_at(&storage, at(0));
+        assert_eq!(inserted.events.len(), 1);
+        let first = the_event(&storage);
+        assert_eq!(first.observation_count, 1);
+
+        // Passes inside the minute over the unchanged Event write nothing.
+        for seconds in [1, 10, 59] {
+            let changes = pass_at(&storage, at(seconds));
+            assert!(changes.is_empty(), "{changes:?}");
+            assert_eq!(the_event(&storage), first, "no amendment written at +{seconds}s");
+        }
+
+        // A minute on: one persisted observation, and still nothing published.
+        let changes = pass_at(&storage, at(60));
+        assert!(changes.is_empty(), "an unchanged amendment emits nothing: {changes:?}");
+        let observed = the_event(&storage);
+        assert_eq!(observed.observation_count, 2);
+        assert_eq!(observed.last_observed_at, "2026-09-28T12:01:00Z");
+        assert_eq!(observed.revision, first.revision);
+        let changes = pass_at(&storage, at(61));
+        assert!(changes.is_empty());
+        assert_eq!(the_event(&storage), observed, "once, not on every later pass");
+
+        // A changed amendment inside the minute writes and publishes.
+        set_current_mg(&storage, 70_000);
+        let changes = pass_at(&storage, at(65));
+        assert_eq!(changes.events.len(), 1, "{changes:?}");
+        assert_eq!(changes.events[0].change, EventChange::Amended);
+        let changed = the_event(&storage);
+        assert_eq!(changed.revision, first.revision + 1);
+        assert_eq!(changed.observation_count, 3);
+        assert_eq!(changed.last_observed_at, "2026-09-28T12:01:05Z");
+        assert_eq!(
+            changed.detail,
+            AttentionDetail::SpoolLow {
+                current_mg: 70_000,
+                low_threshold_mg: 100_000
+            }
+        );
+        assert_eq!(changes.events[0].event, changed);
     }
 }
