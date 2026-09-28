@@ -42,7 +42,10 @@ pub enum LifecycleAction {
 /// Printer — decision 7), `QueueEntryPinned` (delete: an open Queue Entry
 /// is pinned to the Printer through `manual_printer_id`), and
 /// `QueueReferencesRevision` (Slice Revision delete: a Queue Entry or Job
-/// references it).
+/// references it). P8 D8 adds `IncidentHistoryExists` (delete: an
+/// Incident references the Printer — owner decision 3) and
+/// `PinnedEvidenceExists` (delete: a pinned, unpruned `manual` snapshot of
+/// the Printer has no Incident and no Job).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(
@@ -60,6 +63,8 @@ pub enum LifecycleBlockerCode {
     JobHistoryExists,
     QueueEntryPinned,
     QueueReferencesRevision,
+    IncidentHistoryExists,
+    PinnedEvidenceExists,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -136,6 +141,7 @@ pub fn blocker_sources() -> &'static [&'static dyn LifecycleBlockerSource] {
         &LoadedSpoolBlockers,
         &crate::host_ops::guards::HostOperationBlockers,
         &crate::jobs::guards::JobBlockers,
+        &crate::incidents::guards::IncidentBlockers,
     ]
 }
 

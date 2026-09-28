@@ -12,6 +12,9 @@
  * Printer — decision 7), `QueueEntryPinned` (delete: an open Queue Entry
  * is pinned to the Printer through `manual_printer_id`), and
  * `QueueReferencesRevision` (Slice Revision delete: a Queue Entry or Job
- * references it).
+ * references it). P8 D8 adds `IncidentHistoryExists` (delete: an
+ * Incident references the Printer — owner decision 3) and
+ * `PinnedEvidenceExists` (delete: a pinned, unpruned `manual` snapshot of
+ * the Printer has no Incident and no Job).
  */
-export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST" | "HOST_OPERATION_UNRESOLVED" | "JOB_ACTIVE" | "JOB_HISTORY_EXISTS" | "QUEUE_ENTRY_PINNED" | "QUEUE_REFERENCES_REVISION";
+export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST" | "HOST_OPERATION_UNRESOLVED" | "JOB_ACTIVE" | "JOB_HISTORY_EXISTS" | "QUEUE_ENTRY_PINNED" | "QUEUE_REFERENCES_REVISION" | "INCIDENT_HISTORY_EXISTS" | "PINNED_EVIDENCE_EXISTS";

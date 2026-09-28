@@ -1009,11 +1009,10 @@ fn an_invalid_imported_camera_or_alert_default_rejects_the_import() {
     );
 }
 
-/// Controller carry 1: until Task 11's `EVIDENCE_EXISTS` guard, an import
-/// that would replace a Printer with an Incident fails at the foreign key.
-/// It must fail cleanly: an error, not a panic, and nothing written.
+/// P8 D8: an import that would replace a Printer with an Incident fails
+/// `EVIDENCE_EXISTS` before anything is attempted, and writes nothing.
 #[test]
-fn an_import_over_a_printer_with_incident_history_fails_cleanly() {
+fn an_import_over_a_printer_with_incident_history_fails_evidence_exists() {
     let rig = Rig::new();
     let id = rig
         .create(
@@ -1041,12 +1040,10 @@ fn an_import_over_a_printer_with_incident_history_fails_cleanly() {
             json!([imported_printer("prn-other", json!({}))]),
         ))
         .unwrap_err();
-    // Today the foreign key refuses the delete and the transaction rolls
-    // back (`PERSISTENCE_UNAVAILABLE`); Task 11's guard makes it
-    // `EVIDENCE_EXISTS` before anything is attempted.
-    assert!(
-        ["PERSISTENCE_UNAVAILABLE", "EVIDENCE_EXISTS"].contains(&error["code"].as_str().unwrap()),
-        "{error}"
+    assert_eq!(error["code"], "EVIDENCE_EXISTS", "{error}");
+    assert_eq!(
+        error["details"],
+        json!({"printerIds": [id], "incidentIds": ["inc-carry"], "snapshotIds": []})
     );
     assert!(!error.to_string().contains("192.0.2.49"), "{error}");
     assert_eq!(rig.count("SELECT COUNT(*) FROM printers"), 1);

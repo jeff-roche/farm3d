@@ -439,9 +439,16 @@ pub async fn unarchive_printer<R: tauri::Runtime>(
     }))
 }
 
+/// D6: deletes an archived Printer. P8 D8: blocked by Incident history
+/// (`INCIDENT_HISTORY_EXISTS`) or pinned unattached camera evidence
+/// (`PINNED_EVIDENCE_EXISTS`); otherwise its open Attention Events resolve
+/// `sourceRemoved` (published after commit) and its unattached, unpinned
+/// or pruned manual snapshots go with it. The delete runs under the media
+/// janitor's lock, so no capture or prune is between its plan and its
+/// commit while the Printer's snapshot rows are removed.
 #[tauri::command]
 pub async fn delete_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     expected_revision: i64,
@@ -449,10 +456,25 @@ pub async fn delete_printer<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<DeletePrinterResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let deleted = crate::connections::commands::with_credential_coordination(|| {
-        PrinterRepository::new(Arc::clone(&services.storage)).delete(&id, expected_revision)
-    })
-    .map_err(CommandError::from_repository)?;
+    let deletion = {
+        let _media = services.cameras.janitor().lock().await;
+        crate::connections::commands::with_credential_coordination(|| {
+            PrinterRepository::new(Arc::clone(&services.storage)).delete_with_outcome(
+                &id,
+                expected_revision,
+                services.attention.now(),
+            )
+        })
+        .map_err(CommandError::from_repository)?
+    };
+    // P8 D8 step 4: the resolved Events (and any Incident with them).
+    services.attention.stream.publish_change(
+        &app,
+        &deletion.resolved.events,
+        &deletion.resolved.incidents,
+        &[],
+    );
+    let deleted = deletion.printer;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
     if !services.manager.stop_and_wait(&id).await {
@@ -923,16 +945,25 @@ pub async fn import_printers<R: tauri::Runtime>(
             (printer.id.clone(), layout)
         })
         .collect();
-    let (stored, previous_cameras) =
-        crate::connections::commands::with_credential_coordination(|| {
-            PrinterRepository::new(Arc::clone(&services.storage)).replace_all_with_setup(
-                &expected,
-                document.printers,
-                &layouts,
-                &document.setups,
-            )
-        })
-        .map_err(CommandError::from_repository)?;
+    let crate::printers::repository::ReplaceAllOutcome {
+        stored,
+        previous_cameras,
+        resolved_events,
+    } = crate::connections::commands::with_credential_coordination(|| {
+        PrinterRepository::new(Arc::clone(&services.storage)).replace_all_with_setup(
+            &expected,
+            document.printers,
+            &layouts,
+            &document.setups,
+            services.attention.now(),
+        )
+    })
+    .map_err(CommandError::from_repository)?;
+    // P8 D8: the replaced Printers' open Events, resolved `sourceRemoved`.
+    services
+        .attention
+        .stream
+        .publish_change(&app, &resolved_events, &[], &[]);
     // P8 D4: a Printer the import removed is forgotten by the camera
     // services; one whose source the import changed (added, replaced, or
     // cleared) has its health reset and published. An unchanged source

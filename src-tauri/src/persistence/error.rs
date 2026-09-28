@@ -284,6 +284,16 @@ pub enum RepositoryError {
         cap_bytes: i64,
         pinned_bytes: i64,
     },
+    /// P8 D8: `import_printers` (`replace_all`) while any Incident or any
+    /// `camera_snapshots` row exists. `replace_all` deletes every Printer,
+    /// and `incidents.printer_id` and `camera_snapshots.printer_id` are
+    /// `ON DELETE RESTRICT`, so this is checked up front instead. Nothing
+    /// was written. `EVIDENCE_EXISTS`. Each list is capped at 20.
+    EvidenceExists {
+        printer_ids: Vec<String>,
+        incident_ids: Vec<String>,
+        snapshot_ids: Vec<String>,
+    },
     Storage(StorageError),
 }
 

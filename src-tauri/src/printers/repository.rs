@@ -25,6 +25,29 @@ pub struct PrinterRepository {
     storage: Arc<Storage>,
 }
 
+/// What a committed [`PrinterRepository::delete_with_outcome`] changed.
+#[derive(Debug)]
+pub struct PrinterDeletion {
+    /// The deleted row, as it was.
+    pub printer: StoredPrinter,
+    /// P8 D8: the Printer's open Events, now resolved `sourceRemoved`
+    /// (and any Incident that changed with them), to publish.
+    pub resolved: crate::incidents::guards::ResolvedPrinterEvents,
+}
+
+/// What a committed [`PrinterRepository::replace_all_with_setup`] changed.
+#[derive(Debug)]
+pub struct ReplaceAllOutcome {
+    /// The imported Printers, sorted by id.
+    pub stored: Vec<StoredPrinter>,
+    /// Every camera source stored before the import, so the caller can
+    /// tell which Printers' sources changed.
+    pub previous_cameras: std::collections::HashMap<String, crate::cameras::CameraSource>,
+    /// P8 D8: every replaced Printer's open Events, now resolved
+    /// `sourceRemoved`, to publish.
+    pub resolved_events: Vec<crate::attention::AttentionEvent>,
+}
+
 impl PrinterRepository {
     pub fn new(storage: Arc<Storage>) -> Self {
         Self { storage }
@@ -288,40 +311,67 @@ impl PrinterRepository {
         result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
     }
 
+    /// [`delete_with_outcome`](Self::delete_with_outcome) at the current
+    /// time, returning only the deleted row.
     pub fn delete(
         &self,
         id: &str,
         expected_revision: i64,
     ) -> Result<StoredPrinter, RepositoryError> {
+        self.delete_with_outcome(id, expected_revision, chrono::Utc::now())
+            .map(|deletion| deletion.printer)
+    }
+
+    /// D6: deletes an archived Printer, in one transaction: the revision
+    /// check, the lifecycle guards (P7's Job history, P8 D8's Incident
+    /// history and pinned evidence, ...), the Printer's terminal Host
+    /// Operation rows (P6 owner decision 5), then P8 D8's delete-time
+    /// steps -- its open Attention Events resolve `sourceRemoved` (at
+    /// `now`), its unattached `manual` snapshot rows that are unpinned or
+    /// pruned are removed -- and finally the row itself.
+    /// `attention_events.printer_id` becomes NULL (`ON DELETE SET NULL`;
+    /// each Event keeps its subject), and `printer_cameras` and
+    /// `printer_alert_defaults` cascade. After commit, the removed
+    /// snapshots' files are unlinked; the caller publishes the resolved
+    /// Events and pokes the projector.
+    pub fn delete_with_outcome(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<PrinterDeletion, RepositoryError> {
         if expected_revision <= 0 {
             return Err(RepositoryError::Validation {
                 field_path: "expectedRevision",
             });
         }
-        let mut blocked: Option<Vec<super::lifecycle::LifecycleBlocker>> = None;
-        let result = self.storage.write(|transaction| {
-            let printer = transaction
-                .query_row(
-                    &format!("SELECT {PRINTER_COLUMNS} FROM printers WHERE id = ?1"),
-                    [id],
-                    decode,
-                )
-                .optional()?
-                .ok_or(StorageError::OperationFailed)?;
+        let (deletion, rel_paths) = self.storage.write_repo(|transaction| {
+            let printer = load_for_write(transaction, id)?;
             if printer.revision != expected_revision {
-                return Err(StorageError::OperationFailed);
+                return Err(RepositoryError::Conflict {
+                    entity_id: id.to_string(),
+                    expected_revision,
+                    current_revision: printer.revision,
+                });
             }
             let eligibility = evaluate(&printer, transaction)?;
             if !eligibility.can_delete {
-                blocked = Some(blockers_for(eligibility, LifecycleAction::Delete));
-                return Err(StorageError::OperationFailed);
+                return Err(RepositoryError::LifecycleBlocked(blockers_for(
+                    eligibility,
+                    LifecycleAction::Delete,
+                )));
             }
             // P6 owner decision 5: the Printer's terminal Host Operation
             // rows go with it. The blocker check above has just proved
             // none is unresolved (`HostOperationBlockers`), and
             // `ON DELETE RESTRICT` backs that up.
-            host_operations::delete_terminal_for_printer(transaction, id)
-                .map_err(crate::host_ops::guards::storage_error)?;
+            host_operations::delete_terminal_for_printer(transaction, id)?;
+            // P8 D8 steps 1 and 2. The guards above have proved no
+            // Incident, no Job, and no pinned unpruned unattached snapshot
+            // references the Printer, so these leave nothing behind that
+            // `ON DELETE RESTRICT` would refuse.
+            let resolved = crate::incidents::guards::resolve_printer_events(transaction, id, now)?;
+            let rel_paths = crate::cameras::media::remove_unattached_manual(transaction, id)?;
             transaction.execute("DELETE FROM printers WHERE id = ?1", [id])?;
             if let Some(reference) = printer
                 .connection
@@ -330,12 +380,16 @@ impl PrinterRepository {
             {
                 enqueue_credential_cleanup(transaction, reference, Some(id), "printer_deleted")?;
             }
-            Ok(printer)
-        });
-        if let Some(blockers) = blocked {
-            return Err(RepositoryError::LifecycleBlocked(blockers));
+            Ok((PrinterDeletion { printer, resolved }, rel_paths))
+        })?;
+        // P8 D8 step 4: the removed rows' files, after commit. One that
+        // can't be removed now has no row left, so the next startup sweep
+        // deletes it.
+        let media = crate::cameras::media::MediaStore::for_storage(&self.storage);
+        for rel_path in &rel_paths {
+            media.unlink(rel_path);
         }
-        result.map_err(|error| classify_entity_write(error, self, id, expected_revision))
+        Ok(deletion)
     }
 
     /// D6/P3 D10: moves a Printer into the archived state, relocating its
@@ -636,8 +690,14 @@ impl PrinterRepository {
         imported: Vec<StoredPrinter>,
         layouts: &std::collections::HashMap<String, Vec<SlotSpec>>,
     ) -> Result<Vec<StoredPrinter>, RepositoryError> {
-        self.replace_all_with_setup(expected, imported, layouts, &Default::default())
-            .map(|(stored, _)| stored)
+        self.replace_all_with_setup(
+            expected,
+            imported,
+            layouts,
+            &Default::default(),
+            chrono::Utc::now(),
+        )
+        .map(|outcome| outcome.stored)
     }
 
     /// [`replace_all`](Self::replace_all), plus P8's setup rows (schema 4):
@@ -647,19 +707,19 @@ impl PrinterRepository {
     /// row. Also returns every camera source stored before the import, read
     /// in the same transaction, so the caller can tell which Printers'
     /// sources changed.
+    ///
+    /// P8 D8: any Incident or any `camera_snapshots` row rejects the whole
+    /// import (`EVIDENCE_EXISTS`) before anything is written, and every
+    /// replaced Printer's open Events resolve `sourceRemoved` before the
+    /// `DELETE FROM printers` NULLs their `printer_id` (at `resolved_at`).
     pub fn replace_all_with_setup(
         &self,
         expected: &[(String, i64)],
         mut imported: Vec<StoredPrinter>,
         layouts: &std::collections::HashMap<String, Vec<SlotSpec>>,
         setups: &std::collections::HashMap<String, PrinterSetupExtras>,
-    ) -> Result<
-        (
-            Vec<StoredPrinter>,
-            std::collections::HashMap<String, crate::cameras::CameraSource>,
-        ),
-        RepositoryError,
-    > {
+        resolved_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<ReplaceAllOutcome, RepositoryError> {
         self.storage.write_repo(|transaction| {
             let mut statement = transaction
                 .prepare("SELECT id, revision FROM printers ORDER BY CAST(id AS BLOB)")?;
@@ -685,13 +745,29 @@ impl PrinterRepository {
             // mid-import. Checked before the (narrower) unresolved Host
             // Operation guard, since this one is decisive on its own.
             crate::jobs::guards::check_import(transaction)?;
+            // P8 D8: likewise any Incident or camera snapshot
+            // (`EVIDENCE_EXISTS`): both reference their Printer
+            // `ON DELETE RESTRICT`.
+            crate::incidents::guards::check_import(transaction)?;
             // P6 D7: an unresolved Host Operation anywhere rejects the whole
             // import. Terminal rows go with the Printers the import
             // replaces (owner decision 5), before `printer_id`'s
             // `ON DELETE RESTRICT` would refuse the delete below.
             crate::host_ops::guards::check_import(transaction)?;
+            let mut resolved_events = Vec::new();
             for (printer_id, _) in &current {
                 host_operations::delete_terminal_for_printer(transaction, printer_id)?;
+                // P8 D8: every replaced Printer's open Events resolve
+                // `sourceRemoved`. None is linked to an Incident, since
+                // any Incident rejected the import above.
+                resolved_events.extend(
+                    crate::incidents::guards::resolve_printer_events(
+                        transaction,
+                        printer_id,
+                        resolved_at,
+                    )?
+                    .events,
+                );
             }
             let revisions: std::collections::HashMap<_, _> = current.into_iter().collect();
             let old_references = transaction.prepare("SELECT DISTINCT json_extract(connection_json, '$.credentialRef') FROM printers WHERE json_extract(connection_json, '$.credentialRef') IS NOT NULL")?
@@ -729,7 +805,11 @@ impl PrinterRepository {
                 )?;
             }
             imported.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
-            Ok((imported, previous_cameras))
+            Ok(ReplaceAllOutcome {
+                stored: imported,
+                previous_cameras,
+                resolved_events,
+            })
         })
     }
 }

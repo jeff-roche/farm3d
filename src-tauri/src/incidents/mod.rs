@@ -4,11 +4,12 @@
 //! ("Vocabulary and ownership") and "Backend model" module layout table.
 //!
 //! It holds the wire types, the repository ([`repository`]: open, link,
-//! reopen, `append_entry`, `close_if_settled`), and the three Incident
-//! commands ([`commands`]). The lifecycle-blocker and import guards are a
-//! later task (see the module layout table in the design spec).
+//! reopen, `append_entry`, `close_if_settled`), the three Incident
+//! commands ([`commands`]), and the D8 lifecycle and import guards
+//! ([`guards`]).
 
 pub mod commands;
+pub mod guards;
 pub mod repository;
 
 use serde::{Deserialize, Serialize};

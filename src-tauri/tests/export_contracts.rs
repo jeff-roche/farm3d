@@ -933,6 +933,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::EvidencePruned,
         ErrorCode::SnapshotDiskCap,
         ErrorCode::NotificationsUnavailable,
+        ErrorCode::EvidenceExists,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -978,7 +979,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
                 "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
-                "NOTIFICATIONS_UNAVAILABLE"
+                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

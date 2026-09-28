@@ -509,6 +509,38 @@ pub fn incident_has_evidence(conn: &Connection, incident_id: &str) -> Result<boo
     )?)
 }
 
+/// P8 D8, Printer delete step 2, inside the delete's transaction (after
+/// its guards): deletes the Printer's `manual` snapshot rows with no
+/// Incident and no Job that are unpinned or pruned, and returns the
+/// `rel_path`s of the unpruned ones, whose files the caller unlinks after
+/// commit ([`MediaStore::unlink`]). A pinned, unpruned row is left in
+/// place: `PINNED_EVIDENCE_EXISTS` has already blocked the delete, and
+/// `ON DELETE RESTRICT` backs that up. A crash between the commit and the
+/// unlink leaves files with no row, which the startup sweep deletes.
+pub fn remove_unattached_manual(
+    tx: &Transaction<'_>,
+    printer_id: &str,
+) -> Result<Vec<String>, StorageError> {
+    const UNATTACHED: &str = "printer_id = ?1 AND trigger = 'manual'
+         AND incident_id IS NULL AND job_id IS NULL
+         AND (pinned_at IS NULL OR pruned_at IS NOT NULL)";
+    let rel_paths = {
+        let mut statement = tx.prepare(&format!(
+            "SELECT rel_path FROM camera_snapshots WHERE {UNATTACHED} AND pruned_at IS NULL
+             ORDER BY id"
+        ))?;
+        let paths = statement
+            .query_map([printer_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        paths
+    };
+    tx.execute(
+        &format!("DELETE FROM camera_snapshots WHERE {UNATTACHED}"),
+        [printer_id],
+    )?;
+    Ok(rel_paths)
+}
+
 // --- what a media transaction changed ----------------------------------------------
 
 /// A committed media transaction's rows, to publish on the `attention`

@@ -398,6 +398,9 @@ pub enum ErrorCode {
     /// P8 D6: `send_test_notification` with an `unavailable` or
     /// `unsupported` notifier.
     NotificationsUnavailable,
+    /// P8 D8: a Printers import while any Incident or camera snapshot
+    /// exists.
+    EvidenceExists,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -808,6 +811,30 @@ impl CommandError {
             ("printerIds".to_string(), strings(printer_ids)),
             ("jobIds".to_string(), strings(job_ids)),
             ("queueEntryIds".to_string(), strings(queue_entry_ids)),
+        ]));
+        error
+    }
+
+    /// P8 D8 `EVIDENCE_EXISTS`: `import_printers` while any Incident or any
+    /// camera snapshot exists. Each list is at most 20.
+    pub fn evidence_exists(
+        printer_ids: &[String],
+        incident_ids: &[String],
+        snapshot_ids: &[String],
+    ) -> Self {
+        let strings = |values: &[String]| {
+            JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
+        };
+        let mut error = Self::typed(
+            ErrorCode::EvidenceExists,
+            "Printers with Incidents or camera evidence can't be replaced by an import.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("printerIds".to_string(), strings(printer_ids)),
+            ("incidentIds".to_string(), strings(incident_ids)),
+            ("snapshotIds".to_string(), strings(snapshot_ids)),
         ]));
         error
     }
@@ -1869,6 +1896,11 @@ impl CommandError {
                 cap_bytes,
                 pinned_bytes,
             } => Self::snapshot_disk_cap(used_bytes, cap_bytes, pinned_bytes),
+            RepositoryError::EvidenceExists {
+                printer_ids,
+                incident_ids,
+                snapshot_ids,
+            } => Self::evidence_exists(&printer_ids, &incident_ids, &snapshot_ids),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

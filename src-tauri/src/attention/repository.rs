@@ -518,9 +518,10 @@ pub fn list_attention(
     })
 }
 
-/// D8 (a later task): Printer delete resolves its open Events
-/// `sourceRemoved`. Returns the ones that actually changed (always all of
-/// them here, since every input row is open by construction).
+/// D8: Printer delete (and `replace_all`) resolves its open Events
+/// `sourceRemoved`, through `incidents::guards::resolve_printer_events`.
+/// Returns the ones that actually changed (always all of them here, since
+/// every input row is open by construction).
 pub fn resolve_for_printer(
     tx: &Transaction<'_>,
     printer_id: &str,
