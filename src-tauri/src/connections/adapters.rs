@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use super::capabilities::{
     ArtifactStaging, CameraDiscovery, CapabilityEvidence, CapabilityKey, EvidenceTier,
-    HostStateQuery, PrintControl,
+    HostStateQuery, PrintControl, WebcamSnapshotSource,
 };
 use super::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
 use super::moonraker::MoonrakerConnection;
@@ -32,6 +32,9 @@ pub type HostStateBuilder =
     fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn HostStateQuery>;
 pub type CameraBuilder =
     fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn CameraDiscovery>;
+/// P8 D4: the crate-private host-webcam snapshot lookup (Moonraker only).
+pub(crate) type WebcamSnapshotBuilder =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Box<dyn WebcamSnapshotSource>;
 
 pub struct AdapterDescriptor {
     pub kind: &'static str,
@@ -40,6 +43,10 @@ pub struct AdapterDescriptor {
     pub control: Option<ControlBuilder>,
     pub host_state: Option<HostStateBuilder>,
     pub camera: Option<CameraBuilder>,
+    /// P8 D4: resolves a `hostWebcam` camera source's snapshot URL. `None`
+    /// means `hostWebcam` is `unsupportedAdapter` on this adapter (a
+    /// `snapshotUrl` source still works). Crate-private, like the lookup.
+    pub(crate) webcam_snapshot: Option<WebcamSnapshotBuilder>,
     /// Per-capability evidence (D6) — the UI shows each capability's own
     /// tier, so this is never one evidence value for the whole adapter.
     pub evidence: &'static [(CapabilityKey, CapabilityEvidence)],
@@ -92,6 +99,13 @@ fn moonraker_camera(
     Box::new(moonraker_capabilities(config, api_key))
 }
 
+fn moonraker_webcam_snapshot(
+    config: &ConnectionConfig,
+    api_key: Option<zeroize::Zeroizing<String>>,
+) -> Box<dyn WebcamSnapshotSource> {
+    Box::new(moonraker_capabilities(config, api_key))
+}
+
 fn octoprint_observe(
     config: &ConnectionConfig,
     api_key: Option<zeroize::Zeroizing<String>>,
@@ -123,7 +137,12 @@ pub const MOONRAKER_SIM_VERSION: &str = "Moonraker v0.11.0-1-g1cfb0c4-prind API 
 pub const MOONRAKER_READ_ONLY_VERSION: &str = "Moonraker 1.5.2 API 1.4.0 (read-only hardware)";
 
 /// D6 "Rows at the end of P6": a `sim` row for every Moonraker capability.
-/// `camera` is the camera query only; the simulator has no webcam (Gate H).
+/// `camera` is the camera query only. The P6 simulator listed no webcam
+/// (Gate H); since P8 the single-extruder simulator lists `[webcam
+/// farm3d-sim]`, so the query has a non-empty `sim` answer, and the P8 run
+/// `docs/superpowers/baselines/2026-09-28-p8-sim-manifest-20260928T152754Z.json`
+/// resolved and fetched a frame from it (`tests/sim_moonraker.rs`'s P8
+/// section and `tests/p8_tracer.rs`).
 static MOONRAKER_EVIDENCE: LazyLock<Vec<(CapabilityKey, CapabilityEvidence)>> =
     LazyLock::new(|| {
         CapabilityKey::ALL
@@ -159,6 +178,7 @@ static REGISTRY: LazyLock<[AdapterDescriptor; 2]> = LazyLock::new(|| {
             control: Some(moonraker_control),
             host_state: Some(moonraker_host_state),
             camera: Some(moonraker_camera),
+            webcam_snapshot: Some(moonraker_webcam_snapshot),
             evidence: MOONRAKER_EVIDENCE.as_slice(),
         },
         AdapterDescriptor {
@@ -168,6 +188,7 @@ static REGISTRY: LazyLock<[AdapterDescriptor; 2]> = LazyLock::new(|| {
             control: None,
             host_state: None,
             camera: None,
+            webcam_snapshot: None,
             evidence: &[],
         },
     ]
@@ -227,6 +248,7 @@ mod tests {
         let _control = (moonraker.control.expect("control"))(&config, None);
         let _host_state = (moonraker.host_state.expect("host state"))(&config, None);
         let _camera = (moonraker.camera.expect("camera"))(&config, None);
+        let _webcam = (moonraker.webcam_snapshot.expect("webcam snapshot"))(&config, None);
     }
 
     /// Task 12 (D6): one `sim` row per capability, each naming the P6
@@ -283,6 +305,7 @@ mod tests {
         assert!(octoprint.control.is_none());
         assert!(octoprint.host_state.is_none());
         assert!(octoprint.camera.is_none());
+        assert!(octoprint.webcam_snapshot.is_none());
     }
 
     #[test]

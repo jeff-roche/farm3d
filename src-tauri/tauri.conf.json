@@ -26,7 +26,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../public/catalog/printer-catalog.json": "resources/printer-catalog.json"
+      "../public/catalog/printer-catalog.json": "resources/printer-catalog.json",
+      "icons/128x128.png": "resources/farm3d-notification.png"
     },
     "icon": [
       "icons/32x32.png",

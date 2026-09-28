@@ -2,6 +2,7 @@ import { For, Match, Show, Suspense, Switch, createSignal, lazy, onCleanup, onMo
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
+import { attention } from "../attention/attention-store";
 import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
@@ -11,8 +12,11 @@ import { MonitorQueueDock } from "./MonitorQueueDock";
 import { queue } from "../queue/queue-store";
 import styles from "./PrinterDashboard.module.css";
 
-// The batch dialog loads on first use, keeping it out of the main chunk.
+// The batch dialog and the Attention Event/Incident dock detail all load
+// on first use, keeping them out of the main chunk.
 const PrinterBatchDialog = lazy(() => import("./PrinterBatchDialog").then((m) => ({ default: m.PrinterBatchDialog })));
+const AttentionEventDetail = lazy(() => import("./AttentionEventDetail").then((m) => ({ default: m.AttentionEventDetail })));
+const IncidentDetail = lazy(() => import("./IncidentDetail").then((m) => ({ default: m.IncidentDetail })));
 
 export interface PrinterDashboardProps {
   store: MonitorStore;
@@ -29,6 +33,15 @@ export interface PrinterDashboardProps {
   /** Called once a Printer has been permanently deleted through the Setup
    *  tab's guarded Archive → Delete… flow. */
   onRemovePrinter?: (id: string) => void;
+  /** The `attention` Event selected via `monitor/attention/<id>` (App's
+   *  navigation target): shows `AttentionEventDetail` in the dock, in
+   *  place of the Printer/Queue content (spec "Frontend architecture"). */
+  attentionEventId?: string | null;
+  onAttentionEventClose?: () => void;
+  /** The Incident selected via `monitor/incident/<id>`: shows
+   *  `IncidentDetail` in the dock, the same way. */
+  incidentId?: string | null;
+  onIncidentClose?: () => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
@@ -55,8 +68,13 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   /** Narrow widths: the preview is an overlay, opened from the toolbar. */
   const [queueOverlayOpen, setQueueOverlayOpen] = createSignal(false);
   let queueTrigger: HTMLElement | null = null;
+  const selectedAttentionEvent = () => {
+    const id = props.attentionEventId;
+    return id ? attention.event(id) : undefined;
+  };
   const showQueueDock = () =>
-    !props.store.selectedPrinter() && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
+    !props.store.selectedPrinter() && !selectedAttentionEvent() && !props.incidentId
+    && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
   const closeQueueDock = () => {
     setQueueOverlayOpen(false);
     setSelectedJobId(null);
@@ -210,6 +228,28 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           focusRequest={dockFocus()}
           onFocusHandled={() => setDockFocus(undefined)}
         />
+        <Show when={selectedAttentionEvent()}>
+          {(event) => (
+            <Suspense fallback={<p class={styles.loadingNotice} role="status">Loading…</p>}>
+              <AttentionEventDetail
+                event={event()}
+                mode={dockMode()}
+                onClose={() => props.onAttentionEventClose?.()}
+              />
+            </Suspense>
+          )}
+        </Show>
+        <Show when={props.incidentId}>
+          {(incidentId) => (
+            <Suspense fallback={<p class={styles.loadingNotice} role="status">Loading…</p>}>
+              <IncidentDetail
+                incidentId={incidentId()}
+                mode={dockMode()}
+                onClose={() => props.onIncidentClose?.()}
+              />
+            </Suspense>
+          )}
+        </Show>
         <Show when={showQueueDock()}>
           <MonitorQueueDock
             mode={dockMode()}

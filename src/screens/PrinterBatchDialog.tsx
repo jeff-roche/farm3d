@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store";
 import {
   Button,
   Dialog,
+  NumberField,
   RadioGroup,
   Select,
   Stepper,
@@ -13,14 +14,18 @@ import {
 import type { BatchRowError } from "../generated/contracts/command/BatchRowError";
 import type { BatchRowErrorCode } from "../generated/contracts/command/BatchRowErrorCode";
 import type { BatchShared } from "../generated/contracts/command/BatchShared";
+import type { CameraTemplate } from "../generated/contracts/command/CameraTemplate";
 import type { ErrorCode } from "../generated/contracts/command/ErrorCode";
 import { isCommandError } from "../ipc/client";
+import { testCamera } from "../cameras/camera-store";
+import { frameObjectUrl } from "../cameras/frame";
 import {
   defaultPort,
   generateRows,
   isRowCreated,
   mapDiscovery,
   parseIntake,
+  resolveRowCameraSource,
   toBatchInput,
   type BatchRowDraft,
   type CandidateMatch,
@@ -41,6 +46,8 @@ import type {
   ResolvedPrinter,
   StartSafety,
 } from "../printers/types";
+import { AlertDefaultsSection, alertDefaultsSummary, DEFAULT_ALERT_DEFAULTS } from "./AlertDefaultsSection";
+import type { BatchCameraTestResult } from "./BatchRowsTable";
 import { BatchRowsTable } from "./BatchRowsTable";
 import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
 import { KINDS, toSubmission } from "./ConnectionFields";
@@ -48,6 +55,23 @@ import { defaultSlotDrafts, MaterialSlotsEditor, slotDraftsValid, toSlotSpecs } 
 import { bedTypeLabel, bedTypeOptionsFor } from "./PrinterProfilePanel";
 import { START_SAFETY_OPTIONS } from "./PrinterSetupWizard";
 import styles from "./PrinterBatchDialog.module.css";
+
+type CameraTemplateKindOption = "none" | "hostWebcam" | "snapshotUrl";
+
+const CAMERA_TEMPLATE_KIND_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "hostWebcam", label: "Host webcam" },
+  { value: "snapshotUrl", label: "Manual snapshot URL" },
+];
+
+function alertDefaultsEqual(a: typeof DEFAULT_ALERT_DEFAULTS, b: typeof DEFAULT_ALERT_DEFAULTS): boolean {
+  return (
+    a.offlineAfterMinutes === b.offlineAfterMinutes &&
+    a.notifications === b.notifications &&
+    a.snapshotOnIncident === b.snapshotOnIncident &&
+    a.snapshotOnCompletion === b.snapshotOnCompletion
+  );
+}
 
 const STEP_ORDER = ["shared", "rows", "connect", "review"] as const;
 type StepId = (typeof STEP_ORDER)[number];
@@ -152,6 +176,59 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setBedType(p.defaultBedType);
   });
 
+  // P8 D13: the batch's own camera template -- never a host (each row
+  // resolves its own endpoint at commit). `alertDefaults` is copied into
+  // every created row's own row.
+  const [cameraTemplateKind, setCameraTemplateKind] = createSignal<CameraTemplateKindOption>("none");
+  const [cameraWebcamName, setCameraWebcamName] = createSignal("");
+  const [cameraWebPort, setCameraWebPort] = createSignal("");
+  const [cameraPath, setCameraPath] = createSignal("/webcam/?action=snapshot");
+  const [cameraPort, setCameraPort] = createSignal(80);
+  const [alertDefaults, setAlertDefaults] = createSignal(DEFAULT_ALERT_DEFAULTS);
+  const [cameraTestResults, setCameraTestResults] = createSignal<Record<string, BatchCameraTestResult>>({});
+
+  function cameraTemplateKindForTable(): "hostWebcam" | "snapshotUrl" | undefined {
+    const kind = cameraTemplateKind();
+    return kind === "none" ? undefined : kind;
+  }
+
+  function cameraTemplate(): CameraTemplate | undefined {
+    if (cameraTemplateKind() === "hostWebcam") {
+      const name = cameraWebcamName().trim();
+      if (name === "") return undefined;
+      const trimmedPort = cameraWebPort().trim();
+      const port = trimmedPort === "" ? null : Number(trimmedPort);
+      return { kind: "hostWebcam", webcamName: name, webPort: Number.isInteger(port) ? port : null };
+    }
+    if (cameraTemplateKind() === "snapshotUrl") {
+      const path = cameraPath().trim();
+      if (path === "" || !Number.isInteger(cameraPort()) || cameraPort() <= 0) return undefined;
+      return { kind: "snapshotUrl", path, port: cameraPort() };
+    }
+    return undefined;
+  }
+
+  /** A kind was picked but `cameraTemplate()` can't build one from it yet
+   *  (e.g. "Host webcam" with a blank name) -- every row would otherwise
+   *  be created with no camera and no sign anything was dropped. Blocks
+   *  leaving the Shared step (spec ruling: an incomplete template never
+   *  silently becomes "no camera"). */
+  function cameraTemplateIncomplete(): boolean {
+    return cameraTemplateKind() !== "none" && cameraTemplate() === undefined;
+  }
+
+  /** Review's one-line summary, mirroring the wizard's `cameraDraftSummary`
+   *  wording -- this dialog's template has its own shape (`path`/`port`
+   *  instead of a full URL), so it isn't the same draft type. */
+  function cameraTemplateSummary(): string {
+    if (cameraTemplateKind() === "none") return "No camera";
+    if (cameraTemplateKind() === "hostWebcam") {
+      const name = cameraWebcamName().trim();
+      return name ? `Host webcam: ${name}` : "Host webcam (not chosen yet)";
+    }
+    return cameraPath().trim() ? "Manual snapshot URL" : "Manual snapshot URL (not entered yet)";
+  }
+
   // Rows
   const [rows, setRows] = createStore<BatchRowDraft[]>([]);
   const newRowId = () => crypto.randomUUID();
@@ -202,6 +279,13 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     setBedType("");
     setBedTypeTouched(false);
     setSlots(defaultSlotDrafts());
+    setCameraTemplateKind("none");
+    setCameraWebcamName("");
+    setCameraWebPort("");
+    setCameraPath("/webcam/?action=snapshot");
+    setCameraPort(80);
+    setAlertDefaults(DEFAULT_ALERT_DEFAULTS);
+    setCameraTestResults({});
     setRows([]);
     setQuantity("1");
     setPattern("");
@@ -347,12 +431,38 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
     const catalogRef = picker.catalogRef();
     if (!catalogRef) return null;
     const catalogDefault = picker.preview()?.defaultBedType ?? "";
+    const template = cameraTemplate();
+    const defaults = alertDefaults();
     return {
       catalogRef,
       startSafety: startSafety(),
       ...(bedType() !== catalogDefault ? { defaultBedType: bedType() } : {}),
       slotLayout: toSlotSpecs(slots()),
+      ...(template ? { cameraTemplate: template } : {}),
+      ...(!alertDefaultsEqual(defaults, DEFAULT_ALERT_DEFAULTS) ? { alertDefaults: defaults } : {}),
     };
+  }
+
+  // ---- Camera (results step) --------------------------------------------
+
+  async function onTestRowCamera(rowId: string) {
+    const row = rows.find((r) => r.rowId === rowId);
+    const source = row && resolveRowCameraSource(row, cameraTemplate());
+    if (!row || !row.printerId || !source) return;
+    setCameraTestResults((prev) => ({ ...prev, [rowId]: { status: "pending" } }));
+    try {
+      const frame = await testCamera({ printerId: row.printerId, source });
+      setCameraTestResults((prev) => ({ ...prev, [rowId]: { status: "ok", url: frameObjectUrl(frame) } }));
+    } catch (e) {
+      setCameraTestResults((prev) => ({
+        ...prev,
+        [rowId]: { status: "error", message: isCommandError(e) ? e.message : "The camera test failed." },
+      }));
+    }
+  }
+
+  function rowHasCamera(row: BatchRowDraft): boolean {
+    return !!row.printerId && resolveRowCameraSource(row, cameraTemplate()) !== undefined;
   }
 
   function mergeResults(results: NonNullable<BatchRowDraft["result"]>[]) {
@@ -518,7 +628,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   // ---- Navigation ------------------------------------------------------
 
   const canLeave = (id: StepId) => {
-    if (id === "shared") return !!picker.catalogRef() && slotDraftsValid(slots());
+    if (id === "shared") return !!picker.catalogRef() && slotDraftsValid(slots()) && !cameraTemplateIncomplete();
     if (id === "rows") return rowsValid();
     return true;
   };
@@ -605,6 +715,46 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                   multiMaterialHint={picker.preview()?.supportsMultiFilament ?? false}
                 />
               </section>
+
+              <section class={styles.section} aria-label="Camera template for every Printer">
+                <span class={styles.sectionTitle}>Camera</span>
+                <p class={styles.note}>Each row's camera resolves against its own Connection at creation. This never asks for a host.</p>
+                <RadioGroup
+                  label="Source"
+                  options={CAMERA_TEMPLATE_KIND_OPTIONS}
+                  value={cameraTemplateKind()}
+                  onChange={(v) => setCameraTemplateKind(v as CameraTemplateKindOption)}
+                />
+                <Show when={cameraTemplateKind() === "hostWebcam"}>
+                  <TextField
+                    label="Webcam name"
+                    value={cameraWebcamName()}
+                    onChange={setCameraWebcamName}
+                    placeholder="front"
+                    error={cameraWebcamName().trim() === "" ? "Required, or choose None" : undefined}
+                  />
+                  <NumberField
+                    label="Port (optional)"
+                    value={cameraWebPort() === "" ? undefined : Number(cameraWebPort())}
+                    onChange={(n) => setCameraWebPort(Number.isNaN(n) ? "" : String(n))}
+                    minValue={1}
+                    maxValue={65535}
+                    placeholder="80"
+                  />
+                </Show>
+                <Show when={cameraTemplateKind() === "snapshotUrl"}>
+                  <TextField
+                    label="Path"
+                    value={cameraPath()}
+                    onChange={setCameraPath}
+                    placeholder="/webcam/?action=snapshot"
+                    error={cameraPath().trim() === "" ? "Required, or choose None" : undefined}
+                  />
+                  <NumberField label="Port" value={cameraPort()} onChange={setCameraPort} minValue={1} maxValue={65535} />
+                </Show>
+              </section>
+
+              <AlertDefaultsSection mode="draft" value={alertDefaults()} onChange={setAlertDefaults} />
             </div>
           </Show>
 
@@ -793,6 +943,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 mode="connect"
                 preview={rowPreview()}
                 existingNames={existingNames()}
+                cameraTemplateKind={cameraTemplateKindForTable()}
               />
             </div>
           </Show>
@@ -813,6 +964,8 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 </Show>
                 <p>Bed type: {bedTypeLabel(bedType())}</p>
                 <p>Start safety: {startSafetyLabel()}</p>
+                <p>Camera: {cameraTemplateSummary()}</p>
+                <p>Alerts: {alertDefaultsSummary(alertDefaults())}</p>
               </div>
               <Show when={store()}>
                 {(info) => (
@@ -841,6 +994,10 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 unverified={unverified()}
                 onSaveAnyway={(rowId) => void saveAnyway(rowId)}
                 onEquip={props.onEquip ? equip : undefined}
+                cameraTemplateKind={cameraTemplateKindForTable()}
+                cameraSourceFor={rowHasCamera}
+                cameraTestResults={cameraTestResults()}
+                onTestCamera={(rowId) => void onTestRowCamera(rowId)}
               />
             </div>
           </Show>

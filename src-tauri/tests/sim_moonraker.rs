@@ -1599,22 +1599,33 @@ fn p6_a_klipper_restart_keeps_a_started_row_and_an_uncertain_start_no_longer_pen
 
 // --- capability detection ----------------------------------------------------------------
 
-fn assert_facts(facts: &HostFacts, tools: u32, bed: bool) {
+/// `cameras`: the single-extruder simulator lists P8's `[webcam
+/// farm3d-sim]` (in every mode); the four-toolhead one lists none (spike
+/// Gate H's empty answer).
+fn assert_facts(facts: &HostFacts, tools: u32, bed: bool, cameras: u32) {
     assert_eq!(facts.tool_count, tools, "{facts:?}");
     assert_eq!(facts.has_heater_bed, bed, "{facts:?}");
     assert!(facts.has_virtual_sdcard, "{facts:?}");
     assert!(facts.has_pause_resume, "{facts:?}");
     assert!(facts.has_history, "{facts:?}");
-    // The simulator has no webcam (spike Gate H): the query answers, empty.
-    assert_eq!(facts.camera_count, 0, "{facts:?}");
+    assert_eq!(facts.camera_count, cameras, "{facts:?}");
     assert!(facts.host_software.contains("v0.11"), "{facts:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the simulators: just sim-up && just test-sim"]
 async fn p6_capability_detection_on_every_simulator_variant() {
-    use farm3d_lib::connections::capabilities::CameraDiscovery;
+    use farm3d_lib::connections::capabilities::{CameraDiscovery, CameraInfo};
     use farm3d_lib::connections::capabilities::KlippyState;
+
+    // P8: the camera query's non-empty simulator answer (names and
+    // services only; the URL is never kept).
+    let sim_webcam = || {
+        vec![CameraInfo {
+            name: sim::camera::WEBCAM_NAME.to_string(),
+            service: sim::camera::WEBCAM_SERVICE.to_string(),
+        }]
+    };
 
     let sim = require_sim!(MoonrakerSim::discover());
     let multi = require_sim!(MoonrakerSim::discover_variant(Variant::MultiTool));
@@ -1624,16 +1635,17 @@ async fn p6_capability_detection_on_every_simulator_variant() {
 
     // moonraker: one tool and a bed.
     let adapter = sim_capabilities(&sim, None);
-    assert_facts(&adapter.host_facts().await.expect("facts"), 1, true);
+    assert_facts(&adapter.host_facts().await.expect("facts"), 1, true, 1);
     let state = adapter.host_job_state().await.expect("job state");
     assert_eq!(state.klippy_state, KlippyState::Ready);
     assert_eq!(state.tools.len(), 1, "{state:?}");
     assert!(state.bed.is_some(), "{state:?}");
-    assert!(adapter.cameras().await.expect("cameras").is_empty());
+    assert_eq!(adapter.cameras().await.expect("cameras"), sim_webcam());
 
     // moonraker-multi: four tools, every one reported.
     let adapter = sim_capabilities(&multi, None);
-    assert_facts(&adapter.host_facts().await.expect("facts"), 4, true);
+    assert_facts(&adapter.host_facts().await.expect("facts"), 4, true, 0);
+    assert!(adapter.cameras().await.expect("cameras").is_empty());
     let state = adapter.host_job_state().await.expect("job state");
     assert_eq!(
         state
@@ -1648,7 +1660,7 @@ async fn p6_capability_detection_on_every_simulator_variant() {
     // variant no-bed: the bed is absent, never zero.
     sim.set_mode(Mode::NoBed);
     let adapter = sim_capabilities(&sim, None);
-    assert_facts(&adapter.host_facts().await.expect("facts"), 1, false);
+    assert_facts(&adapter.host_facts().await.expect("facts"), 1, false, 1);
     let state = adapter.host_job_state().await.expect("job state");
     assert_eq!(state.bed, None, "{state:?}");
 
@@ -1664,12 +1676,12 @@ async fn p6_capability_detection_on_every_simulator_variant() {
         &keyed.host_facts().await.expect("facts with the key"),
         1,
         true,
+        1,
     );
-    assert!(keyed
-        .cameras()
-        .await
-        .expect("cameras with the key")
-        .is_empty());
+    assert_eq!(
+        keyed.cameras().await.expect("cameras with the key"),
+        sim_webcam()
+    );
 
     sim.reset();
 }
@@ -1774,5 +1786,96 @@ fn p7_an_emergency_stop_gives_the_tracker_a_failed_verdict() {
     let (status, verdict) = p7_final_verdict(&sim, &tracked);
     assert_eq!(status, "klippy_shutdown");
     assert_eq!(verdict, TrackerVerdict::Failed);
+    sim.reset();
+}
+
+// --- P8: the host webcam and the sim camera ------------------------------------------
+//
+// The single-extruder simulator lists `[webcam farm3d-sim]`, whose snapshot
+// URL is the sim camera through the fault proxy (`sim/camera/`). These
+// prove the host-webcam path end to end against real Moonraker: the lookup
+// through the Printer's Connection (`cameras::resolve`) and the bounded
+// fetch (`FrameFetcher`), and that the camera answers exactly the fetches
+// farm3d makes. `p8_tracer.rs` runs the same camera through the capture
+// runtime.
+
+use farm3d_lib::cameras::fetch::FrameFetcher;
+use farm3d_lib::cameras::resolve::{resolve, WebcamHost};
+use farm3d_lib::cameras::{CameraContentType, CameraErrorKind, CameraSource};
+use sim::camera::CameraSim;
+
+/// The production fetch budget (D4).
+const CAMERA_BUDGET: Duration = Duration::from_secs(5);
+
+fn sim_webcam_source(name: &str) -> CameraSource {
+    CameraSource::HostWebcam {
+        webcam_name: name.to_string(),
+        webcam_service: Some(sim::camera::WEBCAM_SERVICE.to_string()),
+        web_port: None,
+    }
+}
+
+#[test]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+fn p8_a_host_webcam_resolves_through_the_simulator_and_fetches_the_test_pattern() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let camera = require_sim!(CameraSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    let host = WebcamHost {
+        config: sim.config(),
+        api_key: None,
+    };
+    let fetcher = FrameFetcher::new(CAMERA_BUDGET);
+    let before = camera.requests();
+
+    // The lookup reads Moonraker's list (no camera request) and resolves
+    // the absolute URL on the Connection's own host.
+    let url = block_on(resolve(
+        &sim_webcam_source(sim::camera::WEBCAM_NAME),
+        Some(&host),
+        CAMERA_BUDGET,
+    ))
+    .expect("the simulator's webcam resolves");
+    assert_eq!(url.as_str(), camera.snapshot_url());
+    assert_eq!(camera.requests(), before, "a lookup fetches no frame");
+
+    // One fetch: the committed test pattern, byte for byte.
+    let frame = block_on(fetcher.fetch(&url)).expect("the sim camera answers");
+    assert_eq!(frame.content_type, CameraContentType::Jpeg);
+    assert_eq!(frame.bytes, sim::camera::TEST_PATTERN);
+    assert_eq!(camera.requests(), before + 1, "exactly one GET");
+
+    // A name the host doesn't list is typed, and fetches nothing.
+    let missing = block_on(resolve(
+        &sim_webcam_source("not-a-webcam"),
+        Some(&host),
+        CAMERA_BUDGET,
+    ))
+    .unwrap_err();
+    assert_eq!(missing.kind(), CameraErrorKind::NoSuchWebcam);
+
+    // The camera behind a cut proxy is unreachable; the camera sees nothing.
+    camera.faults.set_enabled(Proxy::Camera, false);
+    let cut = block_on(fetcher.fetch(&url)).unwrap_err();
+    assert_eq!(cut.kind(), CameraErrorKind::Unreachable);
+    camera.faults.set_enabled(Proxy::Camera, true);
+
+    // A Printer that can't be reached can't list its webcams.
+    sim.faults.set_enabled(Proxy::Moonraker, false);
+    let unlisted = block_on(resolve(
+        &sim_webcam_source(sim::camera::WEBCAM_NAME),
+        Some(&host),
+        CAMERA_BUDGET,
+    ))
+    .unwrap_err();
+    assert_eq!(unlisted.kind(), CameraErrorKind::WebcamListFailed);
+    sim.faults.set_enabled(Proxy::Moonraker, true);
+
+    assert_eq!(camera.requests(), before + 1, "no fetch without a trigger");
+    for error in [&missing, &cut, &unlisted] {
+        let text = format!("{error} {error:?}");
+        assert!(!text.contains("127.0.0.1") && !text.contains("snapshot.jpg"), "{text}");
+    }
     sim.reset();
 }

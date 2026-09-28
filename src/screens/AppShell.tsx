@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
 import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
+import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
 
@@ -20,6 +21,11 @@ export interface AppShellProps {
   /** Every active Job (not completed, failed, or cancelled), for the top
    *  bar's active Job count. Omitted hides the count. */
   activeJobs?: readonly PrinterRosterEntry[];
+  /** Forwarded to the ActivityBar's Monitor badge (spec "Frontend
+   *  architecture": "The Monitor rail button's badge shows the same
+   *  actionable count"). The `AttentionTrigger` itself reads the
+   *  Attention store directly. */
+  attentionActionableCount?: number;
   children: JSX.Element;
 }
 
@@ -103,6 +109,7 @@ export function AppShell(props: AppShellProps) {
             )}
           </For>
         </div>
+        <AttentionTrigger />
       </header>
 
       <ActivityBar
@@ -110,6 +117,7 @@ export function AppShell(props: AppShellProps) {
         onSelect={props.onSelect}
         attentionSpoolCount={props.attentionSpoolCount}
         queueAttentionCount={props.queueAttentionCount}
+        attentionActionableCount={props.attentionActionableCount}
       />
 
       <main class={styles.content}>{props.children}</main>

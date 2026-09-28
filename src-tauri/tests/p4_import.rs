@@ -712,6 +712,11 @@ fn no_command_request_carries_a_filesystem_path() {
             .collect::<Vec<_>>()
             .join("\n");
         for field in declared_fields(&declaration) {
+            // P8's batch `CameraTemplate.path` is a camera URL's path (the
+            // spec's wire name), never a filesystem path.
+            if name == "CameraTemplate" && field == "path" {
+                continue;
+            }
             assert!(
                 !field.to_lowercase().contains("path"),
                 "field `{field}` in {} (reachable from a request)",

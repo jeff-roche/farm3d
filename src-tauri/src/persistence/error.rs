@@ -262,6 +262,38 @@ pub enum RepositoryError {
         required_mg: Option<i64>,
         error: crate::spools::reservations::ReservationError,
     },
+    /// P8 D2 "Lifecycle rules": `resolve_attention_event` on an Event
+    /// whose `resolution_mode` isn't `manual`
+    /// (`attention::lifecycle::LifecycleError::NotManual`). Nothing was
+    /// written. `ATTENTION_NOT_MANUAL`.
+    AttentionNotManual {
+        event_id: String,
+        condition: crate::attention::ConditionKind,
+        resolution_mode: crate::attention::ResolutionMode,
+    },
+    /// P8 D5: `snapshot_image`, or `set_snapshot_pinned(true)`, on a
+    /// pruned snapshot. `EVIDENCE_PRUNED`.
+    EvidencePruned {
+        snapshot_id: String,
+        reason: crate::cameras::PruneReason,
+    },
+    /// P8 D5: `capture_snapshot` when only pinned snapshots would be left
+    /// to prune. `SNAPSHOT_DISK_CAP`.
+    SnapshotDiskCap {
+        used_bytes: i64,
+        cap_bytes: i64,
+        pinned_bytes: i64,
+    },
+    /// P8 D8: `import_printers` (`replace_all`) while any Incident or any
+    /// `camera_snapshots` row exists. `replace_all` deletes every Printer,
+    /// and `incidents.printer_id` and `camera_snapshots.printer_id` are
+    /// `ON DELETE RESTRICT`, so this is checked up front instead. Nothing
+    /// was written. `EVIDENCE_EXISTS`. Each list is capped at 20.
+    EvidenceExists {
+        printer_ids: Vec<String>,
+        incident_ids: Vec<String>,
+        snapshot_ids: Vec<String>,
+    },
     Storage(StorageError),
 }
 

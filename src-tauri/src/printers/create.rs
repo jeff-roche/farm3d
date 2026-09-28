@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use zeroize::Zeroizing;
 
+use crate::cameras::{config as camera_config, CameraSource, CameraSourceInput, CameraSourceKind};
 use crate::catalog::resolve::resolve_catalog_ref;
 use crate::connections::commands::{credential_coordinator, retry_pending_credential_cleanup};
 use crate::connections::credentials::CredentialStoreKind;
@@ -18,6 +19,7 @@ use crate::contracts::command::{
     CommandError, CommandSuccess, ErrorCode, IncomingContractVersion, JsonValue, RecoveryCode,
 };
 use crate::contracts::ContractVersion;
+use crate::printers::alerts::AlertDefaults;
 use crate::printers::commands::OperationWarning;
 use crate::printers::repository::PrinterRepository;
 use crate::printers::setup::{supervise_persisted, SupervisionOutcome};
@@ -49,12 +51,63 @@ pub struct CreatePrinterOptions {
     /// `operationId`. Always empty for batch create (D12: "batch never
     /// loads Spools").
     pub initial_loads: Vec<InitialLoad>,
+    /// P8 D4: the new Printer's camera source, validated here
+    /// (`VALIDATION` on `camera.<field>`) and written in the create
+    /// transaction. A batch row's is built from its own Connection or host
+    /// override, never copied from another row.
+    pub camera: Option<CameraSourceInput>,
+    /// P8: the new Printer's alert defaults, written in the create
+    /// transaction. `None` writes no row (the defaults apply).
+    pub alert_defaults: Option<AlertDefaults>,
+}
+
+/// P8: the per-Printer setup rows written beside the Printer itself — its
+/// camera source and alert defaults — by create, batch create, and the
+/// Printers import. Configuration only: never a test result, health, or
+/// evidence.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrinterSetupExtras {
+    pub camera: Option<CameraSource>,
+    pub alert_defaults: Option<AlertDefaults>,
 }
 
 pub struct CreateOutcome {
     pub printer: StoredPrinter,
     pub credential_stored: bool,
     pub warnings: Vec<OperationWarning>,
+    /// The kind of the camera source written with the Printer, if any: the
+    /// caller resets (and publishes) its fresh camera health after commit.
+    pub camera_kind: Option<CameraSourceKind>,
+}
+
+/// Validates a camera source submitted with a new (or imported) Printer:
+/// [`camera_config::validate_source`] under `prefix`, and a host webcam
+/// needs a Connection whose adapter can list webcams (`VALIDATION` on
+/// `<prefix>.kind`).
+pub fn validate_setup_camera(
+    source: &CameraSource,
+    connection_kind: Option<&str>,
+    prefix: &str,
+) -> Result<CameraSource, CommandError> {
+    let source = camera_config::validate_source(source, prefix)?;
+    if let CameraSource::HostWebcam { .. } = source {
+        match connection_kind {
+            None => {
+                return Err(CommandError::validation_at(
+                    format!("{prefix}.kind"),
+                    "A host webcam needs the Printer's Connection. Use a manual snapshot URL.",
+                ))
+            }
+            Some(kind) if !crate::cameras::resolve::supports_host_webcams(kind) => {
+                return Err(CommandError::validation_at(
+                    format!("{prefix}.kind"),
+                    "This Printer's adapter can't list webcams. Use a manual snapshot URL.",
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(source)
 }
 
 /// Trimmed, 1..=128 characters, no control characters. Shared by
@@ -242,6 +295,24 @@ pub async fn create_printer_with<R: tauri::Runtime>(
 ) -> Result<CreateOutcome, CommandError> {
     let name = validate_name(&options.name)?;
     let location = validate_location(options.location.as_deref())?;
+    let camera = options
+        .camera
+        .as_ref()
+        .map(|camera| {
+            validate_setup_camera(
+                &camera.0,
+                options
+                    .connection
+                    .as_ref()
+                    .map(|(config, _)| config.kind.as_str()),
+                "camera",
+            )
+        })
+        .transpose()?;
+    let setup = PrinterSetupExtras {
+        camera,
+        alert_defaults: options.alert_defaults,
+    };
 
     // D12: each initial load must be an active Spool currently in storage
     // (see `spools::repository::is_loadable_from_storage`'s doc comment).
@@ -373,11 +444,12 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         updated_at: String::new(),
     };
 
-    let create_result = repository.create_with_layout(
+    let create_result = repository.create_with_setup(
         printer,
         provisional_reference.as_deref(),
         &options.slot_layout,
         &options.initial_loads,
+        &setup,
     );
     // Drop the coordinator lock before any further credential-store call —
     // `retry_pending_credential_cleanup` (below, on the error path) takes
@@ -415,5 +487,6 @@ pub async fn create_printer_with<R: tauri::Runtime>(
         printer: stored,
         credential_stored,
         warnings,
+        camera_kind: setup.camera.as_ref().map(CameraSource::kind),
     })
 }

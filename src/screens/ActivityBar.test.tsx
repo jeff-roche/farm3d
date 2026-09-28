@@ -42,6 +42,19 @@ describe("ActivityBar", () => {
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
+  it("marks Monitor current when active, and shows no badge with nothing actionable", () => {
+    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} attentionActionableCount={0} />);
+    const monitor = screen.getByRole("button", { name: "Monitor" });
+    expect(monitor).toHaveAttribute("aria-current", "page");
+    expect(monitor.parentElement).not.toHaveTextContent(/\d/);
+  });
+
+  it("badges Monitor with the same actionable count as the Attention trigger", () => {
+    render(() => <ActivityBar active="queue" onSelect={vi.fn()} attentionActionableCount={4} />);
+    const monitor = screen.getByRole("button", { name: "Monitor (4 need attention)" });
+    expect(monitor.parentElement).toHaveTextContent("4");
+  });
+
   it("marks Queue current when active, and shows no Queue badge with nothing needing attention", () => {
     render(() => <ActivityBar active="queue" onSelect={vi.fn()} queueAttentionCount={0} />);
     const queue = screen.getByRole("button", { name: "Queue" });

@@ -26,7 +26,7 @@ use super::files::{self, LocateStep, UploadForm, WriteKind};
 use crate::connections::capabilities::{
     ArtifactStaging, CameraDiscovery, CameraInfo, CommandFailure, HistoryJob, HistoryQuery,
     HostFacts, HostJobState, HostOperationFailureCode, HostStateQuery, KlippyState, LocateOutcome,
-    PrintControl, StagedArtifact,
+    PrintControl, StagedArtifact, WebcamSnapshotSource,
 };
 use crate::connections::{ConnectionConfig, ConnectionError, TLS_UNSUPPORTED_MESSAGE};
 
@@ -356,5 +356,17 @@ impl HostStateQuery for MoonrakerCapabilities {
 impl CameraDiscovery for MoonrakerCapabilities {
     async fn cameras(&self) -> Result<Vec<CameraInfo>, ConnectionError> {
         files::parse_webcams_list(&self.get_json("/server/webcams/list").await?)
+    }
+}
+
+/// P8 D4: the same `webcams.list` read, with the API key like every
+/// Moonraker read, keeping only the named entry's `snapshot_url`.
+#[async_trait::async_trait]
+impl WebcamSnapshotSource for MoonrakerCapabilities {
+    async fn snapshot_url(
+        &self,
+        name: &str,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, ConnectionError> {
+        files::parse_webcam_snapshot_url(&self.get_json("/server/webcams/list").await?, name)
     }
 }

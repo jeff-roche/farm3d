@@ -379,6 +379,28 @@ pub enum ErrorCode {
     JobAlreadyRetried,
     /// P7 D8: a Printers import while Job history exists.
     JobsExist,
+    /// P8 D2 "Lifecycle rules": `resolve_attention_event` on an Event whose
+    /// Condition resolves by itself (`auto` or `action`).
+    AttentionNotManual,
+    /// P8 D4: `camera_preview_frame` on a Printer with no camera source.
+    CameraNotConfigured,
+    /// P8 D4: a frame fetch failed (every `CameraErrorKind` except
+    /// `hostMismatch` and `unsupportedAdapter`).
+    CameraFailed,
+    /// P8 D4: a host webcam's absolute URL names another host.
+    CameraHostMismatch,
+    /// P8 D5: `snapshot_image`, or `set_snapshot_pinned(true)`, on a
+    /// pruned snapshot.
+    EvidencePruned,
+    /// P8 D5: `capture_snapshot` when only pinned snapshots would be left
+    /// to prune.
+    SnapshotDiskCap,
+    /// P8 D6: `send_test_notification` with an `unavailable` or
+    /// `unsupported` notifier.
+    NotificationsUnavailable,
+    /// P8 D8: a Printers import while any Incident or camera snapshot
+    /// exists.
+    EvidenceExists,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -462,6 +484,11 @@ pub struct CommandError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub details: Option<BTreeMap<String, JsonValue>>,
+}
+
+/// A detail value that is a string or `null`.
+fn optional_string(value: Option<&str>) -> JsonValue {
+    value.map_or(JsonValue::Null(()), |value| JsonValue::String(value.to_string()))
 }
 
 impl CommandError {
@@ -784,6 +811,190 @@ impl CommandError {
             ("printerIds".to_string(), strings(printer_ids)),
             ("jobIds".to_string(), strings(job_ids)),
             ("queueEntryIds".to_string(), strings(queue_entry_ids)),
+        ]));
+        error
+    }
+
+    /// P8 D8 `EVIDENCE_EXISTS`: `import_printers` while any Incident or any
+    /// camera snapshot exists. Each list is at most 20.
+    pub fn evidence_exists(
+        printer_ids: &[String],
+        incident_ids: &[String],
+        snapshot_ids: &[String],
+    ) -> Self {
+        let strings = |values: &[String]| {
+            JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
+        };
+        let mut error = Self::typed(
+            ErrorCode::EvidenceExists,
+            "Printers with Incidents or camera evidence can't be replaced by an import.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("printerIds".to_string(), strings(printer_ids)),
+            ("incidentIds".to_string(), strings(incident_ids)),
+            ("snapshotIds".to_string(), strings(snapshot_ids)),
+        ]));
+        error
+    }
+
+    /// P8 `ATTENTION_NOT_MANUAL`: only a `manual` Event is the operator's
+    /// to resolve; this one resolves by itself when its cause clears.
+    pub fn attention_not_manual(
+        event_id: &str,
+        condition: crate::attention::ConditionKind,
+        resolution_mode: crate::attention::ResolutionMode,
+    ) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::AttentionNotManual,
+            "This Attention Event resolves by itself when its cause clears.",
+            vec![RecoveryCode::Reload],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("eventId".to_string(), JsonValue::String(event_id.to_string())),
+            (
+                "condition".to_string(),
+                JsonValue::String(condition.as_str().to_string()),
+            ),
+            (
+                "resolutionMode".to_string(),
+                JsonValue::String(crate::spools::encode_enum(resolution_mode)),
+            ),
+        ]));
+        error
+    }
+
+    /// P8 `CAMERA_NOT_CONFIGURED`: the Printer has no camera source.
+    pub fn camera_not_configured(printer_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::CameraNotConfigured,
+            "This Printer has no camera.",
+            vec![RecoveryCode::OpenPrinterSetup],
+            false,
+        )
+        .with_string_details(&[("printerId", printer_id)])
+    }
+
+    /// P8 `EVIDENCE_PRUNED`: the snapshot's image was removed (`reason`).
+    /// The row, its links, and its timeline stay.
+    pub fn evidence_pruned(snapshot_id: &str, reason: crate::cameras::PruneReason) -> Self {
+        use crate::cameras::PruneReason;
+        let label = match reason {
+            PruneReason::Age => "past the retention period",
+            PruneReason::DiskCap => "to stay under the disk cap",
+            PruneReason::MissingFile => "its file was missing",
+        };
+        Self::typed(
+            ErrorCode::EvidencePruned,
+            format!("This snapshot's image was removed ({label})."),
+            vec![],
+            false,
+        )
+        .with_string_details(&[
+            ("snapshotId", snapshot_id),
+            ("reason", &crate::spools::encode_enum(reason)),
+        ])
+    }
+
+    /// P8 `NOTIFICATIONS_UNAVAILABLE`: the notifier can't show anything
+    /// (`status` is `unavailable` or `unsupported`).
+    pub fn notifications_unavailable(status: &crate::notifications::NotifierStatus) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::NotificationsUnavailable,
+            "Desktop notifications aren't available here.",
+            vec![],
+            false,
+        );
+        let status = serde_json::to_value(status)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or(JsonValue::Null(()));
+        error.details = Some(BTreeMap::from([("status".to_string(), status)]));
+        error
+    }
+
+    /// P8 `SNAPSHOT_DISK_CAP`: a manual capture the cap refuses because
+    /// only pinned snapshots are left to prune.
+    pub fn snapshot_disk_cap(used_bytes: i64, cap_bytes: i64, pinned_bytes: i64) -> Self {
+        let number = |value: i64| {
+            JsonValue::Number(JsonNumber::try_from(value).unwrap_or_else(|_| {
+                JsonNumber::try_from(0_i64).expect("zero is JS-safe")
+            }))
+        };
+        let mut error = Self::typed(
+            ErrorCode::SnapshotDiskCap,
+            "The snapshot disk cap is full of pinned evidence. Unpin some or raise the cap.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("usedBytes".to_string(), number(used_bytes)),
+            ("capBytes".to_string(), number(cap_bytes)),
+            ("pinnedBytes".to_string(), number(pinned_bytes)),
+        ]));
+        error
+    }
+
+    /// P8 `CAMERA_FAILED`: a frame fetch failed with `kind` (a
+    /// `CameraErrorKind` wire spelling). `message` is the kind's own
+    /// sentence; neither names the camera's address. `[OPEN_PRINTER_SETUP]`
+    /// joins `[RETRY]` when the Printer's setup is what needs changing.
+    pub fn camera_failed(
+        printer_id: Option<&str>,
+        kind: &str,
+        http_status: Option<u16>,
+        message: String,
+        open_setup: bool,
+    ) -> Self {
+        let mut recovery = vec![RecoveryCode::Retry];
+        if open_setup {
+            recovery.push(RecoveryCode::OpenPrinterSetup);
+        }
+        let mut error = Self::typed(ErrorCode::CameraFailed, message, recovery, true);
+        error.details = Some(BTreeMap::from([
+            ("printerId".to_string(), optional_string(printer_id)),
+            ("kind".to_string(), JsonValue::String(kind.to_string())),
+            (
+                "httpStatus".to_string(),
+                http_status.map_or(JsonValue::Null(()), |status| {
+                    JsonValue::Number(
+                        JsonNumber::try_from(i64::from(status)).expect("a status is JS-safe"),
+                    )
+                }),
+            ),
+        ]));
+        error
+    }
+
+    /// P8 `CAMERA_HOST_MISMATCH`: a host webcam's URL names another host
+    /// than the Printer's Connection.
+    pub fn camera_host_mismatch(printer_id: Option<&str>) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::CameraHostMismatch,
+            "The printer's webcam points at a different host. Use a manual snapshot URL.",
+            vec![RecoveryCode::OpenPrinterSetup],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "printerId".to_string(),
+            optional_string(printer_id),
+        )]));
+        error
+    }
+
+    /// P8 D4: `hostWebcam` on an adapter without the webcam lookup is P6's
+    /// `CAPABILITY_UNSUPPORTED` (`capability: "camera"`, `reason:
+    /// "adapter"`); `printerId` is null for an unsaved Connection.
+    pub fn camera_unsupported_adapter(printer_id: Option<&str>) -> Self {
+        let detail = "This printer's connection can't list its webcams. Use a manual snapshot URL.";
+        let mut error = Self::typed(ErrorCode::CapabilityUnsupported, detail, vec![], false);
+        error.details = Some(BTreeMap::from([
+            ("printerId".to_string(), optional_string(printer_id)),
+            ("capability".to_string(), JsonValue::String("camera".to_string())),
+            ("reason".to_string(), JsonValue::String("adapter".to_string())),
+            ("detail".to_string(), JsonValue::String(detail.to_string())),
         ]));
         error
     }
@@ -1671,6 +1882,25 @@ impl CommandError {
                 job_ids,
                 queue_entry_ids,
             } => Self::jobs_exist(&printer_ids, &job_ids, &queue_entry_ids),
+            RepositoryError::AttentionNotManual {
+                event_id,
+                condition,
+                resolution_mode,
+            } => Self::attention_not_manual(&event_id, condition, resolution_mode),
+            RepositoryError::EvidencePruned {
+                snapshot_id,
+                reason,
+            } => Self::evidence_pruned(&snapshot_id, reason),
+            RepositoryError::SnapshotDiskCap {
+                used_bytes,
+                cap_bytes,
+                pinned_bytes,
+            } => Self::snapshot_disk_cap(used_bytes, cap_bytes, pinned_bytes),
+            RepositoryError::EvidenceExists {
+                printer_ids,
+                incident_ids,
+                snapshot_ids,
+            } => Self::evidence_exists(&printer_ids, &incident_ids, &snapshot_ids),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

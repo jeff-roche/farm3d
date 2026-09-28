@@ -16,5 +16,11 @@
     "listen": "127.0.0.1:25000",
     "upstream": "127.0.0.1:25001",
     "enabled": true
+  },
+  {
+    "name": "camera",
+    "listen": "127.0.0.1:28080",
+    "upstream": "127.0.0.1:28081",
+    "enabled": true
   }
 ]

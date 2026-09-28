@@ -52,6 +52,9 @@ vi.mock("../printers/printer-store", () => ({
   credentialStoreInfo,
 }));
 
+const testCamera = vi.hoisted(() => vi.fn());
+vi.mock("../cameras/camera-store", () => ({ testCamera }));
+
 afterEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -185,6 +188,131 @@ describe("PrinterBatchDialog — Shared step", () => {
     expect(nextButton().disabled).toBe(false);
     fireEvent.click(nextButton());
     expect(stepItem("Rows").getAttribute("aria-current")).toBe("step");
+  });
+});
+
+describe("PrinterBatchDialog — Shared camera template", () => {
+  it("never asks for a host, for either template kind", async () => {
+    renderDialog();
+    await pickModel();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    expect(screen.queryByLabelText(/^Host$/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Webcam name")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Manual snapshot URL" }));
+    expect(screen.queryByLabelText(/^Host$/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Path")).toBeInTheDocument();
+    expect(screen.getByLabelText("Port")).toBeInTheDocument();
+  });
+
+  it("blocks Next on a Host webcam template with a blank Webcam name, with inline text explaining why", async () => {
+    renderDialog();
+    await pickModel();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("Required, or choose None")).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    expect(nextButton().disabled).toBe(false);
+    expect(screen.queryByText("Required, or choose None")).not.toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "" } });
+    expect(nextButton().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "None" }));
+    expect(nextButton().disabled).toBe(false);
+  });
+
+  it("never stores the literal string \"NaN\" in the webcam port when the field is cleared", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.input(screen.getByLabelText("Port (optional)"), { target: { value: "8080" } });
+    fireEvent.input(screen.getByLabelText("Port (optional)"), { target: { value: "" } });
+    fireEvent.click(nextButton()); // rows
+    generate("1", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    // A cleared optional port is `null`, never a "NaN" string that
+    // survived Kobalte's onChange(NaN) uncleaned.
+    expect(input.shared.cameraTemplate).toEqual({ kind: "hostWebcam", webcamName: "front", webPort: null });
+  });
+
+  it("Review shows a one-line camera-template and alert-defaults summary", async () => {
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Off" })); // offline alert
+    fireEvent.click(nextButton()); // rows
+    generate("1", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+
+    expect(screen.getByText("Camera: Host webcam: front")).toBeInTheDocument();
+    expect(screen.getByText(/^Alerts: /)).toHaveTextContent("Alerts: offline alert off, notifications follow settings");
+  });
+
+  it("sends the hostWebcam template as shared.cameraTemplate, never a host", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.click(nextButton()); // rows
+    generate("2", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    expect(input.shared.cameraTemplate).toEqual({ kind: "hostWebcam", webcamName: "front", webPort: null });
+  });
+
+  it("sends alertDefaults only once they're changed from D12's own defaults", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(nextButton()); // rows
+    generate("2", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const unchanged = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    expect(unchanged.shared.alertDefaults).toBeUndefined();
+  });
+
+  it("sends a changed alertDefaults as shared.alertDefaults", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Off" })); // offline alert
+    fireEvent.click(nextButton()); // rows
+    generate("2", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    expect(input.shared.alertDefaults).toEqual({
+      offlineAfterMinutes: null,
+      notifications: "follow",
+      snapshotOnIncident: true,
+      snapshotOnCompletion: true,
+    });
   });
 });
 
@@ -362,9 +490,96 @@ describe("PrinterBatchDialog — Connect step", () => {
     expect(field.type).toBe("password");
     expect(field.value).toBe("");
   });
+
+  it("shows a per-row Camera host override column only for a snapshotUrl template, never copying one row's value to another", async () => {
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Manual snapshot URL" }));
+    fireEvent.input(screen.getByLabelText("Path"), { target: { value: "/snap" } });
+    fireEvent.click(nextButton()); // rows
+    generate("3", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    await screen.findByLabelText("Shared credential");
+
+    fireEvent.input(screen.getByLabelText("Camera host for row 1"), { target: { value: "192.0.2.11" } });
+    fireEvent.input(screen.getByLabelText("Camera host for row 2"), { target: { value: "192.0.2.12" } });
+
+    expect(screen.getByLabelText("Camera host for row 1")).toHaveValue("192.0.2.11");
+    expect(screen.getByLabelText("Camera host for row 2")).toHaveValue("192.0.2.12");
+    expect(screen.getByLabelText("Camera host for row 3")).toHaveValue("");
+  });
+
+  it("sends each row's own camera host override, never another row's", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Manual snapshot URL" }));
+    fireEvent.input(screen.getByLabelText("Path"), { target: { value: "/snap" } });
+    fireEvent.click(nextButton()); // rows
+    generate("3", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    await screen.findByLabelText("Shared credential");
+    fireEvent.input(screen.getByLabelText("Camera host for row 1"), { target: { value: "192.0.2.11" } });
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    expect(input.rows[0].cameraHostOverride).toBe("192.0.2.11");
+    expect(input.rows[1].cameraHostOverride).toBeUndefined();
+    expect(input.rows[2].cameraHostOverride).toBeUndefined();
+  });
 });
 
 describe("PrinterBatchDialog — Review & results", () => {
+  it("Test camera shows each row's own result, never crossing rows", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => ({
+      batchId: input.batchId,
+      rows: [
+        result(input.rows[0].rowId, "created", { printer: record("prn-1") }),
+        result(input.rows[1].rowId, "created", { printer: record("prn-2") }),
+        result(input.rows[2].rowId, "rejected", { errors: [{ code: "VALIDATION", message: "Name is not allowed", fieldPath: "name" }] }),
+      ],
+    }));
+    testCamera.mockImplementation(({ printerId }: { printerId: string }) => {
+      if (printerId === "prn-1") {
+        return Promise.resolve({
+          header: { contentType: "image/png", capturedAt: "2026-09-27T12:00:00Z", byteLen: 1, snapshotId: null },
+          image: new Uint8Array([1]),
+        });
+      }
+      return Promise.reject({
+        contractVersion: 1,
+        code: "CAMERA_FAILED",
+        message: "The camera did not answer in time.",
+        recovery: ["RETRY"],
+        retryable: true,
+      });
+    });
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.click(nextButton()); // rows
+    generate("3", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    await screen.findByLabelText("Shared credential");
+    fireEvent.input(screen.getByLabelText("Host for row 1"), { target: { value: "10.0.0.1" } });
+    fireEvent.input(screen.getByLabelText("Host for row 2"), { target: { value: "10.0.0.2" } });
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Test camera" })).toHaveLength(2));
+
+    const [rowA, rowB] = screen.getAllByTestId(/^row-/);
+    fireEvent.click(within(rowA).getByRole("button", { name: "Test camera" }));
+    fireEvent.click(within(rowB).getByRole("button", { name: "Test camera" }));
+
+    await waitFor(() => expect(within(rowA).getByAltText(/Camera test snapshot/)).toBeInTheDocument());
+    await waitFor(() => expect(within(rowB).getByText("The camera did not answer in time.")).toBeInTheDocument());
+    expect(testCamera).toHaveBeenCalledWith({ printerId: "prn-1", source: { kind: "hostWebcam", webcamName: "front", webcamService: null, webPort: null } });
+    expect(testCamera).toHaveBeenCalledWith({ printerId: "prn-2", source: { kind: "hostWebcam", webcamName: "front", webcamService: null, webPort: null } });
+  });
+
   it("creates with toBatchInput's shape, then shows each row's outcome and keeps failed input", async () => {
     createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
     renderDialog();

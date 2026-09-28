@@ -257,6 +257,44 @@ impl std::fmt::Display for ConnectionError {
 
 impl std::error::Error for ConnectionError {}
 
+/// P8 D2 "Reachability": the Rust-only reason behind a
+/// `ConnectionState::Error` status, recorded beside it in the status map
+/// so Attention can tell an unreachable host (`printer.offline`) from a
+/// misconfigured one (`printer.connectionError`) without matching message
+/// strings. Never serialized: `PrinterStatus` and its contract are
+/// unchanged.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConnectionErrorCause {
+    Unreachable,
+    Timeout,
+    Auth,
+    Protocol,
+}
+
+impl ConnectionErrorCause {
+    /// D2: `Unreachable`, `Timeout`, and `Auth` map to themselves;
+    /// `Protocol` and `HostNotReady` both record `protocol`.
+    pub fn from_error(error: &ConnectionError) -> Self {
+        match error {
+            ConnectionError::Unreachable(_) => ConnectionErrorCause::Unreachable,
+            ConnectionError::Timeout => ConnectionErrorCause::Timeout,
+            ConnectionError::Auth(_) => ConnectionErrorCause::Auth,
+            ConnectionError::Protocol(_) | ConnectionError::HostNotReady => {
+                ConnectionErrorCause::Protocol
+            }
+        }
+    }
+}
+
+/// P8 D2: one Printer's status with its Rust-only error cause, as
+/// `ConnectionManager::status_facts()` returns it. `cause` is only ever
+/// read when `status.connection_state` is `Error`.
+#[derive(Clone, PartialEq, Debug)]
+pub struct PrinterStatusFacts {
+    pub status: PrinterStatus,
+    pub cause: Option<ConnectionErrorCause>,
+}
+
 /// One protocol adapter.
 ///
 /// `subscribe` owns its transport and pushes into a channel rather than
@@ -376,5 +414,29 @@ mod tests {
         // A status with no readings must not claim zero temperatures.
         assert!(!json.contains("nozzleTempC"));
         assert!(!json.contains("progress"));
+    }
+
+    #[test]
+    fn connection_error_cause_maps_every_variant() {
+        assert_eq!(
+            ConnectionErrorCause::from_error(&ConnectionError::Unreachable("x".into())),
+            ConnectionErrorCause::Unreachable
+        );
+        assert_eq!(
+            ConnectionErrorCause::from_error(&ConnectionError::Timeout),
+            ConnectionErrorCause::Timeout
+        );
+        assert_eq!(
+            ConnectionErrorCause::from_error(&ConnectionError::Auth("x".into())),
+            ConnectionErrorCause::Auth
+        );
+        assert_eq!(
+            ConnectionErrorCause::from_error(&ConnectionError::Protocol("x".into())),
+            ConnectionErrorCause::Protocol
+        );
+        assert_eq!(
+            ConnectionErrorCause::from_error(&ConnectionError::HostNotReady),
+            ConnectionErrorCause::Protocol
+        );
     }
 }

@@ -3,9 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { loadWebQueueFixture, resetQueueStoreMock } from "../queue/queue-store-mock";
+import { resetAttentionStoreMock, setAttentionStoreState } from "../attention/attention-store-mock";
+import { attentionEvent, incident, incidentDetail } from "../attention/test-records";
 import { PrinterDashboard } from "./PrinterDashboard";
 
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
+vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
+const getIncidentMock = vi.hoisted(() => vi.fn());
+vi.mock("../incidents/incident-store", () => ({
+  getIncident: getIncidentMock,
+  watchIncidentDetail: vi.fn(() => () => {}),
+  addIncidentNote: vi.fn(),
+}));
 vi.mock("../host-ops/host-operations-store", async () =>
   (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
 vi.mock("../host-ops/capabilities-store", async () =>
@@ -37,6 +46,8 @@ describe("PrinterDashboard", () => {
     cleanup();
     vi.unstubAllGlobals();
     resetQueueStoreMock();
+    resetAttentionStoreMock();
+    getIncidentMock.mockReset();
   });
 
   it("keeps loading separate from first-run and an empty Farm", () => {
@@ -220,5 +231,42 @@ describe("PrinterDashboard", () => {
     await screen.findByRole("region", { name: "Job" });
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("shows the Attention Event detail for an attention selection, in place of the Queue preview", async () => {
+    setAttentionStoreState({ events: [attentionEvent({ id: "atn-1", summary: "Bay 1 is offline." })] });
+    render(() => <PrinterDashboard store={store([printer()])} attentionEventId="atn-1" />);
+
+    expect(await screen.findByRole("dialog", { name: "Bay 1 is offline." })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Queue preview" })).not.toBeInTheDocument();
+  });
+
+  it("closing the Attention Event detail calls onAttentionEventClose", async () => {
+    setAttentionStoreState({ events: [attentionEvent({ id: "atn-1", summary: "Bay 1 is offline." })] });
+    const onAttentionEventClose = vi.fn();
+    render(() => (
+      <PrinterDashboard store={store([printer()])} attentionEventId="atn-1" onAttentionEventClose={onAttentionEventClose} />
+    ));
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    expect(onAttentionEventClose).toHaveBeenCalled();
+  });
+
+  it("shows the Incident detail for an incident selection, in place of the Queue preview", async () => {
+    getIncidentMock.mockResolvedValue(incidentDetail({ incident: incident({ id: "inc-1" }) }));
+    render(() => <PrinterDashboard store={store([printer()])} incidentId="inc-1" />);
+
+    expect(await screen.findByRole("dialog", { name: "Printer-reported failure" })).toBeInTheDocument();
+    expect(getIncidentMock).toHaveBeenCalledWith("inc-1");
+    expect(screen.queryByRole("dialog", { name: "Queue preview" })).not.toBeInTheDocument();
+  });
+
+  it("closing the Incident detail calls onIncidentClose", async () => {
+    getIncidentMock.mockResolvedValue(incidentDetail({ incident: incident({ id: "inc-1" }) }));
+    const onIncidentClose = vi.fn();
+    render(() => <PrinterDashboard store={store([printer()])} incidentId="inc-1" onIncidentClose={onIncidentClose} />);
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    expect(onIncidentClose).toHaveBeenCalled();
   });
 });

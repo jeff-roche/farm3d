@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use farm3d_lib::attention::projector::AppliedChanges;
+use farm3d_lib::attention::services::{AttentionServices, AttentionTimings};
 use farm3d_lib::connections::capabilities::{
     ArtifactStaging, CapabilityEvidence, CapabilityKey, CapabilityMap, CapabilityState,
     CommandFailure, EvidenceTier, HostFacts, HostStateQuery, LocateOutcome, PrintControl,
@@ -26,7 +28,7 @@ use farm3d_lib::connections::capabilities::{
 };
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
-use farm3d_lib::connections::supervisor::{ConnectionManager, STATUS_EVENT};
+use farm3d_lib::connections::supervisor::{build_connection, ConnectionManager, STATUS_EVENT};
 use farm3d_lib::connections::{
     ConnectionConfig, ConnectionState, PrinterConnection, PrinterStatus, MOONRAKER_KIND,
 };
@@ -253,12 +255,18 @@ fn rig_host_ops_timings() -> HostOpsTimings {
     }
 }
 
+/// The rig's default adapter factory: no adapter at all, so a rig user
+/// that starts the supervisor by mistake sees it fail at once instead of
+/// reaching a host. Only [`AttentionBoot::real_adapters`] opts out.
 fn unused_factory(
     _config: &ConnectionConfig,
     _key: Option<zeroize::Zeroizing<String>>,
 ) -> Option<Box<dyn PrinterConnection>> {
     None
 }
+
+type ConnectionFactory =
+    fn(&ConnectionConfig, Option<zeroize::Zeroizing<String>>) -> Option<Box<dyn PrinterConnection>>;
 
 /// The adapter's and host operations' timings, and how long any one wait
 /// on the running app may take. [`RigTimings::default`] suits the
@@ -521,6 +529,9 @@ pub struct Running {
 impl Drop for Running {
     fn drop(&mut self) {
         self.services.jobs.stop();
+        self.services.attention.stop();
+        self.services.cameras.stop();
+        self.services.notifications.stop();
     }
 }
 
@@ -570,9 +581,80 @@ pub fn boot_prepared(
     job_clock: Option<Arc<dyn Clock>>,
     prepare: impl FnOnce(&Arc<RuntimeServices<MockRuntime>>),
 ) -> Running {
+    boot_inner(roots, driver, initial, timings, job_clock, prepare, None).0
+}
+
+/// P8: how [`boot_with_attention`] starts the Attention runtime.
+pub struct AttentionBoot {
+    pub timings: AttentionTimings,
+    /// The projector's clock (the offline grace); the real time if `None`.
+    pub clock: Option<Arc<dyn Clock>>,
+    /// P8 Task 8: `Some` starts the camera capture runtime (and the
+    /// `MediaJanitor`) with these timings, before the projector, as
+    /// `build_runtime_services` does; `None` leaves captures off.
+    pub cameras: Option<farm3d_lib::cameras::services::CameraTimings>,
+    /// P8 Task 16: `Some` starts the notification runtime over this sink
+    /// and window control, before the projector, as
+    /// `build_runtime_services` does; `None` leaves it off.
+    pub notifications: Option<NotificationBoot>,
+    /// `true` gives the supervisor the production adapters
+    /// (`build_connection`), for a test that really starts it (P8's
+    /// tracer, around its offline cuts). `false` keeps the rig's
+    /// no-adapter factory, as every other rig user seeds the live status.
+    pub real_adapters: bool,
+}
+
+/// P8 Task 16: what the notification runtime shows through and raises.
+pub struct NotificationBoot {
+    pub sink: Arc<dyn farm3d_lib::notifications::NotificationSink>,
+    pub control: Arc<dyn farm3d_lib::notifications::activation::WindowControl>,
+}
+
+/// [`boot_tuned`] with the Attention projector as `build_runtime_services`
+/// runs it: the startup backfill right after Job recovery, and
+/// `start_attention_runtime` after `start_jobs_runtime`. Returns the
+/// backfill's changes beside the running app.
+pub fn boot_with_attention(
+    roots: &Roots,
+    initial: PrinterStatus,
+    timings: JobTimings,
+    attention: AttentionBoot,
+) -> (Running, AppliedChanges) {
+    let (running, backfilled) = boot_inner(
+        roots,
+        Driver::Started,
+        initial,
+        timings,
+        None,
+        |_| {},
+        Some(attention),
+    );
+    (running, backfilled.expect("the backfill ran"))
+}
+
+fn boot_inner(
+    roots: &Roots,
+    driver: Driver,
+    initial: PrinterStatus,
+    timings: JobTimings,
+    job_clock: Option<Arc<dyn Clock>>,
+    prepare: impl FnOnce(&Arc<RuntimeServices<MockRuntime>>),
+    attention: Option<AttentionBoot>,
+) -> (Running, Option<AppliedChanges>) {
     let storage = Arc::new(Storage::open(roots.paths.clone(), &roots.lease).unwrap());
     host_ops::recover_after_restart(&storage, SystemClock.now()).unwrap();
     let recovered = farm3d_lib::jobs::recover_after_restart(&storage, SystemClock.now()).unwrap();
+    // P8 D2 "Startup backfill": right after Job recovery, before any
+    // command is served.
+    let backfilled = attention
+        .as_ref()
+        .map(|_| farm3d_lib::attention::projector::backfill(&storage, SystemClock.now()).unwrap());
+    // P8 D5 "Startup sweep", when captures are on: before any command is
+    // served, published once the camera runtime starts.
+    let swept = attention
+        .as_ref()
+        .and_then(|boot| boot.cameras)
+        .map(|_| farm3d_lib::cameras::media::startup_sweep(&storage, SystemClock.now()));
     let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
         upload_unsupported: Arc::clone(&roots.upload_unsupported),
         tier: Arc::clone(&roots.evidence_tier),
@@ -581,6 +663,24 @@ pub fn boot_prepared(
     });
     let host_ops_timings = roots.timings.host_ops;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let factory_for_manager: ConnectionFactory =
+        if attention.as_ref().is_some_and(|boot| boot.real_adapters) {
+            build_connection
+        } else {
+            unused_factory
+        };
+    let camera_timings = attention.as_ref().and_then(|boot| boot.cameras);
+    let notification_boot = attention.as_ref().and_then(|boot| {
+        boot.notifications
+            .as_ref()
+            .map(|notifications| (Arc::clone(&notifications.sink), Arc::clone(&notifications.control)))
+    });
+    let attention_services = attention.as_ref().map(|boot| {
+        Arc::new(AttentionServices::with_clock(
+            boot.timings,
+            boot.clock.clone().unwrap_or_else(|| Arc::new(SystemClock)),
+        ))
+    });
     let (app, webview, manager, services) = common::runtime_with(
         tauri::generate_handler![
             farm3d_lib::queue::commands::list_queue,
@@ -607,11 +707,30 @@ pub fn boot_prepared(
             farm3d_lib::spools::commands::spool_history,
             farm3d_lib::printers::commands::archive_printer,
             farm3d_lib::printers::commands::delete_printer,
+            farm3d_lib::attention::commands::list_attention,
+            farm3d_lib::attention::commands::mark_attention_read,
+            farm3d_lib::attention::commands::acknowledge_attention_event,
+            farm3d_lib::attention::commands::resolve_attention_event,
+            farm3d_lib::incidents::commands::list_incidents,
+            farm3d_lib::incidents::commands::get_incident,
+            farm3d_lib::incidents::commands::add_incident_note,
+            farm3d_lib::cameras::commands::set_printer_camera,
+            farm3d_lib::cameras::commands::capture_snapshot,
+            farm3d_lib::cameras::commands::list_snapshots,
+            farm3d_lib::cameras::commands::snapshot_image,
+            farm3d_lib::cameras::commands::set_snapshot_pinned,
+            farm3d_lib::cameras::commands::media_usage,
+            farm3d_lib::connections::commands::printer_statuses,
+            farm3d_lib::cameras::commands::get_printer_camera,
+            farm3d_lib::printers::alerts::get_printer_alert_defaults,
+            farm3d_lib::printers::alerts::set_printer_alert_defaults,
+            farm3d_lib::settings::commands::load_settings,
+            farm3d_lib::settings::commands::save_settings,
         ],
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
         roots.credentials.path().to_path_buf(),
-        unused_factory,
+        factory_for_manager,
         move |services| {
             services.host_ops = Arc::new(HostOperationServices::new(
                 Arc::clone(&services.storage),
@@ -625,6 +744,12 @@ pub fn boot_prepared(
                 Some(clock) => JobServices::with_clock(timings, clock),
                 None => JobServices::new(timings),
             });
+            if let Some(attention) = attention_services {
+                services.attention = attention;
+            }
+            if let Some(timings) = camera_timings {
+                services.cameras = Arc::new(farm3d_lib::cameras::services::CameraServices::new(timings));
+            }
         },
     );
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -639,15 +764,35 @@ pub fn boot_prepared(
     if driver == Driver::Started {
         farm3d_lib::start_jobs_runtime(&services, app.handle());
     }
-    Running {
-        app,
-        webview,
-        manager,
-        services,
-        storage,
-        events,
-        wait: roots.timings.wait,
+    if let Some(changes) = &backfilled {
+        services.attention.set_backfilled(changes.clone());
+        if let Some(swept) = swept {
+            services.cameras.apply_startup_sweep(swept);
+            // Before the projector, so its first pass's captures are heard.
+            farm3d_lib::start_camera_runtime(&services, app.handle());
+        }
+        if let Some((sink, control)) = notification_boot {
+            // Before `start`, so neither the platform sink nor the main
+            // window is ever reached; before the projector, so its first
+            // live pass is heard.
+            services.notifications.set_sink(sink);
+            services.notifications.set_window_control(control);
+            farm3d_lib::start_notification_runtime(&services, app.handle());
+        }
+        farm3d_lib::start_attention_runtime(&services, app.handle());
     }
+    (
+        Running {
+            app,
+            webview,
+            manager,
+            services,
+            storage,
+            events,
+            wait: roots.timings.wait,
+        },
+        backfilled,
+    )
 }
 
 /// A live status: Online and fresh in `state`, or Offline for
@@ -770,6 +915,60 @@ impl Running {
             assert!(Instant::now() < deadline, "the driver never reached the barrier");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// P8: waits until the Attention projector has finished a whole pass
+    /// that started after this call (`AttentionServices::pass_barrier`).
+    pub fn attention_pass(&self) {
+        let mut done = self.services.attention.pass_barrier();
+        let deadline = Instant::now() + self.wait;
+        loop {
+            match done.try_recv() {
+                Ok(()) => return,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    panic!("the projector stopped before the barrier")
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+            assert!(Instant::now() < deadline, "the projector never finished a pass");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// P8: the stored `attention_events` rows as `list_attention`'s
+    /// decoder reads them, open ones and resolved ones alike, oldest first.
+    pub fn attention_rows(&self) -> Vec<farm3d_lib::attention::AttentionEvent> {
+        self.storage
+            .read(|connection| {
+                let mut statement =
+                    connection.prepare("SELECT id FROM attention_events ORDER BY first_observed_at, rowid")?;
+                let ids = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(ids)
+            })
+            .unwrap()
+            .iter()
+            .map(|id| {
+                self.storage
+                    .read(|connection| Ok(farm3d_lib::attention::repository::load_event(connection, id)))
+                    .unwrap()
+                    .unwrap()
+                    .expect("row exists")
+            })
+            .collect()
+    }
+
+    /// P8: the captured `attention` stream events of `event_type` whose
+    /// subject is `subject_id`.
+    pub fn attention_stream(&self, event_type: &str, subject_id: &str) -> Vec<Value> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|text| serde_json::from_str::<Value>(text).unwrap())
+            .filter(|event| event["type"] == event_type && event["subject"]["id"] == subject_id)
+            .collect()
     }
 
     /// Waits until everything already set in motion has run: the driver has

@@ -1,8 +1,9 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
-    // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2);
+    // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
+    // P8 Task 6's 7, Task 7's 6, Task 8's 5, and Task 9's 4.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -113,6 +114,28 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "declare_job_outcome",
             "settle_job_material",
             "correct_job_material",
+            "list_attention",
+            "mark_attention_read",
+            "acknowledge_attention_event",
+            "resolve_attention_event",
+            "list_incidents",
+            "get_incident",
+            "add_incident_note",
+            "get_printer_camera",
+            "set_printer_camera",
+            "clear_printer_camera",
+            "list_host_webcams",
+            "test_camera",
+            "camera_preview_frame",
+            "capture_snapshot",
+            "list_snapshots",
+            "snapshot_image",
+            "set_snapshot_pinned",
+            "media_usage",
+            "get_printer_alert_defaults",
+            "set_printer_alert_defaults",
+            "notification_status",
+            "send_test_notification",
         ]
     );
 }
@@ -274,6 +297,28 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::jobs::commands::declare_job_outcome,
             farm3d_lib::jobs::commands::settle_job_material,
             farm3d_lib::jobs::commands::correct_job_material,
+            farm3d_lib::attention::commands::list_attention,
+            farm3d_lib::attention::commands::mark_attention_read,
+            farm3d_lib::attention::commands::acknowledge_attention_event,
+            farm3d_lib::attention::commands::resolve_attention_event,
+            farm3d_lib::incidents::commands::list_incidents,
+            farm3d_lib::incidents::commands::get_incident,
+            farm3d_lib::incidents::commands::add_incident_note,
+            farm3d_lib::cameras::commands::get_printer_camera,
+            farm3d_lib::cameras::commands::set_printer_camera,
+            farm3d_lib::cameras::commands::clear_printer_camera,
+            farm3d_lib::cameras::commands::list_host_webcams,
+            farm3d_lib::cameras::commands::test_camera,
+            farm3d_lib::cameras::commands::camera_preview_frame,
+            farm3d_lib::cameras::commands::capture_snapshot,
+            farm3d_lib::cameras::commands::list_snapshots,
+            farm3d_lib::cameras::commands::snapshot_image,
+            farm3d_lib::cameras::commands::set_snapshot_pinned,
+            farm3d_lib::cameras::commands::media_usage,
+            farm3d_lib::printers::alerts::get_printer_alert_defaults,
+            farm3d_lib::printers::alerts::set_printer_alert_defaults,
+            farm3d_lib::notifications::commands::notification_status,
+            farm3d_lib::notifications::commands::send_test_notification,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -581,6 +626,65 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             "correct_job_material",
             json!({"operationId": "o", "jobId": "j", "entry": {"kind": "net", "netMg": 1000, "confidence": "measured"}}),
         ),
+        ("list_attention", json!({})),
+        (
+            "mark_attention_read",
+            json!({"operationId": "o", "eventIds": ["a"]}),
+        ),
+        (
+            "acknowledge_attention_event",
+            json!({"operationId": "o", "eventId": "a"}),
+        ),
+        (
+            "resolve_attention_event",
+            json!({"operationId": "o", "eventId": "a"}),
+        ),
+        ("list_incidents", json!({})),
+        ("get_incident", json!({"incidentId": "i"})),
+        (
+            "add_incident_note",
+            json!({"operationId": "o", "incidentId": "i", "text": "t"}),
+        ),
+        ("get_printer_camera", json!({"printerId": "p"})),
+        (
+            "set_printer_camera",
+            json!({"operationId": "o", "printerId": "p", "source": {"kind": "hostWebcam", "webcamName": "w", "webcamService": null, "webPort": null}}),
+        ),
+        (
+            "clear_printer_camera",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        ("list_host_webcams", json!({"printerId": "p"})),
+        (
+            "test_camera",
+            json!({"source": {"kind": "snapshotUrl", "snapshotUrl": "http://192.0.2.10/snap"}}),
+        ),
+        ("camera_preview_frame", json!({"printerId": "p"})),
+        (
+            "capture_snapshot",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        ("list_snapshots", json!({})),
+        ("snapshot_image", json!({"snapshotId": "s"})),
+        (
+            "set_snapshot_pinned",
+            json!({"operationId": "o", "snapshotId": "s", "pinned": true}),
+        ),
+        ("media_usage", json!({})),
+        ("get_printer_alert_defaults", json!({"printerId": "p"})),
+        (
+            "set_printer_alert_defaults",
+            json!({
+                "operationId": "o",
+                "printerId": "p",
+                "alertDefaults": {
+                    "offlineAfterMinutes": 5, "notifications": "follow",
+                    "snapshotOnIncident": true, "snapshotOnCompletion": true,
+                },
+            }),
+        ),
+        ("notification_status", json!({})),
+        ("send_test_notification", json!({})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

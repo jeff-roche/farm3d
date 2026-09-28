@@ -288,7 +288,7 @@ fn fresh_database_records_the_v8_ledger_row_with_a_matching_checksum() {
         .expect("schema state");
 
     assert_eq!(version, CURRENT_SCHEMA_VERSION);
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     assert_eq!(name, "0008_p7_queue_jobs");
     let expected_checksum = format!(
         "{:x}",

@@ -25,7 +25,24 @@ export interface BatchRowsTableProps {
   onSaveAnyway?: (rowId: string) => void;
   /** Results mode: Equip on a created row, with its Printer id (D12). */
   onEquip?: (printerId: string) => void;
+  /** P8 D13: the Shared step's own camera template kind, if any -- the
+   *  per-row host override column shows only for `snapshotUrl` (a
+   *  `hostWebcam` template never asks for a host). */
+  cameraTemplateKind?: "hostWebcam" | "snapshotUrl";
+  /** P8: results mode's own per-row "Test camera" (D13: "test results ...
+   *  never cross rows"). `cameraSourceFor` decides whether a created row
+   *  can offer it at all (no camera resolved for that row -> none shown);
+   *  `cameraTestResults` holds the latest outcome for each row that has
+   *  one. */
+  cameraSourceFor?: (row: BatchRowDraft) => boolean;
+  cameraTestResults?: Record<string, BatchCameraTestResult>;
+  onTestCamera?: (rowId: string) => void;
 }
+
+export type BatchCameraTestResult =
+  | { status: "pending" }
+  | { status: "ok"; url: string }
+  | { status: "error"; message: string };
 
 const OUTCOME_MARKERS: Record<BatchRowOutcome, { severity: SeverityMarkerProps["severity"]; label: string }> = {
   created: { severity: "resolved", label: "Created" },
@@ -41,11 +58,17 @@ const SAFETY_PREVIEW: Record<StartSafety, string> = {
 
 const CREDENTIAL_LABELS = { none: "None", shared: "Shared", row: "Per row" } as const;
 
-const HEADERS: Record<BatchRowsTableProps["mode"], string[]> = {
-  edit: ["Name", "Location", "Receives", ""],
-  connect: ["Name", "Location", "Protocol", "Host", "Port", "Credential", "Receives"],
-  results: ["Name", "Location", "Host", "Port", "Outcome", "Details"],
-};
+function headersFor(props: BatchRowsTableProps): string[] {
+  const cameraHost = props.cameraTemplateKind === "snapshotUrl" ? ["Camera host"] : [];
+  switch (props.mode) {
+    case "edit":
+      return ["Name", "Location", "Receives", ""];
+    case "connect":
+      return ["Name", "Location", "Protocol", "Host", "Port", "Credential", ...cameraHost, "Receives"];
+    case "results":
+      return ["Name", "Location", "Host", "Port", ...cameraHost, "Outcome", "Details"];
+  }
+}
 
 /** Equip is offered on a row that became a Printer this batch. */
 function equipPrinterId(row: BatchRowDraft): string | undefined {
@@ -142,6 +165,21 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
     );
   }
 
+  function cameraHostCell(row: BatchRowDraft, index: number, editable: boolean): JSX.Element {
+    return (
+      <div role="cell" class={styles.cell}>
+        <Show when={editable} fallback={<span class={styles.text}>{row.cameraHostOverride ?? ""}</span>}>
+          <TextField
+            aria-label={`Camera host for row ${index + 1}`}
+            value={row.cameraHostOverride ?? ""}
+            placeholder="This row's Connection host"
+            onChange={(cameraHostOverride) => props.onChange(row.rowId, { cameraHostOverride })}
+          />
+        </Show>
+      </div>
+    );
+  }
+
   function previewCell(row: BatchRowDraft): JSX.Element {
     return (
       <div role="cell" class={[styles.cell, styles.preview].join(" ")} data-testid={`preview-${row.rowId}`}>
@@ -203,9 +241,30 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
             Save anyway
           </Button>
         </Show>
+        <Show when={props.onTestCamera && props.cameraSourceFor?.(row)}>
+          <div class={styles.cameraTest}>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={cameraTestResult(row)?.status === "pending"}
+              onClick={() => props.onTestCamera?.(row.rowId)}
+            >
+              {cameraTestResult(row)?.status === "pending" ? "Testing…" : "Test camera"}
+            </Button>
+            <Show when={cameraTestResult(row)?.status === "ok"}>
+              <img class={styles.cameraTestImage} src={(cameraTestResult(row) as { url: string }).url} alt={`Camera test snapshot for ${row.name}`} />
+            </Show>
+            <Show when={cameraTestResult(row)?.status === "error"}>
+              <span class={styles.error}>{(cameraTestResult(row) as { message: string }).message}</span>
+            </Show>
+          </div>
+        </Show>
       </div>
     );
   }
+
+  const cameraTestResult = (row: BatchRowDraft): BatchCameraTestResult | undefined =>
+    props.cameraTestResults?.[row.rowId];
 
   return (
     <div class={styles.scroller}>
@@ -222,7 +281,7 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
               </Checkbox>
             </div>
           </Show>
-          <For each={HEADERS[props.mode]}>
+          <For each={headersFor(props)}>
             {(header) => (
               <div role="columnheader" class={styles.cell}>
                 {header}
@@ -297,6 +356,9 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
                         />
                       </Show>
                     </div>
+                    <Show when={props.cameraTemplateKind === "snapshotUrl"}>
+                      {cameraHostCell(row, index(), !locked())}
+                    </Show>
                     {previewCell(row)}
                   </Match>
 
@@ -322,6 +384,9 @@ export function BatchRowsTable(props: BatchRowsTableProps) {
                       <div role="cell" class={styles.cell}>
                         {portInput(row, index())}
                       </div>
+                    </Show>
+                    <Show when={props.cameraTemplateKind === "snapshotUrl"}>
+                      {cameraHostCell(row, index(), connectionEditable())}
                     </Show>
                     {outcomeCell(row)}
                     {detailsCell(row)}

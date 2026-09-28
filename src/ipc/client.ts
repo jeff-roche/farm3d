@@ -160,11 +160,36 @@ type CommandMap = {
   declare_job_outcome: [Contracts.DeclareJobOutcomeRequest, Contracts.DeclareJobOutcomeResult];
   settle_job_material: [Contracts.SettleJobMaterialRequest, Contracts.SettleJobMaterialResult];
   correct_job_material: [Contracts.CorrectJobMaterialRequest, Contracts.CorrectJobMaterialResult];
+  list_attention: [Contracts.ListAttentionRequest, Contracts.ListAttentionResult];
+  mark_attention_read: [Contracts.MarkAttentionReadRequest, Contracts.MarkAttentionReadResult];
+  acknowledge_attention_event: [
+    Contracts.AcknowledgeAttentionEventRequest,
+    Contracts.AcknowledgeAttentionEventResult,
+  ];
+  resolve_attention_event: [Contracts.ResolveAttentionEventRequest, Contracts.ResolveAttentionEventResult];
+  list_incidents: [Contracts.ListIncidentsRequest, Contracts.ListIncidentsResult];
+  get_incident: [Contracts.GetIncidentRequest, Contracts.GetIncidentResult];
+  add_incident_note: [Contracts.AddIncidentNoteRequest, Contracts.AddIncidentNoteResult];
+  get_printer_camera: [Contracts.GetPrinterCameraRequest, Contracts.GetPrinterCameraResult];
+  set_printer_camera: [Contracts.SetPrinterCameraRequest, Contracts.SetPrinterCameraResult];
+  clear_printer_camera: [Contracts.ClearPrinterCameraRequest, Contracts.ClearPrinterCameraResult];
+  list_host_webcams: [Contracts.ListHostWebcamsRequest, Contracts.ListHostWebcamsResult];
+  capture_snapshot: [Contracts.CaptureSnapshotRequest, Contracts.CaptureSnapshotResult];
+  list_snapshots: [Contracts.ListSnapshotsRequest, Contracts.ListSnapshotsResult];
+  set_snapshot_pinned: [Contracts.SetSnapshotPinnedRequest, Contracts.SetSnapshotPinnedResult];
+  media_usage: [Contracts.MediaUsageRequest, Contracts.MediaUsageResult];
+  get_printer_alert_defaults: [Contracts.GetPrinterAlertDefaultsRequest, Contracts.GetPrinterAlertDefaultsResult];
+  set_printer_alert_defaults: [Contracts.SetPrinterAlertDefaultsRequest, Contracts.SetPrinterAlertDefaultsResult];
+  notification_status: [Contracts.NotificationStatusRequest, Contracts.NotificationStatusResult];
+  send_test_notification: [Contracts.SendTestNotificationRequest, Contracts.SendTestNotificationResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */
 export type BinaryCommandMap = {
   get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
+  test_camera: [Contracts.TestCameraRequest, Contracts.TestCameraResult];
+  camera_preview_frame: [Contracts.CameraPreviewFrameRequest, Contracts.CameraPreviewFrameResult];
+  snapshot_image: [Contracts.SnapshotImageRequest, Contracts.SnapshotImageResult];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;

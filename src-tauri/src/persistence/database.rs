@@ -22,6 +22,7 @@ pub struct StoragePaths {
     legacy_root: PathBuf,
     snapshot_root: PathBuf,
     content_root: PathBuf,
+    media_root: PathBuf,
 }
 
 impl StoragePaths {
@@ -40,15 +41,17 @@ impl StoragePaths {
         let snapshot_root = create_contained_directory(&metadata_root, Path::new("snapshots"))?;
         let content_root =
             create_contained_directory(&app_data_root, Path::new("farm3d-content/v1"))?;
+        // P8 D5: camera snapshots, beside (never inside) the content store.
+        let media_root = create_contained_directory(&app_data_root, Path::new("farm3d-media/v1"))?;
         let database = validate_database_path(&metadata_root)?;
 
-        if [&legacy_root, &snapshot_root, &content_root]
-            .iter()
-            .any(|tree| database.starts_with(tree))
-            || trees_overlap(&legacy_root, &snapshot_root)
-            || trees_overlap(&legacy_root, &content_root)
-            || trees_overlap(&snapshot_root, &content_root)
-        {
+        let trees = [&legacy_root, &snapshot_root, &content_root, &media_root];
+        let overlapping = trees.iter().enumerate().any(|(index, left)| {
+            trees[index + 1..]
+                .iter()
+                .any(|right| trees_overlap(left, right))
+        });
+        if trees.iter().any(|tree| database.starts_with(tree)) || overlapping {
             return Err(StorageError::PathCollision);
         }
 
@@ -59,6 +62,7 @@ impl StoragePaths {
             legacy_root,
             snapshot_root,
             content_root,
+            media_root,
         })
     }
 
@@ -76,6 +80,13 @@ impl StoragePaths {
 
     pub fn content_root(&self) -> &Path {
         &self.content_root
+    }
+
+    /// P8 D5: `<app data>/farm3d-media/v1`, the camera snapshot store
+    /// (`cameras::media`). Rust-only: no path under it is ever sent to the
+    /// frontend.
+    pub fn media_root(&self) -> &Path {
+        &self.media_root
     }
 
     pub fn legacy_root(&self) -> &Path {

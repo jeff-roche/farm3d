@@ -58,6 +58,7 @@ vi.mock("./screens/AppShell", () => ({
     printerRoster: { count: number };
     attentionSpoolCount?: number;
     queueAttentionCount?: number;
+    attentionActionableCount?: number;
     activeJobs?: { id: string; stateLabel: string }[];
     children: JSX.Element;
   }) => (
@@ -66,6 +67,7 @@ vi.mock("./screens/AppShell", () => ({
       <output aria-label="Printer count">{props.printerRoster.count}</output>
       <output aria-label="Attention Spools">{props.attentionSpoolCount}</output>
       <output aria-label="Queue attention">{props.queueAttentionCount}</output>
+      <output aria-label="Attention actionable">{props.attentionActionableCount}</output>
       <output aria-label="Active Jobs">{(props.activeJobs ?? []).map((j) => `${j.id}:${j.stateLabel}`).join(",")}</output>
       {props.children}
     </div>
@@ -105,6 +107,23 @@ const webview = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: webview.onDragDropEvent }),
+}));
+
+// `farm3d-navigate-v1` (App.tsx's own listener -- every other store's
+// `@tauri-apps/api/event` usage is already replaced by its own mock, e.g.
+// `queue-store-mock`, so this is the only consumer of `listen` left).
+type NavigateEventPayload = { payload: unknown };
+const navigateEvent = vi.hoisted(() => ({
+  handler: undefined as undefined | ((event: NavigateEventPayload) => void),
+  unlisten: vi.fn(),
+  listen: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, cb: (event: NavigateEventPayload) => void) => {
+    navigateEvent.listen(name, cb);
+    if (name === "farm3d-navigate-v1") navigateEvent.handler = cb;
+    return Promise.resolve(navigateEvent.unlisten);
+  },
 }));
 
 /** `vi.resetModules` gives each test a fresh navigation store, so read the
@@ -166,6 +185,25 @@ async function queueStore(): Promise<QueueStoreTestModule> {
   return (await import("./queue/queue-store")) as unknown as QueueStoreTestModule;
 }
 
+// Same pattern for the mocked Attention store.
+vi.mock("./attention/attention-store", async () => {
+  const mock = await import("./attention/attention-store-mock");
+  return {
+    ...mock.attentionStoreMock,
+    setAttentionStoreState: mock.setAttentionStoreState,
+    loadWebAttentionFixture: mock.loadWebAttentionFixture,
+    resetAttentionStoreMock: mock.resetAttentionStoreMock,
+  };
+});
+type AttentionStoreTestModule = typeof import("./attention/attention-store-mock").attentionStoreMock & {
+  setAttentionStoreState: typeof import("./attention/attention-store-mock").setAttentionStoreState;
+  loadWebAttentionFixture: () => ReturnType<typeof import("./attention/attention-store-mock").loadWebAttentionFixture>;
+  resetAttentionStoreMock: () => void;
+};
+async function attentionStore(): Promise<AttentionStoreTestModule> {
+  return (await import("./attention/attention-store")) as unknown as AttentionStoreTestModule;
+}
+
 vi.mock("./screens/QueueScreen", () => ({
   QueueScreen: () => <div>Queue screen</div>,
 }));
@@ -206,13 +244,17 @@ vi.mock("./screens/PrinterDashboard", () => ({
     syncState?: string;
     onImport?: () => void;
     onExport?: () => void;
+    attentionEventId?: string | null;
+    onAttentionEventClose?: () => void;
   }) => (
     <div>
       <p>{props.store.hasPrinters() ? "Persisted Printers are visible" : props.isFirstRun ? "First run" : "Returning empty Farm"}</p>
       <p>Sync state: {props.syncState}</p>
       <output aria-label="Selected Printer">{props.store.selectedPrinterId() ?? "none"}</output>
+      <output aria-label="Selected Attention Event">{props.attentionEventId ?? "none"}</output>
       <button onClick={props.onImport}>Import Printers</button>
       <button onClick={props.onExport}>Export Printers</button>
+      <button onClick={props.onAttentionEventClose}>Close Attention Event</button>
     </div>
   ),
 }));
@@ -269,6 +311,12 @@ beforeEach(async () => {
   const queueMock = await queueStore();
   queueMock.resetQueueStoreMock();
   queueMock.startQueue.mockReset().mockResolvedValue(() => {});
+  const attentionMock = await attentionStore();
+  attentionMock.resetAttentionStoreMock();
+  attentionMock.startAttention.mockReset().mockResolvedValue(() => {});
+  navigateEvent.handler = undefined;
+  navigateEvent.unlisten.mockReset();
+  navigateEvent.listen.mockReset();
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -388,6 +436,102 @@ describe("App", () => {
     await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
     expect(screen.getByText("Monitor")).toBeInTheDocument();
+  });
+
+  it("forwards the Attention store's actionable count to the shell's Monitor badge and the trigger", async () => {
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({
+      events: [attentionEvent({ id: "atn-1", requiresAction: true, resolvedAt: null })],
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Attention actionable")).toHaveTextContent("1"));
+  });
+
+  it("is available for a known Attention Event deep link", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/atn-1";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({ events: [attentionEvent({ id: "atn-1" })] });
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+  });
+
+  it("passes an Attention Event deep link to the dashboard as attentionEventId, and clearing it navigates back to plain Monitor", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/atn-1";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({ events: [attentionEvent({ id: "atn-1" })] });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Selected Attention Event")).toHaveTextContent("atn-1"));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close Attention Event" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Selected Attention Event")).toHaveTextContent("none"));
+    expect(window.location.hash).toBe("#nav=v1/monitor");
+  });
+
+  it("keeps Monitor open and selects nothing else for an unknown deep-linked Attention Event", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/missing";
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("selectionUnavailable"));
+    await waitFor(() => expect(screen.getAllByText("The requested item is no longer available.").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
+    expect(screen.getByText("Monitor")).toBeInTheDocument();
+  });
+
+  it("is available for a closed Incident referenced only by a resolved Event's incidentId (Controller ruling, fix round 1)", async () => {
+    window.location.hash = "#nav=v1/monitor/incident/inc-closed";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    // The Incident itself never appears in `openIncidents()` (it's
+    // closed), but a resolved Event still names it: D8 keeps a closed
+    // Incident openable, since an Event's detail links its Incident even
+    // after it closes.
+    attentionMock.setAttentionStoreState({
+      events: [attentionEvent({
+        id: "atn-resolved", incidentId: "inc-closed",
+        resolvedAt: "2026-09-25T00:00:00Z", resolution: "operatorResolved",
+      })],
+      incidents: [],
+    });
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+  });
+
+  it("routes a farm3d-navigate-v1 payload through navigate, changing the hash", async () => {
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigateEvent.handler).toBeDefined());
+    navigateEvent.handler!({
+      payload: {
+        contractVersion: 1,
+        target: { version: 1, destination: "monitor", selection: { kind: "printer", id: "prn-1" } },
+        openAttentionCenter: false,
+      },
+    });
+
+    await waitFor(() => expect(window.location.hash).toBe("#nav=v1/monitor/printer/prn-1"));
+    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("prn-1"));
   });
 
   it("loads the Spool inventory at startup, so the attention-Spool badge counts (low or reconciliation) without visiting Spools", async () => {
@@ -558,8 +702,10 @@ describe("App", () => {
     render(() => <App />);
     expect(await screen.findByText("Queue screen")).toBeInTheDocument();
     expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
-    // Three awaiting operator, one blocked, and one deferred requirement.
-    expect(screen.getByRole("status", { name: "Queue attention" })).toHaveTextContent("5");
+    // Three awaiting operator, one blocked, one deferred materialReconciliation
+    // Requirement, and one pending jobOutcomeUnknown Requirement (P8 fix
+    // round 1's web-fixture cross-linking added the latter).
+    expect(screen.getByRole("status", { name: "Queue attention" })).toHaveTextContent("6");
     expect(screen.getByRole("status", { name: "Active Jobs" })).toHaveTextContent("job-web-printing:Printing");
   });
 

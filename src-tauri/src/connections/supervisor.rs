@@ -15,8 +15,9 @@ use super::status_repository::{
     PrinterTelemetry, SnapshotWrite, StatusRepository, StoredTelemetrySnapshot,
 };
 use super::{
-    ConnectionConfig, ConnectionError, ConnectionObservation, ConnectionState, PrinterConnection,
-    PrinterStatus, StatusCacheWarning, StatusCacheWarningOperation,
+    ConnectionConfig, ConnectionError, ConnectionErrorCause, ConnectionObservation,
+    ConnectionState, PrinterConnection, PrinterStatus, PrinterStatusFacts, StatusCacheWarning,
+    StatusCacheWarningOperation,
 };
 use crate::contracts::event::{EventEnvelope, EventSubject, JsSafeInteger};
 use crate::printers::operational::{evaluate_operational_status, HostActivity, OperationalInput};
@@ -119,6 +120,9 @@ pub struct PrinterStatusRow {
 struct StatusState {
     stream_id: String,
     values: HashMap<String, PrinterStatus>,
+    /// P8 D2 "Reachability": the Rust-only cause beside each `error`
+    /// status that has one. Never serialized.
+    causes: HashMap<String, ConnectionErrorCause>,
     hydrated: HashSet<String>,
     epochs: HashMap<String, u64>,
     sequence: u64,
@@ -129,6 +133,7 @@ impl Default for StatusState {
         Self {
             stream_id: uuid::Uuid::new_v4().to_string(),
             values: HashMap::new(),
+            causes: HashMap::new(),
             hydrated: HashSet::new(),
             epochs: HashMap::new(),
             sequence: 0,
@@ -200,6 +205,33 @@ impl StatusMap {
         self.state.lock().expect("status map lock").values.clone()
     }
 
+    /// Every status with its recorded error cause, read under one lock.
+    fn facts(&self) -> HashMap<String, PrinterStatusFacts> {
+        let state = self.state.lock().expect("status map lock");
+        state
+            .values
+            .iter()
+            .map(|(id, status)| {
+                (
+                    id.clone(),
+                    PrinterStatusFacts {
+                        status: status.clone(),
+                        cause: state.causes.get(id).copied(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn cause(&self, id: &str) -> Option<ConnectionErrorCause> {
+        self.state
+            .lock()
+            .expect("status map lock")
+            .causes
+            .get(id)
+            .copied()
+    }
+
     fn status_and_hydration(&self, id: &str) -> (Option<PrinterStatus>, bool) {
         let state = self.state.lock().expect("status map lock");
         (state.values.get(id).cloned(), state.hydrated.contains(id))
@@ -247,8 +279,10 @@ impl StatusMap {
         id: &str,
         status: PrinterStatus,
         hydrated: bool,
+        cause: Option<ConnectionErrorCause>,
     ) -> PrinterStatusEvent {
         let mut state = self.state.lock().expect("status map lock");
+        record_cause(&mut state, id, &status, cause);
         let envelope = next_envelope(
             &mut state,
             id,
@@ -283,6 +317,9 @@ impl StatusMap {
         if state.epochs.get(id).copied() != Some(epoch) {
             return None;
         }
+        // An observation never carries a cause: an adapter's own `error`
+        // health report has none (D2: `Unknown`).
+        record_cause(&mut state, id, &status, None);
         let envelope = next_envelope(
             &mut state,
             id,
@@ -312,6 +349,7 @@ impl StatusMap {
     fn publish_removed(&self, id: &str) -> PrinterStatusEvent {
         let mut state = self.state.lock().expect("status map lock");
         state.values.remove(id);
+        state.causes.remove(id);
         state.hydrated.remove(id);
         let epoch = state.epochs.entry(id.to_string()).or_default();
         *epoch = epoch.saturating_add(1);
@@ -321,6 +359,24 @@ impl StatusMap {
             PrinterStatusEventType::Removed,
             PrinterStatusEventPayload::Removed,
         )
+    }
+}
+
+/// P8 D2: records `cause` beside an `error` status, and forgets any cause
+/// once the status is anything else (or an `error` with no known cause).
+fn record_cause(
+    state: &mut StatusState,
+    id: &str,
+    status: &PrinterStatus,
+    cause: Option<ConnectionErrorCause>,
+) {
+    match cause {
+        Some(cause) if status.connection_state == ConnectionState::Error => {
+            state.causes.insert(id.to_string(), cause);
+        }
+        _ => {
+            state.causes.remove(id);
+        }
     }
 }
 
@@ -595,6 +651,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
     pub fn statuses(&self) -> HashMap<String, PrinterStatus> {
         self.statuses.snapshot()
     }
+
+    /// P8 D2 "Reachability": every status with its Rust-only error cause
+    /// (`Some` only beside an `error` status the supervisor could explain).
+    pub(crate) fn status_facts(&self) -> HashMap<String, PrinterStatusFacts> {
+        self.statuses.facts()
+    }
     pub fn status_backfill(&self) -> PrinterStatusBackfill {
         let mut backfill = self.statuses.backfill();
         backfill.cache_warnings = self.cache_warnings();
@@ -637,6 +699,8 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
 
     pub fn reconcile_printer(&self, printer_id: &str, setup: PrinterSetupFacts) {
         let (previous, hydrated) = self.statuses.status_and_hydration(printer_id);
+        // Kept only while the state stays `error` (`record_cause`).
+        let previous_cause = self.statuses.cause(printer_id);
         let previous = previous.unwrap_or_else(|| PrinterStatus::new(ConnectionState::Offline));
         let cache_warnings = previous.cache_warnings.clone();
         let state = if setup.has_usable_connection {
@@ -655,7 +719,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             self.now(),
         );
         next.cache_warnings = cache_warnings;
-        self.publish_changed(printer_id, next, hydrated);
+        self.publish_changed(printer_id, next, hydrated, previous_cause);
     }
 
     pub fn apply_observation(
@@ -694,7 +758,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             }
         }
         next.cache_warnings = self.cache_warnings_for(printer_id);
-        self.publish_changed(printer_id, next, hydrated && !telemetry_observed);
+        self.publish_changed(printer_id, next, hydrated && !telemetry_observed, None);
     }
 
     pub fn apply_connection_error(
@@ -717,11 +781,11 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             self.now(),
         );
         next.cache_warnings = cache_warnings;
-        self.publish_changed(printer_id, next, hydrated);
+        self.publish_changed(printer_id, next, hydrated, Some(ConnectionErrorCause::Protocol));
     }
 
     pub fn seed(&self, printer_id: &str, status: PrinterStatus) {
-        self.publish_changed(printer_id, status, false);
+        self.publish_changed(printer_id, status, false, None);
     }
 
     pub async fn start(
@@ -783,11 +847,14 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                         _ = stop_requested.changed() => None,
                     },
                     None => {
+                        // D2: no cause (the Printer is Setup incomplete, so
+                        // it is never read).
                         apply_error_to(
                             &app,
                             &statuses,
                             &id,
                             "This Connection kind is not supported by this build.",
+                            None,
                             setup,
                             (clock)(),
                         );
@@ -805,6 +872,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                         &statuses,
                         &id,
                         status_message(&error),
+                        Some(ConnectionErrorCause::from_error(&error)),
                         setup,
                         (clock)(),
                     ),
@@ -898,7 +966,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             now,
         );
         next.cache_warnings = self.cache_warnings_for(printer_id);
-        self.publish_changed(printer_id, next, false);
+        self.publish_changed(printer_id, next, false, None);
         graceful
     }
 
@@ -942,8 +1010,14 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
         self.reconciliation.lock().await
     }
 
-    fn publish_changed(&self, id: &str, status: PrinterStatus, hydrated: bool) {
-        let event = self.statuses.publish_changed(id, status, hydrated);
+    fn publish_changed(
+        &self,
+        id: &str,
+        status: PrinterStatus,
+        hydrated: bool,
+        cause: Option<ConnectionErrorCause>,
+    ) {
+        let event = self.statuses.publish_changed(id, status, hydrated, cause);
         let _ = self.app.emit(STATUS_EVENT, event);
     }
     fn publish_removed(&self, id: &str) {
@@ -999,11 +1073,14 @@ fn apply_observation_to<R: tauri::Runtime>(
     }
 }
 
+/// Publishes an `error` status for `id`, recording `cause` beside it in
+/// the status map (P8 D2 "Reachability").
 fn apply_error_to<R: tauri::Runtime>(
     app: &AppHandle<R>,
     statuses: &StatusMap,
     id: &str,
     message: impl Into<String>,
+    cause: Option<ConnectionErrorCause>,
     setup: PrinterSetupFacts,
     now: DateTime<Utc>,
 ) {
@@ -1021,7 +1098,7 @@ fn apply_error_to<R: tauri::Runtime>(
         now,
     );
     next.cache_warnings = cache_warnings;
-    let event = statuses.publish_changed(id, next, hydrated);
+    let event = statuses.publish_changed(id, next, hydrated, cause);
     let _ = app.emit(STATUS_EVENT, event);
 }
 
@@ -1114,7 +1191,7 @@ mod tests {
     fn changed_event_payload_uses_the_backfill_status_shape() {
         let statuses = StatusMap::default();
         let status = PrinterStatus::new(ConnectionState::Online);
-        let event = statuses.publish_changed("prn-1", status, false);
+        let event = statuses.publish_changed("prn-1", status, false, None);
         let PrinterStatusEventPayload::Changed { ref status } = event.payload else {
             panic!("expected changed payload")
         };
@@ -1130,6 +1207,7 @@ mod tests {
             "prn-1",
             PrinterStatus::new(ConnectionState::Online),
             false,
+            None,
         );
         let value = serde_json::to_value(event).unwrap();
 
@@ -1291,6 +1369,129 @@ mod tests {
 
         assert_eq!(status.telemetry.nozzle_temp_c, Some(215.0));
         assert_eq!(status.freshness, TelemetryFreshness::Stale);
+    }
+
+    /// A connection whose every `subscribe` fails with the same error.
+    struct FailingConnection(ConnectionError);
+
+    #[async_trait::async_trait]
+    impl PrinterConnection for FailingConnection {
+        async fn probe(&self) -> Result<super::super::ProbeResult, ConnectionError> {
+            Err(self.0.clone())
+        }
+
+        async fn subscribe(
+            &self,
+            _tx: tokio::sync::mpsc::Sender<ConnectionObservation>,
+        ) -> Result<(), ConnectionError> {
+            Err(self.0.clone())
+        }
+    }
+
+    fn a_config() -> ConnectionConfig {
+        ConnectionConfig {
+            kind: MOONRAKER_KIND.to_string(),
+            host: "192.0.2.10".to_string(),
+            port: 7125,
+            use_tls: false,
+            credential_ref: None,
+        }
+    }
+
+    async fn cause_after_failed_subscribe(error: ConnectionError) -> Option<ConnectionErrorCause> {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::with_clock_and_factory(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+            Utc::now,
+            move |_config, _key| {
+                Some(Box::new(FailingConnection(error.clone())) as Box<dyn PrinterConnection>)
+            },
+        );
+        manager
+            .start("prn-1".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let facts = manager.status_facts().remove("prn-1").expect("a status");
+            if facts.status.connection_state == ConnectionState::Error {
+                manager.stop("prn-1").await;
+                return facts.cause;
+            }
+            assert!(std::time::Instant::now() < deadline, "no error status");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// P8 D2 "Reachability": the status map records the Rust-only cause
+    /// beside every `error` status the supervisor's reconnect publishes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_reconnect_records_its_error_cause() {
+        assert_eq!(
+            cause_after_failed_subscribe(ConnectionError::Unreachable("no route".into())).await,
+            Some(ConnectionErrorCause::Unreachable)
+        );
+        assert_eq!(
+            cause_after_failed_subscribe(ConnectionError::Timeout).await,
+            Some(ConnectionErrorCause::Timeout)
+        );
+        assert_eq!(
+            cause_after_failed_subscribe(ConnectionError::Auth("401".into())).await,
+            Some(ConnectionErrorCause::Auth)
+        );
+        assert_eq!(
+            cause_after_failed_subscribe(ConnectionError::HostNotReady).await,
+            Some(ConnectionErrorCause::Protocol)
+        );
+    }
+
+    /// `report_error` records `protocol`; a later non-error status clears
+    /// the cause; the unsupported-kind path records none; removal forgets
+    /// it.
+    #[tokio::test]
+    async fn the_error_cause_follows_the_status() {
+        let (_root, _lease, storage) = crate::test_storage();
+        let app = tauri::test::mock_app();
+        let manager = ConnectionManager::with_clock_and_factory(
+            app.handle().clone(),
+            Arc::new(StatusRepository::new(storage)),
+            Utc::now,
+            |_config, _key| None,
+        );
+        manager
+            .report_error("prn-1", "bad answer", PrinterSetupFacts::complete())
+            .await;
+        assert_eq!(
+            manager.status_facts()["prn-1"].cause,
+            Some(ConnectionErrorCause::Protocol)
+        );
+        // A reconcile that keeps the `error` state keeps its cause.
+        manager.reconcile_printer("prn-1", PrinterSetupFacts::complete());
+        assert_eq!(
+            manager.status_facts()["prn-1"].cause,
+            Some(ConnectionErrorCause::Protocol)
+        );
+
+        manager.seed("prn-1", PrinterStatus::new(ConnectionState::Online));
+        assert_eq!(manager.status_facts()["prn-1"].cause, None);
+
+        manager
+            .start("prn-2".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .await;
+        tokio::task::yield_now().await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while manager.status_facts()["prn-2"].status.connection_state != ConnectionState::Error {
+            assert!(std::time::Instant::now() < deadline, "no error status");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(manager.status_facts()["prn-2"].cause, None, "unsupported kind");
+
+        manager.report_error("prn-1", "bad answer", PrinterSetupFacts::complete()).await;
+        manager.stop("prn-1").await;
+        assert!(!manager.status_facts().contains_key("prn-1"));
+        manager.seed("prn-1", PrinterStatus::new(ConnectionState::Error));
+        assert_eq!(manager.status_facts()["prn-1"].cause, None, "removal forgot it");
     }
 
     #[tokio::test]
@@ -1493,7 +1694,7 @@ mod tests {
     #[test]
     fn removal_publishes_a_tombstone_and_deletes_the_backfill_entry() {
         let statuses = StatusMap::default();
-        statuses.publish_changed("prn-1", PrinterStatus::new(ConnectionState::Online), false);
+        statuses.publish_changed("prn-1", PrinterStatus::new(ConnectionState::Online), false, None);
 
         let event = statuses.publish_removed("prn-1");
 

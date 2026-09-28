@@ -6,10 +6,13 @@ import { archivePrinter, lifecycleEligibility, printers, reportError, unarchiveP
 import type { LifecycleEligibility, ResolvedPrinter } from "../printers/types";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import { clearPrinterJobRequest, openPrinterJob, printerJobRequest } from "../host-ops/open-printer-job";
+import { AlertDefaultsSection } from "./AlertDefaultsSection";
 import { ArchivePrinterDialog } from "./ArchivePrinterDialog";
+import { CameraSourceSection } from "./CameraSourceSection";
 import { CapabilityList } from "./CapabilityList";
 import { DeletePrinterDialog } from "./DeletePrinterDialog";
 import { MATERIAL_SLOTS_ANCHOR_ID, MaterialSlotsSection } from "./MaterialSlotsEditor";
+import { PrinterCameraPanel } from "./PrinterCameraPanel";
 import { PrinterConnectionPanel } from "./PrinterConnectionPanel";
 import { PrinterJobPanel } from "./PrinterJobPanel";
 import { PrinterProfilePanel } from "./PrinterProfilePanel";
@@ -274,6 +277,8 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
                 <MaterialSlotsSection printer={props.printer} />
                 <PrinterProfilePanel printer={props.printer} />
                 <PrinterConnectionPanel printer={props.printer} />
+                <CameraSourceSection mode="printer" printerId={props.printer.id} hasConnection={!!props.printer.connection} />
+                <AlertDefaultsSection mode="printer" printerId={props.printer.id} />
                 <CapabilityList printerId={props.printer.id} />
                 <div class={styles.lifecycle}>
                   <div class={styles.lifecycleActions}>
@@ -340,6 +345,17 @@ function DockContent(props: Omit<PrinterDetailDockProps, "mode"> & { printer: Re
             value: "job",
             label: "Job",
             content: <PrinterJobPanel printer={props.printer} />,
+          },
+          {
+            value: "camera",
+            label: "Camera",
+            content: (
+              <PrinterCameraPanel
+                printer={props.printer}
+                visible={() => tab() === "camera"}
+                onOpenSetup={() => setTab("setup")}
+              />
+            ),
           },
         ]}
       />

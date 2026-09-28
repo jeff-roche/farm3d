@@ -19,16 +19,24 @@ pub enum Proxy {
     Moonraker,
     MoonrakerMulti,
     OctoPrint,
+    /// P8: the static snapshot camera (`sim/camera/`).
+    Camera,
 }
 
 impl Proxy {
-    pub const ALL: [Proxy; 3] = [Proxy::Moonraker, Proxy::MoonrakerMulti, Proxy::OctoPrint];
+    pub const ALL: [Proxy; 4] = [
+        Proxy::Moonraker,
+        Proxy::MoonrakerMulti,
+        Proxy::OctoPrint,
+        Proxy::Camera,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Proxy::Moonraker => "moonraker",
             Proxy::MoonrakerMulti => "moonraker-multi",
             Proxy::OctoPrint => "octoprint",
+            Proxy::Camera => "camera",
         }
     }
 }

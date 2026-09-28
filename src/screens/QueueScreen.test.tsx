@@ -77,7 +77,7 @@ describe("QueueScreen", () => {
     loadWebQueueFixture();
     render(() => <QueueScreen />);
     // The default tab is the whole open Queue, in order.
-    expect(bodyRows()).toHaveLength(6);
+    expect(bodyRows()).toHaveLength(7);
 
     fireEvent.click(screen.getByRole("tab", { name: /^Awaiting operator/ }));
     await waitFor(() => expect(bodyRows()).toHaveLength(3));
@@ -93,7 +93,8 @@ describe("QueueScreen", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /^History/ }));
     await waitFor(() => expect(bodyRows()[0]).toHaveAttribute("data-entry-id", WEB_QUEUE_ENTRY_HISTORY_DEFERRED));
-    expect(bodyRows()).toHaveLength(1);
+    // Three closed entries (deferred, hostCancelled, completed), newest first.
+    expect(bodyRows()).toHaveLength(3);
     // A deferred settlement shows in the History view.
     expect(bodyRows()[0]).toHaveTextContent("Deferred");
 
@@ -309,7 +310,7 @@ describe("QueueScreen", () => {
     expect(screen.getByText("The Queue may be out of date")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(queueStoreMock.refreshQueue).toHaveBeenCalledOnce();
-    expect(bodyRows()).toHaveLength(6);
+    expect(bodyRows()).toHaveLength(7);
   });
 
   it("keeps the policy filter on a filtered-empty view and offers one way out", async () => {

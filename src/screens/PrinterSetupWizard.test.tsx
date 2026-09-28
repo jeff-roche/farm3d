@@ -68,6 +68,10 @@ vi.mock("../printers/printer-store", () => ({
   discoverPrinters,
 }));
 
+const listHostWebcams = vi.hoisted(() => vi.fn());
+const testCamera = vi.hoisted(() => vi.fn());
+vi.mock("../cameras/camera-store", () => ({ listHostWebcams, testCamera }));
+
 afterEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -339,6 +343,14 @@ describe("PrinterSetupWizard — Operate", () => {
     await fireEvent.pointerDown(bedTypeTrigger, { pointerType: "mouse", button: 0 });
     expect(await screen.findByText("Default")).toBeInTheDocument();
   });
+
+  it("renders the alert defaults with D12's own defaults", async () => {
+    await reachOperate();
+    expect(screen.getByRole("radio", { name: "5 minutes" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Follow the notification settings" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Capture a snapshot when an Incident opens" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Capture a snapshot when a Job completes" })).toBeChecked();
+  });
 });
 
 describe("PrinterSetupWizard — Review", () => {
@@ -372,6 +384,19 @@ describe("PrinterSetupWizard — Review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
 
     expect(await screen.findByText("Location: Bay 1")).toBeInTheDocument();
+  });
+
+  it("summarizes the camera source and alert defaults", async () => {
+    render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
+    await pickCentauriCarbon();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.click(screen.getByRole("button", { name: "Skip — save Profile-only" })); // equip
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // operate
+    fireEvent.click(screen.getByRole("radio", { name: "Off" })); // offline alert
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // review
+
+    expect(await screen.findByText("Camera: No camera")).toBeInTheDocument();
+    expect(screen.getByText("Alerts: offline alert off, notifications follow settings")).toBeInTheDocument();
   });
 
   it("shows mismatches from the last probe and the credential-store location", async () => {
@@ -458,6 +483,8 @@ describe("PrinterSetupWizard — Review", () => {
       connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
       slotLayout: [{ name: "Main" }],
       initialLoads: [],
+      camera: undefined,
+      alertDefaults: { offlineAfterMinutes: 5, notifications: "follow", snapshotOnIncident: true, snapshotOnCompletion: true },
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onCreated).toHaveBeenCalledWith(created);
@@ -536,6 +563,37 @@ describe("PrinterSetupWizard — Equip", () => {
     await reachEquip();
     fireEvent.input(screen.getByLabelText("Name for slot 1"), { target: { value: " " } });
     expect(screen.getByRole("button", { name: "Next →" })).toBeDisabled();
+  });
+
+  it("defaults the camera source to None, and it never blocks Next", async () => {
+    await reachEquip();
+    expect(screen.getByRole("radio", { name: "None" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Next →" })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    expect(stepItem("Operate").getAttribute("aria-current")).toBe("step");
+  });
+
+  it("explains why the host webcam list is empty before a Connection is given", async () => {
+    await reachEquip();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    expect(screen.getByText("Connect a Connection first to list this printer's webcams.")).toBeInTheDocument();
+    expect(listHostWebcams).not.toHaveBeenCalled();
+  });
+
+  it("lists host webcams from the Connect step's Connection once one is given", async () => {
+    listHostWebcams.mockResolvedValueOnce([{ name: "front", service: "webrtc" }]);
+    render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} onCreated={vi.fn()} />);
+    await pickCentauriCarbon();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // connect
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next →" })); // equip
+
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+
+    await waitFor(() => expect(listHostWebcams).toHaveBeenCalledWith({
+      connection: { kind: "moonraker", host: "voron.local", port: 7125, useTls: false },
+    }));
+    expect(await screen.findByLabelText("Webcam")).toBeInTheDocument();
   });
 
   it("lists the slots and loads on Review, and Save sends slotLayout and initialLoads", async () => {

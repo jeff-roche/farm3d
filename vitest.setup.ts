@@ -32,6 +32,15 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// jsdom doesn't implement object URLs; `src/cameras/frame.ts`'s
+// `frameObjectUrl` (and `usePreview`, which calls it once per polled frame)
+// needs them. A counter keeps each URL distinct without a real Blob store.
+if (typeof URL.createObjectURL === "undefined") {
+  let objectUrlCount = 0;
+  URL.createObjectURL = () => `blob:mock-${(objectUrlCount += 1)}`;
+  URL.revokeObjectURL = () => {};
+}
+
 // jsdom doesn't implement matchMedia; theme-engine's system-preference detection needs it.
 // Tests that care about a specific light/dark preference (e.g. theme-engine.test.ts) stub
 // this themselves with vi.stubGlobal, which takes precedence over this default.

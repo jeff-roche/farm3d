@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 107] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 129] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -463,9 +463,111 @@ contracts![
         "CorrectJobMaterialRequest",
         "CorrectJobMaterialResult"
     ),
+    (
+        "list_attention",
+        "ListAttentionRequest",
+        "ListAttentionResult"
+    ),
+    (
+        "mark_attention_read",
+        "MarkAttentionReadRequest",
+        "MarkAttentionReadResult"
+    ),
+    (
+        "acknowledge_attention_event",
+        "AcknowledgeAttentionEventRequest",
+        "AcknowledgeAttentionEventResult"
+    ),
+    (
+        "resolve_attention_event",
+        "ResolveAttentionEventRequest",
+        "ResolveAttentionEventResult"
+    ),
+    (
+        "list_incidents",
+        "ListIncidentsRequest",
+        "ListIncidentsResult"
+    ),
+    (
+        "get_incident",
+        "GetIncidentRequest",
+        "GetIncidentResult"
+    ),
+    (
+        "add_incident_note",
+        "AddIncidentNoteRequest",
+        "AddIncidentNoteResult"
+    ),
+    (
+        "get_printer_camera",
+        "GetPrinterCameraRequest",
+        "GetPrinterCameraResult"
+    ),
+    (
+        "set_printer_camera",
+        "SetPrinterCameraRequest",
+        "SetPrinterCameraResult"
+    ),
+    (
+        "clear_printer_camera",
+        "ClearPrinterCameraRequest",
+        "ClearPrinterCameraResult"
+    ),
+    (
+        "list_host_webcams",
+        "ListHostWebcamsRequest",
+        "ListHostWebcamsResult"
+    ),
+    ("test_camera", "TestCameraRequest", "TestCameraResult"),
+    (
+        "camera_preview_frame",
+        "CameraPreviewFrameRequest",
+        "CameraPreviewFrameResult"
+    ),
+    (
+        "capture_snapshot",
+        "CaptureSnapshotRequest",
+        "CaptureSnapshotResult"
+    ),
+    (
+        "list_snapshots",
+        "ListSnapshotsRequest",
+        "ListSnapshotsResult"
+    ),
+    (
+        "snapshot_image",
+        "SnapshotImageRequest",
+        "SnapshotImageResult"
+    ),
+    (
+        "set_snapshot_pinned",
+        "SetSnapshotPinnedRequest",
+        "SetSnapshotPinnedResult"
+    ),
+    ("media_usage", "MediaUsageRequest", "MediaUsageResult"),
+    (
+        "get_printer_alert_defaults",
+        "GetPrinterAlertDefaultsRequest",
+        "GetPrinterAlertDefaultsResult"
+    ),
+    (
+        "set_printer_alert_defaults",
+        "SetPrinterAlertDefaultsRequest",
+        "SetPrinterAlertDefaultsResult"
+    ),
+    (
+        "notification_status",
+        "NotificationStatusRequest",
+        "NotificationStatusResult"
+    ),
+    (
+        "send_test_notification",
+        "SendTestNotificationRequest",
+        "SendTestNotificationResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 107] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 129] {
     &COMMAND_CONTRACTS
 }
 
@@ -490,7 +592,7 @@ impl ts_rs::TS for CommandContracts {
         r#"type ContractRequest = { contractVersion: 1 };
 export type LoadSettingsRequest = NoArgsRequest;
 export type LoadSettingsResult = CommandSuccess<SettingsRecord>;
-export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string; monitorSection: MonitorSection; monitorDensity: MonitorDensity };
+export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string; monitorSection: MonitorSection; monitorDensity: MonitorDensity; notifications?: NotificationClassSettings; snapshotRetention?: SnapshotRetention };
 export type SaveSettingsResult = CommandSuccess<SettingsRecord>;
 export type ExportSettingsRequest = NoArgsRequest;
 export type ExportSettingsResult = CommandSuccess<SettingsExportOutcome>;
@@ -498,7 +600,7 @@ export type ImportSettingsRequest = ContractRequest & { expectedRevision: number
 export type ImportSettingsResult = CommandSuccess<SettingsImportOutcome>;
 export type ListPrintersRequest = NoArgsRequest;
 export type ListPrintersResult = CommandSuccess<PrinterRecord[]>;
-export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] };
+export type CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[]; camera?: CameraSourceInput; alertDefaults?: AlertDefaults };
 export type CreatePrinterResult = CommandSuccess<PrinterMutationResult>;
 export type SetMaterialSlotLayoutRequest = ContractRequest & { printerId: string; expectedRevision: number; slots: SlotSpec[] };
 export type SetMaterialSlotLayoutResult = CommandSuccess<PrinterMutationResult>;
@@ -701,7 +803,51 @@ export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;
 export type SettleJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; choice: SettleChoice };
 export type SettleJobMaterialResult = CommandSuccess<QueueChange>;
 export type CorrectJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; entry: AmountEntry };
-export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string()
+export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;
+export type ListAttentionRequest = ContractRequest & { resolvedBefore?: AttentionCursor; limit?: number };
+export type ListAttentionResult = CommandSuccess<AttentionBackfill>;
+export type MarkAttentionReadRequest = ContractRequest & { operationId: string; eventIds: string[] };
+export type MarkAttentionReadResult = CommandSuccess<AttentionChange>;
+export type AcknowledgeAttentionEventRequest = ContractRequest & { operationId: string; eventId: string };
+export type AcknowledgeAttentionEventResult = CommandSuccess<AttentionChange>;
+export type ResolveAttentionEventRequest = ContractRequest & { operationId: string; eventId: string };
+export type ResolveAttentionEventResult = CommandSuccess<AttentionChange>;
+export type ListIncidentsRequest = ContractRequest & { state?: "open" | "closed" | "all"; printerId?: string; before?: string; limit?: number };
+export type ListIncidentsResult = CommandSuccess<IncidentPage>;
+export type GetIncidentRequest = ContractRequest & { incidentId: string };
+export type GetIncidentResult = CommandSuccess<IncidentDetail>;
+export type AddIncidentNoteRequest = ContractRequest & { operationId: string; incidentId: string; text: string };
+export type AddIncidentNoteResult = CommandSuccess<IncidentDetail>;
+export type GetPrinterCameraRequest = ContractRequest & { printerId: string };
+export type GetPrinterCameraResult = CommandSuccess<PrinterCamera | null>;
+export type SetPrinterCameraRequest = ContractRequest & { operationId: string; printerId: string; source: CameraSourceInput };
+export type SetPrinterCameraResult = CommandSuccess<PrinterCameraSummary>;
+export type ClearPrinterCameraRequest = ContractRequest & { operationId: string; printerId: string };
+export type ClearPrinterCameraResult = CommandSuccess<PrinterCameraCleared>;
+export type ListHostWebcamsRequest = ContractRequest & { printerId?: string; connection?: ConnectionSubmission };
+export type ListHostWebcamsResult = CommandSuccess<HostWebcam[]>;
+export type TestCameraRequest = ContractRequest & { printerId?: string; connection?: ConnectionSubmission; source: CameraSourceInput };
+export type TestCameraResult = ArrayBuffer;
+export type CameraPreviewFrameRequest = ContractRequest & { printerId: string };
+export type CameraPreviewFrameResult = ArrayBuffer;
+export type CaptureSnapshotRequest = ContractRequest & { operationId: string; printerId: string };
+export type CaptureSnapshotResult = CommandSuccess<CameraSnapshot>;
+export type ListSnapshotsRequest = ContractRequest & { printerId?: string; incidentId?: string; jobId?: string; includePruned?: boolean; before?: string; limit?: number };
+export type ListSnapshotsResult = CommandSuccess<SnapshotPage>;
+export type SnapshotImageRequest = ContractRequest & { snapshotId: string };
+export type SnapshotImageResult = ArrayBuffer;
+export type SetSnapshotPinnedRequest = ContractRequest & { operationId: string; snapshotId: string; pinned: boolean };
+export type SetSnapshotPinnedResult = CommandSuccess<CameraSnapshot>;
+export type MediaUsageRequest = NoArgsRequest;
+export type MediaUsageResult = CommandSuccess<MediaUsage>;
+export type GetPrinterAlertDefaultsRequest = ContractRequest & { printerId: string };
+export type GetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>;
+export type SetPrinterAlertDefaultsRequest = ContractRequest & { operationId: string; printerId: string; alertDefaults: AlertDefaults };
+export type SetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>;
+export type NotificationStatusRequest = NoArgsRequest;
+export type NotificationStatusResult = CommandSuccess<NotifierStatus>;
+export type SendTestNotificationRequest = NoArgsRequest;
+export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -714,6 +860,8 @@ export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string(
         visitor.visit::<crate::settings::commands::SettingsRecord>();
         visitor.visit::<crate::settings::commands::MonitorSection>();
         visitor.visit::<crate::settings::commands::MonitorDensity>();
+        visitor.visit::<crate::notifications::NotificationClassSettings>();
+        visitor.visit::<crate::settings::commands::SnapshotRetention>();
         visitor.visit::<crate::settings::commands::ExportResult>();
         visitor.visit::<crate::settings::commands::SettingsImportResult>();
         visitor.visit::<crate::printers::commands::PrinterRevisionPrecondition>();
@@ -803,6 +951,23 @@ export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string(
         visitor.visit::<crate::queue::MaterialEstimate>();
         visitor.visit::<crate::queue::QueueEntryEligibility>();
         visitor.visit::<crate::jobs::JobHistory>();
+        visitor.visit::<crate::attention::AttentionCursor>();
+        visitor.visit::<crate::attention::AttentionBackfill>();
+        visitor.visit::<crate::attention::AttentionChange>();
+        visitor.visit::<crate::incidents::IncidentPage>();
+        visitor.visit::<crate::incidents::IncidentDetail>();
+        visitor.visit::<crate::cameras::PrinterCamera>();
+        visitor.visit::<crate::cameras::CameraSourceInput>();
+        visitor.visit::<crate::cameras::PrinterCameraSummary>();
+        visitor.visit::<crate::cameras::commands::PrinterCameraCleared>();
+        visitor.visit::<crate::cameras::HostWebcam>();
+        visitor.visit::<crate::cameras::CameraSnapshot>();
+        visitor.visit::<crate::cameras::SnapshotPage>();
+        visitor.visit::<crate::cameras::MediaUsage>();
+        visitor.visit::<crate::printers::alerts::AlertDefaults>();
+        visitor.visit::<crate::printers::alerts::PrinterAlertDefaults>();
+        visitor.visit::<crate::notifications::NotifierStatus>();
+        visitor.visit::<crate::notifications::commands::TestNotificationSent>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

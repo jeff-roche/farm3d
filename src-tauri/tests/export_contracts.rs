@@ -2,6 +2,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use farm3d_lib::attention::events::{
+    AttentionStreamEvent, AttentionStreamEventType, AttentionStreamPayload,
+};
+use farm3d_lib::attention::lifecycle::AckBy;
+use farm3d_lib::attention::{
+    AttentionAction, AttentionBackfill, AttentionChange, AttentionCursor, AttentionDetail,
+    AttentionEvent, AttentionOrigin, AttentionResolution, AttentionSeverity, AttentionSource,
+    AttentionSourceKind, AttentionSubject, ConditionKind, EvidenceOutcome,
+    MaterialReconciliationStatus, NotificationClass, PrinterConnectionErrorCause, ResolutionMode,
+};
+use farm3d_lib::cameras::{
+    CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
+    CameraSource, CameraSourceInput, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam,
+    MediaUsage, PrinterCamera, PrinterCameraSummary, PruneReason, SnapshotPage, SnapshotTrigger,
+};
 use farm3d_lib::catalog::commands::{CatalogInfo, CatalogModelSummary, CatalogVariantSummary};
 use farm3d_lib::catalog::resolve::{
     CatalogStatus, ProfileDrift, ProfileResolution, ResolvedPrinter,
@@ -40,6 +55,10 @@ use farm3d_lib::host_ops::{
     HostOperationLastAttempt, HostOperationObservedState, HostOperationResolution,
     HostOperationState, HostOperationsSnapshot, PriorState, StartEvidenceSource,
 };
+use farm3d_lib::incidents::{
+    Incident, IncidentDetail, IncidentEntry, IncidentEntryDetail, IncidentEntryKind, IncidentKind,
+    IncidentPage, IncidentState, IncidentTimelineItem,
+};
 use farm3d_lib::jobs::{
     AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
@@ -72,10 +91,14 @@ use farm3d_lib::library::{
     ModelSourceRevisionRecord, ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin,
     SourceState, StorageMode, WatchMode,
 };
+use farm3d_lib::notifications::commands::TestNotificationSent;
+use farm3d_lib::notifications::{
+    NavigateRequest, NotificationClassSettings, NotifierStatus, NotifierUnavailableReason,
+};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
-    CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
+    CameraTemplate, CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
 };
 use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
@@ -91,6 +114,7 @@ use farm3d_lib::printers::operational::{
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
+use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
@@ -390,6 +414,7 @@ fn export_registry() -> Vec<Export> {
         export::<PrintersImportResult>(),
         export::<CreatePrintersBatchInput>(),
         export::<BatchShared>(),
+        export::<CameraTemplate>(),
         export::<BatchRowInput>(),
         export::<BatchRowConnection>(),
         export::<BatchCredentialSource>(),
@@ -591,6 +616,64 @@ fn export_registry() -> Vec<Export> {
         export::<ReconciliationRequirement>(),
         export::<JobHistory>(),
         export::<SettleChoice>(),
+        export::<ConditionKind>(),
+        export::<AttentionSeverity>(),
+        export::<ResolutionMode>(),
+        export::<AttentionResolution>(),
+        export::<AttentionOrigin>(),
+        export::<AttentionSourceKind>(),
+        export::<AttentionSource>(),
+        export::<NotificationClass>(),
+        export::<AttentionSubject>(),
+        export::<PrinterConnectionErrorCause>(),
+        export::<MaterialReconciliationStatus>(),
+        export::<AttentionDetail>(),
+        export::<AttentionAction>(),
+        export::<AttentionEvent>(),
+        export::<AttentionCursor>(),
+        export::<AttentionChange>(),
+        export::<AckBy>(),
+        export::<CameraSourceKind>(),
+        export::<CameraSource>(),
+        export::<CameraSourceInput>(),
+        export::<PrinterCamera>(),
+        export::<PrinterCameraSummary>(),
+        export::<farm3d_lib::cameras::commands::PrinterCameraCleared>(),
+        export::<HostWebcam>(),
+        export::<CameraErrorKind>(),
+        export::<CameraHealthState>(),
+        export::<CameraHealth>(),
+        export::<SnapshotTrigger>(),
+        export::<PruneReason>(),
+        export::<EvidenceSkipReason>(),
+        export::<EvidenceOutcome>(),
+        export::<CameraContentType>(),
+        export::<CameraSnapshot>(),
+        export::<MediaUsage>(),
+        export::<SnapshotPage>(),
+        export::<FrameHeader>(),
+        export::<AttentionBackfill>(),
+        export::<IncidentState>(),
+        export::<IncidentKind>(),
+        export::<Incident>(),
+        export::<IncidentEntryKind>(),
+        export::<IncidentEntryDetail>(),
+        export::<IncidentEntry>(),
+        export::<IncidentTimelineItem>(),
+        export::<IncidentDetail>(),
+        export::<IncidentPage>(),
+        export::<NotifierUnavailableReason>(),
+        export::<NotifierStatus>(),
+        export::<NavigateRequest>(),
+        export::<NotificationMode>(),
+        export::<AlertDefaults>(),
+        export::<PrinterAlertDefaults>(),
+        export::<NotificationClassSettings>(),
+        export::<farm3d_lib::settings::commands::SnapshotRetention>(),
+        export::<TestNotificationSent>(),
+        export::<AttentionStreamEventType>(),
+        export::<AttentionStreamPayload>(),
+        export::<AttentionStreamEvent>(),
     ]
 }
 
@@ -843,6 +926,14 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::JobAlreadySettled,
         ErrorCode::JobAlreadyRetried,
         ErrorCode::JobsExist,
+        ErrorCode::AttentionNotManual,
+        ErrorCode::CameraNotConfigured,
+        ErrorCode::CameraFailed,
+        ErrorCode::CameraHostMismatch,
+        ErrorCode::EvidencePruned,
+        ErrorCode::SnapshotDiskCap,
+        ErrorCode::NotificationsUnavailable,
+        ErrorCode::EvidenceExists,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -885,7 +976,10 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID",
                 "JOB_ACTIVE", "JOB_ACTION_NOT_ALLOWED", "QUEUE_ENTRY_ACTION_NOT_ALLOWED",
                 "ASSIGNMENT_BLOCKED", "JOB_START_BLOCKED", "JOB_NOT_ON_PRINTER",
-                "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST"
+                "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
+                "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
+                "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
+                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
@@ -1234,7 +1328,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[]; camera?: CameraSourceInput; alertDefaults?: AlertDefaults }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));

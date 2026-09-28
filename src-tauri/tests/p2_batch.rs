@@ -928,3 +928,37 @@ fn a_capability_mismatch_is_a_warning_and_the_row_is_still_created() {
         "Bed width: catalog says 256 mm, the printer reports 266 mm"
     );
 }
+
+// --- 11. Evaluator wake ------------------------------------------------------
+
+#[test]
+fn a_batch_that_creates_a_printer_wakes_the_evaluator() {
+    let fixture = fixture();
+    assert!(
+        fixture._services.evaluator.is_idle(),
+        "the evaluator starts with no trigger pending"
+    );
+
+    let result = run_batch(
+        &fixture,
+        batch_body(
+            &batch_id(),
+            shared_block(json!({})),
+            None,
+            false,
+            json!([{"rowId": "r1", "name": "A"}]),
+        ),
+    )
+    .unwrap();
+    assert_eq!(row(&result, "r1")["outcome"], "createdSetupIncomplete");
+
+    // Every single-Printer command wakes the automatic evaluator so it can
+    // schedule onto the new Printer (`printers::commands`); a batch create
+    // must too. `is_idle()` is false only while an accepted trigger sits
+    // unconsumed on the channel (the evaluator task is never started in
+    // this harness), so this observes the `poke` directly.
+    assert!(
+        !fixture._services.evaluator.is_idle(),
+        "batch create should have woken the evaluator"
+    );
+}

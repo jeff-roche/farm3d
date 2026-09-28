@@ -1,10 +1,13 @@
 import { For, onMount, Show } from "solid-js";
-import { ColorSwatch } from "../design-system";
+import { ColorSwatch, SeverityMarker } from "../design-system";
 import { serializeNavigationTarget } from "../navigation/navigation-store";
 import type { MaterialSlot, ResolvedPrinter } from "../printers/types";
 import { materialLabel } from "../spools/materials";
 import { ensureInventoryLoaded, spoolState } from "../spools/spool-store";
 import { formatGrams } from "../spools/weight";
+import { attention } from "../attention/attention-store";
+import { attentionSeverityLabel } from "../attention/presentation";
+import type { AttentionEvent } from "../attention/types";
 import { formatTemperature, nozzleReadings } from "./monitor-printer-presentation";
 import styles from "./PrinterStatusPanel.module.css";
 
@@ -61,6 +64,7 @@ export function PrinterStatusPanel(props: PrinterStatusPanelProps) {
       <dl class={styles.fields}>
         <For each={fields()}>{([label, value]) => <div class={styles.field}><dt>{label}</dt><dd>{value}</dd></div>}</For>
       </dl>
+      <AttentionEventsList printerId={props.printer.id} />
       <MaterialSlotsList slots={props.printer.materialSlots} />
       <p class={styles.sync} aria-live="polite">
         {props.syncState === "uncertain" ? "Live status is still reconciling." : ""}
@@ -75,6 +79,42 @@ function openSpool(spoolId: string): void {
   window.location.hash = serializeNavigationTarget({
     version: 1, destination: "spools", selection: { kind: "spool", id: spoolId },
   }).slice(1);
+}
+
+/** Opens an Attention Event's own detail (`monitor/attention/<id>`), the
+ *  same way. */
+function openAttentionEvent(eventId: string): void {
+  window.location.hash = serializeNavigationTarget({
+    version: 1, destination: "monitor", selection: { kind: "attention", id: eventId },
+  }).slice(1);
+}
+
+/** Spec Task 13 "Printer detail dock": the Status tab lists the Printer's
+ *  open Events (from `eventsForPrinter`), each with its severity marker
+ *  and a link to its detail. Rust decides which Events are open and
+ *  actionable; this only presents them. */
+function AttentionEventsList(props: { printerId: string }) {
+  const events = (): AttentionEvent[] => attention.eventsForPrinter(props.printerId);
+
+  return (
+    <section class={styles.events} aria-labelledby="printer-status-events-title">
+      <h3 id="printer-status-events-title" class={styles.eventsTitle}>Attention</h3>
+      <Show when={events().length > 0} fallback={<p class={styles.empty}>No open Events for this Printer.</p>}>
+        <ul class={styles.eventList} aria-label="Open Attention Events">
+          <For each={events()}>
+            {(event) => (
+              <li class={styles.event}>
+                <button type="button" class={styles.eventLink} onClick={() => openAttentionEvent(event.id)}>
+                  <SeverityMarker severity={event.severity} label={attentionSeverityLabel(event.severity)} />
+                  <span>{event.summary}</span>
+                </button>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </section>
+  );
 }
 
 /** Spec §Components "Printer Status tab": each slot's occupant (number,

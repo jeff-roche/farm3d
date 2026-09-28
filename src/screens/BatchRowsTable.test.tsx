@@ -221,4 +221,83 @@ describe("BatchRowsTable — results mode", () => {
     renderTable({ mode: "results", rows: [row()], pending: new Set(["r1"]) });
     expect(screen.getByRole("status", { name: "In progress" })).toBeInTheDocument();
   });
+
+  it("shows a created row's camera errors visibly (created with a problem found only at commit)", () => {
+    renderTable({
+      mode: "results",
+      rows: [
+        row({
+          rowId: "a",
+          name: "A",
+          printerId: "p1",
+          result: {
+            rowId: "a",
+            outcome: "created",
+            credentialStored: false,
+            errors: [{ code: "VALIDATION", message: "This adapter can't list webcams.", fieldPath: "shared.cameraTemplate.kind" }],
+            warnings: [],
+          },
+        }),
+      ],
+    });
+
+    const marker = screen.getByRole("status", { name: "Created" });
+    expect(marker).toHaveAttribute("data-severity", "resolved");
+    expect(screen.getByText("This adapter can't list webcams.")).toHaveTextContent("shared.cameraTemplate.kind");
+  });
+
+  it("shows a per-row Camera host override column only for a snapshotUrl template", () => {
+    renderTable({
+      mode: "results",
+      rows: [row({ rowId: "a", name: "A", host: "printer-a.local" })],
+      cameraTemplateKind: "snapshotUrl",
+    });
+    expect(screen.getByLabelText("Camera host for row 1")).toBeInTheDocument();
+  });
+
+  it("hides the Camera host column for a hostWebcam template or no template", () => {
+    renderTable({ mode: "results", rows: [row()], cameraTemplateKind: "hostWebcam" });
+    expect(screen.queryByLabelText("Camera host for row 1")).not.toBeInTheDocument();
+    renderTable({ mode: "results", rows: [row()] });
+    expect(screen.queryByLabelText("Camera host for row 1")).not.toBeInTheDocument();
+  });
+
+  it("editing one row's camera host override never touches another row's", () => {
+    const props = renderTable({
+      mode: "connect",
+      cameraTemplateKind: "snapshotUrl",
+      rows: [
+        row({ rowId: "a", name: "A", cameraHostOverride: "192.0.2.10" }),
+        row({ rowId: "b", name: "B" }),
+      ],
+    });
+
+    expect(screen.getByLabelText("Camera host for row 1")).toHaveValue("192.0.2.10");
+    expect(screen.getByLabelText("Camera host for row 2")).toHaveValue("");
+    fireEvent.input(screen.getByLabelText("Camera host for row 2"), { target: { value: "192.0.2.11" } });
+    expect(props.onChange).toHaveBeenCalledWith("b", { cameraHostOverride: "192.0.2.11" });
+    // Only row b's onChange fired -- row a's own value is untouched.
+    expect(props.onChange).not.toHaveBeenCalledWith("a", expect.anything());
+  });
+
+  it("offers a per-row Test camera button, and shows that row's own result", () => {
+    const onTestCamera = vi.fn();
+    renderTable({
+      mode: "results",
+      onTestCamera,
+      cameraSourceFor: (r) => r.rowId === "a",
+      cameraTestResults: { a: { status: "ok", url: "blob:test" } },
+      rows: [
+        row({ rowId: "a", name: "A", printerId: "p1", result: { rowId: "a", outcome: "created", credentialStored: false, errors: [], warnings: [] } }),
+        row({ rowId: "b", name: "B", printerId: "p2", result: { rowId: "b", outcome: "created", credentialStored: false, errors: [], warnings: [] } }),
+      ],
+    });
+
+    const rowA = screen.getByTestId("row-a");
+    fireEvent.click(within(rowA).getByRole("button", { name: "Test camera" }));
+    expect(onTestCamera).toHaveBeenCalledWith("a");
+    expect(within(rowA).getByAltText("Camera test snapshot for A")).toBeInTheDocument();
+    // Row b was never given a camera source, so it offers nothing.
+    expect(within(screen.getByTestId("row-b")).queryByRole("button", { name: "Test camera" })).not.toBeInTheDocument();
+  });
 });

@@ -134,9 +134,17 @@ pub async fn create_printer<R: tauri::Runtime>(
     connection: Option<crate::connections::commands::ConnectionSubmission>,
     slot_layout: Option<Vec<SlotSpec>>,
     initial_loads: Option<Vec<InitialLoad>>,
+    camera: Option<crate::cameras::CameraSourceInput>,
+    alert_defaults: Option<serde_json::Value>,
 ) -> Result<CommandSuccess<PrinterMutationResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
+    // P8: read field by field, so a bad value is `VALIDATION` on
+    // `alertDefaults.<field>` and rejects the whole create.
+    let alert_defaults = alert_defaults
+        .as_ref()
+        .map(|value| super::alerts::parse_alert_defaults(value, "alertDefaults"))
+        .transpose()?;
     let connection = connection.map(|submission| {
         let secret = submission
             .api_key
@@ -169,9 +177,21 @@ pub async fn create_printer<R: tauri::Runtime>(
             connection,
             slot_layout: slot_layout.unwrap_or_else(crate::spools::slots::default_layout),
             initial_loads: initial_loads.unwrap_or_default(),
+            camera,
+            alert_defaults,
         },
     )
     .await?;
+    // P8 D4: a new source starts `unknown`; publish it so the frontend
+    // knows the Printer has a camera. Nothing is fetched.
+    if let Some(kind) = outcome.camera_kind {
+        services.cameras.source_changed(
+            &app,
+            &services.attention.stream,
+            &outcome.printer.id,
+            Some(kind),
+        );
+    }
     // D11: initial loads moved Spools into the new Printer's slots.
     if !loaded_spool_ids.is_empty() {
         crate::spools::events::publish_ids(
@@ -184,6 +204,8 @@ pub async fn create_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
@@ -216,6 +238,8 @@ pub fn set_material_slot_layout<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -268,6 +292,8 @@ pub fn update_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -366,6 +392,8 @@ pub async fn archive_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
         warnings,
@@ -403,15 +431,24 @@ pub async fn unarchive_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &unarchived),
         warnings,
     }))
 }
 
+/// D6: deletes an archived Printer. P8 D8: blocked by Incident history
+/// (`INCIDENT_HISTORY_EXISTS`) or pinned unattached camera evidence
+/// (`PINNED_EVIDENCE_EXISTS`); otherwise its open Attention Events resolve
+/// `sourceRemoved` (published after commit) and its unattached, unpinned
+/// or pruned manual snapshots go with it. The delete runs under the media
+/// janitor's lock, so no capture or prune is between its plan and its
+/// commit while the Printer's snapshot rows are removed.
 #[tauri::command]
 pub async fn delete_printer<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     expected_revision: i64,
@@ -419,10 +456,25 @@ pub async fn delete_printer<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<DeletePrinterResult>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    let deleted = crate::connections::commands::with_credential_coordination(|| {
-        PrinterRepository::new(Arc::clone(&services.storage)).delete(&id, expected_revision)
-    })
-    .map_err(CommandError::from_repository)?;
+    let deletion = {
+        let _media = services.cameras.janitor().lock().await;
+        crate::connections::commands::with_credential_coordination(|| {
+            PrinterRepository::new(Arc::clone(&services.storage)).delete_with_outcome(
+                &id,
+                expected_revision,
+                services.attention.now(),
+            )
+        })
+        .map_err(CommandError::from_repository)?
+    };
+    // P8 D8 step 4: the resolved Events (and any Incident with them).
+    services.attention.stream.publish_change(
+        &app,
+        &deletion.resolved.events,
+        &deletion.resolved.incidents,
+        &[],
+    );
+    let deleted = deletion.printer;
     let mut warnings = Vec::new();
     let _reconciliation = services.manager.reconciliation_guard().await;
     if !services.manager.stop_and_wait(&id).await {
@@ -448,6 +500,11 @@ pub async fn delete_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
+    // P8 D4: the deleted Printer's camera health and last preview frame go
+    // with it (its `printer_cameras` row cascaded in the delete).
+    services.cameras.forget_printer(&id);
     Ok(CommandSuccess::new(DeletePrinterResult {
         deleted_id: id,
         deleted_revision: expected_revision,
@@ -487,6 +544,8 @@ pub fn set_printer_override<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -523,6 +582,8 @@ pub fn rebind_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -594,6 +655,8 @@ pub fn resolve_profile_drift<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -643,7 +706,16 @@ struct PrintersDocument {
     #[allow(dead_code)]
     exported_at: String,
     printers: Vec<super::StoredPrinter>,
+    /// P8 (schemaVersion 4): each Printer's `camera` and `alertDefaults`,
+    /// validated, by Printer id. Taken off the rows before they are read
+    /// as `StoredPrinter`s; a Printer with neither has no entry.
+    #[serde(skip)]
+    setups: std::collections::HashMap<String, super::create::PrinterSetupExtras>,
 }
+
+/// The Printers document version `export_printers` writes. `import_printers`
+/// reads 1 through this.
+const PRINTERS_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -696,13 +768,60 @@ pub async fn export_printers<R: tauri::Runtime>(
     let printers = PrinterRepository::new(Arc::clone(&services.storage))
         .list()
         .map_err(|error| CommandError::from_repository(error.into()))?;
+    // P8 (schemaVersion 4): each Printer's camera source (a manual URL
+    // included, as the Connection host is: this document is written by Rust
+    // to the file the operator picked and is never a command result) and
+    // its alert defaults (`null`: no row, the defaults).
+    let (cameras, alerts) = services
+        .storage
+        .read(|connection| {
+            Ok((|| -> Result<_, crate::persistence::StorageError> {
+                let cameras: std::collections::HashMap<_, _> =
+                    crate::cameras::config::list_all(connection)?
+                        .into_iter()
+                        .map(|camera| (camera.printer_id, camera.source))
+                        .collect();
+                let mut alerts = std::collections::HashMap::new();
+                for printer in &printers {
+                    let stored = super::alerts::get(connection, &printer.id)?;
+                    if stored.revision.is_some() {
+                        alerts.insert(printer.id.clone(), stored.alert_defaults);
+                    }
+                }
+                Ok((cameras, alerts))
+            })())
+        })
+        .and_then(|read| read)
+        .map_err(|error| CommandError::from_repository(error.into()))?;
     let exported_at = crate::printers::now_rfc3339();
     let exported = printers
         .iter()
-        .map(export_printer)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|printer| {
+            let mut value = export_printer(printer)?;
+            let object = value.as_object_mut().ok_or_else(CommandError::internal)?;
+            let camera = cameras
+                .get(&printer.id)
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|_| CommandError::internal())?;
+            let alert_defaults = alerts
+                .get(&printer.id)
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|_| CommandError::internal())?;
+            object.insert(
+                "camera".to_string(),
+                camera.unwrap_or(serde_json::Value::Null),
+            );
+            object.insert(
+                "alertDefaults".to_string(),
+                alert_defaults.unwrap_or(serde_json::Value::Null),
+            );
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, CommandError>>()?;
     let bytes = serde_json::to_vec_pretty(&ExportPrintersDocument {
-        schema_version: 3,
+        schema_version: PRINTERS_SCHEMA_VERSION as u8,
         exported_at: &exported_at,
         printers: &exported,
     })
@@ -716,7 +835,7 @@ pub async fn export_printers<R: tauri::Runtime>(
 
 #[tauri::command]
 pub async fn import_printers<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<crate::RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     expected_revisions: Vec<PrinterRevisionPrecondition>,
@@ -826,14 +945,46 @@ pub async fn import_printers<R: tauri::Runtime>(
             (printer.id.clone(), layout)
         })
         .collect();
-    let stored = crate::connections::commands::with_credential_coordination(|| {
-        PrinterRepository::new(Arc::clone(&services.storage)).replace_all(
+    let crate::printers::repository::ReplaceAllOutcome {
+        stored,
+        previous_cameras,
+        resolved_events,
+    } = crate::connections::commands::with_credential_coordination(|| {
+        PrinterRepository::new(Arc::clone(&services.storage)).replace_all_with_setup(
             &expected,
             document.printers,
             &layouts,
+            &document.setups,
+            services.attention.now(),
         )
     })
     .map_err(CommandError::from_repository)?;
+    // P8 D8: the replaced Printers' open Events, resolved `sourceRemoved`.
+    services
+        .attention
+        .stream
+        .publish_change(&app, &resolved_events, &[], &[]);
+    // P8 D4: a Printer the import removed is forgotten by the camera
+    // services; one whose source the import changed (added, replaced, or
+    // cleared) has its health reset and published. An unchanged source
+    // keeps its health and last frame.
+    for removed in old.difference(&imported_ids) {
+        services.cameras.forget_printer(removed);
+    }
+    for printer in &stored {
+        let now = document
+            .setups
+            .get(&printer.id)
+            .and_then(|setup| setup.camera.as_ref());
+        if now != previous_cameras.get(&printer.id) {
+            services.cameras.source_changed(
+                &app,
+                &services.attention.stream,
+                &printer.id,
+                now.map(crate::cameras::CameraSource::kind),
+            );
+        }
+    }
     services.documents.after_printers_commit();
     let _reconciliation = services.manager.reconciliation_guard().await;
     let mut warnings: Vec<OperationWarning> = duplicate_hosts
@@ -878,6 +1029,8 @@ pub async fn import_printers<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrintersImportResult::Applied {
         printers: resolved,
         created_count: imported_ids.difference(&old).count(),
@@ -968,12 +1121,12 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         .get("schemaVersion")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| CommandError::validation("schemaVersion must be a positive integer."))?;
-    if version > 3 {
+    if version > PRINTERS_SCHEMA_VERSION {
         return Err(CommandError::unsupported_schema(version));
     }
-    if version != 1 && version != 2 && version != 3 {
+    if version < 1 {
         return Err(CommandError::validation(
-            "schemaVersion must be 1, 2, or 3.",
+            "schemaVersion must be 1, 2, 3, or 4.",
         ));
     }
     let rows = root
@@ -1006,11 +1159,16 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
         // `slots::default_layout()` in `import_printers` below.
         "materialSlots",
     ];
+    // P8 (schemaVersion 4 only): optional; absent or `null` is no camera
+    // and the default alert defaults. Taken off each row below.
+    const SETUP_FIELDS: &[&str] = &["camera", "alertDefaults"];
     for row in rows {
         let object = row
             .as_object()
             .ok_or_else(|| CommandError::validation("Every Printer must be an object."))?;
-        if object.keys().any(|key| !FIELDS.contains(&key.as_str()))
+        let known =
+            |key: &str| FIELDS.contains(&key) || (version >= 4 && SETUP_FIELDS.contains(&key));
+        if object.keys().any(|key| !known(key.as_str()))
             || FIELDS[..6].iter().any(|key| !object.contains_key(*key))
         {
             return Err(CommandError::validation(
@@ -1026,9 +1184,28 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
             ));
         }
     }
+    let row_count = rows.len();
+    let mut raw = raw;
+    let mut raw_setups = Vec::with_capacity(row_count);
+    for row in raw["printers"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_object_mut)
+    {
+        raw_setups.push((row.remove("camera"), row.remove("alertDefaults")));
+    }
     let mut document: PrintersDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Printers document has an invalid shape.")
     })?;
+    for (index, (printer, (camera, alert_defaults))) in
+        document.printers.iter().zip(raw_setups).enumerate()
+    {
+        let setup = parse_imported_setup(index, printer, camera, alert_defaults)?;
+        if setup != super::create::PrinterSetupExtras::default() {
+            document.setups.insert(printer.id.clone(), setup);
+        }
+    }
     for printer in &mut document.printers {
         if printer.id.is_empty()
             || printer.id.len() > 512
@@ -1073,6 +1250,49 @@ fn parse_printers_document(bytes: &[u8]) -> Result<PrintersDocument, CommandErro
     Ok(document)
 }
 
+/// One imported Printer's schema-4 `camera` and `alertDefaults`, validated
+/// as `create_printer` validates them, with field paths under
+/// `printers[<index>]`. A rejected value is never quoted.
+fn parse_imported_setup(
+    index: usize,
+    printer: &super::StoredPrinter,
+    camera: Option<serde_json::Value>,
+    alert_defaults: Option<serde_json::Value>,
+) -> Result<super::create::PrinterSetupExtras, CommandError> {
+    let prefix = format!("printers[{index}]");
+    let camera = match camera {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let source: crate::cameras::CameraSource =
+                serde_json::from_value(value).map_err(|_| {
+                    CommandError::validation_at(
+                        format!("{prefix}.camera"),
+                        "A Printer's camera source is invalid.",
+                    )
+                })?;
+            Some(super::create::validate_setup_camera(
+                &source,
+                printer
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.kind.as_str()),
+                &format!("{prefix}.camera"),
+            )?)
+        }
+    };
+    let alert_defaults = match alert_defaults {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(super::alerts::parse_alert_defaults(
+            &value,
+            &format!("{prefix}.alertDefaults"),
+        )?),
+    };
+    Ok(super::create::PrinterSetupExtras {
+        camera,
+        alert_defaults,
+    })
+}
+
 pub(crate) fn validate_credential_reference(reference: &str) -> Result<(), CommandError> {
     let valid_legacy = reference
         .strip_prefix("farm3d/printer/")
@@ -1115,7 +1335,7 @@ mod import_export_tests {
 
     #[test]
     fn printer_import_rejects_future_schema_duplicate_ids_and_secret_fields() {
-        let future = br#"{"schemaVersion":4,"exportedAt":"x","printers":[]}"#;
+        let future = br#"{"schemaVersion":5,"exportedAt":"x","printers":[]}"#;
         assert_eq!(
             parse_printers_document(future).unwrap_err().code,
             ErrorCode::UnsupportedSchemaVersion

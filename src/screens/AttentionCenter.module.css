@@ -1,0 +1,106 @@
+.center {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 26rem;
+  max-width: calc(100vw - 1.5rem);
+}
+
+.heading {
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The SegmentedControl's four options (Actionable/Unread/All open/
+   Resolved) must never shrink below their natural width -- that's what
+   made "All open" wrap into two lines when the row ran out of room.
+   `.severity` is the one allowed to give way, wrapping onto its own line
+   instead. */
+.filters > :first-child {
+  flex-shrink: 0;
+}
+
+.severity {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+.empty {
+  margin: 0;
+  padding: 0.75rem 0.25rem;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.row {
+  composes: resetButton focusRing from "../design-system/components/shared.module.css";
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--f3d-radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background-color: var(--f3d-color-surface-hover);
+}
+
+.unread {
+  font-weight: var(--f3d-type-label-weight);
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.time {
+  flex: none;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.loadMore {
+  composes: resetButton focusRing from "../design-system/components/shared.module.css";
+  align-self: flex-start;
+  padding: 0.25rem;
+  color: var(--f3d-color-accent);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  cursor: pointer;
+}
+
+.loadMore:hover {
+  color: var(--f3d-color-text);
+}

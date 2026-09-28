@@ -18,6 +18,7 @@
 //! | `FARM3D_MOONRAKER_OUT` | Optional. Evidence directory. Defaults to `target/a0-moonraker/<UTC time>`. |
 //! | `FARM3D_MOONRAKER_WATCH_SECS` | Optional. How long `live_watch` observes. Defaults to 180. |
 //! | `FARM3D_MOONRAKER_ALLOW_CONTROL` | Must be `1` for `live_lifecycle_drive`. It sends M112 and FIRMWARE_RESTART. |
+//! | `FARM3D_MOONRAKER_WEB_PORT` | Optional, `live_camera` only. The port a relative webcam URL resolves against. Defaults to 80. |
 //!
 //! The tests drive the production adapter (`MoonrakerConnection`) and the
 //! production `ConnectionManager` with a mock Tauri runtime. Next to them, a
@@ -1230,4 +1231,207 @@ fn live_lifecycle_drive() {
         "checks failed: {failed:?}; evidence in {}",
         live.out.display()
     );
+}
+
+
+// ---------------------------------------------------------------------------
+// P8 Task 16: the read-only camera probe (`just moonraker-live camera`)
+// ---------------------------------------------------------------------------
+
+/// How a webcam's `snapshot_url` is written, never the URL itself: on a
+/// real host an absolute one embeds the printer's LAN address (P6 spike
+/// Gate H).
+fn url_form(value: Option<&str>) -> &'static str {
+    match value.map(str::trim) {
+        None | Some("") => "none",
+        Some(url) if url.starts_with("//") => "scheme-relative",
+        Some(url) if url.contains("://") => "absolute",
+        Some(_) => "relative",
+    }
+}
+
+/// A `ConnectionError`'s kind, without its message (which can quote the
+/// host).
+fn error_kind(error: &ConnectionError) -> &'static str {
+    match error {
+        ConnectionError::Unreachable(_) => "unreachable",
+        ConnectionError::Timeout => "timeout",
+        ConnectionError::Auth(_) => "auth",
+        ConnectionError::Protocol(_) => "protocol",
+        ConnectionError::HostNotReady => "hostNotReady",
+    }
+}
+
+/// P8 owner decision 14: read-only camera evidence from a real host. It
+/// sends `GET`s only: the webcam list (through the production camera
+/// query, a raw read that classifies each snapshot URL, and
+/// `cameras::resolve`'s lookup), then **one** snapshot through
+/// `FrameFetcher`. No upload, print control, G-code, heater change, or
+/// restart. It prints only what the verification record may keep: how
+/// many webcams, each one's service and URL form, and for the one frame
+/// its byte length, content type, and SHA-256. It never prints a webcam
+/// name, a URL, the host, or an error's message, and it writes no file
+/// (the frame stays in memory).
+#[test]
+#[ignore = "needs a live Moonraker; run with `just moonraker-live camera`"]
+fn live_camera() {
+    use farm3d_lib::cameras::fetch::FrameFetcher;
+    use farm3d_lib::cameras::resolve::{resolve, WebcamHost};
+    use farm3d_lib::cameras::CameraSource;
+    use farm3d_lib::connections::capabilities::CameraDiscovery;
+    use farm3d_lib::connections::moonraker::control::{MoonrakerCapabilities, MoonrakerTimings};
+    use sha2::{Digest, Sha256};
+
+    // The host has no default: it comes from the environment only.
+    let host = std::env::var("FARM3D_MOONRAKER_HOST").unwrap_or_default();
+    assert!(
+        !host.trim().is_empty(),
+        "set FARM3D_MOONRAKER_HOST to the Moonraker host (see docs/verification/a0-1-moonraker-live-validation.md)"
+    );
+    let port = std::env::var("FARM3D_MOONRAKER_PORT")
+        .ok()
+        .map(|value| value.parse().expect("FARM3D_MOONRAKER_PORT is not a port"))
+        .unwrap_or(DEFAULT_MOONRAKER_PORT);
+    let web_port: Option<u16> = std::env::var("FARM3D_MOONRAKER_WEB_PORT")
+        .ok()
+        .map(|value| value.parse().expect("FARM3D_MOONRAKER_WEB_PORT is not a port"));
+    let api_key = std::env::var("FARM3D_MOONRAKER_API_KEY")
+        .ok()
+        .or_else(|| {
+            std::env::var("FARM3D_MOONRAKER_API_KEY_FILE")
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+        })
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .map(zeroize::Zeroizing::new);
+    let config = ConnectionConfig {
+        kind: MOONRAKER_KIND.to_string(),
+        host: host.trim().to_string(),
+        port,
+        use_tls: false,
+        credential_ref: None,
+    };
+    let budget = Duration::from_secs(5);
+
+    tauri::async_runtime::block_on(async {
+        // 1. Names and services, through the production camera query.
+        let adapter = MoonrakerCapabilities::new(&config, api_key.clone(), MoonrakerTimings::default());
+        let cameras = match adapter.cameras().await {
+            Ok(cameras) => cameras,
+            Err(error) => {
+                println!(
+                    "p8-camera: probe skipped: the webcam list failed ({})",
+                    error_kind(&error)
+                );
+                return;
+            }
+        };
+        println!("p8-camera: webcams listed: {}", cameras.len());
+
+        // 2. Each snapshot URL's form, from the same list read raw (the
+        //    production parse drops the URLs on purpose).
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(budget)
+            .build()
+            .expect("an HTTP client");
+        let mut request = client.get(format!(
+            "http://{}:{}/server/webcams/list",
+            config.host, config.port
+        ));
+        if let Some(key) = &api_key {
+            request = request.header("X-Api-Key", key.as_str());
+        }
+        let listed: Value = match request.send().await {
+            Ok(response) => response
+                .bytes()
+                .await
+                .ok()
+                .and_then(|body| serde_json::from_slice(&body).ok())
+                .unwrap_or(Value::Null),
+            Err(_) => Value::Null,
+        };
+        let entries: Vec<(String, &'static str)> = listed["result"]["webcams"]
+            .as_array()
+            .map(|webcams| {
+                webcams
+                    .iter()
+                    .map(|webcam| {
+                        (
+                            webcam["name"].as_str().unwrap_or_default().to_string(),
+                            url_form(webcam["snapshot_url"].as_str()),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (index, camera) in cameras.iter().enumerate() {
+            let form = entries
+                .iter()
+                .find(|(name, _)| name == &camera.name)
+                .map(|(_, form)| *form)
+                .unwrap_or("unknown");
+            println!(
+                "p8-camera: webcam {}: service={} snapshotUrl={form}",
+                index + 1,
+                camera.service
+            );
+        }
+
+        // 3. Resolve through `cameras::resolve` (list reads only), absolute
+        //    URLs first, and fetch the first that resolves: one GET.
+        let webcam_host = WebcamHost {
+            config: config.clone(),
+            api_key: api_key.clone(),
+        };
+        let mut order: Vec<usize> = (0..cameras.len()).collect();
+        let form_of = |index: usize| {
+            entries
+                .iter()
+                .find(|(name, _)| name == &cameras[index].name)
+                .map(|(_, form)| *form)
+                .unwrap_or("unknown")
+        };
+        order.sort_by_key(|index| (form_of(*index) != "absolute", *index));
+        for index in order {
+            let source = CameraSource::HostWebcam {
+                webcam_name: cameras[index].name.clone(),
+                webcam_service: Some(cameras[index].service.clone()),
+                web_port,
+            };
+            let url = match resolve(&source, Some(&webcam_host), budget).await {
+                Ok(url) => url,
+                Err(error) => {
+                    println!(
+                        "p8-camera: webcam {}: resolve failed ({:?})",
+                        index + 1,
+                        error.kind()
+                    );
+                    continue;
+                }
+            };
+            println!(
+                "p8-camera: fetching webcam {} (snapshotUrl={}, service={}): one GET",
+                index + 1,
+                form_of(index),
+                cameras[index].service
+            );
+            match FrameFetcher::new(budget).fetch(&url).await {
+                Ok(frame) => {
+                    let digest = Sha256::digest(&frame.bytes);
+                    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+                    println!(
+                        "p8-camera: frame: byteLen={} contentType={:?} sha256={hex}",
+                        frame.bytes.len(),
+                        frame.content_type
+                    );
+                }
+                Err(error) => println!("p8-camera: frame: fetch failed ({:?})", error.kind()),
+            }
+            return;
+        }
+        println!("p8-camera: no webcam resolved; nothing fetched");
+    });
 }

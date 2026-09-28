@@ -20,6 +20,15 @@ vi.mock("./PrinterJobPanel", () => ({
   PrinterJobPanel: (props: { printer: { name: string } }) => <div>Job panel for {props.printer.name}</div>,
 }));
 
+vi.mock("./PrinterCameraPanel", () => ({
+  PrinterCameraPanel: (props: { printer: { name: string }; onOpenSetup: () => void }) => (
+    <div>
+      Camera panel for {props.printer.name}
+      <button onClick={props.onOpenSetup}>Set up camera (stub)</button>
+    </div>
+  ),
+}));
+
 vi.mock("./CapabilityList", () => ({
   CapabilityList: (props: { printerId: string }) => <div>Capabilities of {props.printerId}</div>,
 }));
@@ -121,8 +130,8 @@ describe("PrinterDetailDock", () => {
     expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Status" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Setup" })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Status", "Setup", "Job"]);
-    expect(screen.queryByRole("tab", { name: /Camera/ })).not.toBeInTheDocument();
+    // Camera appended, today's order kept (spec "Printer detail dock").
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Status", "Setup", "Job", "Camera"]);
 
     const status = screen.getByRole("tab", { name: "Status" });
     status.focus();
@@ -140,6 +149,26 @@ describe("PrinterDetailDock", () => {
     expect(screen.getByText("Capabilities of prn-1")).toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "Job" }));
     expect(screen.getByText("Job panel for North Bay")).toBeInTheDocument();
+  });
+
+  it("shows the camera source and alert defaults sections on Setup", async () => {
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    expect(screen.getByRole("heading", { name: "Camera" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "None" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "5 minutes" })).toBeInTheDocument();
+  });
+
+  it("has a Camera tab, whose 'Set up camera' switches the dock to Setup", async () => {
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Camera" }));
+    expect(screen.getByText("Camera panel for North Bay")).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Set up camera (stub)" }));
+    expect(screen.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Profile setup")).toBeInTheDocument();
   });
 
   it("opens the Job tab on an OPEN_PRINTER_JOB request for this Printer, and ignores one for another", async () => {

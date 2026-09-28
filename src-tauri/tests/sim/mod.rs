@@ -14,6 +14,8 @@
 //! | `FARM3D_SIM_OCTOPRINT_CONTROL` | OctoPrint direct |
 //! | `FARM3D_SIM_OCTOPRINT_API_KEY` | The sim's fixed API key (a fixture, not a secret) |
 //! | `FARM3D_SIM_TOXIPROXY` | The fault proxy's API |
+//! | `FARM3D_SIM_CAMERA` | The static snapshot camera through the fault proxy (P8) |
+//! | `FARM3D_SIM_CAMERA_CONTROL` | The camera direct; the harness checks readiness here |
 //! | `FARM3D_SIM_CTL` | Path to `sim/simctl`, for faults that need the container engine |
 //! | `FARM3D_SIM_REQUIRED` | `1` turns "simulator missing" from a skip into a failure |
 //!
@@ -31,6 +33,7 @@
 //! [`exclusive`] for its whole body and calls the adapter's `reset` first.
 #![allow(dead_code)]
 
+pub mod camera;
 pub mod elegoolink;
 pub mod http;
 pub mod moonraker;

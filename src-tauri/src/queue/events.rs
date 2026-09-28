@@ -9,7 +9,8 @@
 //!
 //! [`QueueStream::publish`] emits one event per changed row — entries
 //! first, then Jobs, then requirements — only after the change committed,
-//! and never for a replay. Rows carry no credential (no Queue or Job
+//! and never for a replay, then sends the changed ids in-process
+//! ([`QueueStream::subscribe_changes`], P8's Attention wake). Rows carry no credential (no Queue or Job
 //! column holds one, and `printer_snapshot_json` never holds an endpoint
 //! or a credential reference), so neither does any event.
 
@@ -82,6 +83,21 @@ pub enum QueueEventPayload {
 #[ts(export_to = "domain/QueueEvent.ts")]
 pub struct QueueEvent(pub EventEnvelope<QueueEventType, QueueEventPayload>);
 
+/// P8 D2 "Wakes": the ids one committed [`QueueStream::publish`] changed,
+/// sent in-process after the Tauri emits so the Attention projector can
+/// run a pass. Never serialized.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueChangeIds {
+    pub entry_ids: Vec<String>,
+    pub job_ids: Vec<String>,
+    pub requirement_ids: Vec<String>,
+}
+
+/// The in-process queue broadcast's capacity (P8 D2 "Wakes"). A
+/// subscriber that falls further behind sees `Lagged`, which means "run a
+/// full pass".
+pub const QUEUE_CHANGE_CAPACITY: usize = 256;
+
 /// The stream's identity and sequence. One per process, held in
 /// `RuntimeServices`.
 pub struct QueueStream {
@@ -90,6 +106,11 @@ pub struct QueueStream {
     /// Held while rows are numbered and emitted, so events reach the
     /// channel in sequence order and one change's events stay together.
     emit: Mutex<()>,
+    /// P8 D2: every publish's ids, in-process. All three P7 publish paths
+    /// (`queue::commands::publish_rows`, `jobs::services::publish`, and
+    /// the evaluator's assignments through `publish_rows`) go through
+    /// [`QueueStream::publish`], so this covers them all.
+    changes: tokio::sync::broadcast::Sender<QueueChangeIds>,
 }
 
 impl Default for QueueStream {
@@ -98,6 +119,7 @@ impl Default for QueueStream {
             stream_id: uuid::Uuid::new_v4().to_string(),
             sequence: AtomicU64::new(0),
             emit: Mutex::new(()),
+            changes: tokio::sync::broadcast::channel(QUEUE_CHANGE_CAPACITY).0,
         }
     }
 }
@@ -105,6 +127,12 @@ impl Default for QueueStream {
 impl QueueStream {
     pub fn stream_id(&self) -> &str {
         &self.stream_id
+    }
+
+    /// P8 D2 "Wakes": a receiver of the ids of every change published from
+    /// now on (sent after its Tauri emits).
+    pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<QueueChangeIds> {
+        self.changes.subscribe()
     }
 
     /// The last sequence handed out. `list_queue` reads this before it
@@ -165,6 +193,19 @@ impl QueueStream {
                     },
                 ),
             );
+        }
+        let ids = QueueChangeIds {
+            entry_ids: change.entries.iter().map(|entry| entry.id.clone()).collect(),
+            job_ids: change.jobs.iter().map(|job| job.id.clone()).collect(),
+            requirement_ids: change
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id.clone())
+                .collect(),
+        };
+        if !(ids.entry_ids.is_empty() && ids.job_ids.is_empty() && ids.requirement_ids.is_empty()) {
+            // An error only means nobody is subscribed.
+            let _ = self.changes.send(ids);
         }
     }
 
@@ -237,6 +278,48 @@ mod tests {
                 "queue.eligibility.changed"
             ])
         );
+    }
+
+    fn a_requirement(id: &str) -> ReconciliationRequirement {
+        ReconciliationRequirement {
+            id: id.to_string(),
+            job_id: "job-1".to_string(),
+            kind: crate::jobs::RequirementKind::MaterialReconciliation,
+            status: crate::jobs::RequirementStatus::Pending,
+            spool_id: None,
+            reservation_id: None,
+            opened_at: "2026-09-28T00:00:00Z".to_string(),
+            deferred_at: None,
+            resolved_at: None,
+            resolution: None,
+        }
+    }
+
+    /// P8 D2 "Wakes": every publish also goes out in-process, as the ids
+    /// it changed, to every subscriber (the Attention projector).
+    #[test]
+    fn publish_broadcasts_the_changed_ids_in_process() {
+        let app = tauri::test::mock_app();
+        let stream = QueueStream::default();
+        let mut changes = stream.subscribe_changes();
+        stream.publish(
+            app.handle(),
+            &QueueChange {
+                requirements: vec![a_requirement("rrq-1"), a_requirement("rrq-2")],
+                ..QueueChange::default()
+            },
+        );
+        assert_eq!(
+            changes.try_recv().unwrap(),
+            QueueChangeIds {
+                entry_ids: vec![],
+                job_ids: vec![],
+                requirement_ids: vec!["rrq-1".to_string(), "rrq-2".to_string()],
+            }
+        );
+        // An empty change changed nothing: no wake.
+        stream.publish(app.handle(), &QueueChange::default());
+        assert!(changes.try_recv().is_err());
     }
 
     #[test]

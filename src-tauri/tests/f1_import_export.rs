@@ -601,7 +601,7 @@ fn printers_export_writes_schema_version_3_with_lifecycle_fields() {
     assert_eq!(exported["data"]["status"], "exported");
     let writes = documents.writes.lock().unwrap();
     let document: Value = serde_json::from_slice(&writes[0]).unwrap();
-    assert_eq!(document["schemaVersion"], 3);
+    assert_eq!(document["schemaVersion"], 4);
     let printers = document["printers"].as_array().unwrap();
     let by_id = |id: &str| printers.iter().find(|row| row["id"] == id).unwrap();
     let with_location = by_id(&with_location.id);

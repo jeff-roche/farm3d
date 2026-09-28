@@ -1,12 +1,16 @@
+pub mod attention;
 pub mod bootstrap;
+pub mod cameras;
 pub mod catalog;
 pub mod connections;
 pub mod contracts;
 pub mod document_io;
 mod file_links;
 pub mod host_ops;
+pub mod incidents;
 pub mod jobs;
 pub mod library;
+pub mod notifications;
 pub mod persistence;
 pub mod printers;
 pub mod queue;
@@ -14,6 +18,14 @@ pub mod settings;
 pub mod slicing;
 pub mod spools;
 
+use attention::commands::{
+    acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
+};
+use cameras::commands::{
+    camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
+    list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
+    snapshot_image, test_camera,
+};
 use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
 };
@@ -26,16 +38,19 @@ use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
 };
+use incidents::commands::{add_incident_note, get_incident, list_incidents};
 use jobs::commands::{
     assign_queue_entry, cancel_job, correct_job_material, declare_job_outcome, get_job_history,
     pause_job, release_job, resume_job, retry_job, settle_job_material, stage_job, start_job,
 };
+use notifications::commands::{notification_status, send_test_notification};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
     library_content_info, list_library, list_model_revisions, locate_linked_source,
     pick_model_files, rename_project, set_model_projects, update_model,
 };
+use printers::alerts::{get_printer_alert_defaults, set_printer_alert_defaults};
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
     archive_printer, create_printer, delete_printer, export_printers, import_printers,
@@ -87,6 +102,14 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub jobs: Arc<jobs::JobServices<R>>,
     /// P7 D6: the automatic evaluator's trigger channel and last run.
     pub evaluator: Arc<queue::evaluator::Evaluator>,
+    /// P8 D2: the Attention projector's runtime and the `attention` stream.
+    pub attention: Arc<attention::services::AttentionServices<R>>,
+    /// P8 D4/D5: camera health, one fetch per Printer, the last preview
+    /// frame, the capture runtime, and the `MediaJanitor`.
+    pub cameras: Arc<cameras::services::CameraServices<R>>,
+    /// P8 D6: the notify policy, the platform sink, focus, and click
+    /// activation.
+    pub notifications: Arc<notifications::services::NotificationService<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -151,12 +174,15 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             queue_stream: queue::events::QueueStream::default(),
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             evaluator: Arc::default(),
+            attention: Arc::default(),
+            cameras: Arc::default(),
+            notifications: Arc::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 107] = [
+pub const COMMAND_NAMES: [&str; 129] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -264,6 +290,28 @@ pub const COMMAND_NAMES: [&str; 107] = [
     "declare_job_outcome",
     "settle_job_material",
     "correct_job_material",
+    "list_attention",
+    "mark_attention_read",
+    "acknowledge_attention_event",
+    "resolve_attention_event",
+    "list_incidents",
+    "get_incident",
+    "add_incident_note",
+    "get_printer_camera",
+    "set_printer_camera",
+    "clear_printer_camera",
+    "list_host_webcams",
+    "test_camera",
+    "camera_preview_frame",
+    "capture_snapshot",
+    "list_snapshots",
+    "snapshot_image",
+    "set_snapshot_pinned",
+    "media_usage",
+    "get_printer_alert_defaults",
+    "set_printer_alert_defaults",
+    "notification_status",
+    "send_test_notification",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -346,6 +394,72 @@ pub fn start_jobs_runtime<R: tauri::Runtime>(
 ) {
     jobs::services::start(services, app);
     queue::evaluator::start(services);
+}
+
+/// P8 D2 "Runtime and wakes": starts the Attention projector for
+/// `services`. It records when the supervisors started, subscribes to the
+/// status, queue, and inventory broadcasts, then spawns the projector,
+/// whose first action is a full pass; it publishes the startup backfill's
+/// changes first. The startup backfill (`attention::projector::backfill`)
+/// must already have run. `build_runtime_services` calls it after
+/// `start_jobs_runtime`; tests call it the same way. A second call does
+/// nothing.
+pub fn start_attention_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    attention::services::start(services, app);
+}
+
+/// P8 D4/D5: starts the camera capture runtime for `services` — it
+/// publishes the startup sweep's changes, subscribes to the Attention
+/// projector's committed passes (capture intents run on their own tasks,
+/// never inside a pass), and starts the `MediaJanitor`, whose first prune
+/// pass runs at once. It must start **before** `start_attention_runtime`,
+/// so the projector's first pass is heard. The startup sweep
+/// (`cameras::media::startup_sweep`) must already have run and its outcome
+/// been handed to `CameraServices::apply_startup_sweep`.
+/// `build_runtime_services` calls it; tests call it the same way. A second
+/// call does nothing.
+pub fn start_camera_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    cameras::capture::start(services, app);
+}
+
+/// P8 D6: starts the notification runtime for `services` — it subscribes
+/// to the Attention projector's committed passes, listens to the sink's
+/// signals, and connects the sink in the background. It must start
+/// **before** `start_attention_runtime`, so the projector's first live
+/// pass is heard. `build_runtime_services` calls it; tests call it the
+/// same way. A second call does nothing.
+pub fn start_notification_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    notifications::services::start(services, app);
+}
+
+/// D6's `app_icon`: the installed `farm3d` icon name, else the bundled
+/// icon's absolute path (`just dev`, AppImage), else none.
+fn notification_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let bundled = app
+            .path()
+            .resolve("resources/farm3d-notification.png", BaseDirectory::Resource)
+            .ok();
+        notifications::dbus::resolve_icon(
+            &notifications::dbus::xdg_data_dirs(),
+            bundled.as_deref(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        String::new()
+    }
 }
 
 enum StartupFailure {
@@ -436,6 +550,19 @@ fn build_runtime_services<R: tauri::Runtime>(
     // closed catches up with it, before any command is served.
     let recovered_jobs =
         jobs::recover_after_restart(&storage, chrono::Utc::now()).map_err(startup_error)?;
+    // P8 D2 "Startup backfill": project every durable Condition with live
+    // status unknown, before any command is served. Published once the
+    // attention runtime starts.
+    let backfilled =
+        attention::projector::backfill(&storage, chrono::Utc::now()).map_err(|error| match error {
+            persistence::RepositoryError::Storage(error) => startup_error(error),
+            _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
+        })?;
+    // P8 D5 "Startup sweep": repair whatever a crash left in the media
+    // store, before any command is served. Published once the camera
+    // runtime starts. A failure never blocks startup (the camera is
+    // optional): evidence capture is off until a later sweep succeeds.
+    let swept = cameras::media::startup_sweep(&storage, chrono::Utc::now());
 
     let resource_path = app
         .path()
@@ -506,6 +633,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     ));
     let jobs = Arc::new(jobs::JobServices::new(jobs::JobTimings::default()));
     jobs.set_recovered(recovered_jobs);
+    let attention = Arc::new(attention::services::AttentionServices::new(
+        attention::services::AttentionTimings::default(),
+    ));
+    attention.set_backfilled(backfilled);
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -523,6 +654,16 @@ fn build_runtime_services<R: tauri::Runtime>(
         queue_stream: queue::events::QueueStream::default(),
         jobs,
         evaluator: Arc::default(),
+        attention,
+        cameras: Arc::new(cameras::services::CameraServices::new(
+            cameras::services::CameraTimings::default(),
+        )),
+        notifications: Arc::new(notifications::services::NotificationService::platform(
+            app.try_state::<notifications::focus::Focus>()
+                .map(|focus| focus.inner().clone())
+                .unwrap_or_default(),
+            notification_icon(app),
+        )),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -531,6 +672,15 @@ fn build_runtime_services<R: tauri::Runtime>(
     start_host_ops_runtime(&services, app);
     // P7 D4: then the dispatch driver.
     start_jobs_runtime(&services, app);
+    // P8 D4/D5: the capture runtime and the janitor, subscribed before the
+    // projector's first pass.
+    services.cameras.apply_startup_sweep(swept);
+    start_camera_runtime(&services, app);
+    // P8 D6: the notification runtime, also subscribed before the
+    // projector's first pass.
+    start_notification_runtime(&services, app);
+    // P8 D2: then the Attention projector.
+    start_attention_runtime(&services, app);
     // D2: the startup probe runs in the background; `get_slicer_runtime`
     // meanwhile waits on the same probe rather than starting another.
     services.slicing.probe_in_background();
@@ -632,6 +782,17 @@ fn handle_window_drop<R: tauri::Runtime>(app: tauri::AppHandle<R>, paths: Vec<st
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // P8 D6 "Focus": the main window's focus, from its
+        // `WindowEvent::Focused` after the one seed in `setup`.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event {
+                if window.label() == notifications::activation::MAIN_WINDOW {
+                    if let Some(focus) = window.try_state::<notifications::focus::Focus>() {
+                        focus.set(*focused);
+                    }
+                }
+            }
+        })
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
             {
@@ -639,6 +800,17 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Before the services, so a bootstrap retry keeps the same
+            // focus. Tauri builds (and shows) the config's main window
+            // before `setup`, so seed from its `is_focused()` now, once
+            // (decision 41); `false` if it errors or there is no window.
+            let focus = notifications::focus::Focus::default();
+            focus.seed(
+                app.get_webview_window(notifications::activation::MAIN_WINDOW)
+                    .ok_or(())
+                    .and_then(|window| window.is_focused().map_err(|_| ())),
+            );
+            app.manage(focus);
             let handle = app.handle().clone();
             let retained_lease = Arc::new(std::sync::Mutex::new(None));
             match build_runtime_services(&handle, &retained_lease) {
@@ -772,6 +944,28 @@ pub fn run() {
             declare_job_outcome,
             settle_job_material,
             correct_job_material,
+            list_attention,
+            mark_attention_read,
+            acknowledge_attention_event,
+            resolve_attention_event,
+            list_incidents,
+            get_incident,
+            add_incident_note,
+            get_printer_camera,
+            set_printer_camera,
+            clear_printer_camera,
+            list_host_webcams,
+            test_camera,
+            camera_preview_frame,
+            capture_snapshot,
+            list_snapshots,
+            snapshot_image,
+            set_snapshot_pinned,
+            media_usage,
+            get_printer_alert_defaults,
+            set_printer_alert_defaults,
+            notification_status,
+            send_test_notification,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])
