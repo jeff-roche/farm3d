@@ -390,6 +390,26 @@ fn every_condition_has_a_label_and_every_body_starts_with_its_severity_word() {
     }
 }
 
+/// `decide`, then — as the service does after the sink showed it —
+/// `record` with a stand-in server id.
+fn show(
+    candidate: &NotifyCandidate,
+    limiter: &mut RateLimiter,
+    at: DateTime<Utc>,
+    id: u32,
+) -> Option<farm3d_lib::notifications::Notification> {
+    let shown = decide(
+        candidate,
+        &all_on(),
+        &alerts(NotificationMode::Follow),
+        false,
+        limiter,
+        at,
+    )?;
+    limiter.record(&shown, id, at);
+    Some(shown)
+}
+
 #[test]
 fn the_same_key_notifies_at_most_once_in_ten_minutes() {
     let mut limiter = RateLimiter::default();
@@ -404,37 +424,53 @@ fn the_same_key_notifies_at_most_once_in_ten_minutes() {
         EventChange::Inserted { recurred: true },
     );
     let at = |minutes: i64| now() + ChronoDuration::minutes(minutes);
-    let classes = all_on();
-    let follow = alerts(NotificationMode::Follow);
-    assert!(decide(&insert, &classes, &follow, false, &mut limiter, at(0)).is_some());
+    assert!(show(&insert, &mut limiter, at(0), 1).is_some());
     // A recurrence of the same key 9 minutes later: suppressed.
-    assert!(decide(&recur, &classes, &follow, false, &mut limiter, at(9)).is_none());
+    assert!(show(&recur, &mut limiter, at(9), 2).is_none());
     // A suppressed candidate doesn't restart the 10 minutes.
-    assert!(decide(&recur, &classes, &follow, false, &mut limiter, at(10)).is_some());
+    assert!(show(&recur, &mut limiter, at(10), 3).is_some());
     // Another key is unaffected.
     let other = NotifyCandidate {
         event: event_of(ConditionKind::PrinterOffline, AttentionOrigin::Live, "src-2"),
         change: EventChange::Inserted { recurred: false },
     };
-    assert!(decide(&other, &classes, &follow, false, &mut limiter, at(10)).is_some());
+    assert!(show(&other, &mut limiter, at(10), 4).is_some());
+}
+
+#[test]
+fn a_notification_the_sink_never_showed_uses_up_neither_its_key_nor_a_burst_slot() {
+    let mut limiter = RateLimiter::default();
+    let classes = all_on();
+    let follow = alerts(NotificationMode::Follow);
+    let nth = |n: usize| NotifyCandidate {
+        event: event_of(ConditionKind::PrinterOffline, AttentionOrigin::Live, &format!("src-{n}")),
+        change: EventChange::Inserted { recurred: false },
+    };
+    // Five failed shows (decided, never recorded): no slot is used.
+    for n in 0..5 {
+        let decided = decide(&nth(n), &classes, &follow, false, &mut limiter, now()).unwrap();
+        assert_eq!(decided.kind, NotificationKind::Event);
+    }
+    // The same key right after a failed show: still shown by itself.
+    let retried = show(&nth(0), &mut limiter, now(), 1).unwrap();
+    assert_eq!(retried.kind, NotificationKind::Event);
 }
 
 #[test]
 fn a_fourth_notification_within_ten_seconds_becomes_one_summary_that_opens_the_attention_center() {
     let mut limiter = RateLimiter::default();
-    let classes = all_on();
-    let follow = alerts(NotificationMode::Follow);
     let nth = |n: usize, kind: ConditionKind| NotifyCandidate {
         event: event_of(kind, AttentionOrigin::Live, &format!("src-{n}")),
         change: EventChange::Inserted { recurred: false },
     };
     let at = |seconds: i64| now() + ChronoDuration::seconds(seconds);
     for n in 0..3 {
-        let shown = decide(&nth(n, ConditionKind::PrinterOffline), &classes, &follow, false, &mut limiter, at(n as i64)).unwrap();
+        let shown = show(&nth(n, ConditionKind::PrinterOffline), &mut limiter, at(n as i64), n as u32 + 1).unwrap();
         assert_eq!(shown.kind, NotificationKind::Event, "#{n} is shown by itself");
     }
-    // The 4th, 3 s after the first: one summary, a new notification.
-    let summary = decide(&nth(3, ConditionKind::JobCompleted), &classes, &follow, false, &mut limiter, at(3)).unwrap();
+    // The 4th, 3 s after the first: one summary, a new notification; the
+    // sink returns id 41 for it.
+    let summary = show(&nth(3, ConditionKind::JobCompleted), &mut limiter, at(3), 41).unwrap();
     assert_eq!(summary.kind, NotificationKind::Summary { count: 1 });
     assert_eq!(summary.summary, "1 new Attention Event");
     assert!(summary.open_attention_center);
@@ -450,20 +486,22 @@ fn a_fourth_notification_within_ten_seconds_becomes_one_summary_that_opens_the_a
         }
     );
     assert_eq!(summary.urgency, Urgency::Low);
-    // The sink returned id 41 for it.
-    limiter.summary_shown(41);
     // The 5th in the same window replaces it in place, with the new count
     // and the worst severity so far.
-    let replaced = decide(&nth(4, ConditionKind::JobFailed), &classes, &follow, false, &mut limiter, at(8)).unwrap();
+    let replaced = show(&nth(4, ConditionKind::JobFailed), &mut limiter, at(8), 41).unwrap();
     assert_eq!(replaced.kind, NotificationKind::Summary { count: 2 });
     assert_eq!(replaced.summary, "2 new Attention Events");
     assert_eq!(replaced.replaces_id, 41);
     assert_eq!(replaced.urgency, Urgency::Critical);
     assert!(replaced.body.starts_with("Fatal: "), "{}", replaced.body);
+    // The 6th keeps the worst severity seen in the window.
+    let third = show(&nth(6, ConditionKind::JobCompleted), &mut limiter, at(9), 41).unwrap();
+    assert_eq!(third.kind, NotificationKind::Summary { count: 3 });
+    assert_eq!(third.urgency, Urgency::Critical);
     // A folded key counts as shown for the per-key rule.
-    assert!(decide(&nth(4, ConditionKind::JobFailed), &classes, &follow, false, &mut limiter, at(9)).is_none());
+    assert!(show(&nth(4, ConditionKind::JobFailed), &mut limiter, at(9), 41).is_none());
     // After the window, a candidate is shown by itself again.
-    let later = decide(&nth(5, ConditionKind::PrinterOffline), &classes, &follow, false, &mut limiter, at(14)).unwrap();
+    let later = show(&nth(5, ConditionKind::PrinterOffline), &mut limiter, at(14), 50).unwrap();
     assert_eq!(later.kind, NotificationKind::Event);
 }
 
@@ -479,57 +517,49 @@ fn a_gated_candidate_never_touches_the_limiter() {
     );
     // Focused: not shown, and not remembered for the per-key rule.
     assert!(decide(&offline, &classes, &follow, true, &mut limiter, now()).is_none());
-    assert!(decide(&offline, &classes, &follow, false, &mut limiter, now()).is_some());
+    assert!(show(&offline, &mut limiter, now(), 1).is_some());
 }
 
+/// D6 "Content" (controller ruling, fix round 1): the body is the severity
+/// word, a colon, and the Event's summary exactly as the Attention center
+/// shows it — operator punctuation included.
 #[test]
-fn the_body_never_carries_a_host_url_or_credential_from_operator_text() {
+fn the_body_is_the_severity_word_and_the_event_summary_verbatim() {
     let subject = AttentionSubject {
-        printer_name: Some(format!("Voron {SECRET_URL}")),
-        printer_location: Some("Bay 192.0.2.10:7125 by the door".into()),
-        job_label: Some(format!("Cube {SECRET_URL}")),
+        printer_name: Some("PLA:Black rig@bay".into()),
+        printer_location: Some("shelf=2 (which?)".into()),
+        job_label: Some("Cube v2: final? a=b @home".into()),
         spool_number: Some(3),
-        spool_label: Some("operator:s3cr3t-P8N".into()),
+        spool_label: Some("PLA:Black".into()),
     };
     for kind in ConditionKind::ALL {
-        let mut limiter = RateLimiter::default();
-        let shown = decide(
+        let event = event_with_subject(kind, AttentionOrigin::Live, "src-1", subject.clone());
+        let shown = show(
             &NotifyCandidate {
-                event: event_with_subject(kind, AttentionOrigin::Live, "src-1", subject.clone()),
+                event: event.clone(),
                 change: EventChange::Inserted { recurred: false },
             },
-            &all_on(),
-            &alerts(NotificationMode::Follow),
-            false,
-            &mut limiter,
+            &mut RateLimiter::default(),
             now(),
+            1,
         )
         .unwrap();
-        assert_no_corpus("summary", &shown.summary);
-        assert_no_corpus("body", &shown.body);
-        assert_no_corpus("target", &serde_json::to_string(&shown.target).unwrap());
+        let word = match event.severity {
+            AttentionSeverity::Fatal => "Fatal",
+            AttentionSeverity::Warning => "Warning",
+            AttentionSeverity::Info => "Info",
+        };
+        assert_eq!(shown.body, format!("{word}: {}", event.summary), "{kind:?}");
     }
-    // The rest of the operator's words stay.
-    let mut limiter = RateLimiter::default();
-    let shown = decide(
-        &NotifyCandidate {
-            event: event_with_subject(
-                ConditionKind::PrinterOffline,
-                AttentionOrigin::Live,
-                "src-1",
-                subject,
-            ),
-            change: EventChange::Inserted { recurred: false },
-        },
-        &all_on(),
-        &alerts(NotificationMode::Follow),
-        false,
-        &mut limiter,
-        now(),
-    )
-    .unwrap();
-    assert!(shown.body.starts_with("Warning: Voron "), "{}", shown.body);
-    assert!(shown.body.contains("by the door"), "{}", shown.body);
+    let offline = event_with_subject(ConditionKind::PrinterOffline, AttentionOrigin::Live, "src-1", subject);
+    assert_eq!(
+        event_notification_body(&offline),
+        "Warning: PLA:Black rig@bay (shelf=2 (which?)) is offline."
+    );
+}
+
+fn event_notification_body(event: &AttentionEvent) -> String {
+    farm3d_lib::notifications::policy::event_notification(event).body
 }
 
 #[test]
@@ -1186,10 +1216,14 @@ fn an_unavailable_notifier_never_panics_and_the_commands_say_so() {
     );
     // A candidate while unavailable is dropped quietly.
     rig.services.notifications.focus().set(false);
-    assert_eq!(rig.consider(&rig.voron_failed()), None);
+    let event = rig.voron_failed();
+    assert_eq!(rig.consider(&event), None);
     // The next status call retries: the server came back.
     rig.sink.set_status(RecordingSink::available().status_now());
     assert_eq!(rig.ok("notification_status", json!({}))["state"], "available");
+    // The failed show didn't use up the key's 10 minutes.
+    assert!(rig.consider(&event).is_some());
+    assert_eq!(rig.sink.shown().len(), 1);
 }
 
 #[test]
@@ -1495,19 +1529,31 @@ fn alert_defaults_get_the_defaults_set_is_idempotent_and_a_change_pokes_the_proj
         .unwrap_err();
 }
 
-/// Global constraint 3: the corpus in the Printer's name and location, and
-/// as the Printer's manual camera URL, never reaches a notification, the
-/// navigate event, a command response, or a log line.
+/// Global constraint 3: the corpus in the real secret-bearing inputs — the
+/// Printer's Connection host, its stored credential, and a manual camera
+/// URL — never reaches a notification, the navigate event, a command
+/// response, or a log line. The Printer has an ordinary name.
 #[test]
 fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_line() {
     let rig = rig();
+    const CREDENTIAL_REF: &str = "cred-p8n-notifications";
+    rig.services
+        .credentials
+        .set(CREDENTIAL_REF, "s3cr3t-P8N")
+        .unwrap();
     rig.storage
         .write(|tx| {
             tx.execute(
-                "UPDATE printers SET name = ?1, location = ?2 WHERE id = ?3",
+                "UPDATE printers SET location = 'Bay A', connection_json = ?1 WHERE id = ?2",
                 rusqlite::params![
-                    format!("Voron {SECRET_URL}"),
-                    "rack 192.0.2.10:7125 operator:s3cr3t-P8N",
+                    json!({
+                        "kind": "moonraker",
+                        "host": "192.0.2.10",
+                        "port": 8080,
+                        "useTls": false,
+                        "credentialRef": CREDENTIAL_REF,
+                    })
+                    .to_string(),
                     PRINTER
                 ],
             )?;
@@ -1519,22 +1565,24 @@ fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_lin
             Ok(())
         })
         .unwrap();
-    rig.services.notifications.focus().set(false);
-    let event = rig.insert_host_failed(
-        PRINTER,
-        AttentionSubject {
-            printer_name: Some(format!("Voron {SECRET_URL}")),
-            printer_location: Some("rack 192.0.2.10:7125 operator:s3cr3t-P8N".into()),
-            job_label: None,
-            spool_number: None,
-            spool_label: None,
-        },
+    // The corpus really is in place (the scan below isn't vacuous).
+    assert_eq!(
+        rig.services.credentials.get(CREDENTIAL_REF).unwrap(),
+        Some("s3cr3t-P8N".to_string())
     );
+
+    // Insert -> show -> token -> click.
+    rig.services.notifications.focus().set(false);
+    let event = rig.voron_failed();
     let id = rig.consider(&event).expect("shown");
+    rig.signal(|sink| sink.token(id, "activation-token"));
     rig.signal(|sink| sink.click(id, "default"));
     wait_until("navigation", || !rig.navigations.lock().unwrap().is_empty());
+    wait_until("the read to be published", || !rig.stream.lock().unwrap().is_empty());
 
-    for (_, notification) in rig.sink.shown() {
+    let shown = rig.sink.shown();
+    assert!(!shown.is_empty());
+    for (_, notification) in shown {
         assert_no_corpus("summary", &notification.summary);
         assert_no_corpus("body", &notification.body);
         assert_no_corpus("target", &serde_json::to_string(&notification.target).unwrap());
@@ -1542,22 +1590,41 @@ fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_lin
     for navigation in rig.navigations.lock().unwrap().iter() {
         assert_no_corpus("navigate event", &navigation.to_string());
     }
+    for published in rig.stream.lock().unwrap().iter() {
+        assert_no_corpus("attention stream event", &published.to_string());
+    }
     for response in [
         rig.ok("notification_status", json!({})),
         rig.ok("send_test_notification", json!({})),
         rig.ok("get_printer_alert_defaults", json!({"printerId": PRINTER})),
         rig.ok("set_printer_alert_defaults", alert_body("op-secret", PRINTER, json!(5), "follow")),
+        rig.ok("load_settings", json!({})),
     ] {
         assert_no_corpus("command response", &response.to_string());
     }
-    // A failing show logs too.
+    // Failing shows and refused sends log; so does a lagged hand-off.
     rig.sink.set_status(NotifierStatus::Unavailable {
         reason: NotifierUnavailableReason::CallFailed,
     });
     let error = rig.call("send_test_notification", json!({})).unwrap_err();
     assert_no_corpus("command error", &error.to_string());
-    assert!(!rig.services.notifications.log_lines().is_empty());
-    for line in rig.services.notifications.log_lines() {
+    rig.services.notifications.hold();
+    for _ in 0..70 {
+        rig.services
+            .attention
+            .hand_on_for_test(farm3d_lib::attention::projector::AppliedChanges {
+                notify: vec![NotifyCandidate {
+                    event: event.clone(),
+                    change: EventChange::Inserted { recurred: false },
+                }],
+                ..Default::default()
+            });
+    }
+    rig.services.notifications.release();
+    wait_until("the lagged hand-off", || rig.services.notifications.lagged() > 0);
+    let lines = rig.services.notifications.log_lines();
+    assert!(lines.len() >= 2, "{lines:?}");
+    for line in lines {
         assert_no_corpus("log line", &line);
     }
 }

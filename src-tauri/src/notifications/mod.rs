@@ -213,6 +213,8 @@ pub struct Notification {
     pub event_id: Option<String>,
     /// Every Event whose `notified_at` a successful show writes.
     pub event_ids: Vec<String>,
+    /// The dedup keys a successful show records in the rate limiter.
+    pub dedup_keys: Vec<String>,
     pub kind: NotificationKind,
 }
 
@@ -229,6 +231,7 @@ impl Notification {
             open_attention_center: false,
             event_id: None,
             event_ids: Vec::new(),
+            dedup_keys: Vec::new(),
             kind: NotificationKind::Test,
         }
     }

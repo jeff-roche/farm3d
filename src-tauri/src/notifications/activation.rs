@@ -4,13 +4,12 @@
 //!
 //! **The raise** (controller ruling, from the Task 2 spike on KWin
 //! Wayland): one main-thread tick applies the activation token, if one
-//! arrived, to the GTK window (`set_startup_id`), then `show` and
-//! `set_focus`. If no `Focused(true)` follows within the wait (500 ms),
+//! arrived, to the GTK window (`set_startup_id`), then `unminimize` (for
+//! X11; it does nothing on Wayland), `show`, and `set_focus`. If no `Focused(true)` follows within the wait (500 ms),
 //! `hide`, `show`, and `set_focus` in one tick (re-mapping brings back a
 //! minimized window without a token), and another wait; only then
 //! `request_user_attention(Informational)`, which may be a no-op on
-//! Wayland. `unminimize` is not used: it does nothing on Wayland. The
-//! raise never blocks the navigation: step 4 and 5 run at once, and the
+//! Wayland. The raise never blocks the navigation: step 4 and 5 run at once, and the
 //! Attention center keeps the Event whatever the raise does. Task 17
 //! (the owner at the desktop) confirms the sequence with a real click.
 
@@ -28,7 +27,8 @@ pub const MAIN_WINDOW: &str = "main";
 /// One raise step, as [`WindowControl`] performs it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RaiseStep {
-    /// Apply `token` if any, then `show` and `set_focus`, in one tick.
+    /// Apply `token` if any, then `unminimize`, `show`, and `set_focus`,
+    /// in one tick.
     Present { token: Option<String> },
     /// `hide`, `show`, and `set_focus` in one tick.
     Remap,
@@ -77,6 +77,9 @@ impl<R: tauri::Runtime> WindowControl for MainWindowControl<R> {
             }
             #[cfg(not(target_os = "linux"))]
             let _ = &token;
+            // A no-op on Wayland; on X11, tao's `set_focus` skips a
+            // minimized window.
+            let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
         });

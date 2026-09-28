@@ -45,7 +45,7 @@ use super::null::NullNotificationSink;
 use super::policy::{self, NotifyCandidate, RateLimiter};
 use super::{
     NavigateRequest, Notification, NotificationClassSettings, NotificationHandle,
-    NotificationKind, NotificationSink, NotifierStatus, NotifyError, SinkSignal,
+    NotificationSink, NotifierStatus, NotifyError, SinkSignal,
 };
 
 /// The most notifications remembered for a click (D6, step 1).
@@ -307,9 +307,8 @@ impl<R: tauri::Runtime> NotificationService<R> {
                 return None;
             }
         };
-        if matches!(notification.kind, NotificationKind::Summary { .. }) {
-            lock(&self.limiter).summary_shown(handle.id);
-        }
+        // Only a notification the sink showed counts toward the limits.
+        lock(&self.limiter).record(&notification, handle.id, now);
         self.remember(handle, &notification);
         let marked = services.storage.write_repo(|tx| -> Result<(), RepositoryError> {
             for event_id in &notification.event_ids {

@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -123,6 +124,8 @@ struct Live {
     proxy: NotificationsProxy<'static>,
     owner: String,
     body_markup: bool,
+    /// Set when the listener's stream ended: the next call reconnects.
+    stale: std::sync::Arc<AtomicBool>,
     listener: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -186,6 +189,32 @@ async fn current_owner(connection: &Connection) -> Result<String, NotifierUnavai
     }
 }
 
+/// The listener: every signal message becomes a [`SinkSignal`] for the
+/// handler. A message the stream fails to read is skipped; when the stream
+/// ends (the connection dropped), `stale` is set so the next call
+/// reconnects instead of showing notifications no one listens for.
+async fn listen<S>(
+    mut stream: S,
+    handler: std::sync::Arc<Mutex<Option<SignalHandler>>>,
+    stale: std::sync::Arc<AtomicBool>,
+) where
+    S: futures_util::Stream<Item = zbus::Result<zbus::Message>> + Unpin,
+{
+    while let Some(received) = stream.next().await {
+        let Ok(message) = received else {
+            continue;
+        };
+        let Some(signal) = parse_signal(&message) else {
+            continue;
+        };
+        let handler = lock(&handler).clone();
+        if let Some(handler) = handler {
+            handler(signal);
+        }
+    }
+    stale.store(true, Ordering::SeqCst);
+}
+
 /// One signal message as a [`SinkSignal`]; `None` for anything else.
 fn parse_signal(message: &zbus::Message) -> Option<SinkSignal> {
     let header = message.header();
@@ -245,19 +274,13 @@ impl DbusNotificationSink {
             .and_then(|rule| rule.interface(INTERFACE))
             .map_err(|_| NotifierUnavailableReason::CallFailed)?
             .build();
-        let mut stream = bounded(MessageStream::for_match_rule(rule, &connection, Some(64))).await?;
-        let handler = std::sync::Arc::clone(&self.handler);
-        let listener = tauri::async_runtime::spawn(async move {
-            while let Some(Ok(message)) = stream.next().await {
-                let Some(signal) = parse_signal(&message) else {
-                    continue;
-                };
-                let handler = lock(&handler).clone();
-                if let Some(handler) = handler {
-                    handler(signal);
-                }
-            }
-        });
+        let stream = bounded(MessageStream::for_match_rule(rule, &connection, Some(64))).await?;
+        let stale = std::sync::Arc::new(AtomicBool::new(false));
+        let listener = tauri::async_runtime::spawn(listen(
+            stream,
+            std::sync::Arc::clone(&self.handler),
+            std::sync::Arc::clone(&stale),
+        ));
         let has = |capability: &str| capabilities.iter().any(|c| c == capability);
         self.set_status(NotifierStatus::Available {
             server_name: name,
@@ -272,6 +295,7 @@ impl DbusNotificationSink {
             proxy,
             owner,
             body_markup: has("body-markup"),
+            stale,
             listener,
         })
     }
@@ -283,6 +307,12 @@ impl DbusNotificationSink {
         &self,
         live: &'a mut Option<Live>,
     ) -> Result<&'a Live, NotifierUnavailableReason> {
+        if live
+            .as_ref()
+            .is_some_and(|current| current.stale.load(Ordering::SeqCst))
+        {
+            *live = None;
+        }
         if let Some(current) = live.as_ref() {
             match current_owner(&current.connection).await {
                 Ok(owner) if owner == current.owner => {}
@@ -434,5 +464,47 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+    }
+
+    /// A stream error is skipped, not the end of the listener; the end of
+    /// the stream marks the connection stale.
+    #[test]
+    fn the_listener_skips_a_stream_error_and_marks_the_connection_stale_at_the_end() {
+        let signal = |member: &str, body: &(u32, String)| {
+            zbus::Message::signal(PATH, INTERFACE, member)
+                .unwrap()
+                .build(body)
+                .unwrap()
+        };
+        let messages: Vec<zbus::Result<zbus::Message>> = vec![
+            Ok(signal("ActivationToken", &(7, "token-7".to_string()))),
+            Err(zbus::Error::InvalidReply),
+            Ok(signal("ActionInvoked", &(7, "default".to_string()))),
+        ];
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let handler: SignalHandler = std::sync::Arc::new(move |signal| {
+            recorded.lock().unwrap().push(signal);
+        });
+        let stale = std::sync::Arc::new(AtomicBool::new(false));
+        tauri::async_runtime::block_on(listen(
+            futures_util::stream::iter(messages),
+            std::sync::Arc::new(Mutex::new(Some(handler))),
+            std::sync::Arc::clone(&stale),
+        ));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                SinkSignal::ActivationToken {
+                    id: 7,
+                    token: "token-7".into()
+                },
+                SinkSignal::ActionInvoked {
+                    id: 7,
+                    action: "default".into()
+                },
+            ]
+        );
+        assert!(stale.load(Ordering::SeqCst));
     }
 }
