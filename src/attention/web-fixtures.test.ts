@@ -112,3 +112,61 @@ describe("webSnapshotPage / webMediaUsage", () => {
     expect(usage.usedBytes).toBeGreaterThan(0);
   });
 });
+
+describe("cross-links sibling web fixtures (fix round 1)", () => {
+  // Every Printer/Job/Spool id this fixture names must actually exist in
+  // the sibling fixture that owns that kind of object -- otherwise `just
+  // web`'s "Open source" lands on `selectionUnavailable` instead of the
+  // real Printer/Job/Spool detail.
+  it("names only Printer ids that printer-store.ts's web fixture actually has", async () => {
+    // The raw fixture id space, not `loadPrinters()`'s resolved runtime
+    // records -- resolving those needs the bundled catalog over `fetch`,
+    // which would only mask a missing id behind a silently-dropped
+    // unresolved Printer.
+    const { WEB_FIXTURE_EQUIPPED_PRINTER_ID } = await import("../printers/printer-store");
+    const { WEB_HOST_OPS_PRINTERS } = await import("../host-ops/web-fixtures");
+    const printerIds = new Set([WEB_FIXTURE_EQUIPPED_PRINTER_ID, ...WEB_HOST_OPS_PRINTERS.map((printer) => printer.id)]);
+
+    const fixture = buildWebAttentionFixture();
+    const referenced = new Set<string>();
+    for (const event of [...fixture.backfill.open, ...fixture.backfill.resolved]) {
+      if (event.printerId !== null) referenced.add(event.printerId);
+      if (event.source.kind === "printer") referenced.add(event.source.id);
+    }
+    for (const incident of fixture.backfill.openIncidents) referenced.add(incident.printerId);
+    for (const health of fixture.backfill.cameraHealth) referenced.add(health.printerId);
+
+    expect(referenced.size).toBeGreaterThan(0);
+    for (const id of referenced) expect(printerIds, `Printer id ${id}`).toContain(id);
+  });
+
+  it("names only Job ids that queue/web-fixtures.ts's fixture actually has", async () => {
+    const { buildWebQueueFixture } = await import("../queue/web-fixtures");
+    const jobIds = new Set(buildWebQueueFixture().jobs.map((job) => job.id));
+
+    const fixture = buildWebAttentionFixture();
+    const referenced = new Set<string>();
+    for (const event of [...fixture.backfill.open, ...fixture.backfill.resolved]) {
+      if (event.jobId !== null) referenced.add(event.jobId);
+      if (event.source.kind === "job") referenced.add(event.source.id);
+    }
+
+    expect(referenced.size).toBeGreaterThan(0);
+    for (const id of referenced) expect(jobIds, `Job id ${id}`).toContain(id);
+  });
+
+  it("names only Spool ids that spools/web-fixtures.ts's fixture actually has", async () => {
+    const { buildWebInventoryFixture } = await import("../spools/web-fixtures");
+    const spoolIds = new Set(buildWebInventoryFixture().spools.map((spool) => spool.id));
+
+    const fixture = buildWebAttentionFixture();
+    const referenced = new Set<string>();
+    for (const event of [...fixture.backfill.open, ...fixture.backfill.resolved]) {
+      if (event.spoolId !== null) referenced.add(event.spoolId);
+      if (event.source.kind === "spool") referenced.add(event.source.id);
+    }
+
+    expect(referenced.size).toBeGreaterThan(0);
+    for (const id of referenced) expect(spoolIds, `Spool id ${id}`).toContain(id);
+  });
+});

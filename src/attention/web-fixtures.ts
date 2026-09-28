@@ -6,11 +6,40 @@
  *  `src/library/web-fixtures.ts`).
  *
  *  Covers every `ConditionKind` (the catalogue table, spec D2), one
- *  recurrence chain (`printer.offline` on Bay 3: an older resolved Event,
- *  and today's open one with `recurrenceOf` pointing at it), one open
- *  Incident with a snapshot (a generated PNG test pattern, never a
- *  photo), and one pruned snapshot. */
+ *  recurrence chain (`printer.offline` on the equipped Printer: an older
+ *  resolved Event, and today's open one with `recurrenceOf` pointing at
+ *  it), one open Incident with a snapshot (a generated PNG test pattern,
+ *  never a photo), and one pruned snapshot.
+ *
+ *  Every Printer/Job/Spool id an Event or the Incident names is sourced
+ *  from the sibling web fixture that owns it (`printers/printer-store.ts`,
+ *  `host-ops/web-fixtures.ts`, `queue/web-fixtures.ts`,
+ *  `spools/web-fixtures.ts`), never invented locally -- so in `just web`,
+ *  an Event's "Open source" lands on the real Printer/Job/Spool detail,
+ *  not `selectionUnavailable` (spec Task 12 fix round 1). Only the
+ *  Attention Events, the Incident, and the snapshots themselves (this
+ *  fixture's own domain) get ids invented here. */
 import { generateTestPatternPng, testPatternDataUrl } from "../cameras/test-pattern";
+import { WEB_FIXTURE_EQUIPPED_PRINTER_ID } from "../printers/printer-store";
+import {
+  WEB_HOST_OPS_PRINTER_FAILED,
+  WEB_HOST_OPS_PRINTER_FINISHED,
+  WEB_HOST_OPS_PRINTER_OCTOPRINT,
+  WEB_HOST_OPS_PRINTER_READY_SINGLE,
+  WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD,
+} from "../host-ops/web-fixtures";
+import {
+  failedPrinterSnapshot,
+  WEB_QUEUE_DEFERRED_SPOOL_ID,
+  WEB_QUEUE_JOB_AWAITING_START,
+  WEB_QUEUE_JOB_COMPLETED,
+  WEB_QUEUE_JOB_DEFERRED,
+  WEB_QUEUE_JOB_HOST_CANCELLED,
+  WEB_QUEUE_JOB_OUTCOME_UNKNOWN,
+  WEB_QUEUE_REQUIREMENT_DEFERRED,
+  WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN,
+} from "../queue/web-fixtures";
+import { WEB_SPOOL_LOW_ID } from "../spools/web-fixtures";
 import type {
   AttentionBackfill,
   AttentionEvent,
@@ -28,7 +57,10 @@ const PRINTER_OFFLINE_PRIOR_ID = "atn-w-printer-offline-prior";
 const INCIDENT_ID = "inc-w-host-failed";
 export const WEB_INCIDENT_SNAPSHOT_ID = "snp-w-incident-evidence";
 export const WEB_PRUNED_SNAPSHOT_ID = "snp-w-pruned";
-export const WEB_INCIDENT_PRINTER_ID = "prn-w-south";
+/** The `printer.hostFailed` Incident's Printer: `host-ops/web-fixtures.ts`'s
+ *  own "Failed — Bay 8" (its narrative already fits -- a Printer whose
+ *  latest Job the tracker found `failed`, source Task 12 fix round 1). */
+export const WEB_INCIDENT_PRINTER_ID = WEB_HOST_OPS_PRINTER_FAILED;
 
 /** Built once per process: the PNG bytes never change, so there is no
  *  reason to re-run the zlib framing on every `startAttention()` call. */
@@ -110,26 +142,27 @@ function openEvent(overrides: Partial<AttentionEvent>): AttentionEvent {
  *  recurrence chain's earlier resolved copy. Severities, `requiresAction`,
  *  `resolutionMode`, and `notificationClass` match the catalogue exactly
  *  -- this fixture presents the same shape Rust would send, never a
- *  frontend-invented one (global constraint 4). */
+ *  frontend-invented one (global constraint 4). Every Printer/Job/Spool id
+ *  below is a sibling fixture's own export (see the module doc comment). */
 function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
   const printerOfflinePrior = resolvedEvent({
     id: PRINTER_OFFLINE_PRIOR_ID,
-    dedupKey: "printer.offline:printer:prn-w-bay3",
-    source: { kind: "printer", id: "prn-w-bay3" },
-    printerId: "prn-w-bay3",
-    subject: { printerName: "Bay 3", printerLocation: "Garage", jobLabel: null, spoolNumber: null, spoolLabel: null },
+    dedupKey: `printer.offline:printer:${WEB_FIXTURE_EQUIPPED_PRINTER_ID}`,
+    source: { kind: "printer", id: WEB_FIXTURE_EQUIPPED_PRINTER_ID },
+    printerId: WEB_FIXTURE_EQUIPPED_PRINTER_ID,
+    subject: { printerName: "Elegoo Centauri Carbon — Bay 1", printerLocation: null, jobLabel: null, spoolNumber: null, spoolLabel: null },
     detail: { kind: "printerOffline", unreachableSince: "2026-09-18T08:00:00Z" },
-    summary: "Bay 3 was offline.",
+    summary: "Elegoo Centauri Carbon — Bay 1 was offline.",
   });
 
   const printerOffline = openEvent({
     id: "atn-w-printer-offline",
-    dedupKey: "printer.offline:printer:prn-w-bay3",
-    source: { kind: "printer", id: "prn-w-bay3" },
-    printerId: "prn-w-bay3",
-    subject: { printerName: "Bay 3", printerLocation: "Garage", jobLabel: null, spoolNumber: null, spoolLabel: null },
+    dedupKey: `printer.offline:printer:${WEB_FIXTURE_EQUIPPED_PRINTER_ID}`,
+    source: { kind: "printer", id: WEB_FIXTURE_EQUIPPED_PRINTER_ID },
+    printerId: WEB_FIXTURE_EQUIPPED_PRINTER_ID,
+    subject: { printerName: "Elegoo Centauri Carbon — Bay 1", printerLocation: null, jobLabel: null, spoolNumber: null, spoolLabel: null },
     detail: { kind: "printerOffline", unreachableSince: "2026-09-25T08:00:00Z" },
-    summary: "Bay 3 is offline.",
+    summary: "Elegoo Centauri Carbon — Bay 1 is offline.",
     firstObservedAt: "2026-09-25T08:00:00Z",
     lastObservedAt: "2026-09-25T08:10:00Z",
     observationCount: 2,
@@ -140,12 +173,12 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
   const connectionError = openEvent({
     id: "atn-w-connection-error",
     condition: "printer.connectionError",
-    dedupKey: "printer.connectionError:printer:prn-w-east",
-    source: { kind: "printer", id: "prn-w-east" },
-    printerId: "prn-w-east",
-    subject: { printerName: "East", printerLocation: null, jobLabel: null, spoolNumber: null, spoolLabel: null },
+    dedupKey: `printer.connectionError:printer:${WEB_HOST_OPS_PRINTER_OCTOPRINT}`,
+    source: { kind: "printer", id: WEB_HOST_OPS_PRINTER_OCTOPRINT },
+    printerId: WEB_HOST_OPS_PRINTER_OCTOPRINT,
+    subject: { printerName: "OctoPrint — Bay 6", printerLocation: "Bay 6", jobLabel: null, spoolNumber: null, spoolLabel: null },
     detail: { kind: "printerConnectionError", cause: "auth" },
-    summary: "East's credentials were rejected.",
+    summary: "OctoPrint — Bay 6's credentials were rejected.",
     allowedActions: ["markRead"],
   });
 
@@ -158,9 +191,9 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     printerId: WEB_INCIDENT_PRINTER_ID,
     incidentId: INCIDENT_ID,
     notificationClass: "fatal",
-    subject: { printerName: "South", printerLocation: "Basement", jobLabel: null, spoolNumber: null, spoolLabel: null },
+    subject: { printerName: "Failed — Bay 8", printerLocation: "Bay 8", jobLabel: null, spoolNumber: null, spoolLabel: null },
     detail: { kind: "printerHostFailed" },
-    summary: "South reported a failure.",
+    summary: "Failed — Bay 8 reported a failure.",
     allowedActions: ["markRead", "acknowledge"],
   });
 
@@ -170,13 +203,13 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     severity: "info",
     resolutionMode: "action",
     notificationClass: "confirmation",
-    dedupKey: "job.startConfirmation:job:job-w-1",
-    source: { kind: "job", id: "job-w-1" },
-    printerId: "prn-w-east",
-    jobId: "job-w-1",
-    subject: { printerName: "East", printerLocation: null, jobLabel: "Bracket", spoolNumber: null, spoolLabel: null },
-    detail: { kind: "jobStartConfirmation", awaitingMaterial: true },
-    summary: "Bracket on East needs the bed confirmed clear.",
+    dedupKey: `job.startConfirmation:job:${WEB_QUEUE_JOB_AWAITING_START}`,
+    source: { kind: "job", id: WEB_QUEUE_JOB_AWAITING_START },
+    printerId: WEB_HOST_OPS_PRINTER_FINISHED,
+    jobId: WEB_QUEUE_JOB_AWAITING_START,
+    subject: { printerName: "Finished — Bay 7", printerLocation: "Bay 7", jobLabel: "Enclosure lid — Lid", spoolNumber: null, spoolLabel: null },
+    detail: { kind: "jobStartConfirmation", awaitingMaterial: false },
+    summary: "Enclosure lid — Lid on Finished — Bay 7 needs the bed confirmed clear.",
     allowedActions: ["markRead", "acknowledge"],
   });
 
@@ -186,13 +219,13 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     severity: "fatal",
     resolutionMode: "manual",
     notificationClass: "fatal",
-    dedupKey: "job.failed:job:job-w-2",
-    source: { kind: "job", id: "job-w-2" },
-    printerId: "prn-w-bay3",
-    jobId: "job-w-2",
-    subject: { printerName: "Bay 3", printerLocation: "Garage", jobLabel: "Bushing — Plate 2", spoolNumber: null, spoolLabel: null },
-    detail: { kind: "jobFailed", endedAt: "2026-09-25T07:00:00Z" },
-    summary: "Bushing — Plate 2 failed on Bay 3.",
+    dedupKey: `job.failed:job:${WEB_QUEUE_JOB_DEFERRED}`,
+    source: { kind: "job", id: WEB_QUEUE_JOB_DEFERRED },
+    printerId: WEB_INCIDENT_PRINTER_ID,
+    jobId: WEB_QUEUE_JOB_DEFERRED,
+    subject: { printerName: "Failed — Bay 8", printerLocation: "Bay 8", jobLabel: "Calibration cube (sliced)", spoolNumber: null, spoolLabel: null },
+    detail: { kind: "jobFailed", endedAt: "2026-09-24T09:09:00Z" },
+    summary: "Calibration cube (sliced) failed on Failed — Bay 8.",
     allowedActions: ["markRead", "resolve"],
   });
 
@@ -200,13 +233,13 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     id: "atn-w-job-host-cancelled",
     condition: "job.hostCancelled",
     resolutionMode: "manual",
-    dedupKey: "job.hostCancelled:job:job-w-3",
-    source: { kind: "job", id: "job-w-3" },
-    printerId: "prn-w-east",
-    jobId: "job-w-3",
-    subject: { printerName: "East", printerLocation: null, jobLabel: "Hinge", spoolNumber: null, spoolLabel: null },
-    detail: { kind: "jobHostCancelled", endedAt: "2026-09-25T06:00:00Z" },
-    summary: "Hinge was cancelled on East's own screen.",
+    dedupKey: `job.hostCancelled:job:${WEB_QUEUE_JOB_HOST_CANCELLED}`,
+    source: { kind: "job", id: WEB_QUEUE_JOB_HOST_CANCELLED },
+    printerId: WEB_HOST_OPS_PRINTER_READY_SINGLE,
+    jobId: WEB_QUEUE_JOB_HOST_CANCELLED,
+    subject: { printerName: "Moonraker — Bay 4", printerLocation: "Bay 4", jobLabel: "Calibration cube (sliced)", spoolNumber: null, spoolLabel: null },
+    detail: { kind: "jobHostCancelled", endedAt: "2026-09-22T08:20:00Z" },
+    summary: "Calibration cube (sliced) was cancelled on Moonraker — Bay 4's own screen.",
     allowedActions: ["markRead", "resolve"],
   });
 
@@ -215,14 +248,15 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     condition: "requirement.materialReconciliation",
     resolutionMode: "action",
     notificationClass: "reconciliation",
-    dedupKey: "requirement.materialReconciliation:reconciliationRequirement:rrq-w-1",
-    source: { kind: "reconciliationRequirement", id: "rrq-w-1" },
-    printerId: "prn-w-bay3",
-    jobId: "job-w-4",
-    requirementId: "rrq-w-1",
-    subject: { printerName: "Bay 3", printerLocation: "Garage", jobLabel: "Clip", spoolNumber: 12, spoolLabel: "Prusament PLA" },
-    detail: { kind: "requirementMaterialReconciliation", requirementStatus: "pending", spoolId: "spl-w-12" },
-    summary: "Clip needs its material reconciled against Spool #12.",
+    dedupKey: `requirement.materialReconciliation:reconciliationRequirement:${WEB_QUEUE_REQUIREMENT_DEFERRED}`,
+    source: { kind: "reconciliationRequirement", id: WEB_QUEUE_REQUIREMENT_DEFERRED },
+    printerId: WEB_INCIDENT_PRINTER_ID,
+    jobId: WEB_QUEUE_JOB_DEFERRED,
+    requirementId: WEB_QUEUE_REQUIREMENT_DEFERRED,
+    spoolId: WEB_QUEUE_DEFERRED_SPOOL_ID,
+    subject: { printerName: "Failed — Bay 8", printerLocation: "Bay 8", jobLabel: "Calibration cube (sliced)", spoolNumber: 9, spoolLabel: "Polymaker PolyLite PLA" },
+    detail: { kind: "requirementMaterialReconciliation", requirementStatus: "deferred", spoolId: WEB_QUEUE_DEFERRED_SPOOL_ID },
+    summary: "Calibration cube (sliced) needs its material reconciled against Spool #9.",
     allowedActions: ["markRead", "acknowledge"],
   });
 
@@ -232,14 +266,14 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     severity: "fatal",
     resolutionMode: "action",
     notificationClass: "fatal",
-    dedupKey: "requirement.jobOutcomeUnknown:reconciliationRequirement:rrq-w-2",
-    source: { kind: "reconciliationRequirement", id: "rrq-w-2" },
-    printerId: "prn-w-east",
-    jobId: "job-w-5",
-    requirementId: "rrq-w-2",
-    subject: { printerName: "East", printerLocation: null, jobLabel: "Mount", spoolNumber: null, spoolLabel: null },
+    dedupKey: `requirement.jobOutcomeUnknown:reconciliationRequirement:${WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN}`,
+    source: { kind: "reconciliationRequirement", id: WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN },
+    printerId: WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD,
+    jobId: WEB_QUEUE_JOB_OUTCOME_UNKNOWN,
+    requirementId: WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN,
+    subject: { printerName: "Uncertain upload — Bay 9", printerLocation: "Bay 9", jobLabel: "Mystery part", spoolNumber: null, spoolLabel: null },
     detail: { kind: "requirementJobOutcomeUnknown" },
-    summary: "Mount's outcome on East is unknown.",
+    summary: "Mystery part's outcome on Uncertain upload — Bay 9 is unknown.",
     allowedActions: ["markRead", "acknowledge"],
   });
 
@@ -248,13 +282,13 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     condition: "spool.low",
     requiresAction: false,
     notificationClass: "inventory",
-    dedupKey: "spool.low:spool:spl-w-3",
-    source: { kind: "spool", id: "spl-w-3" },
+    dedupKey: `spool.low:spool:${WEB_SPOOL_LOW_ID}`,
+    source: { kind: "spool", id: WEB_SPOOL_LOW_ID },
     printerId: null,
-    spoolId: "spl-w-3",
-    subject: { printerName: null, printerLocation: null, jobLabel: null, spoolNumber: 3, spoolLabel: "Overture PETG" },
+    spoolId: WEB_SPOOL_LOW_ID,
+    subject: { printerName: null, printerLocation: null, jobLabel: null, spoolNumber: 2, spoolLabel: "Overture PETG" },
     detail: { kind: "spoolLow", currentMg: 80_000, lowThresholdMg: 100_000 },
-    summary: "Spool #3 is low (80 g left).",
+    summary: "Spool #2 is low (80 g left).",
     allowedActions: ["markRead"],
   });
 
@@ -264,13 +298,13 @@ function buildEvents(): { open: AttentionEvent[]; resolved: AttentionEvent[] } {
     severity: "info",
     requiresAction: false,
     notificationClass: "completion",
-    dedupKey: "job.completed:job:job-w-6",
-    source: { kind: "job", id: "job-w-6" },
-    printerId: "prn-w-bay3",
-    jobId: "job-w-6",
-    subject: { printerName: "Bay 3", printerLocation: "Garage", jobLabel: "Spacer", spoolNumber: null, spoolLabel: null },
-    detail: { kind: "jobCompleted", endedAt: "2026-09-25T05:00:00Z" },
-    summary: "Spacer completed on Bay 3.",
+    dedupKey: `job.completed:job:${WEB_QUEUE_JOB_COMPLETED}`,
+    source: { kind: "job", id: WEB_QUEUE_JOB_COMPLETED },
+    printerId: WEB_HOST_OPS_PRINTER_FINISHED,
+    jobId: WEB_QUEUE_JOB_COMPLETED,
+    subject: { printerName: "Finished — Bay 7", printerLocation: "Bay 7", jobLabel: "Lid mount", spoolNumber: null, spoolLabel: null },
+    detail: { kind: "jobCompleted", endedAt: "2026-09-20T09:29:00Z" },
+    summary: "Lid mount completed on Finished — Bay 7.",
     allowedActions: ["markRead"],
   });
 
@@ -299,25 +333,10 @@ function buildIncident(): Incident {
     state: "open",
     printerId: WEB_INCIDENT_PRINTER_ID,
     jobId: null,
-    printerSnapshot: {
-      name: "South",
-      location: "Basement",
-      catalogRef: null,
-      adapterKind: "moonraker",
-      profile: {
-        bedShape: { kind: "rectangular", widthMm: 220, depthMm: 220, originXMm: 0, originYMm: 0 },
-        printableHeightMm: 250,
-        bedExcludeAreas: [],
-        defaultBedType: "0",
-        nozzleDiameterMm: [0.4],
-        nozzleType: "brass",
-        gcodeFlavor: "klipper",
-        hasAuxiliaryFan: false,
-        supportsAirFiltration: false,
-        supportsMultiFilament: false,
-        suggestedHostType: "moonraker",
-      },
-    },
+    // The same snapshot `queue/web-fixtures.ts` builds for this Printer
+    // (`failedPrinterSnapshot`, exported for this reuse), so the two
+    // fixtures never drift apart on what this Printer looked like.
+    printerSnapshot: failedPrinterSnapshot(),
     openedAt: "2026-09-25T07:30:00Z",
     closedAt: null,
     linkedEventIds: ["atn-w-host-failed"],
@@ -379,8 +398,8 @@ export function buildWebAttentionFixture(): WebAttentionFixture {
       openIncidents: [buildIncident()],
       cameraHealth: [
         { printerId: WEB_INCIDENT_PRINTER_ID, state: "ok", sourceKind: "hostWebcam", lastSuccessAt: "2026-09-25T08:00:00Z", lastFailureAt: null, lastFailureKind: null },
-        { printerId: "prn-w-bay3", state: "failing", sourceKind: "snapshotUrl", lastSuccessAt: "2026-09-24T00:00:00Z", lastFailureAt: "2026-09-25T08:00:00Z", lastFailureKind: "timeout" },
-        { printerId: "prn-w-east", state: "unknown", sourceKind: "hostWebcam", lastSuccessAt: null, lastFailureAt: null, lastFailureKind: null },
+        { printerId: WEB_FIXTURE_EQUIPPED_PRINTER_ID, state: "failing", sourceKind: "snapshotUrl", lastSuccessAt: "2026-09-24T00:00:00Z", lastFailureAt: "2026-09-25T08:00:00Z", lastFailureKind: "timeout" },
+        { printerId: WEB_HOST_OPS_PRINTER_OCTOPRINT, state: "unknown", sourceKind: "hostWebcam", lastSuccessAt: null, lastFailureAt: null, lastFailureKind: null },
       ],
     },
     snapshots,

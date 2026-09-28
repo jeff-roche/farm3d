@@ -105,10 +105,16 @@ function App() {
     .flatMap((entry) => (entry.jobId ? [entry.id, entry.jobId] : [entry.id]));
   // Every Attention Event and Incident the store holds, for `monitor`'s
   // `attention`/`incident` selections (deep links, `farm3d-navigate-v1`).
+  // An Incident stays a valid `monitor/incident` target after it closes
+  // (Controller ruling, fix round 1): an Event's detail links its
+  // Incident even once closed, and D8 keeps an archived Printer's
+  // Incidents openable, so `openIncidents()` alone isn't enough -- every
+  // loaded Event's own `incidentId` (open or resolved) counts too.
+  const attentionEvents = () => [...attention.open(), ...attention.resolved()];
   const attentionIds = () => [
-    ...attention.open().map((event) => event.id),
-    ...attention.resolved().map((event) => event.id),
+    ...attentionEvents().map((event) => event.id),
     ...attention.openIncidents().map((incident) => incident.id),
+    ...attentionEvents().flatMap((event) => (event.incidentId ? [event.incidentId] : [])),
   ];
   const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
     availableDestinations: ["monitor", "queue", "library", "spools"] as NavigationDestination[],

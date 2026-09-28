@@ -5,6 +5,10 @@ import { WEB_HOST_OPS_PRINTER_FINISHED } from "../host-ops/web-fixtures";
 
 /** P7's awaiting-start Job's Spool (`queue/web-fixtures.ts`). */
 export const WEB_QUEUE_AWAITING_START_SPOOL_ID = "spl-web-10";
+/** Spool #2: active, in storage, estimated, and low -- the one fixture
+ *  Spool with `facets.low: true` (`attention/web-fixtures.ts`'s
+ *  `spool.low` Event). */
+export const WEB_SPOOL_LOW_ID = "spl-web-2";
 
 /** `just web`'s Spool inventory seed data -- no Rust backend, so this
  *  stands in for the Farm's persisted Spools/tares (P3 design's Frontend
@@ -50,7 +54,7 @@ function buildWebSpools(): SpoolRecord[] {
     },
     // 2. Active, in storage, estimated and low.
     {
-      id: "spl-web-2", revision: 1, spoolNumber: 2,
+      id: WEB_SPOOL_LOW_ID, revision: 1, spoolNumber: 2,
       manufacturer: "Overture", product: "PETG", materialFamily: "PETG",
       colorName: "Clear", diameter: "1.75",
       nominalMg: 1_000_000, lowThresholdMg: 100_000, tareId: TARE_PLASTIC,

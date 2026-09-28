@@ -5,7 +5,9 @@ import {
   WEB_HOST_OPS_PRINTER_OCTOPRINT,
   WEB_HOST_OPS_PRINTER_READY_MULTI,
   WEB_HOST_OPS_PRINTER_READY_SINGLE,
+  WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD,
   WEB_HOST_OPS_STAGED_OPERATION,
+  WEB_HOST_OPS_UNCERTAIN_OPERATION,
   WEB_HOST_OPS_UPLOAD_FAILED_PRINT,
   WEB_HOST_OPS_UPLOAD_READY_MULTI,
 } from "../host-ops/web-fixtures";
@@ -41,11 +43,17 @@ import type {
  *
  *  Six open entries: three linked copies (an `Add to Queue` of quantity
  *  3), one blocked entry, one `assigned` entry whose Job is `printing` (on
- *  the host-ops fixture's own already-printing Printer), and one whose Job
+ *  the host-ops fixture's own already-printing Printer), one whose Job
  *  is `awaitingStart` with no start blockers (staged on the Finished
- *  Printer, its Spool loaded there), so the Start confirmation shows.
- *  One closed entry carries a `failed` Job whose material settlement was
- *  deferred, with an open `materialReconciliation` Requirement. */
+ *  Printer, its Spool loaded there), so the Start confirmation shows, and
+ *  one whose Job is `outcomeUnknown` (on the Uncertain-upload Printer),
+ *  with an open `jobOutcomeUnknown` Requirement.
+ *  Three closed entries: a `failed` Job whose material settlement was
+ *  deferred, with an open `materialReconciliation` Requirement; a
+ *  `hostCancelled` Job (cancelled from the printer's own screen); and a
+ *  `completed` Job. `attention/web-fixtures.ts` sources every one of
+ *  these Job/Requirement ids for its own `job.*`/`requirement.*` Events,
+ *  rather than inventing a disjoint id space (spec Task 12 fix round 1). */
 export interface WebQueueFixture {
   entries: QueueEntry[];
   jobs: Job[];
@@ -73,6 +81,19 @@ export const WEB_QUEUE_REQUIREMENT_DEFERRED = "rqr-web-deferred";
  *  "one Spool with `reconciliation = true`"), so the two fixtures tell one
  *  consistent story. */
 export const WEB_QUEUE_DEFERRED_SPOOL_ID = "spl-web-9";
+export const WEB_QUEUE_ENTRY_HOST_CANCELLED = "qen-web-host-cancelled";
+/** A Job cancelled from the printer's own screen, not by farm3d (spec P8
+ *  `job.hostCancelled`; `attention/web-fixtures.ts` sources this id
+ *  rather than inventing one). */
+export const WEB_QUEUE_JOB_HOST_CANCELLED = "job-web-host-cancelled";
+export const WEB_QUEUE_ENTRY_OUTCOME_UNKNOWN = "qen-web-outcome-unknown";
+/** A Job whose outcome the tracker couldn't determine (spec P8
+ *  `requirement.jobOutcomeUnknown`). */
+export const WEB_QUEUE_JOB_OUTCOME_UNKNOWN = "job-web-outcome-unknown";
+export const WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN = "rqr-web-outcome-unknown";
+export const WEB_QUEUE_ENTRY_COMPLETED = "qen-web-completed";
+/** A normally completed Job (spec P8 `job.completed`). */
+export const WEB_QUEUE_JOB_COMPLETED = "job-web-completed";
 
 const CENTAURI_CARBON_PROFILE = {
   bedShape: { kind: "rectangular" as const, widthMm: 256, depthMm: 256, originXMm: 0, originYMm: 0 },
@@ -82,14 +103,22 @@ const CENTAURI_CARBON_PROFILE = {
   suggestedHostType: "moonraker",
 };
 
-function failedPrinterSnapshot(): PrinterSnapshot {
+/** Exported so `attention/web-fixtures.ts` can build a Printer snapshot
+ *  that agrees with this fixture's own, rather than hand-rolling a second,
+ *  possibly-drifting copy (spec Task 12 fix round 1: cross-link, don't
+ *  duplicate). */
+export function centauriCarbonSnapshot(name: string, location: string): PrinterSnapshot {
   return {
-    name: "Failed — Bay 8",
-    location: "Bay 8",
+    name,
+    location,
     catalogRef: { vendor: "Elegoo", model: "Elegoo Centauri Carbon", variant: "Elegoo Centauri Carbon 0.4 nozzle", modelId: "Elegoo-CC", printerVariant: "0.4" },
     adapterKind: "moonraker",
     profile: CENTAURI_CARBON_PROFILE,
   };
+}
+
+export function failedPrinterSnapshot(): PrinterSnapshot {
+  return centauriCarbonSnapshot("Failed — Bay 8", "Bay 8");
 }
 
 function readyMultiPrinterSnapshot(): PrinterSnapshot {
@@ -399,6 +428,224 @@ function deferredRequirement(): ReconciliationRequirement {
   };
 }
 
+/** A Job cancelled from the printer's own screen (spec P8
+ *  `job.hostCancelled`): closed, no Requirement, no material to settle. */
+function hostCancelledEntry(): QueueEntry {
+  return {
+    id: WEB_QUEUE_ENTRY_HOST_CANCELLED,
+    revision: 3,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    lineageId: "qln-web-host-cancelled",
+    copyIndex: 1,
+    copyCount: 1,
+    originEntryId: null,
+    originKind: null,
+    state: "closed",
+    closeReason: "cancelled",
+    position: null,
+    policy: "manual",
+    preference: "loadedFirst",
+    estimate: { amountMg: 18_000, source: "sliceEstimate" },
+    manualPrinterId: WEB_HOST_OPS_PRINTER_READY_SINGLE,
+    jobId: WEB_QUEUE_JOB_HOST_CANCELLED,
+    requiresManualPrinterSelection: false,
+    allowedActions: [],
+    display: {
+      modelId: "mdl-web-cube-gcode", modelName: "Calibration cube (sliced)", plateLabel: null,
+      targetLabel: "Elegoo Centauri Carbon 0.4 nozzle", materialFamily: null, materialOther: null, printSeconds: 900,
+    },
+    createdAt: "2026-09-22T08:00:00Z",
+    updatedAt: "2026-09-22T08:20:00Z",
+    closedAt: "2026-09-22T08:20:00Z",
+  };
+}
+
+function hostCancelledJob(): Job {
+  return {
+    id: WEB_QUEUE_JOB_HOST_CANCELLED,
+    revision: 3,
+    queueEntryId: WEB_QUEUE_ENTRY_HOST_CANCELLED,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    printerId: WEB_HOST_OPS_PRINTER_READY_SINGLE,
+    printerSnapshot: centauriCarbonSnapshot("Moonraker — Bay 4", "Bay 4"),
+    spoolId: "spl-web-7",
+    reservationId: "rsv-web-host-cancelled",
+    estimateMg: 18_000,
+    state: "cancelled",
+    cancelReason: "hostCancelled",
+    settlement: "notRequired",
+    settlementMethod: null,
+    settlementPreview: null,
+    corrected: false,
+    assignedBy: "operator",
+    startConfirmation: "bedClear",
+    uploadHostOperationId: null,
+    activeHostOperationId: null,
+    hostPath: "farm3d/calibration-cube.gcode",
+    maxProgressPct: 15,
+    hostUnreachableSince: null,
+    lastFailure: null,
+    startBlockers: [],
+    allowedActions: [],
+    createdAt: "2026-09-22T08:00:00Z",
+    updatedAt: "2026-09-22T08:20:00Z",
+    startedAt: "2026-09-22T08:05:00Z",
+    endedAt: "2026-09-22T08:20:00Z",
+  };
+}
+
+/** A Job whose outcome the tracker couldn't determine (spec P8
+ *  `requirement.jobOutcomeUnknown`): still open (`outcomeUnknown` is not
+ *  terminal, D3), its own `jobOutcomeUnknown` Requirement pending the
+ *  operator's `declareOutcome`. Reuses the host-ops fixture's own
+ *  uncertain-upload Host Operation, so the two fixtures tell one story. */
+function outcomeUnknownEntry(): QueueEntry {
+  return {
+    id: WEB_QUEUE_ENTRY_OUTCOME_UNKNOWN,
+    revision: 3,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    lineageId: "qln-web-outcome-unknown",
+    copyIndex: 1,
+    copyCount: 1,
+    originEntryId: null,
+    originKind: null,
+    state: "assigned",
+    closeReason: null,
+    position: 7,
+    policy: "manual",
+    preference: "loadedFirst",
+    estimate: { amountMg: 22_000, source: "sliceEstimate" },
+    manualPrinterId: null,
+    jobId: WEB_QUEUE_JOB_OUTCOME_UNKNOWN,
+    requiresManualPrinterSelection: false,
+    // D2: an `assigned` entry can only move.
+    allowedActions: ["move"],
+    display: {
+      modelId: "mdl-web-mystery", modelName: "Mystery part", plateLabel: null,
+      targetLabel: "Elegoo Centauri Carbon 0.4 nozzle", materialFamily: "PETG", materialOther: null, printSeconds: 4_100,
+    },
+    createdAt: "2026-09-25T07:00:00Z",
+    updatedAt: "2026-09-25T07:40:00Z",
+    closedAt: null,
+  };
+}
+
+function outcomeUnknownJob(): Job {
+  return {
+    id: WEB_QUEUE_JOB_OUTCOME_UNKNOWN,
+    revision: 3,
+    queueEntryId: WEB_QUEUE_ENTRY_OUTCOME_UNKNOWN,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    printerId: WEB_HOST_OPS_PRINTER_UNCERTAIN_UPLOAD,
+    printerSnapshot: centauriCarbonSnapshot("Uncertain upload — Bay 9", "Bay 9"),
+    spoolId: "spl-web-8",
+    reservationId: "rsv-web-outcome-unknown",
+    estimateMg: 22_000,
+    state: "outcomeUnknown",
+    cancelReason: null,
+    settlement: "pending",
+    settlementMethod: null,
+    settlementPreview: null,
+    corrected: false,
+    assignedBy: "operator",
+    startConfirmation: "bedClear",
+    uploadHostOperationId: WEB_HOST_OPS_UNCERTAIN_OPERATION,
+    activeHostOperationId: WEB_HOST_OPS_UNCERTAIN_OPERATION,
+    hostPath: "farm3d/mystery-part.gcode",
+    maxProgressPct: 0,
+    hostUnreachableSince: null,
+    lastFailure: null,
+    startBlockers: [],
+    allowedActions: ["declareOutcome"],
+    createdAt: "2026-09-25T07:00:00Z",
+    updatedAt: "2026-09-25T07:40:00Z",
+    startedAt: "2026-09-25T07:35:00Z",
+    endedAt: null,
+  };
+}
+
+function outcomeUnknownRequirement(): ReconciliationRequirement {
+  return {
+    id: WEB_QUEUE_REQUIREMENT_OUTCOME_UNKNOWN,
+    jobId: WEB_QUEUE_JOB_OUTCOME_UNKNOWN,
+    kind: "jobOutcomeUnknown",
+    status: "pending",
+    spoolId: null,
+    reservationId: null,
+    openedAt: "2026-09-25T07:40:00Z",
+    deferredAt: null,
+    resolvedAt: null,
+    resolution: null,
+  };
+}
+
+/** A normally completed Job on the Finished Printer, before the
+ *  currently-staged `awaitingStartJob` was assigned there (spec P8
+ *  `job.completed`). Shares that Job's Spool (still loaded). */
+function completedEntry(): QueueEntry {
+  return {
+    id: WEB_QUEUE_ENTRY_COMPLETED,
+    revision: 3,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    lineageId: "qln-web-completed",
+    copyIndex: 1,
+    copyCount: 1,
+    originEntryId: null,
+    originKind: null,
+    state: "closed",
+    closeReason: "completed",
+    position: null,
+    policy: "manual",
+    preference: "loadedFirst",
+    estimate: { amountMg: 30_000, source: "sliceEstimate" },
+    manualPrinterId: WEB_HOST_OPS_PRINTER_FINISHED,
+    jobId: WEB_QUEUE_JOB_COMPLETED,
+    requiresManualPrinterSelection: false,
+    allowedActions: [],
+    display: {
+      modelId: "mdl-web-lid-mount", modelName: "Lid mount", plateLabel: null,
+      targetLabel: "Elegoo Centauri Carbon 0.4 nozzle", materialFamily: "PLA", materialOther: null, printSeconds: 5_000,
+    },
+    createdAt: "2026-09-20T08:00:00Z",
+    updatedAt: "2026-09-20T09:30:00Z",
+    closedAt: "2026-09-20T09:30:00Z",
+  };
+}
+
+function completedJob(): Job {
+  return {
+    id: WEB_QUEUE_JOB_COMPLETED,
+    revision: 3,
+    queueEntryId: WEB_QUEUE_ENTRY_COMPLETED,
+    sliceRevisionId: WEB_SLICING_REVISION_FARM3D,
+    printerId: WEB_HOST_OPS_PRINTER_FINISHED,
+    printerSnapshot: finishedPrinterSnapshot(),
+    spoolId: WEB_QUEUE_AWAITING_START_SPOOL_ID,
+    reservationId: "rsv-web-completed",
+    estimateMg: 30_000,
+    state: "completed",
+    cancelReason: null,
+    settlement: "settled",
+    settlementMethod: "measured",
+    settlementPreview: null,
+    corrected: false,
+    assignedBy: "operator",
+    startConfirmation: "bedClear",
+    uploadHostOperationId: null,
+    activeHostOperationId: null,
+    hostPath: "farm3d/lid-mount.gcode",
+    maxProgressPct: 100,
+    hostUnreachableSince: null,
+    lastFailure: null,
+    startBlockers: [],
+    allowedActions: [],
+    createdAt: "2026-09-20T08:00:00Z",
+    updatedAt: "2026-09-20T09:30:00Z",
+    startedAt: "2026-09-20T08:05:00Z",
+    endedAt: "2026-09-20T09:29:00Z",
+  };
+}
+
 function bracketEligibility(entryId: string): EligibilitySummary {
   return {
     entryId,
@@ -431,10 +678,13 @@ function blockedEligibility(): EligibilitySummary {
  *  literals (mirrors `host-ops/web-fixtures.ts`). */
 export function buildWebQueueFixture(): WebQueueFixture {
   const entries: QueueEntry[] = [
-    ...linkedCopies(), blockedEntry(), printingEntry(), awaitingStartEntry(), historyDeferredEntry(),
+    ...linkedCopies(), blockedEntry(), printingEntry(), awaitingStartEntry(), outcomeUnknownEntry(),
+    historyDeferredEntry(), hostCancelledEntry(), completedEntry(),
   ];
-  const jobs: Job[] = [printingJob(), awaitingStartJob(), deferredJob()];
-  const requirements: ReconciliationRequirement[] = [deferredRequirement()];
+  const jobs: Job[] = [
+    printingJob(), awaitingStartJob(), outcomeUnknownJob(), deferredJob(), hostCancelledJob(), completedJob(),
+  ];
+  const requirements: ReconciliationRequirement[] = [deferredRequirement(), outcomeUnknownRequirement()];
   const eligibility: EligibilitySummary[] = [
     ...WEB_QUEUE_ENTRY_BRACKET_IDS.map(bracketEligibility),
     blockedEligibility(),

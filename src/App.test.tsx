@@ -457,6 +457,29 @@ describe("App", () => {
     expect(screen.getByText("Monitor")).toBeInTheDocument();
   });
 
+  it("is available for a closed Incident referenced only by a resolved Event's incidentId (Controller ruling, fix round 1)", async () => {
+    window.location.hash = "#nav=v1/monitor/incident/inc-closed";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    // The Incident itself never appears in `openIncidents()` (it's
+    // closed), but a resolved Event still names it: D8 keeps a closed
+    // Incident openable, since an Event's detail links its Incident even
+    // after it closes.
+    attentionMock.setAttentionStoreState({
+      events: [attentionEvent({
+        id: "atn-resolved", incidentId: "inc-closed",
+        resolvedAt: "2026-09-25T00:00:00Z", resolution: "operatorResolved",
+      })],
+      incidents: [],
+    });
+    const { App, navigation } = await importAppAndNavigation();
+
+    render(() => <App />);
+
+    await waitFor(() => expect(navigation.availability()).toBe("available"));
+    expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+  });
+
   it("routes a farm3d-navigate-v1 payload through navigate, changing the hash", async () => {
     const { default: App } = await import("./App");
 
@@ -643,8 +666,10 @@ describe("App", () => {
     render(() => <App />);
     expect(await screen.findByText("Queue screen")).toBeInTheDocument();
     expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
-    // Three awaiting operator, one blocked, and one deferred requirement.
-    expect(screen.getByRole("status", { name: "Queue attention" })).toHaveTextContent("5");
+    // Three awaiting operator, one blocked, one deferred materialReconciliation
+    // Requirement, and one pending jobOutcomeUnknown Requirement (P8 fix
+    // round 1's web-fixture cross-linking added the latter).
+    expect(screen.getByRole("status", { name: "Queue attention" })).toHaveTextContent("6");
     expect(screen.getByRole("status", { name: "Active Jobs" })).toHaveTextContent("job-web-printing:Printing");
   });
 
