@@ -294,7 +294,9 @@ A durable record, with a stable id, of something about a Job the operator
 must settle: its material after it failed or was cancelled, or its
 outcome when farm3d couldn't prove it. It stays until it is resolved.
 Deferring keeps it open.
-_Avoid_: Alert, notification, Attention Event (P8 shows these as one)
+_Avoid_: Alert, notification, Attention Event (P8 projects each open one
+into an Attention Event; the requirement stays the durable record, and
+resolving it resolves that Event)
 
 **Awaiting material**:
 A Job that is staged and waiting to start, but whose Spool isn't loaded
@@ -335,11 +337,59 @@ there is no automatic AMS topology.
 _Avoid_: Bay, feeder (unless naming the hardware)
 
 **Incident**:
-A notable operational occurrence tied to a Printer or Job, preserving what
-happened and any available evidence or operator action.
+The record of one failure on one Printer, optionally tied to one Job (a
+failed or host-cancelled Job, a Job whose outcome is unknown, or a
+printer-reported failure with no farm3d Job). It keeps a copy of the
+Printer's identity, an append-only timeline, notes, and camera evidence.
+It is `open` until every actionable Attention Event linked to it
+resolves, then `closed`. A Job has at most one Incident. A Printer with
+Incident history can be archived but not deleted.
 _Avoid_: Notification, log entry
 
+**Condition**:
+A current fact that needs the operator's attention, such as a Printer
+being offline, a Job waiting for its start confirmation, or a Spool
+running low. farm3d computes Conditions from normalized state each time;
+it never stores one. Each has a stable dedup key made of its kind and its
+source, so the same fact always maps to the same open Attention Event
+(ADR-0014). A fact farm3d can't observe yet (a Printer's status right
+after startup) is unknown, and unknown never opens or resolves anything.
+_Avoid_: Alert, event, trigger
+
 **Attention Event**:
-An operator-facing signal about a current or historical condition. Reading,
-acknowledging, and resolving an Attention Event are distinct states.
-_Avoid_: Toast, notification
+The durable record of one occurrence of a Condition, with a severity
+(fatal, warning, or info), a source, and whether it needs action. Its
+three dimensions are separate: unread or read, unacknowledged or
+acknowledged, open or resolved. Acknowledging or resolving also marks it
+read, and resolved is final. An acknowledged Event stays open and
+actionable until it resolves. It resolves when its Condition clears, when
+its action completes, or, for a failed or host-cancelled Job, when the
+operator resolves it. While open, repeated observations amend it rather
+than add Events. If the Condition returns after resolution, a new Event
+is created and linked to the previous one (a recurrence).
+_Avoid_: Toast, notification, alert
+
+**Snapshot**:
+One camera frame farm3d captured and stored: when an Incident opened,
+when a Job completed, or by hand. It may be pinned, which keeps it from
+automatic pruning. Pruning removes its image but keeps its record, so the
+textual history stays. Live preview frames and Setup test frames are
+never Snapshots.
+_Avoid_: Photo, frame (for a stored capture); Printer snapshot (a Job's or
+Incident's copy of a Printer's identity)
+
+**Camera Source**:
+A Printer's optional camera configuration: a webcam its Moonraker host
+reports, chosen by name, or a manual plain-HTTP snapshot URL. farm3d
+fetches every frame itself, and never stores a host webcam's URL. A
+missing or failing camera never blocks monitoring, slicing, assignment,
+or Job control. Its preview health is runtime state, not part of the
+Camera Source.
+_Avoid_: Camera stream, webcam config
+
+**Alert defaults**:
+A Printer's own attention settings: how long it must be unreachable
+before it counts as offline (off, 1, 5, or 15 minutes), whether its
+notifications follow the global classes or are muted, and whether farm3d
+captures a Snapshot when an Incident opens or a Job completes.
+_Avoid_: Notification settings (those are the global classes)
