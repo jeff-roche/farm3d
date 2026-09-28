@@ -210,12 +210,21 @@ fn attention_epoch(conn: &Connection) -> Result<DateTime<Utc>, RepositoryError> 
         )
         .optional()
         .map_err(storage_error)?;
-    text.as_deref().and_then(parse_time).ok_or(RepositoryError::Storage(
+    text.as_deref().and_then(epoch_from_applied_at).ok_or(RepositoryError::Storage(
         StorageError::CorruptData {
             source_name: "database",
             source_sha256: None,
         },
     ))
+}
+
+/// The epoch instant from migration 0009's `applied_at`, truncated to the
+/// whole second: Job timestamps (`ended_at`) have whole-second precision,
+/// so a Job that ended in the migration's own second would otherwise
+/// compare as before the epoch and never raise its Condition.
+fn epoch_from_applied_at(text: &str) -> Option<DateTime<Utc>> {
+    use chrono::SubsecRound;
+    parse_time(text).map(|at| at.trunc_subsecs(0))
 }
 
 /// Setup incomplete without a catalog (the backfill): only a missing or
@@ -822,4 +831,19 @@ pub fn apply(
         capture,
         notify,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Job's `ended_at` has whole-second precision; the migration's
+    /// `applied_at` has milliseconds. A Job that ended in the migration's
+    /// own second must still count as after the epoch.
+    #[test]
+    fn a_job_ended_in_the_migrations_second_is_after_the_epoch() {
+        let epoch = epoch_from_applied_at("2026-09-28T06:48:56.458Z").unwrap();
+        assert!(parse_time("2026-09-28T06:48:56Z").unwrap() >= epoch);
+        assert!(parse_time("2026-09-28T06:48:55Z").unwrap() < epoch);
+    }
 }
