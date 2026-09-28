@@ -330,7 +330,11 @@ incomplete.
   UI after the Job completed: no Job Event would ever carry that
   failure). While covered, `job.failed` (once the tracker proves it) or
   `requirement.jobOutcomeUnknown` carries the failure, so
-  `printer.hostFailed` raises no Event **and** no Incident. This is a
+  `printer.hostFailed` raises no Event **and** no Incident. Coverage
+  ignores the attention epoch: a tracker failure that ended before the
+  epoch still covers, because the epoch deliberately silences that
+  pre-P8 failure (Monitor still shows the Printer `failed` through P1,
+  and its Reconciliation Requirement still projects). This is a
   deliberate refinement of planner default 4 ("Decisions made in this
   spec" 7 and 34).
 - **Ended by** (`JobFacts.ended_by`) comes from the Job's terminal
@@ -1196,12 +1200,12 @@ Notes that bind the fixtures:
 | s5 | `prn-1` Setup incomplete | `O` for `printer.connectionError` | Resolve `conditionCleared` |
 | s6 | `offlineAfterMinutes: null` (off), `prn-1` `offline`, `unreachable_since` 11:00:00 | `O` / `N` | Resolve `conditionCleared` / — |
 | s7 | `job-1` `printing` (started); `prn-1` `failed`, reported file `cube.gcode` | `N` / `O` for `printer.hostFailed` | — / Resolve `conditionCleared` (covered) |
-| s8 | `job-1` `failed` by `failed`; `prn-1` `failed`, reported file `cube.gcode` | `N` for `printer.hostFailed` | — (covered by `job-1`); `job.failed` Insert |
+| s8 | `job-1` `failed`, ended by the tracker (terminal event `failed`); `prn-1` `failed`, reported file `cube.gcode` | `N` for `printer.hostFailed` | — (covered by `job-1`); `job.failed` Insert |
 | s9 | `rrq-1` material `deferred` | `N` | Insert with `acknowledged: true` |
 | s10 | `rrq-1` material `deferred` | `O` (unacknowledged, detail `pending`) | Amend `changed: true`, then Acknowledge |
 | s11 | `rrq-1` material `deferred` | `O` (acknowledged, detail `deferred`) | Amend= |
 | s12 | `spl-1` `currentMg: 80000` | `O` with detail `currentMg: 90000` | Amend `changed: true` |
-| s13 | `job-1` `failed` by `failed`, `ended_at` 09:00:00 (before EPOCH) | `N` | — |
+| s13 | `job-1` `failed`, ended by the tracker (terminal event `failed`), `ended_at` 09:00:00 (before EPOCH) | `N` | — |
 | s14 | `job-1` `awaitingStart`; `prn-1` `startSafety: unattended`, no `lastFailure` | `N` / `O` | — / Resolve `actionCompleted` |
 | s15 | as s14, with `lastFailure` set | `N` | Insert |
 | s16 | `job-1` `awaitingStart`; `spl-1` in storage | `N` / `O` (detail `awaitingMaterial: false`) | Insert (`awaitingMaterial: true`) / Amend `changed: true` |
@@ -2124,7 +2128,10 @@ Each departs from, or sharpens, the plan's Design reference.
     `job.failed` is the carrier). A latest Job that ended `completed`,
     `cancelled`, or by a declaration never covers one, so a failed
     reprint of the same file from the host's own UI raises
-    `printer.hostFailed` and its Incident instead of nothing.
+    `printer.hostFailed` and its Incident instead of nothing. Coverage
+    ignores the attention epoch: a pre-epoch tracker failure still
+    covers, since the epoch deliberately silences it (P1 still shows the
+    Printer `failed`, and its requirement still projects).
 
 ## Residual risks
 

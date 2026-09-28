@@ -520,7 +520,9 @@ impl<'a> Context<'a> {
     /// or the tracker ended it `failed` (its `job.failed` is the carrier).
     /// An assigned or staged Job, and one that ended completed, cancelled,
     /// or by a declaration, never covers a failure: nothing else would
-    /// ever raise it (controller ruling, Task 4 review).
+    /// ever raise it (controller ruling, Task 4 review). Coverage ignores
+    /// the attention epoch: a pre-epoch tracker failure still covers, as
+    /// the epoch deliberately silences it.
     fn covered_by_a_job(&self, printer: &PrinterFacts, status: &StatusFacts) -> bool {
         let (Some(file), Some(latest)) = (&status.reported_file, &printer.latest_job) else {
             return false;

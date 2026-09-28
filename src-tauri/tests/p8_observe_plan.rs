@@ -2057,6 +2057,43 @@ fn fixture_x14_a_declared_failed_latest_job_does_not_cover_a_host_failure() {
     );
 }
 
+/// Controller ruling (Task 4 review, round 2): coverage ignores the
+/// attention epoch. A tracker failure that ended before the epoch raises
+/// no `job.failed`, but still covers a host failure on its file: the
+/// epoch deliberately silences that pre-P8 failure (P1 still shows the
+/// Printer failed, and its requirement still projects).
+fn x15_world() -> FarmView {
+    let mut v = s8().view;
+    job(&mut v).ended_at = Some(t("09:00:00"));
+    v
+}
+
+#[test]
+fn fixture_x15_a_pre_epoch_tracker_failure_still_covers_a_host_failure() {
+    let v = x15_world();
+    assert_actions(
+        "x15-n",
+        &v,
+        &prior(K::PrinterHostFailed, Prior::N),
+        K::PrinterHostFailed,
+        vec![],
+    );
+    assert_actions(
+        "x15-o",
+        &v,
+        &prior(K::PrinterHostFailed, Prior::O),
+        K::PrinterHostFailed,
+        vec![resolve(ConditionCleared)],
+    );
+    assert_actions(
+        "x15-job-failed",
+        &v,
+        &Store::default(),
+        K::JobFailed,
+        vec![],
+    );
+}
+
 // ---------------------------------------------------------------------
 // The Insert's subject and ids
 // ---------------------------------------------------------------------
@@ -2164,11 +2201,12 @@ fn plan_is_a_fixed_point_for_every_fixture() {
         assert_fixed_point(c.id, &c.view, c.store);
         count += 1;
     }
-    let coverage: [(&str, fn() -> FarmView); 4] = [
+    let coverage: [(&str, fn() -> FarmView); 5] = [
         ("x12-completed", x12_completed),
         ("x12-cancelled", x12_cancelled),
         ("x13", || s8().view),
         ("x14", x14_world),
+        ("x15", x15_world),
     ];
     for (id, world_of) in coverage {
         for which in [Prior::N, Prior::O] {
@@ -2176,7 +2214,7 @@ fn plan_is_a_fixed_point_for_every_fixture() {
             count += 1;
         }
     }
-    assert_eq!(count, 90 + 34 + 8);
+    assert_eq!(count, 90 + 34 + 10);
 }
 
 // ---------------------------------------------------------------------
