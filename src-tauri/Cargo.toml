@@ -113,12 +113,12 @@ rustix = { version = "1", features = ["fs", "process"] }
 # same default features (the runtime-agnostic `async-io` backend, which
 # runs fine alongside Tauri's tokio runtime). Enabling `tokio` here would
 # switch keyring's zbus backend too, so don't.
+#
+# `notifications::activation` (and `examples/notify_spike.rs`) apply a
+# Wayland activation token with `gtk::Window::set_startup_id`: the same gtk
+# 0.18 the Tauri runtime already links.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "~5.19"
-
-# `examples/notify_spike.rs` applies a Wayland activation token with
-# `gtk::Window::set_startup_id`. Same gtk the Tauri runtime uses.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
 gtk = "0.18"
 
 [dev-dependencies]

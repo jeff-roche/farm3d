@@ -816,10 +816,10 @@ pub fn apply(
             }
         }
         for applied in &events {
-            if let EventChange::Inserted { recurred } = applied.change {
+            if let EventChange::Inserted { .. } = applied.change {
                 notify.push(NotifyCandidate {
                     event: applied.event.clone(),
-                    recurred,
+                    change: applied.change,
                 });
             }
         }

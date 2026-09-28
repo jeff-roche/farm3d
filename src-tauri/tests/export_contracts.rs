@@ -91,7 +91,10 @@ use farm3d_lib::library::{
     ModelSourceRevisionRecord, ModelSourceRevisionSummary, ProjectRecord, RevisionOrigin,
     SourceState, StorageMode, WatchMode,
 };
-use farm3d_lib::notifications::{NavigateRequest, NotifierStatus, NotifierUnavailableReason};
+use farm3d_lib::notifications::commands::TestNotificationSent;
+use farm3d_lib::notifications::{
+    NavigateRequest, NotificationClassSettings, NotifierStatus, NotifierUnavailableReason,
+};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -111,7 +114,7 @@ use farm3d_lib::printers::operational::{
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
-use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode};
+use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
@@ -663,6 +666,10 @@ fn export_registry() -> Vec<Export> {
         export::<NavigateRequest>(),
         export::<NotificationMode>(),
         export::<AlertDefaults>(),
+        export::<PrinterAlertDefaults>(),
+        export::<NotificationClassSettings>(),
+        export::<farm3d_lib::settings::commands::SnapshotRetention>(),
+        export::<TestNotificationSent>(),
         export::<AttentionStreamEventType>(),
         export::<AttentionStreamPayload>(),
         export::<AttentionStreamEvent>(),
@@ -924,6 +931,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::CameraHostMismatch,
         ErrorCode::EvidencePruned,
         ErrorCode::SnapshotDiskCap,
+        ErrorCode::NotificationsUnavailable,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -968,7 +976,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "ASSIGNMENT_BLOCKED", "JOB_START_BLOCKED", "JOB_NOT_ON_PRINTER",
                 "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
-                "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP"
+                "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
+                "NOTIFICATIONS_UNAVAILABLE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

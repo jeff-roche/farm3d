@@ -17,6 +17,17 @@ const DEFAULT_SETTINGS: Settings = {
   themeMode: "system",
   monitorSection: "printerModel",
   monitorDensity: "comfortable",
+  // Rust's defaults (P8 decisions 7 and 11); the desktop always loads the
+  // stored values.
+  notifications: {
+    fatal: true,
+    confirmation: true,
+    completion: true,
+    reconciliation: false,
+    connectivity: false,
+    inventory: false,
+  },
+  snapshotRetention: { retentionDays: 30, diskCapMb: 2048 },
   updatedAt: "",
 };
 

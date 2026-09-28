@@ -178,6 +178,10 @@ type CommandMap = {
   list_snapshots: [Contracts.ListSnapshotsRequest, Contracts.ListSnapshotsResult];
   set_snapshot_pinned: [Contracts.SetSnapshotPinnedRequest, Contracts.SetSnapshotPinnedResult];
   media_usage: [Contracts.MediaUsageRequest, Contracts.MediaUsageResult];
+  get_printer_alert_defaults: [Contracts.GetPrinterAlertDefaultsRequest, Contracts.GetPrinterAlertDefaultsResult];
+  set_printer_alert_defaults: [Contracts.SetPrinterAlertDefaultsRequest, Contracts.SetPrinterAlertDefaultsResult];
+  notification_status: [Contracts.NotificationStatusRequest, Contracts.NotificationStatusResult];
+  send_test_notification: [Contracts.SendTestNotificationRequest, Contracts.SendTestNotificationResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

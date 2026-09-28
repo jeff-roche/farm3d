@@ -300,8 +300,8 @@ fn every_registered_command_has_generated_request_and_result_contracts() {
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
     // P7 Task 6's 11, plus P7 Task 8a's 4, plus P7 Task 8b's 1, plus P7 Task 9's 2,
-    // plus P8 Task 6's 7, P8 Task 7's 6, and P8 Task 8's 5.
-    assert_eq!(manifest.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5);
+    // plus P8 Task 6's 7, P8 Task 7's 6, P8 Task 8's 5, and P8 Task 9's 4.
+    assert_eq!(manifest.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4);
     assert_eq!(
         manifest
             .iter()

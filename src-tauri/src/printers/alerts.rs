@@ -2,7 +2,8 @@
 //! `printers/alerts.rs`). This file holds the value types the Attention
 //! observer reads (`AlertDefaults`, `OfflineAlertMinutes`,
 //! `NotificationMode`), the `printer_alert_defaults` repository ([`get`],
-//! [`set`]); the `get`/`set` commands land beside them in a later task.
+//! [`set`]), and the `get_printer_alert_defaults` /
+//! `set_printer_alert_defaults` commands.
 //!
 //! [`get`] returns the schema's own defaults (`5`, `follow`, both
 //! captures on) when a Printer has no row — D9 "Notes": "No
@@ -16,8 +17,12 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
 
+use crate::bootstrap::BootstrapState;
+use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
 use crate::persistence::{RepositoryError, StorageError};
+use crate::spools::operations::{self, Claim, OperationKind};
 use crate::spools::{decode_enum, encode_enum};
+use crate::RuntimeServices;
 
 /// The offline grace a Printer's `printer.offline` Condition waits for:
 /// 1, 5, or 15 minutes (`printer_alert_defaults.offline_after_minutes`'s
@@ -207,6 +212,101 @@ pub fn set(
         ],
     )?;
     Ok(get(tx, printer_id)?)
+}
+
+fn printer_exists(conn: &Connection, printer_id: &str) -> Result<bool, StorageError> {
+    Ok(conn
+        .query_row("SELECT 1 FROM printers WHERE id = ?1", [printer_id], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
+
+/// `get_printer_alert_defaults`: the Printer's alert defaults, or
+/// decision 12's defaults (`revision: null`) when it has none. Archived
+/// Printers are allowed; a missing one is `NOT_FOUND`.
+#[tauri::command]
+pub async fn get_printer_alert_defaults<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    printer_id: String,
+) -> Result<CommandSuccess<PrinterAlertDefaults>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let found = services
+        .storage
+        .read(|connection| {
+            Ok((|| -> Result<_, StorageError> {
+                if !printer_exists(connection, &printer_id)? {
+                    return Ok(None);
+                }
+                Ok(Some(get(connection, &printer_id)?))
+            })())
+        })
+        .and_then(|found| found)
+        .map_err(|error| CommandError::from_repository(RepositoryError::Storage(error)))?;
+    found
+        .map(CommandSuccess::new)
+        .ok_or_else(|| CommandError::not_found(printer_id))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetDigest<'a> {
+    printer_id: &'a str,
+    alert_defaults: &'a AlertDefaults,
+}
+
+/// `set_printer_alert_defaults`: last writer wins (no
+/// `expectedRevision`); the `operationId` makes a retry safe. The same
+/// values again are a no-op. After a change it pokes the Attention
+/// projector, so a new offline grace takes effect at once.
+#[tauri::command]
+pub async fn set_printer_alert_defaults<R: tauri::Runtime>(
+    _app: tauri::AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    printer_id: String,
+    alert_defaults: AlertDefaults,
+) -> Result<CommandSuccess<PrinterAlertDefaults>, CommandError> {
+    contract_version.validate()?;
+    let services = bootstrap.ready()?;
+    let digest = operations::digest(&SetDigest {
+        printer_id: &printer_id,
+        alert_defaults: &alert_defaults,
+    });
+    let now = crate::printers::now_rfc3339();
+    let (defaults, changed) = services
+        .storage
+        .write_repo(|tx| {
+            if operations::claim(
+                tx,
+                &operation_id,
+                OperationKind::SetPrinterAlertDefaults,
+                &digest,
+            )? == Claim::Replay
+            {
+                return Ok((get(tx, &printer_id)?, false));
+            }
+            if !printer_exists(tx, &printer_id)? {
+                return Err(RepositoryError::NotFound {
+                    entity_id: printer_id.clone(),
+                });
+            }
+            let current = get(tx, &printer_id)?;
+            if current.revision.is_some() && current.alert_defaults == alert_defaults {
+                return Ok((current, false));
+            }
+            Ok((set(tx, &printer_id, &alert_defaults, &now)?, true))
+        })
+        .map_err(CommandError::from_repository)?;
+    if changed {
+        services.attention.poke();
+    }
+    Ok(CommandSuccess::new(defaults))
 }
 
 #[cfg(test)]

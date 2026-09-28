@@ -24,13 +24,22 @@ describe("settings-store", () => {
     });
 
     it("loads settings via the load_settings command and caches them", async () => {
-      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "farm3d-dark", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "now" } });
+      const record = {
+        revision: 1,
+        themeMode: "farm3d-dark",
+        monitorSection: "printerModel",
+        monitorDensity: "comfortable",
+        notifications: { fatal: true, confirmation: false, completion: true, reconciliation: false, connectivity: true, inventory: false },
+        snapshotRetention: { retentionDays: 7, diskCapMb: 512 },
+        updatedAt: "now",
+      };
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: record });
       const { loadSettings, getSettings } = await import("./settings-store");
 
       const settings = await loadSettings();
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("load_settings", { contractVersion: 1 });
-      expect(settings).toEqual({ revision: 1, themeMode: "farm3d-dark", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "now" });
+      expect(settings).toEqual(record);
       expect(getSettings()).toEqual(settings);
     });
 

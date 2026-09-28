@@ -204,8 +204,8 @@ impl<R: tauri::Runtime> CameraServices<R> {
 
     /// D5: the lock every capture and prune takes, and the janitor's poke.
     /// Contract: a command that changes the retention settings must call
-    /// [`MediaJanitor::poke`] after its commit (P8 Task 9 wires
-    /// `save_settings` and `import_settings`; neither does yet).
+    /// [`MediaJanitor::poke`] after its commit (`save_settings` and
+    /// `import_settings` do).
     pub fn janitor(&self) -> &MediaJanitor {
         &self.janitor
     }

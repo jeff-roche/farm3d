@@ -97,6 +97,7 @@ pub struct AttentionServices<R: tauri::Runtime> {
     held: watch::Sender<bool>,
     stop: watch::Sender<bool>,
     passes: AtomicU64,
+    pokes: AtomicU64,
     lagged: AtomicU64,
     /// Committed changes handed to `subscribe_applied` so far.
     applied_sent: AtomicU64,
@@ -133,6 +134,7 @@ impl<R: tauri::Runtime> AttentionServices<R> {
             held: watch::channel(false).0,
             stop: watch::channel(false).0,
             passes: AtomicU64::new(0),
+            pokes: AtomicU64::new(0),
             lagged: AtomicU64::new(0),
             applied_sent: AtomicU64::new(0),
             tasks: Arc::default(),
@@ -154,7 +156,13 @@ impl<R: tauri::Runtime> AttentionServices<R> {
     /// unarchive, delete, import, Connection changes, alert defaults).
     /// Pokes coalesce; one before the runtime starts is kept for it.
     pub fn poke(&self) {
+        self.pokes.fetch_add(1, Ordering::SeqCst);
         self.wake.notify_one();
+    }
+
+    /// Test hook: how many times [`poke`](Self::poke) was called.
+    pub fn pokes(&self) -> u64 {
+        self.pokes.load(Ordering::SeqCst)
     }
 
     /// The startup backfill's changes, published once the runtime starts.
@@ -173,6 +181,13 @@ impl<R: tauri::Runtime> AttentionServices<R> {
     /// camera and notification hand-offs subscribe here).
     pub fn subscribe_applied(&self) -> broadcast::Receiver<Arc<AppliedChanges>> {
         self.applied.subscribe()
+    }
+
+    /// Test hook: hands `changes` to the [`subscribe_applied`](Self::subscribe_applied)
+    /// receivers as a committed pass would (and publishes them).
+    #[doc(hidden)]
+    pub fn hand_on_for_test(&self, changes: AppliedChanges) {
+        self.publish(&changes);
     }
 
     /// Test hook: a receiver that gets `()` once the projector task has

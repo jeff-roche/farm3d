@@ -132,6 +132,7 @@ pub struct MediaJanitor {
     lock: Mutex<()>,
     wake: Arc<Notify>,
     passes: AtomicU64,
+    pokes: AtomicU64,
     /// A [`CaptureFault`] the next capture write simulates (test hook).
     fault: AtomicU8,
 }
@@ -142,6 +143,7 @@ impl Default for MediaJanitor {
             lock: Mutex::new(()),
             wake: Arc::new(Notify::new()),
             passes: AtomicU64::new(0),
+            pokes: AtomicU64::new(0),
             fault: AtomicU8::new(0),
         }
     }
@@ -166,11 +168,17 @@ impl MediaJanitor {
     }
 
     /// Asks for a prune pass now. Every command that changes the retention
-    /// settings must call this after its commit (P8 Task 9 wires
-    /// `save_settings` and `import_settings`). Pokes coalesce; one before
-    /// the task starts is kept for it.
+    /// settings calls this after its commit (`save_settings` and
+    /// `import_settings`). Pokes coalesce; one before the task starts is
+    /// kept for it.
     pub fn poke(&self) {
+        self.pokes.fetch_add(1, Ordering::SeqCst);
         self.wake.notify_one();
+    }
+
+    /// Test hook: how many times [`poke`](Self::poke) was called.
+    pub fn pokes(&self) -> u64 {
+        self.pokes.load(Ordering::SeqCst)
     }
 
     pub(crate) fn wake(&self) -> Arc<Notify> {

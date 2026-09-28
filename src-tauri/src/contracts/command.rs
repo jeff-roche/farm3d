@@ -395,6 +395,9 @@ pub enum ErrorCode {
     /// P8 D5: `capture_snapshot` when only pinned snapshots would be left
     /// to prune.
     SnapshotDiskCap,
+    /// P8 D6: `send_test_notification` with an `unavailable` or
+    /// `unsupported` notifier.
+    NotificationsUnavailable,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -866,6 +869,23 @@ impl CommandError {
             ("snapshotId", snapshot_id),
             ("reason", &crate::spools::encode_enum(reason)),
         ])
+    }
+
+    /// P8 `NOTIFICATIONS_UNAVAILABLE`: the notifier can't show anything
+    /// (`status` is `unavailable` or `unsupported`).
+    pub fn notifications_unavailable(status: &crate::notifications::NotifierStatus) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::NotificationsUnavailable,
+            "Desktop notifications aren't available here.",
+            vec![],
+            false,
+        );
+        let status = serde_json::to_value(status)
+            .ok()
+            .and_then(|value| JsonValue::from_serde_value(value).ok())
+            .unwrap_or(JsonValue::Null(()));
+        error.details = Some(BTreeMap::from([("status".to_string(), status)]));
+        error
     }
 
     /// P8 `SNAPSHOT_DISK_CAP`: a manual capture the cap refuses because

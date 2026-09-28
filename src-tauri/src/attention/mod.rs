@@ -9,10 +9,11 @@
 //! planner ([`plan`]), the repository ([`repository`]), the projector and
 //! its startup backfill ([`projector`]), the runtime that wakes it
 //! ([`services`]), the `attention` event stream ([`events`]), and the four
-//! Attention commands ([`commands`]). Deep links are a later task (see the
-//! module layout table in the design spec).
+//! Attention commands ([`commands`]), and decision 8's deep-link targets
+//! ([`deep_link`]).
 
 pub mod commands;
+pub mod deep_link;
 pub mod events;
 pub mod lifecycle;
 pub mod observe;

@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 125] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 129] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -545,9 +545,29 @@ contracts![
         "SetSnapshotPinnedResult"
     ),
     ("media_usage", "MediaUsageRequest", "MediaUsageResult"),
+    (
+        "get_printer_alert_defaults",
+        "GetPrinterAlertDefaultsRequest",
+        "GetPrinterAlertDefaultsResult"
+    ),
+    (
+        "set_printer_alert_defaults",
+        "SetPrinterAlertDefaultsRequest",
+        "SetPrinterAlertDefaultsResult"
+    ),
+    (
+        "notification_status",
+        "NotificationStatusRequest",
+        "NotificationStatusResult"
+    ),
+    (
+        "send_test_notification",
+        "SendTestNotificationRequest",
+        "SendTestNotificationResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 125] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 129] {
     &COMMAND_CONTRACTS
 }
 
@@ -572,7 +592,7 @@ impl ts_rs::TS for CommandContracts {
         r#"type ContractRequest = { contractVersion: 1 };
 export type LoadSettingsRequest = NoArgsRequest;
 export type LoadSettingsResult = CommandSuccess<SettingsRecord>;
-export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string; monitorSection: MonitorSection; monitorDensity: MonitorDensity };
+export type SaveSettingsRequest = ContractRequest & { expectedRevision: number; themeMode: string; monitorSection: MonitorSection; monitorDensity: MonitorDensity; notifications?: NotificationClassSettings; snapshotRetention?: SnapshotRetention };
 export type SaveSettingsResult = CommandSuccess<SettingsRecord>;
 export type ExportSettingsRequest = NoArgsRequest;
 export type ExportSettingsResult = CommandSuccess<SettingsExportOutcome>;
@@ -819,7 +839,15 @@ export type SnapshotImageResult = ArrayBuffer;
 export type SetSnapshotPinnedRequest = ContractRequest & { operationId: string; snapshotId: string; pinned: boolean };
 export type SetSnapshotPinnedResult = CommandSuccess<CameraSnapshot>;
 export type MediaUsageRequest = NoArgsRequest;
-export type MediaUsageResult = CommandSuccess<MediaUsage>;"#.to_string()
+export type MediaUsageResult = CommandSuccess<MediaUsage>;
+export type GetPrinterAlertDefaultsRequest = ContractRequest & { printerId: string };
+export type GetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>;
+export type SetPrinterAlertDefaultsRequest = ContractRequest & { operationId: string; printerId: string; alertDefaults: AlertDefaults };
+export type SetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>;
+export type NotificationStatusRequest = NoArgsRequest;
+export type NotificationStatusResult = CommandSuccess<NotifierStatus>;
+export type SendTestNotificationRequest = NoArgsRequest;
+export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -832,6 +860,8 @@ export type MediaUsageResult = CommandSuccess<MediaUsage>;"#.to_string()
         visitor.visit::<crate::settings::commands::SettingsRecord>();
         visitor.visit::<crate::settings::commands::MonitorSection>();
         visitor.visit::<crate::settings::commands::MonitorDensity>();
+        visitor.visit::<crate::notifications::NotificationClassSettings>();
+        visitor.visit::<crate::settings::commands::SnapshotRetention>();
         visitor.visit::<crate::settings::commands::ExportResult>();
         visitor.visit::<crate::settings::commands::SettingsImportResult>();
         visitor.visit::<crate::printers::commands::PrinterRevisionPrecondition>();
@@ -934,6 +964,10 @@ export type MediaUsageResult = CommandSuccess<MediaUsage>;"#.to_string()
         visitor.visit::<crate::cameras::CameraSnapshot>();
         visitor.visit::<crate::cameras::SnapshotPage>();
         visitor.visit::<crate::cameras::MediaUsage>();
+        visitor.visit::<crate::printers::alerts::AlertDefaults>();
+        visitor.visit::<crate::printers::alerts::PrinterAlertDefaults>();
+        visitor.visit::<crate::notifications::NotifierStatus>();
+        visitor.visit::<crate::notifications::commands::TestNotificationSent>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {
