@@ -142,6 +142,24 @@ type CommandMap = {
     Contracts.AbandonHostOperationRequest,
     Contracts.AbandonHostOperationResult,
   ];
+  list_queue: [Contracts.ListQueueRequest, Contracts.ListQueueResult];
+  add_to_queue: [Contracts.AddToQueueRequest, Contracts.AddToQueueResult];
+  update_queue_entry: [Contracts.UpdateQueueEntryRequest, Contracts.UpdateQueueEntryResult];
+  move_queue_entry: [Contracts.MoveQueueEntryRequest, Contracts.MoveQueueEntryResult];
+  remove_queue_entry: [Contracts.RemoveQueueEntryRequest, Contracts.RemoveQueueEntryResult];
+  explain_queue_entry: [Contracts.ExplainQueueEntryRequest, Contracts.ExplainQueueEntryResult];
+  assign_queue_entry: [Contracts.AssignQueueEntryRequest, Contracts.AssignQueueEntryResult];
+  release_job: [Contracts.ReleaseJobRequest, Contracts.ReleaseJobResult];
+  retry_job: [Contracts.RetryJobRequest, Contracts.RetryJobResult];
+  cancel_job: [Contracts.CancelJobRequest, Contracts.CancelJobResult];
+  get_job_history: [Contracts.GetJobHistoryRequest, Contracts.GetJobHistoryResult];
+  stage_job: [Contracts.StageJobRequest, Contracts.StageJobResult];
+  start_job: [Contracts.StartJobRequest, Contracts.StartJobResult];
+  pause_job: [Contracts.PauseJobRequest, Contracts.PauseJobResult];
+  resume_job: [Contracts.ResumeJobRequest, Contracts.ResumeJobResult];
+  declare_job_outcome: [Contracts.DeclareJobOutcomeRequest, Contracts.DeclareJobOutcomeResult];
+  settle_job_material: [Contracts.SettleJobMaterialRequest, Contracts.SettleJobMaterialResult];
+  correct_job_material: [Contracts.CorrectJobMaterialRequest, Contracts.CorrectJobMaterialResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

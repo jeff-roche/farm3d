@@ -1,6 +1,8 @@
-import { render, screen, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createStore } from "solid-js/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadWebQueueFixture, resetQueueStoreMock } from "../queue/queue-store-mock";
+import { WEB_QUEUE_DEFERRED_SPOOL_ID } from "../queue/web-fixtures";
 import { SpoolDetailDock } from "./SpoolDetailDock";
 import type { SpoolHistory } from "../generated/contracts/command/SpoolHistory";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
@@ -19,15 +21,20 @@ vi.mock("../spools/spool-store", () => ({
   updateSpool: vi.fn(),
   recordAmount: vi.fn(),
   reportSpoolError: (...args: unknown[]) => reportSpoolError(...args),
+  ensureInventoryLoaded: () => Promise.resolve(),
 }));
 
 vi.mock("../printers/printer-store", () => ({
   printers: () => [],
 }));
 
+vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
+
 afterEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  resetQueueStoreMock();
+  window.location.hash = "";
 });
 
 const ESTIMATED_SPOOL: SpoolRecord = {
@@ -38,7 +45,7 @@ const ESTIMATED_SPOOL: SpoolRecord = {
   lifecycle: "active",
   location: { kind: "storage", storageLabel: "Shelf A2" },
   availability: { currentMg: 612_000, reservedMg: 0, availableMg: 612_000 },
-  facets: { loaded: false, reserved: false, low: false, confidence: "estimated" },
+  facets: { loaded: false, reserved: false, low: false, confidence: "estimated", reconciliation: false },
   createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-09-10T00:00:00Z",
 };
 
@@ -93,6 +100,29 @@ describe("SpoolDetailDock", () => {
     expect(titles[3]).toContain("Initial");
   });
 
+  it("renders reservations in the Timeline, each with its holder label", async () => {
+    const withReservations: SpoolHistory = {
+      ...HISTORY,
+      reservations: [
+        {
+          id: "rsv-1", spoolId: "spl-1", holder: { kind: "job", id: "job-1" },
+          amountMg: 250_000, state: "active", operationId: "op-1",
+          createdAt: "2026-09-11T00:00:00Z",
+        },
+        {
+          id: "rsv-2", spoolId: "spl-1", holder: { kind: "job", id: "job-2" },
+          amountMg: 100_000, state: "unresolved", operationId: "op-2",
+          createdAt: "2026-09-13T00:00:00Z",
+        },
+      ],
+    };
+    loadHistory.mockResolvedValue(withReservations);
+    render(() => <SpoolDetailDock spool={ESTIMATED_SPOOL} mode="inline" onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Reserved 250 g for Job")).toBeInTheDocument();
+    expect(screen.getByText("Reserved (unresolved) 100 g for Job")).toBeInTheDocument();
+  });
+
   it("re-fetches history when the Spool's revision changes, showing the new event", async () => {
     const newer: SpoolHistory = {
       ...HISTORY,
@@ -145,5 +175,34 @@ describe("SpoolDetailDock", () => {
     loadHistory.mockRejectedValue(failure);
     render(() => <SpoolDetailDock spool={ESTIMATED_SPOOL} mode="inline" onClose={vi.fn()} />);
     await waitFor(() => expect(reportSpoolError).toHaveBeenCalledWith(failure));
+  });
+
+  it("links a Job reservation to its Job in the Queue", async () => {
+    loadHistory.mockResolvedValue({
+      ...HISTORY,
+      reservations: [{
+        id: "rsv-1", spoolId: "spl-1", holder: { kind: "job", id: "job-1" },
+        amountMg: 250_000, state: "active", operationId: "op-1", createdAt: "2026-09-11T00:00:00Z",
+      }],
+    });
+    render(() => <SpoolDetailDock spool={ESTIMATED_SPOOL} mode="inline" onClose={vi.fn()} />);
+    await screen.findByText("Reserved 250 g for Job");
+    fireEvent.click(screen.getByRole("button", { name: "Open the Job" }));
+    expect(window.location.hash).toBe("#nav=v1/queue/job/job-1");
+  });
+
+  it("shows a deferred requirement on its Spool with Settle…", async () => {
+    loadWebQueueFixture();
+    loadHistory.mockResolvedValue(HISTORY);
+    const spool: SpoolRecord = {
+      ...ESTIMATED_SPOOL, id: WEB_QUEUE_DEFERRED_SPOOL_ID,
+      facets: { ...ESTIMATED_SPOOL.facets, reconciliation: true },
+    };
+    render(() => <SpoolDetailDock spool={spool} mode="inline" onClose={vi.fn()} />);
+    expect(screen.getByText("Needs reconciliation")).toBeInTheDocument();
+    expect(screen.getByText(/Deferred/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Settle…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settle material" });
+    expect(dialog).toHaveTextContent("Use estimate (2.0 g)");
   });
 });

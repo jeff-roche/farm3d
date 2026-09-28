@@ -149,10 +149,13 @@ pub enum RepositoryError {
     /// P6 D7: the Connection change would change the endpoint, or clear the
     /// Connection or its credential, while `printer_id` has the unresolved
     /// Host Operation `host_operation_id`. Nothing was written.
-    /// `CONNECTION_IN_USE`.
+    /// `CONNECTION_IN_USE`. P7 ruling R5(b): `job_id` is the unresolved
+    /// row's own `job_id`, when it has one — an active Job with no
+    /// unresolved Host Operation never reaches this variant.
     ConnectionInUse {
         printer_id: String,
         host_operation_id: String,
+        job_id: Option<String>,
     },
     /// P6 D7: a Printers import while these Printers have these unresolved
     /// Host Operations. Nothing was written. `HOST_OPERATION_PENDING`. The
@@ -160,6 +163,104 @@ pub enum RepositoryError {
     HostOperationsPending {
         printer_ids: Vec<String>,
         host_operation_ids: Vec<String>,
+    },
+    /// P7 D2: `queue::repository::apply` rejected an event the pure
+    /// `queue::state::transition` doesn't allow from the entry's current
+    /// state. Nothing was written. A later task's caller maps this to
+    /// `QUEUE_ENTRY_ACTION_NOT_ALLOWED` (a user command) or `INTERNAL`
+    /// (farm3d's own code), per D2's table.
+    IllegalQueueEntryTransition {
+        entry_id: String,
+        from: crate::queue::QueueEntryState,
+        event: crate::queue::state::EntryEvent,
+    },
+    /// P7 D2: `move_entry`/`update_entry` refused because the entry isn't
+    /// in a state that action allows (`move` needs an open entry;
+    /// `update` needs `queued`). Nothing was written.
+    /// `QUEUE_ENTRY_ACTION_NOT_ALLOWED`.
+    QueueEntryActionNotAllowed {
+        entry_id: String,
+        action: crate::queue::QueueEntryAction,
+        state: crate::queue::QueueEntryState,
+    },
+    /// P7 D3: `jobs::repository::transition` rejected an event the pure
+    /// `jobs::state::transition` doesn't allow from the Job's current
+    /// state. Nothing was written. A later task's caller maps this to
+    /// `JOB_ACTION_NOT_ALLOWED` (a user command) or drops it as an
+    /// already-applied idempotent no-op (the driver, tracker, or
+    /// `apply_host_outcome`), per D3's table.
+    IllegalJobTransition {
+        job_id: String,
+        from: crate::jobs::JobState,
+        event: crate::jobs::JobEventKind,
+    },
+    /// P7 D3: a Job command whose action the Job's state doesn't allow.
+    /// Nothing was written. `JOB_ACTION_NOT_ALLOWED`.
+    JobActionNotAllowed {
+        job_id: String,
+        action: crate::jobs::JobAction,
+        state: crate::jobs::JobState,
+    },
+    /// P7 D4: assignment to a Printer that already has the active Job
+    /// `job_id`. Nothing was written. `JOB_ACTIVE`.
+    JobActive { printer_id: String, job_id: String },
+    /// P7 D7: a pause, resume, or cancel handoff found the host printing a
+    /// file other than the Job's own (`host_path`). The write-ahead rolled
+    /// back; nothing was sent. `JOB_NOT_ON_PRINTER`.
+    JobNotOnPrinter { job_id: String, printer_id: String },
+    /// P7 D7, ruling R13(a): the start link found a start blocker the
+    /// pre-checks didn't (the Spool left the Printer in between). The
+    /// write-ahead rolled back; nothing was sent. `JOB_START_BLOCKED`.
+    JobStartBlocked {
+        job_id: String,
+        blockers: Vec<crate::queue::Blocker>,
+    },
+    /// P7 D7, ruling R13(a): an unattended start's link found the Printer
+    /// no longer `unattended`. The write-ahead rolled back; nothing was
+    /// sent. `START_PRECONDITION_CHANGED`.
+    StartSafetyChanged { job_id: String, printer_id: String },
+    /// P7 D5: the assign transaction's in-transaction `check_assignment`
+    /// refused the pair. Nothing was written. `ASSIGNMENT_BLOCKED`.
+    AssignmentBlocked {
+        entry_id: String,
+        printer_id: String,
+        spool_id: String,
+        blockers: Vec<crate::queue::Blocker>,
+    },
+    /// P7 D2: `retry_job` on a Job whose entry already has its successor
+    /// `retry_entry_id`. Nothing was written. `JOB_ALREADY_RETRIED`.
+    JobAlreadyRetried {
+        job_id: String,
+        retry_entry_id: String,
+    },
+    /// P7 settlement: a second `settle_job_material` on an already-`settled`
+    /// Job (`reason: settled`), or a second `correct_job_material`
+    /// (`reason: corrected`). Nothing was written. `JOB_ALREADY_SETTLED`.
+    JobAlreadySettled {
+        job_id: String,
+        reason: crate::jobs::SettleFailureReason,
+    },
+    /// P7 D8: `import_printers` (`replace_all`) while any Job exists, or
+    /// any open Queue Entry is pinned to a Printer (`manual_printer_id`).
+    /// `replace_all` deletes every Printer, and `jobs.printer_id` is `ON
+    /// DELETE RESTRICT`, so any Job -- even a finished one -- would make
+    /// the delete fail mid-import; this is checked up front instead.
+    /// Nothing was written. `JOBS_EXIST`. Each list is capped at 20.
+    JobsExist {
+        printer_ids: Vec<String>,
+        job_ids: Vec<String>,
+        queue_entry_ids: Vec<String>,
+    },
+    /// P7 D8: a `spools::reservations` primitive refused inside a Job
+    /// transaction. Carries what the caller knows beyond the primitive's
+    /// own error, so the command's message and `details` can name the
+    /// Spool (`#<n>`), the amount it needed, and the reservation.
+    Reservation {
+        spool_id: String,
+        spool_number: Option<i64>,
+        reservation_id: Option<String>,
+        required_mg: Option<i64>,
+        error: crate::spools::reservations::ReservationError,
     },
     Storage(StorageError),
 }

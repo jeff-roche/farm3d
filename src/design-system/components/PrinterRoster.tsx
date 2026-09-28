@@ -16,6 +16,8 @@ export interface PrinterRosterProps {
   count: number;
   printers: readonly PrinterRosterEntry[];
   onViewAll?: () => void;
+  /** Shown when the roster lists nobody. Defaults to "No Printers in this roster." */
+  emptyLabel?: string;
 }
 
 const ROSTER_LIMIT = 8;
@@ -169,7 +171,7 @@ export function PrinterRoster(props: PrinterRosterProps) {
           <div class={styles.heading}>{props.label}</div>
           <Show
             when={props.printers.length > 0}
-            fallback={<p class={styles.empty}>No Printers in this roster.</p>}
+            fallback={<p class={styles.empty}>{props.emptyLabel ?? "No Printers in this roster."}</p>}
           >
             <ul class={styles.list}>
               <For each={props.printers.slice(0, ROSTER_LIMIT)}>

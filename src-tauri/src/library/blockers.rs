@@ -1,9 +1,17 @@
 //! D18 step 1: what may block deleting a Model. P5 registers "has Slice
-//! Revisions" (spec D14); P7 adds Queue Entries and Jobs here,
-//! the same way P2/P3 register `LifecycleBlockerSource`s for Printers
-//! (`printers::lifecycle::blocker_sources`). A blocked delete is
-//! `LIFECYCLE_BLOCKED`, reusing P2's `LifecycleBlocker` with
-//! `LifecycleAction::Delete`.
+//! Revisions" (spec D14), the same way P2/P3 register
+//! `LifecycleBlockerSource`s for Printers (`printers::lifecycle::
+//! blocker_sources`). A blocked delete is `LIFECYCLE_BLOCKED`, reusing
+//! P2's `LifecycleBlocker` with `LifecycleAction::Delete`.
+//!
+//! P7 D8 doesn't register Queue Entries or Jobs here (a departure from
+//! the plan): a Model delete is already blocked transitively through
+//! `SliceRevisionsBlockModelDeletion` whenever it still has a Slice
+//! Revision, and `jobs::guards::QueueOrJobBlocksRevisionDeletion` (wired
+//! into `slicing::blockers::slice_revision_blocker_sources`) keeps that
+//! revision from ever being deleted out from under it while a Queue
+//! Entry or Job references it. See `jobs::guards` for the guards P7
+//! does add.
 
 use rusqlite::Transaction;
 

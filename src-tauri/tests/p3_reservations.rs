@@ -14,8 +14,8 @@ use farm3d_lib::spools::reservations::{
     self, ReservationError, ReservationHolder, ReservationState,
 };
 use farm3d_lib::spools::{
-    repository, AmountConfidence, Availability, FilamentDiameter, MaterialFamily, SpoolFields,
-    SpoolLifecycle,
+    repository, tares, AmountConfidence, Availability, FilamentDiameter, MaterialFamily,
+    SpoolFields, SpoolLifecycle,
 };
 
 use common::storage;
@@ -400,4 +400,393 @@ fn consuming_a_negative_amount_is_rejected_but_zero_is_allowed() {
     })
     .unwrap();
     assert_eq!(event.after_mg, 1_000_000);
+}
+
+// --- P7 Task 4: `for_holder`, `consume_measured`, and the `reconciliation`
+// facet (D8/D9) -----------------------------------------------------------
+
+/// `for_holder` lists every reservation for a holder regardless of state --
+/// active, released, unresolved, and consumed alike -- unlike
+/// `open_reservations`/`availability`, which only ever see the still-open
+/// ones.
+#[test]
+fn for_holder_lists_every_state() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let holder = job("job-1");
+
+    let active_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &holder, 100_000, "op-1")
+    })
+    .unwrap();
+    let released_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &holder, 100_000, "op-2")
+    })
+    .unwrap();
+    call(&storage, |tx| reservations::release(tx, &released_id)).unwrap();
+    let unresolved_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &holder, 100_000, "op-3")
+    })
+    .unwrap();
+    call(&storage, |tx| {
+        reservations::mark_unresolved(tx, &unresolved_id)
+    })
+    .unwrap();
+    let consumed_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &holder, 100_000, "op-4")
+    })
+    .unwrap();
+    call(&storage, |tx| {
+        reservations::consume(tx, &consumed_id, 100_000, None)
+    })
+    .unwrap();
+
+    // A reservation for a different holder must never show up here.
+    call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-other"), 100_000, "op-5")
+    })
+    .unwrap();
+
+    let held = call(&storage, |tx| reservations::for_holder(tx, &holder).map_err(Into::into))
+        .unwrap();
+    assert_eq!(held.len(), 4);
+    let state_of = |id: &str| held.iter().find(|r| r.id == id).unwrap().state;
+    assert_eq!(state_of(&active_id), ReservationState::Active);
+    assert_eq!(state_of(&released_id), ReservationState::Released);
+    assert_eq!(state_of(&unresolved_id), ReservationState::Unresolved);
+    assert_eq!(state_of(&consumed_id), ReservationState::Consumed);
+}
+
+/// `consume_measured` settles an `active` reservation against a *remaining*
+/// amount (not a *used* one): reserving 400 g then measuring 350 g
+/// remaining writes one `Measurement` row at 350 g -- always confidence
+/// `Measured`, even though the caller's `Net` entry said `Estimated` -- and
+/// moves the reservation to `consumed`.
+#[test]
+fn consume_measured_writes_one_measured_row_and_consumes_the_reservation() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+
+    let event = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Net {
+                net_mg: 350_000,
+                confidence: AmountConfidence::Estimated,
+            },
+            Some("settled by measurement"),
+        )
+    })
+    .unwrap();
+
+    assert!(matches!(event.kind, AmountEventKind::Measurement));
+    assert_eq!(event.confidence_after, AmountConfidence::Measured);
+    assert_eq!(event.after_mg, 350_000);
+    assert_eq!(
+        event.reservation_id.as_deref(),
+        Some(reservation_id.as_str())
+    );
+    assert_eq!(event.note.as_deref(), Some("settled by measurement"));
+    assert_eq!(current_mg(&storage, &spool_id), 350_000);
+
+    let held = call(&storage, |tx| {
+        reservations::for_holder(tx, &job("job-1")).map_err(Into::into)
+    })
+    .unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].state, ReservationState::Consumed);
+
+    let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].id, event.id);
+}
+
+/// Controller ruling R8: an out-of-range `entry.netMg` from
+/// `consume_measured` must surface as `ReservationError::Validation`, not
+/// collapse into `Storage`/`INTERNAL` -- Task 9 passes an operator-entered
+/// weight straight through, so a typo must be recoverable, not an internal
+/// error. The reservation stays untouched (still `active`) and no ledger
+/// row is written.
+#[test]
+fn consume_measured_with_an_out_of_range_net_amount_is_a_validation_error() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+
+    let error = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Net {
+                net_mg: -1,
+                confidence: AmountConfidence::Measured,
+            },
+            None,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ReservationError::Validation {
+                field_path: "entry.netMg"
+            }
+        ),
+        "{error:?}"
+    );
+
+    let held = call(&storage, |tx| {
+        reservations::for_holder(tx, &job("job-1")).map_err(Into::into)
+    })
+    .unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].state, ReservationState::Active);
+    let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
+    assert_eq!(history.len(), 1, "a rejected entry must write no ledger row");
+}
+
+/// Controller ruling R8: an unknown `entry.tareId` is the same kind of
+/// caller mistake as an out-of-range amount, and must map the same way.
+#[test]
+fn consume_measured_with_an_unknown_tare_id_is_a_validation_error() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+
+    let error = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Scale {
+                gross_mg: 500_000,
+                tare_id: Some("tar-missing".to_string()),
+                tare_mg: None,
+            },
+            None,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ReservationError::Validation {
+                field_path: "entry.tareId"
+            }
+        ),
+        "{error:?}"
+    );
+
+    let held = call(&storage, |tx| {
+        reservations::for_holder(tx, &job("job-1")).map_err(Into::into)
+    })
+    .unwrap();
+    assert_eq!(held[0].state, ReservationState::Active);
+    let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
+    assert_eq!(history.len(), 1, "a rejected entry must write no ledger row");
+}
+
+/// A `Scale` entry resolved against a real tare (the happy path Task 4's
+/// original suite skipped): settling against a 752.3 g gross reading with a
+/// 140 g tare records 612.3 g remaining, at `Measured` confidence, with the
+/// scale's snapshot (`grossMg`/`tareMg`) carried onto the ledger row.
+#[test]
+fn consume_measured_resolves_a_scale_entry_against_a_named_tare() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let tare = storage
+        .write_repo(|tx| tares::create(tx, "Cardboard spool", 140_000))
+        .unwrap();
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+
+    let event = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Scale {
+                gross_mg: 752_300,
+                tare_id: Some(tare.id.clone()),
+                tare_mg: None,
+            },
+            None,
+        )
+    })
+    .unwrap();
+
+    assert!(matches!(event.kind, AmountEventKind::Measurement));
+    assert_eq!(event.confidence_after, AmountConfidence::Measured);
+    assert_eq!(event.after_mg, 612_300);
+    assert_eq!(event.gross_mg, Some(752_300));
+    assert_eq!(event.tare_mg, Some(140_000));
+    assert_eq!(current_mg(&storage, &spool_id), 612_300);
+}
+
+/// `consume_measured` is also allowed from `unresolved` (P7's deferred
+/// reconciliation path settling later), not only `active`.
+#[test]
+fn consume_measured_from_unresolved_is_allowed() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+    call(&storage, |tx| {
+        reservations::mark_unresolved(tx, &reservation_id)
+    })
+    .unwrap();
+
+    let event = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Net {
+                net_mg: 200_000,
+                confidence: AmountConfidence::Measured,
+            },
+            None,
+        )
+    })
+    .unwrap();
+
+    assert_eq!(event.after_mg, 200_000);
+    let held = call(&storage, |tx| {
+        reservations::for_holder(tx, &job("job-1")).map_err(Into::into)
+    })
+    .unwrap();
+    assert_eq!(held[0].state, ReservationState::Consumed);
+}
+
+/// Settling the same reservation twice is `InvalidTransition{Consumed}`,
+/// never a second ledger row.
+#[test]
+fn consume_measured_twice_is_invalid_transition() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 400_000, "op-1")
+    })
+    .unwrap();
+    call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Net {
+                net_mg: 350_000,
+                confidence: AmountConfidence::Measured,
+            },
+            None,
+        )
+    })
+    .unwrap();
+
+    let error = call(&storage, |tx| {
+        reservations::consume_measured(
+            tx,
+            &reservation_id,
+            &AmountEntry::Net {
+                net_mg: 300_000,
+                confidence: AmountConfidence::Measured,
+            },
+            None,
+        )
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ReservationError::InvalidTransition {
+            from: ReservationState::Consumed
+        }
+    ));
+    let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
+    assert_eq!(history.len(), 2, "a rejected second settle must write nothing");
+}
+
+/// D9's `reconciliation` facet: true exactly when the Spool has an
+/// `unresolved` reservation, computed by `repository::list_spools`/
+/// `load_record` (not by `reservations::availability`, which this doesn't
+/// exercise) -- `active` alone must not set it, and clearing the
+/// unresolved reservation must clear the facet again.
+#[test]
+fn unresolved_reservation_sets_the_reconciliation_facet() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    let reservation_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 300_000, "op-1")
+    })
+    .unwrap();
+
+    let record = |storage: &Storage| {
+        storage
+            .write(repository::list_spools)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == spool_id)
+            .unwrap()
+    };
+    assert!(
+        !record(&storage).facets.reconciliation,
+        "a merely active reservation must not set the facet"
+    );
+
+    call(&storage, |tx| {
+        reservations::mark_unresolved(tx, &reservation_id)
+    })
+    .unwrap();
+    assert!(record(&storage).facets.reconciliation);
+
+    call(&storage, |tx| {
+        reservations::consume(tx, &reservation_id, 300_000, None)
+    })
+    .unwrap();
+    assert!(
+        !record(&storage).facets.reconciliation,
+        "a resolved (consumed) reservation must clear the facet"
+    );
+}
+
+/// `availableMg` (as `repository::list_spools`/`load_record` derive it, the
+/// same query the frontend actually reads) excludes an `unresolved`
+/// reservation's amount exactly like an `active` one's -- not just
+/// `reservations::availability`, which the existing P3 suite already
+/// covers.
+#[test]
+fn available_mg_excludes_unresolved_amounts() {
+    let (_temp, _lease, storage, _db) = storage();
+    let spool_id = new_spool(&storage);
+    call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-1"), 300_000, "op-1")
+    })
+    .unwrap();
+    let unresolved_id = call(&storage, |tx| {
+        reservations::reserve(tx, &spool_id, &job("job-2"), 200_000, "op-2")
+    })
+    .unwrap();
+    call(&storage, |tx| {
+        reservations::mark_unresolved(tx, &unresolved_id)
+    })
+    .unwrap();
+
+    let record = storage
+        .write(repository::list_spools)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == spool_id)
+        .unwrap();
+    assert_eq!(record.availability.current_mg, 1_000_000);
+    assert_eq!(record.availability.reserved_mg, 500_000);
+    assert_eq!(record.availability.available_mg, 500_000);
 }

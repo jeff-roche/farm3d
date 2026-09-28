@@ -36,7 +36,13 @@ pub enum LifecycleAction {
 /// holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
 /// has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
 /// still has Slice Revisions, D14). P6 adds `HostOperationUnresolved` (a
-/// Printer, or a Slice Revision, has a pending Host Operation, D7).
+/// Printer, or a Slice Revision, has a pending Host Operation, D7). P7 D8
+/// adds `JobActive` (archive: the Printer has a non-terminal Job),
+/// `JobHistoryExists` (delete: a Job, terminal or not, references the
+/// Printer — decision 7), `QueueEntryPinned` (delete: an open Queue Entry
+/// is pinned to the Printer through `manual_printer_id`), and
+/// `QueueReferencesRevision` (Slice Revision delete: a Queue Entry or Job
+/// references it).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(
@@ -50,6 +56,10 @@ pub enum LifecycleBlockerCode {
     SpoolReserved,
     SliceRevisionsExist,
     HostOperationUnresolved,
+    JobActive,
+    JobHistoryExists,
+    QueueEntryPinned,
+    QueueReferencesRevision,
 }
 
 #[derive(Serialize, Clone, Debug, TS)]
@@ -125,6 +135,7 @@ pub fn blocker_sources() -> &'static [&'static dyn LifecycleBlockerSource] {
         &ArchiveStateBlockers,
         &LoadedSpoolBlockers,
         &crate::host_ops::guards::HostOperationBlockers,
+        &crate::jobs::guards::JobBlockers,
     ]
 }
 

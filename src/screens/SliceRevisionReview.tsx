@@ -31,6 +31,8 @@ import {
 import { logSegments } from "../slicing/slice-presentation";
 import { loadSliceRevision, loadSliceRevisionLog, slicing } from "../slicing/slicing-store";
 import type { SliceOperationLog, SliceRevisionRecord } from "../slicing/types";
+import { serializeNavigationTarget } from "../navigation/navigation-store";
+import { AddToQueueDialog } from "./AddToQueueDialog";
 import { DeleteSliceRevisionDialog } from "./DeleteSliceRevisionDialog";
 import { StageOnPrinterDialog } from "./StageOnPrinterDialog";
 import { ProvenanceBadge } from "./ProvenanceBadge";
@@ -43,9 +45,6 @@ export interface SliceRevisionReviewProps {
   /** The revision was deleted from here. */
   onDeleted: (sliceRevisionId: string) => void;
 }
-
-/** P12: the queue-handoff intent. Queueing arrives with P7. */
-const QUEUE_LATER_REASON = "The Queue arrives in a later version.";
 
 function Rows(props: { rows: FactRow[] }) {
   return (
@@ -74,8 +73,8 @@ function Section(props: { title: string; children: JSX.Element }) {
 
 /** D21's Slice Revision review, shown in the Library's details dock: what
  *  was sliced from what, for which target, the estimates, every fact with
- *  where it came from, the runtime, the log, the disabled **Add to Queue…**
- *  intent (P12) and **Delete…**. A revision never changes, so the record
+ *  where it came from, the runtime, the log, **Add to Queue…** (P7) and
+ *  **Delete…**. A revision never changes, so the record
  *  loads once. */
 export function SliceRevisionReview(props: SliceRevisionReviewProps) {
   const [record] = createResource(() => props.sliceRevisionId, (id) => loadSliceRevision(id));
@@ -134,9 +133,10 @@ export function SliceRevisionReview(props: SliceRevisionReviewProps) {
 
 function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => void }) {
   const revision = () => props.revision;
-  const queueReasonId = createUniqueId();
   const [staging, setStaging] = createSignal(false);
+  const [queueing, setQueueing] = createSignal(false);
   let stageTrigger: HTMLButtonElement | undefined;
+  let queueTrigger: HTMLButtonElement | undefined;
   const absentCount = () => FACT_KEYS.filter((key) => revision().facts[key].provenance === "absent").length;
 
   const targetRows = (): FactRow[] => {
@@ -179,11 +179,22 @@ function RevisionBody(props: { revision: SliceRevisionRecord; onDelete: () => vo
       </dl>
 
       <div class={styles.actions}>
-        <Button variant="primary" disabled aria-describedby={queueReasonId}>Add to Queue…</Button>
+        <Button ref={queueTrigger} variant="primary" onClick={() => setQueueing(true)}>Add to Queue…</Button>
         <Button ref={stageTrigger} variant="secondary" onClick={() => setStaging(true)}>Stage on Printer…</Button>
         <Button variant="secondary" onClick={() => props.onDelete()}>Delete…</Button>
       </div>
-      <p id={queueReasonId} class={styles.note}>{QUEUE_LATER_REASON}</p>
+      <AddToQueueDialog
+        open={queueing()}
+        onOpenChange={setQueueing}
+        revision={revision()}
+        returnFocus={() => queueTrigger}
+        // The spec's hand-off: open the first new entry in the Queue.
+        onAdded={(entryId) => {
+          window.location.hash = serializeNavigationTarget({
+            version: 1, destination: "queue", selection: { kind: "job", id: entryId },
+          }).slice(1);
+        }}
+      />
       <StageOnPrinterDialog
         open={staging()}
         onOpenChange={setStaging}

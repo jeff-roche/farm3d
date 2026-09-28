@@ -20,6 +20,9 @@ import type { ImportSelectionSummary } from "./library/types";
 import { startSlicing } from "./slicing/slicing-store";
 import { startHostOperations } from "./host-ops/host-operations-store";
 import { syncCapabilities } from "./host-ops/capabilities-store";
+import { queue, startQueue } from "./queue/queue-store";
+import { jobStateLabel } from "./queue/presentation";
+import type { PrinterRosterEntry } from "./design-system";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
@@ -50,6 +53,7 @@ import {
 // The Spools screen and its dialogs load on first visit, keeping them out of
 // the main chunk.
 const SpoolInventory = lazy(() => import("./screens/SpoolInventory").then((m) => ({ default: m.SpoolInventory })));
+const QueueScreen = lazy(() => import("./screens/QueueScreen").then((m) => ({ default: m.QueueScreen })));
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -83,7 +87,7 @@ function App() {
   const active = () => navigation.target().destination;
   const shellActive = () => {
     const destination = active();
-    return (destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
+    return (destination === "queue" || destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
   };
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
   // Until the Library's first load settles, a Library selection is pending,
@@ -91,14 +95,21 @@ function App() {
   // available" banner away, and the reconcile after `startLibrary`
   // resolves decides for real.
   const libraryPending = () => library.status() === "idle" || library.status() === "loading";
+  const queuePending = () => queue.status() === "idle" || queue.status() === "loading";
+  // Every Queue Entry and Job the store holds: a Queue selection names
+  // either, resolved by prefix (spec "Navigation").
+  const queueIds = () => [...queue.entries(), ...queue.history()]
+    .flatMap((entry) => (entry.jobId ? [entry.id, entry.jobId] : [entry.id]));
   const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
-    availableDestinations: ["monitor", "library", "spools"] as NavigationDestination[],
+    availableDestinations: ["monitor", "queue", "library", "spools"] as NavigationDestination[],
     availableIds: [
       ...printers().map((printer) => printer.id),
       ...spoolState.spools.map((spool) => spool.id),
       ...library.projects().map((project) => project.id),
       ...library.models().map((model) => model.id),
+      ...queueIds(),
       ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
+      ...(target.destination === "queue" && target.selection && queuePending() ? [target.selection.id] : []),
     ],
   });
   const reconcileNavigation = () => {
@@ -116,6 +127,19 @@ function App() {
     window.location.hash = serializeNavigationTarget(target).slice(1);
   };
   const setActive = (destination: ScreenId) => navigate({ version: 1, destination });
+
+  // The Queue badge: entries whose verdict is Blocked or Awaiting operator,
+  // plus open Reconciliation Requirements (spec "Frontend architecture").
+  const queueAttentionCount = () =>
+    queue.entries().filter((entry) => {
+      const verdict = entry.state === "queued" ? queue.eligibility(entry.id)?.verdict : undefined;
+      return verdict === "blocked" || verdict === "awaitingOperator";
+    }).length + queue.requirements().length;
+  // An open `assigned` entry's Job is active until it ends (D2/D3).
+  const activeJobs = (): PrinterRosterEntry[] => queue.entries().flatMap((entry) => {
+    const job = entry.state === "assigned" ? queue.jobFor(entry.id) : undefined;
+    return job ? [{ id: job.id, name: job.printerSnapshot.name, detail: entry.display.modelName, stateLabel: jobStateLabel(job.state) }] : [];
+  });
 
   // The import dialog's selection, from the picker or a window drop (D7).
   const [importSelection, setImportSelection] = createSignal<ImportSelectionSummary | null>(null);
@@ -175,6 +199,7 @@ function App() {
     let disposeLibrary: (() => void) | undefined;
     let disposeSlicing: (() => void) | undefined;
     let disposeHostOperations: (() => void) | undefined;
+    let disposeQueue: (() => void) | undefined;
     let stopCapabilitySync: (() => void) | undefined;
     let startupGeneration = 0;
     const start = () => {
@@ -237,6 +262,15 @@ function App() {
               return;
             }
             disposeHostOperations = disposeOps;
+            // The Queue follows Host Operations (P7).
+            return startQueue().then((disposeQueueStream) => {
+              if (disposed || generation !== startupGeneration) {
+                disposeQueueStream();
+                return;
+              }
+              disposeQueue = disposeQueueStream;
+              reconcileNavigation();
+            });
           });
         });
         // Capabilities have no event: refetch a Printer's whenever its
@@ -271,6 +305,7 @@ function App() {
       disposeLibrary?.();
       disposeSlicing?.();
       disposeHostOperations?.();
+      disposeQueue?.();
       stopCapabilitySync?.();
       window.removeEventListener("hashchange", applyFragment);
     });
@@ -285,7 +320,9 @@ function App() {
       operationalRosters={shell().operationalRosters}
       adapterHealth={shell().adapterHealth}
       lastLiveEventAt={shell().lastLiveEventAt}
-      lowSpoolCount={spoolState.spools.filter((spool) => spool.facets.low).length}
+      attentionSpoolCount={spoolState.spools.filter((spool) => spool.facets.low || spool.facets.reconciliation).length}
+      queueAttentionCount={queueAttentionCount()}
+      activeJobs={activeJobs()}
     >
       <Show when={printerStoreCommandError()?.code === "HOST_OPERATION_PENDING" ? printerStoreCommandError() : undefined}>
         {(error) => (
@@ -362,6 +399,11 @@ function App() {
                 dropActive={dropActive()}
                 dropRefused={dropRefused()}
               />
+            </Match>
+            <Match when={active() === "queue"}>
+              <Suspense fallback={<p class={styles.loading} role="status">Loading the Queue…</p>}>
+                <QueueScreen />
+              </Suspense>
             </Match>
             <Match when={active() === "spools"}>
               <Suspense fallback={<p class={styles.loading} role="status">Loading Spools…</p>}>

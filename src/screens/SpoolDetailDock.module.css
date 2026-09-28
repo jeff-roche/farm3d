@@ -68,3 +68,6 @@
 @media (prefers-reduced-motion: reduce) {
   .overlay, .overlayContent { transition: none; }
 }
+
+.requirement { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.requirementText { color: var(--f3d-color-text); font-family: var(--f3d-type-body-small-font); font-size: var(--f3d-type-body-small-size); }

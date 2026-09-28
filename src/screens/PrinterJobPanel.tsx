@@ -23,11 +23,14 @@ import {
   statusOrUnknown,
   type ControlVerb,
 } from "../host-ops/start-rule";
-import type { CapabilityKey, HostOperation, PrinterCapabilities } from "../host-ops/types";
+import { canAbandon, canReconcile as reconcileSupported, reconcileCapability, supports } from "../host-ops/reconcile-rule";
+import type { HostOperation, PrinterCapabilities } from "../host-ops/types";
 import { operationalLabel } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
 import { AbandonReconciliationDialog } from "./AbandonReconciliationDialog";
+import { queue } from "../queue/queue-store";
 import { HostOperationAlert } from "./HostOperationAlert";
+import { JobPanel } from "./JobPanel";
 import { formatTemperature, nozzleReadings } from "./monitor-printer-presentation";
 import { SeverityLabel } from "./SeverityLabel";
 import { StartStagedDialog } from "./StartStagedDialog";
@@ -49,23 +52,16 @@ const SEND: Record<ControlVerb, (printerId: string) => Promise<unknown>> = {
   cancel: cancelHostPrint,
 };
 
-/** D5 "Capability gate": the capability a row's reconciliation needs. */
-function reconcileCapability(operation: HostOperation): CapabilityKey {
-  return operation.kind === "upload" ? "artifactIdentity" : "hostState";
-}
-
-function supports(record: PrinterCapabilities | undefined, key: CapabilityKey): boolean {
-  return record?.capabilities[key].status === "supported";
-}
-
 /** The Printer's **Job** tab (spec "Components"): the host's current print
  *  from telemetry, Pause/Resume/Cancel print…, what is staged on the
  *  Printer with **Start…**, and its Host Operations with **Check again**
- *  and **Abandon check…**. An unsupported control is never an enabled
+ *  and **Abandon check…**. While the Printer has an active P7 Job, the
+ *  Job's own panel replaces the raw controls and Stage/Start (decision 9). An unsupported control is never an enabled
  *  button; a disabled one says why in visible text. */
 export function PrinterJobPanel(props: PrinterJobPanelProps) {
   const [capabilitiesError, setCapabilitiesError] = createSignal<unknown>(null);
   const held = () => capabilities.forPrinter(props.printer.id);
+  const activeJob = () => queue.activeJobFor(props.printer.id);
 
   const loadHeld = () => {
     setCapabilitiesError(null);
@@ -87,11 +83,19 @@ export function PrinterJobPanel(props: PrinterJobPanelProps) {
             <HostOperationAlert error={error()} fallback="farm3d couldn't read what this printer supports." onRetry={loadHeld} />
           )}
         </Show>
+        {/* Decision 9: while a Job is active its own controls replace P6's
+            raw Stage/Start, Pause, Resume, and Cancel. The Job's panel never
+            waits on the capability load; only P6's raw parts do. */}
+        <Show when={activeJob()}>
+          {(job) => <JobPanel job={job()} printer={props.printer} showHostOperation={false} />}
+        </Show>
         <Show when={held()} fallback={<Show when={!capabilitiesError()}><p class={styles.note}>Checking what this printer supports…</p></Show>}>
           {(record) => (
             <>
-              <Controls printer={props.printer} record={record()} />
-              <Staged printer={props.printer} record={record()} />
+              <Show when={!activeJob()}>
+                <Controls printer={props.printer} record={record()} />
+                <Staged printer={props.printer} record={record()} />
+              </Show>
               <Operations printer={props.printer} record={record()} />
             </>
           )}
@@ -314,7 +318,7 @@ function Operations(props: { printer: ResolvedPrinter; record: PrinterCapabiliti
     },
   ));
 
-  const canReconcile = (operation: HostOperation) => supports(props.record, reconcileCapability(operation));
+  const canReconcile = (operation: HostOperation) => reconcileSupported(operation, props.record);
 
   async function checkAgain(operation: HostOperation) {
     if (checking()) return;
@@ -337,7 +341,7 @@ function Operations(props: { printer: ResolvedPrinter; record: PrinterCapabiliti
             {(operation) => {
               const label = () => hostOperationLabel(operation);
               const uncertain = () => operation.state === "uncertain";
-              const abandonable = () => uncertain() && (operation.attempts >= 1 || !canReconcile(operation));
+              const abandonable = () => canAbandon(operation, props.record);
               return (
                 <li class={styles.operation}>
                   <div class={styles.row}>

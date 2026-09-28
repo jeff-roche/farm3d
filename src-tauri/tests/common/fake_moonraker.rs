@@ -162,6 +162,8 @@ pub struct FakeState {
     pub print_state: String,
     pub print_filename: String,
     pub is_paused: bool,
+    /// `display_status.progress` and `virtual_sdcard.progress`, 0.0..=1.0.
+    pub progress: f64,
     /// (temperature, target) for `extruder`, `extruder1`, ...
     pub tools: Vec<(f64, f64)>,
     /// `None` on a no-bed printer.
@@ -204,6 +206,7 @@ impl FakeState {
             print_state: "standby".to_string(),
             print_filename: String::new(),
             is_paused: false,
+            progress: 0.0,
             tools: vec![(200.0, 210.0)],
             bed: Some((60.0, 65.0)),
             extra_objects: Vec::new(),
@@ -262,6 +265,7 @@ impl FakeState {
     fn apply_start(&mut self, path: &str, trace: StartTrace) {
         self.print_filename = path.to_string();
         self.is_paused = false;
+        self.progress = 0.0;
         match trace {
             StartTrace::PrintingWithHistoryJob => {
                 self.print_state = "printing".to_string();
@@ -431,6 +435,31 @@ impl FakeMoonraker {
 
     pub fn history(&self) -> Vec<FakeJob> {
         self.lock().history.clone()
+    }
+
+    /// The print ends on the host: the open history job closes with the
+    /// history `status` (`completed`, `cancelled`, `error`,
+    /// `klippy_shutdown`, ...), and `print_stats.state` shows the matching
+    /// end (`complete`, `cancelled`, or `error`). The filename stays, as
+    /// Klipper keeps it after a print.
+    pub fn finish_print(&self, status: &str) {
+        let mut state = self.lock();
+        state.print_state = match status {
+            "completed" => "complete",
+            "cancelled" => "cancelled",
+            _ => "error",
+        }
+        .to_string();
+        state.is_paused = false;
+        if status == "completed" {
+            state.progress = 1.0;
+        }
+        state.close_open_job(status);
+    }
+
+    /// The print's progress, 0.0..=1.0 (`display_status.progress`).
+    pub fn set_progress(&self, progress: f64) {
+        self.lock().progress = progress;
     }
 
     /// A Klipper restart as the simulator shows it (spike Gate G): the live
@@ -1080,6 +1109,8 @@ fn object_status(state: &FakeState, name: &str) -> Option<Value> {
             "total_duration": 0.0, "print_duration": 0.0, "filament_used": 0.0,
         }),
         "pause_resume" => json!({"is_paused": state.is_paused}),
+        "display_status" => json!({"progress": state.progress, "message": null}),
+        "virtual_sdcard" => json!({"progress": state.progress, "is_active": state.print_state == "printing"}),
         "heater_bed" => {
             let (temperature, target) = state.bed?;
             json!({"temperature": temperature, "target": target, "power": 0.0})

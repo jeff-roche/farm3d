@@ -1,17 +1,21 @@
-import { IconBox, IconDisc, IconPrinter } from "@tabler/icons-solidjs";
+import { IconBox, IconDisc, IconPlaylist, IconPrinter } from "@tabler/icons-solidjs";
 import { Show } from "solid-js";
 import { IconButton } from "../design-system";
 import { SettingsMenu } from "./SettingsMenu";
 import styles from "./ActivityBar.module.css";
 
-export type ScreenId = "monitor" | "library" | "spools";
+export type ScreenId = "monitor" | "queue" | "library" | "spools";
 
 export interface ActivityBarProps {
   active: ScreenId;
   onSelect: (screen: ScreenId) => void;
-  /** Count of `low` Spools (P3 design: "The badge counts `low` Spools").
+  /** Count of Spools needing attention: `low` or `reconciliation` (P7 Task
+   *  4 brief). Omitted or 0 renders no badge. */
+  attentionSpoolCount?: number;
+  /** Queue Entries whose verdict is Blocked or Awaiting operator, plus open
+   *  Reconciliation Requirements (P7 spec "Frontend architecture").
    *  Omitted or 0 renders no badge. */
-  lowSpoolCount?: number;
+  queueAttentionCount?: number;
 }
 
 export function ActivityBar(props: ActivityBarProps) {
@@ -25,6 +29,20 @@ export function ActivityBar(props: ActivityBarProps) {
       >
         <IconPrinter size={18} />
       </IconButton>
+      <div class={styles.iconWrap}>
+        <IconButton
+          aria-label={(props.queueAttentionCount ?? 0) > 0 ? `Queue (${props.queueAttentionCount} need attention)` : "Queue"}
+          aria-current={props.active === "queue" ? "page" : undefined}
+          active={props.active === "queue"}
+          onClick={() => props.onSelect("queue")}
+        >
+          {/* The umbrella spec's "ordered list entering execution". */}
+          <IconPlaylist size={18} />
+        </IconButton>
+        <Show when={(props.queueAttentionCount ?? 0) > 0}>
+          <span class={styles.badge} aria-hidden="true">{props.queueAttentionCount}</span>
+        </Show>
+      </div>
       <IconButton
         aria-label="Library"
         aria-current={props.active === "library" ? "page" : undefined}
@@ -35,15 +53,15 @@ export function ActivityBar(props: ActivityBarProps) {
       </IconButton>
       <div class={styles.iconWrap}>
         <IconButton
-          aria-label={(props.lowSpoolCount ?? 0) > 0 ? `Spools (${props.lowSpoolCount} low)` : "Spools"}
+          aria-label={(props.attentionSpoolCount ?? 0) > 0 ? `Spools (${props.attentionSpoolCount} need attention)` : "Spools"}
           aria-current={props.active === "spools" ? "page" : undefined}
           active={props.active === "spools"}
           onClick={() => props.onSelect("spools")}
         >
           <IconDisc size={18} />
         </IconButton>
-        <Show when={(props.lowSpoolCount ?? 0) > 0}>
-          <span class={styles.badge} aria-hidden="true">{props.lowSpoolCount}</span>
+        <Show when={(props.attentionSpoolCount ?? 0) > 0}>
+          <span class={styles.badge} aria-hidden="true">{props.attentionSpoolCount}</span>
         </Show>
       </div>
       <div class={styles.spacer} />

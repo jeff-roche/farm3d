@@ -7,16 +7,22 @@ afterEach(() => {
 });
 
 describe("ActivityBar", () => {
-  it("exposes the Monitor, Library, Spools, and Settings controls with the active destination identified, and no Queue button", async () => {
+  it("exposes the Monitor, Queue, Library, Spools, and Settings controls with the active destination identified", async () => {
     const onSelect = vi.fn();
     render(() => <ActivityBar active="monitor" onSelect={onSelect} />);
 
     const monitor = screen.getByRole("button", { name: "Monitor" });
     expect(monitor).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Queue" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Library" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("button", { name: "Spools" })).not.toHaveAttribute("aria-current");
     expect(screen.getByLabelText("Settings")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /queue/i })).not.toBeInTheDocument();
+    // The umbrella spec's rail order: Monitor, Queue, Library, Spools.
+    expect(screen.getAllByRole("button").slice(0, 4).map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Monitor", "Queue", "Library", "Spools"]);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    expect(onSelect).toHaveBeenCalledWith("queue");
 
     await fireEvent.click(screen.getByRole("button", { name: "Library" }));
     expect(onSelect).toHaveBeenCalledWith("library");
@@ -25,14 +31,27 @@ describe("ActivityBar", () => {
     expect(onSelect).toHaveBeenCalledWith("spools");
   });
 
-  it("marks Spools current when active, and shows no badge with a zero low count", () => {
-    render(() => <ActivityBar active="spools" onSelect={vi.fn()} lowSpoolCount={0} />);
+  it("marks Spools current when active, and shows no badge with a zero attention count", () => {
+    render(() => <ActivityBar active="spools" onSelect={vi.fn()} attentionSpoolCount={0} />);
     expect(screen.getByRole("button", { name: "Spools" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows a badge equal to the number of low Spools", () => {
-    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} lowSpoolCount={3} />);
-    expect(screen.getByRole("button", { name: "Spools (3 low)" })).toBeInTheDocument();
+  it("shows a badge equal to the number of Spools needing attention (low or reconciliation)", () => {
+    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} attentionSpoolCount={3} />);
+    expect(screen.getByRole("button", { name: "Spools (3 need attention)" })).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("marks Queue current when active, and shows no Queue badge with nothing needing attention", () => {
+    render(() => <ActivityBar active="queue" onSelect={vi.fn()} queueAttentionCount={0} />);
+    const queue = screen.getByRole("button", { name: "Queue" });
+    expect(queue).toHaveAttribute("aria-current", "page");
+    expect(queue.parentElement).not.toHaveTextContent(/\d/);
+  });
+
+  it("badges the Queue with the entries and requirements needing attention", () => {
+    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} queueAttentionCount={5} />);
+    const queue = screen.getByRole("button", { name: "Queue (5 need attention)" });
+    expect(queue.parentElement).toHaveTextContent("5");
   });
 });

@@ -196,7 +196,7 @@ describe("SpoolFormDialog", () => {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: null },
       availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
       createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
     };
     updateSpool.mockRejectedValue({

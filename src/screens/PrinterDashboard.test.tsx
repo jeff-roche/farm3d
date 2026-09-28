@@ -1,8 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
+import { loadWebQueueFixture, resetQueueStoreMock } from "../queue/queue-store-mock";
 import { PrinterDashboard } from "./PrinterDashboard";
+
+vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
+vi.mock("../host-ops/host-operations-store", async () =>
+  (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
+vi.mock("../host-ops/capabilities-store", async () =>
+  (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
 
 vi.mock("../printers/printer-catalog", () => ({
   listCatalogModels: vi.fn().mockResolvedValue([]),
@@ -29,6 +36,7 @@ describe("PrinterDashboard", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    resetQueueStoreMock();
   });
 
   it("keeps loading separate from first-run and an empty Farm", () => {
@@ -141,5 +149,76 @@ describe("PrinterDashboard", () => {
 
     await waitFor(() => expect(screen.getByRole("dialog", { name: "North Bay" })).toBeInTheDocument());
     expect(screen.queryByRole("complementary", { name: "North Bay" })).not.toBeInTheDocument();
+  });
+
+  function stubWorkspaceWidth(width: number) {
+    class WorkspaceObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.callback([{ target, contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", WorkspaceObserver);
+  }
+
+  it("docks the Queue preview when no Printer is selected, and opens a chosen Job's panel", async () => {
+    stubWorkspaceWidth(1440);
+    loadWebQueueFixture();
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    const preview = await screen.findByRole("complementary", { name: "Queue preview" });
+    expect(within(preview).getByRole("list", { name: "Active Jobs" })).toBeInTheDocument();
+    fireEvent.click(within(preview).getByRole("button", { name: /Four-tool — Bay 5/ }));
+    const dock = await screen.findByRole("complementary", { name: "Job" });
+    expect(within(dock).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    fireEvent.click(within(dock).getByRole("button", { name: "Back to Queue" }));
+    expect(await screen.findByRole("complementary", { name: "Queue preview" })).toBeInTheDocument();
+  });
+
+  it("gives the Printer's detail the dock once a Printer is selected", async () => {
+    stubWorkspaceWidth(1440);
+    const monitor = store([printer()]);
+    monitor.setSelectedPrinterId("prn-1");
+    render(() => <PrinterDashboard store={monitor} />);
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "North Bay" })).toBeInTheDocument());
+    expect(screen.queryByRole("complementary", { name: "Queue preview" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Queue preview as an overlay from the toolbar at a narrow workspace", async () => {
+    stubWorkspaceWidth(1024);
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
+    expect(await screen.findByRole("dialog", { name: "Queue preview" })).toBeInTheDocument();
+  });
+
+  it("replaces the overlay's Queue preview with the chosen Job", async () => {
+    stubWorkspaceWidth(1024);
+    loadWebQueueFixture();
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
+    const dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Four-tool — Bay 5/ }));
+    const job = await screen.findByRole("region", { name: "Job" });
+    expect(within(job).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Next up" })).toBeNull();
+  });
+
+  it("closes the overlay Queue preview, and an overlay Job, with a visible Close", async () => {
+    stubWorkspaceWidth(1024);
+    loadWebQueueFixture();
+    render(() => <PrinterDashboard store={store([printer()])} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue preview" }));
+    let dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Queue preview" }));
+    dialog = await screen.findByRole("dialog", { name: "Queue preview" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Four-tool — Bay 5/ }));
+    await screen.findByRole("region", { name: "Job" });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

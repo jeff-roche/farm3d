@@ -44,6 +44,36 @@ pub enum OperationKind {
     CancelHostPrint,
     /// P6 D2: `abandon_host_operation`.
     AbandonHostOperation,
+    /// P7 D4: `add_to_queue`.
+    AddToQueue,
+    /// P7 D4: `update_queue_entry`.
+    UpdateQueueEntry,
+    /// P7 D4: `move_queue_entry`.
+    MoveQueueEntry,
+    /// P7 D4: `remove_queue_entry`.
+    RemoveQueueEntry,
+    /// P7 D4: `assign_queue_entry`.
+    AssignQueueEntry,
+    /// P7 D4: `stage_job`.
+    StageJob,
+    /// P7 D4: `start_job`.
+    StartJob,
+    /// P7 D4: `pause_job`.
+    PauseJob,
+    /// P7 D4: `resume_job`.
+    ResumeJob,
+    /// P7 D4: `cancel_job`.
+    CancelJob,
+    /// P7 D4: `release_job`.
+    ReleaseJob,
+    /// P7 D4: `retry_job`.
+    RetryJob,
+    /// P7 D4: `declare_job_outcome`.
+    DeclareJobOutcome,
+    /// P7 D4: `settle_job_material`.
+    SettleJobMaterial,
+    /// P7 D4: `correct_job_material`.
+    CorrectJobMaterial,
 }
 
 /// What [`claim`] found.

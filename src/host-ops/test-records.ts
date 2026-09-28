@@ -56,6 +56,7 @@ export function hostOperation(overrides: Partial<HostOperation> = {}): HostOpera
     dispatchedAt: null,
     uncertainSince: null,
     resolvedAt: null,
+    jobId: null,
     ...overrides,
   };
 }

@@ -6,6 +6,12 @@
  * holds Spools, or a Spool is still loaded) and `SpoolReserved` (a Spool
  * has open reservations, D8). P5 adds `SliceRevisionsExist` (a Model
  * still has Slice Revisions, D14). P6 adds `HostOperationUnresolved` (a
- * Printer, or a Slice Revision, has a pending Host Operation, D7).
+ * Printer, or a Slice Revision, has a pending Host Operation, D7). P7 D8
+ * adds `JobActive` (archive: the Printer has a non-terminal Job),
+ * `JobHistoryExists` (delete: a Job, terminal or not, references the
+ * Printer — decision 7), `QueueEntryPinned` (delete: an open Queue Entry
+ * is pinned to the Printer through `manual_printer_id`), and
+ * `QueueReferencesRevision` (Slice Revision delete: a Queue Entry or Job
+ * references it).
  */
-export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST" | "HOST_OPERATION_UNRESOLVED";
+export type LifecycleBlockerCode = "NOT_ARCHIVED" | "ALREADY_ARCHIVED" | "SPOOLS_LOADED" | "SPOOL_RESERVED" | "SLICE_REVISIONS_EXIST" | "HOST_OPERATION_UNRESOLVED" | "JOB_ACTIVE" | "JOB_HISTORY_EXISTS" | "QUEUE_ENTRY_PINNED" | "QUEUE_REFERENCES_REVISION";

@@ -56,3 +56,11 @@ export function formatGrams(mg: number, precision: 0 | 1): string {
   const tenth = roundedUnits % 10;
   return `${sign}${whole}.${tenth} g`;
 }
+
+/** A slicer's grams claim as integer milligrams, rounded up: the same f64
+ *  arithmetic as Rust's `spools::weight::grams_to_mg_round_up`, which
+ *  `add_to_queue` checks a `fileClaimConfirmed` estimate against (P7 spec
+ *  "Commands"). */
+export function gramsToMgRoundUp(grams: number): number {
+  return Math.ceil(grams * 1000);
+}

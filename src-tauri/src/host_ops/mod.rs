@@ -7,6 +7,7 @@
 //! guards ([`guards`], D7) build on top of [`repository`]'s functions, and
 //! `services` holds [`HostOperationServices`] (re-exported here).
 
+pub mod api;
 pub mod commands;
 pub mod events;
 pub mod executor;
@@ -248,6 +249,9 @@ pub struct HostOperation {
     pub dispatched_at: Option<String>,
     pub uncertain_since: Option<String>,
     pub resolved_at: Option<String>,
+    /// P7 D4: the Job this row was handed off for; `null` for a raw P6
+    /// write.
+    pub job_id: Option<String>,
 }
 
 /// `list_host_operations`' result: the stream identity a later `hostOperations`
@@ -453,6 +457,7 @@ mod tests {
             dispatched_at: None,
             uncertain_since: None,
             resolved_at: None,
+            job_id: None,
         }
     }
 }

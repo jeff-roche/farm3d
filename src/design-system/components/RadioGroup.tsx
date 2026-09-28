@@ -5,6 +5,8 @@ import styles from "./RadioGroup.module.css";
 export interface RadioOption {
   value: string;
   label: string;
+  /** A disabled option is shown but can't be chosen. */
+  disabled?: boolean;
 }
 
 export interface RadioGroupProps {
@@ -25,7 +27,7 @@ export function RadioGroup(props: RadioGroupProps) {
       {local.label && <KRadioGroup.Label class={styles.groupLabel}>{local.label}</KRadioGroup.Label>}
       <For each={local.options}>
         {(option) => (
-          <KRadioGroup.Item value={option.value} class={styles.item}>
+          <KRadioGroup.Item value={option.value} disabled={option.disabled} class={styles.item}>
             <KRadioGroup.ItemInput />
             <KRadioGroup.ItemControl class={styles.control} />
             <KRadioGroup.ItemLabel class={styles.itemLabel}>

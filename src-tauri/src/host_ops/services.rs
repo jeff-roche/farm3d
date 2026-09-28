@@ -206,6 +206,10 @@ struct CachedHostFacts {
     observed_at: String,
 }
 
+/// The in-process change broadcast's capacity (P7 D4). A subscriber that
+/// falls further behind than this sees `Lagged` and re-reads.
+const CHANGE_BROADCAST_CAPACITY: usize = 256;
+
 /// P6's Host Operation services (spec "Module layout"): the repository's
 /// callers, the executor, the reconciler, the `hostOperations` stream, the
 /// host-facts cache, the per-Printer locks, and the clock.
@@ -234,6 +238,14 @@ pub struct HostOperationServices<R: tauri::Runtime> {
     retry_attempts_run: AtomicUsize,
     /// How many retry timers were scheduled (diagnostics, tests).
     retry_timers_scheduled: AtomicUsize,
+    /// P7 D4/D6: every published row, in-process, in publish order.
+    changes: tokio::sync::broadcast::Sender<HostOperation>,
+    /// P7 D6: the id of each Printer whose host facts were just refreshed
+    /// (its capabilities may have changed).
+    facts_changes: tokio::sync::broadcast::Sender<String>,
+    /// P7 D4 "Recovery order": `true` once `start`'s first pass (host
+    /// facts, then one attempt per `uncertain` row) has finished.
+    startup_pass: tokio::sync::watch::Sender<bool>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -275,6 +287,9 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             before_outcome_publish: Mutex::new(None),
             retry_attempts_run: AtomicUsize::new(0),
             retry_timers_scheduled: AtomicUsize::new(0),
+            changes: tokio::sync::broadcast::channel(CHANGE_BROADCAST_CAPACITY).0,
+            facts_changes: tokio::sync::broadcast::channel(CHANGE_BROADCAST_CAPACITY).0,
+            startup_pass: tokio::sync::watch::channel(false).0,
         }
     }
 
@@ -343,14 +358,47 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
             for id in uncertain {
                 let _ = reconciler::attempt(&services, &id).await;
             }
+            services.startup_pass.send_replace(true);
         });
     }
 
-    /// Emits one event per row. Call only after the rows' changes committed.
+    /// Emits one event per row, and sends each row on the in-process
+    /// change broadcast. Call only after the rows' changes committed, and
+    /// (as every caller does) under the Printer's lock where a concurrent
+    /// commit could reorder them, so both go out in commit order.
     pub(crate) fn publish(&self, rows: &[HostOperation]) {
         if let Some(app) = self.app.get() {
             self.stream.publish(app, rows);
         }
+        for row in rows {
+            // An error only means nobody is subscribed.
+            let _ = self.changes.send(row.clone());
+        }
+    }
+
+    /// P7 D6/D7: a receiver of every Host Operation row published from now
+    /// on (write-ahead, mark-sent, outcomes, reconciliation, abandon), in
+    /// publish order. Never sent on a replay.
+    pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<HostOperation> {
+        self.changes.subscribe()
+    }
+
+    /// P7 D6: a receiver of the id of each Printer whose host facts were
+    /// refreshed from now on (`CapabilitiesChanged`).
+    pub fn subscribe_host_facts(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.facts_changes.subscribe()
+    }
+
+    /// P7 D4 "Recovery order": a receiver that reads `true` once the
+    /// startup pass `start` spawns (host facts of the Printers already
+    /// Online, then one reconcile attempt per `uncertain` row) finished.
+    pub fn subscribe_startup_pass(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.startup_pass.subscribe()
+    }
+
+    /// Whether that startup pass has finished.
+    pub fn startup_pass_done(&self) -> bool {
+        *self.startup_pass.borrow()
     }
 
     /// D5 "Serialization": the one lock per Printer that write commands and
@@ -710,5 +758,8 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
                 observed_at: format_time(self.clock.now()),
             },
         );
+        drop(cache);
+        // An error only means nobody is subscribed.
+        let _ = self.facts_changes.send(printer_id.to_string());
     }
 }

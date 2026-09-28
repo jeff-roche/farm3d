@@ -492,6 +492,7 @@ mod tests {
             dispatched_at: Some(super::super::format_time(dispatched_at)),
             uncertain_since: Some(super::super::format_time(dispatched_at)),
             resolved_at: None,
+            job_id: None,
         }
     }
 

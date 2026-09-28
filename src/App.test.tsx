@@ -56,13 +56,17 @@ vi.mock("./screens/AppShell", () => ({
   AppShell: (props: {
     title: string;
     printerRoster: { count: number };
-    lowSpoolCount?: number;
+    attentionSpoolCount?: number;
+    queueAttentionCount?: number;
+    activeJobs?: { id: string; stateLabel: string }[];
     children: JSX.Element;
   }) => (
     <div>
       <h1>{props.title}</h1>
       <output aria-label="Printer count">{props.printerRoster.count}</output>
-      <output aria-label="Low Spools">{props.lowSpoolCount}</output>
+      <output aria-label="Attention Spools">{props.attentionSpoolCount}</output>
+      <output aria-label="Queue attention">{props.queueAttentionCount}</output>
+      <output aria-label="Active Jobs">{(props.activeJobs ?? []).map((j) => `${j.id}:${j.stateLabel}`).join(",")}</output>
       {props.children}
     </div>
   ),
@@ -148,6 +152,23 @@ vi.mock("./host-ops/host-operations-store", async () =>
   (await import("./host-ops/host-operations-store-mock")).hostOperationsStoreMock);
 vi.mock("./host-ops/capabilities-store", async () =>
   (await import("./host-ops/capabilities-store-mock")).capabilitiesStoreMock);
+// The mocked Queue store, plus the mock module's own fixture helpers: the
+// mock outlives `vi.resetModules`, so a test reaches its state through here.
+vi.mock("./queue/queue-store", async () => {
+  const mock = await import("./queue/queue-store-mock");
+  return { ...mock.queueStoreMock, loadWebQueueFixture: mock.loadWebQueueFixture, resetQueueStoreMock: mock.resetQueueStoreMock };
+});
+type QueueStoreTestModule = typeof import("./queue/queue-store-mock").queueStoreMock & {
+  loadWebQueueFixture: () => void;
+  resetQueueStoreMock: () => void;
+};
+async function queueStore(): Promise<QueueStoreTestModule> {
+  return (await import("./queue/queue-store")) as unknown as QueueStoreTestModule;
+}
+
+vi.mock("./screens/QueueScreen", () => ({
+  QueueScreen: () => <div>Queue screen</div>,
+}));
 
 vi.mock("./screens/SlicerSettingsDialog", () => ({
   SlicerSettingsDialog: (props: { open: boolean; onOpenChange: (open: boolean) => void }) => (
@@ -168,11 +189,12 @@ const inventory = vi.hoisted(() => ({
 }));
 vi.mock("./spools/spool-store", async () => {
   const { createStore } = await import("solid-js/store");
-  const [spoolState, setSpoolState] = createStore({ spools: [] as { id: string; facets: { low: boolean } }[] });
+  const [spoolState, setSpoolState] = createStore({ spools: [] as { id: string; facets: { low: boolean; reconciliation: boolean } }[] });
   inventory.reset = () => setSpoolState("spools", []);
   inventory.onLoad = () => setSpoolState("spools", [
-    { id: "spl-low", facets: { low: true } },
-    { id: "spl-ok", facets: { low: false } },
+    { id: "spl-low", facets: { low: true, reconciliation: false } },
+    { id: "spl-reconciliation", facets: { low: false, reconciliation: true } },
+    { id: "spl-ok", facets: { low: false, reconciliation: false } },
   ]);
   return { spoolState, ensureInventoryLoaded: inventory.ensureInventoryLoaded };
 });
@@ -244,6 +266,9 @@ beforeEach(async () => {
   setStoreCommandError(null);
   vi.mocked(await import("./host-ops/host-operations-store")).startHostOperations.mockReset().mockResolvedValue(() => {});
   vi.mocked(await import("./host-ops/capabilities-store")).syncCapabilities.mockReset().mockReturnValue(() => {});
+  const queueMock = await queueStore();
+  queueMock.resetQueueStoreMock();
+  queueMock.startQueue.mockReset().mockResolvedValue(() => {});
   window.localStorage.clear();
   appState.printers = [];
   appState.loadSettings.mockReset().mockResolvedValue(SETTINGS);
@@ -365,11 +390,11 @@ describe("App", () => {
     expect(screen.getByText("Monitor")).toBeInTheDocument();
   });
 
-  it("loads the Spool inventory at startup, so the low-Spool badge counts without visiting Spools", async () => {
+  it("loads the Spool inventory at startup, so the attention-Spool badge counts (low or reconciliation) without visiting Spools", async () => {
     const { default: App } = await import("./App");
     render(() => <App />);
 
-    await waitFor(() => expect(screen.getByLabelText("Low Spools")).toHaveTextContent("1"));
+    await waitFor(() => expect(screen.getByLabelText("Attention Spools")).toHaveTextContent("2"));
     expect(inventory.ensureInventoryLoaded).toHaveBeenCalledTimes(1);
   });
 
@@ -493,6 +518,49 @@ describe("App", () => {
     unmount();
     finish?.();
     await waitFor(() => expect(disposeSlicing).toHaveBeenCalledOnce());
+  });
+
+  it("starts the Queue after Host Operations and disposes it on unmount", async () => {
+    const callOrder: string[] = [];
+    const hostOps = vi.mocked(await import("./host-ops/host-operations-store"));
+    hostOps.startHostOperations.mockImplementation(async () => {
+      callOrder.push("startHostOperations");
+      return () => {};
+    });
+    const queueMock = await queueStore();
+    const disposeQueue = vi.fn();
+    queueMock.startQueue.mockImplementation(async () => {
+      callOrder.push("startQueue");
+      return disposeQueue;
+    });
+    const { default: App } = await import("./App");
+    const { unmount } = render(() => <App />);
+    await waitFor(() => expect(queueMock.startQueue).toHaveBeenCalledOnce());
+    expect(callOrder).toEqual(["startHostOperations", "startQueue"]);
+    await Promise.resolve();
+    unmount();
+    expect(disposeQueue).toHaveBeenCalledOnce();
+  });
+
+  it("renders the Queue screen for #nav=v1/queue, not the not-available banner", async () => {
+    window.location.hash = "#nav=v1/queue";
+    const { default: App } = await import("./App");
+    render(() => <App />);
+    expect(await screen.findByRole("heading", { name: "Queue" })).toBeInTheDocument();
+    expect(await screen.findByText("Queue screen")).toBeInTheDocument();
+    expect(screen.queryByText("Queue is not available in this version.")).toBeNull();
+  });
+
+  it("resolves a Queue Entry deep link and counts what needs attention and the active Jobs", async () => {
+    (await queueStore()).loadWebQueueFixture();
+    window.location.hash = "#nav=v1/queue/job/qen-web-blocked";
+    const { default: App } = await import("./App");
+    render(() => <App />);
+    expect(await screen.findByText("Queue screen")).toBeInTheDocument();
+    expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
+    // Three awaiting operator, one blocked, and one deferred requirement.
+    expect(screen.getByRole("status", { name: "Queue attention" })).toHaveTextContent("5");
+    expect(screen.getByRole("status", { name: "Active Jobs" })).toHaveTextContent("job-web-printing:Printing");
   });
 
   it("lists the Library as an available destination", async () => {

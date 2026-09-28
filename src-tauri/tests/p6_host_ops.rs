@@ -1172,6 +1172,7 @@ fn seed_unreachable_uncertain(storage: &Storage, kind: HostOperationKind) -> Str
             host: "127.0.0.1".to_string(),
             port,
         },
+        job_id: None,
     };
     storage
         .write_repo(|tx| {
@@ -1690,6 +1691,7 @@ fn seed_uncertain_upload_on_fake(storage: &Storage, rig: &Rig) -> String {
             host: config.host,
             port: config.port,
         },
+        job_id: None,
     };
     storage
         .write_repo(|tx| {

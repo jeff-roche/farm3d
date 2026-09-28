@@ -10,12 +10,15 @@ import {
 import { hostOperation, printerCapabilities, printerStatus, resolvedPrinter } from "../host-ops/test-records";
 import type { CapabilityKey, HostOperation } from "../host-ops/types";
 import type { ResolvedPrinter } from "../printers/types";
+import { resetQueueStoreMock, setQueueStoreState } from "../queue/queue-store-mock";
+import { job, queueEntry } from "../queue/test-records";
 import { PrinterJobPanel } from "./PrinterJobPanel";
 
 vi.mock("../host-ops/host-operations-store", async () =>
   (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
 vi.mock("../host-ops/capabilities-store", async () =>
   (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
+vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 
 const PENDING_CONTROL = "A printer operation is pending. You can still pause or cancel on the printer itself.";
 const STAGED = hostOperation({
@@ -24,6 +27,7 @@ const STAGED = hostOperation({
 });
 
 beforeEach(() => {
+  resetQueueStoreMock();
   resetHostOperationsStoreMock();
   resetCapabilitiesStoreMock();
   setPrinterCapabilitiesForTest(printerCapabilities());
@@ -254,5 +258,47 @@ describe("PrinterJobPanel: no Connection", () => {
     renderPanel(resolvedPrinter({ connection: undefined, runtimeStatus: undefined }));
     expect(screen.getByText("This Printer has no Connection. Add one in Setup to stage and control prints.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+  });
+});
+
+describe("PrinterJobPanel: with an active Job (decision 9)", () => {
+  it("renders the Job's panel and hides the raw Stage/Start and raw controls", () => {
+    setHostOperationsStoreState([STAGED]);
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-1", state: "assigned", jobId: "job-1" })],
+      jobs: [job({ id: "job-1", printerId: "prn-1", state: "printing", allowedActions: ["pause", "cancel"] })],
+    });
+    renderPanel(printing());
+    expect(screen.queryByRole("region", { name: "Staged on this Printer" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel print…" })).not.toBeInTheDocument();
+    const panel = screen.getByRole("region", { name: "Job" });
+    expect(within(panel).getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Cancel…" })).toBeInTheDocument();
+    // The host's own telemetry still shows.
+    expect(screen.getByRole("region", { name: "Current print" })).toBeInTheDocument();
+  });
+
+  it("keeps the raw controls once the Job is no longer active", () => {
+    setHostOperationsStoreState([STAGED]);
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-1", state: "closed", jobId: "job-1", closeReason: "completed", position: null })],
+      jobs: [job({ id: "job-1", printerId: "prn-1", state: "completed", settlement: "settled", allowedActions: ["retry"] })],
+    });
+    renderPanel();
+    expect(screen.getByRole("region", { name: "Staged on this Printer" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Job" })).not.toBeInTheDocument();
+  });
+
+  it("still shows the Job's panel when the capability load fails; only P6's raw parts wait on it", async () => {
+    resetCapabilitiesStoreMock(); // No record: loadCapabilities rejects.
+    setQueueStoreState({
+      entries: [queueEntry({ id: "qen-1", state: "assigned", jobId: "job-1" })],
+      jobs: [job({ id: "job-1", printerId: "prn-1", state: "printing", allowedActions: ["pause", "cancel"] })],
+    });
+    renderPanel(printing());
+    expect(await screen.findByRole("alert")).toHaveTextContent("prn-1");
+    const panel = screen.getByRole("region", { name: "Job" });
+    expect(within(panel).getByRole("button", { name: "Pause" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "Printer operations" })).not.toBeInTheDocument();
   });
 });

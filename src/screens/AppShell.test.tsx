@@ -132,4 +132,27 @@ describe("AppShell", () => {
     unmount();
     expect(clearIntervalSpy).toHaveBeenCalled();
   });
+
+  it("shows the active Job count as a focusable roster that names each Job's Printer and state", async () => {
+    const onSelect = vi.fn();
+    render(() => (
+      <AppShell
+        active="monitor"
+        onSelect={onSelect}
+        title="Monitor"
+        printerRoster={roster()}
+        operationalRosters={[]}
+        adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
+        activeJobs={[{ id: "job-1", name: "Bay One", detail: "Bracket", stateLabel: "Printing" }]}
+        queueAttentionCount={2}
+      >
+        <p>Workspace</p>
+      </AppShell>
+    ));
+    const jobs = screen.getByRole("button", { name: "1 Active Jobs" });
+    await fireEvent.click(jobs);
+    expect(await screen.findByText("Printing")).toBeInTheDocument();
+    expect(screen.getByText("Bay One")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Queue (2 need attention)" })).toBeInTheDocument();
+  });
 });

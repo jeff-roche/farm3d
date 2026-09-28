@@ -47,3 +47,8 @@
   font-size: var(--f3d-type-body-size);
   color: var(--f3d-color-text);
 }
+
+.itemLabel[data-disabled] {
+  color: var(--f3d-color-text-disabled);
+  cursor: not-allowed;
+}

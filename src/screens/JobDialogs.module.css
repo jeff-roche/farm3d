@@ -1,0 +1,56 @@
+/* Shared by the Job dialogs (Assign, Start, Settle, Declare): one dense
+   column, a muted reason line beside the footer's buttons. */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(28rem, 80vw);
+}
+
+.text,
+.reason,
+.note {
+  margin: 0;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.text { color: var(--f3d-color-text); }
+.reason,
+.note { color: var(--f3d-color-text-muted); }
+
+.file {
+  font-family: var(--f3d-type-mono-font);
+  overflow-wrap: anywhere;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 1.25rem;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.footer .reason { margin-right: auto; }
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}

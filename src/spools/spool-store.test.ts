@@ -41,7 +41,7 @@ function spool(overrides: Partial<SpoolRecord> = {}): SpoolRecord {
     lifecycle: "active",
     location: { kind: "storage", storageLabel: null },
     availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
-    facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+    facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
     createdAt: "2026-09-01T00:00:00Z",
     updatedAt: "2026-09-01T00:00:00Z",
     ...overrides,
@@ -158,7 +158,7 @@ describe("moveSpool: optimistic settle", () => {
     const occupant = spool({
       id: "spl-occupant", spoolNumber: 2,
       location: { kind: "slot", slotId: "slt-1", printerId: "prn-1" },
-      facets: { loaded: true, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: true, reserved: false, low: false, confidence: "measured", reconciliation: false },
     });
     const moving = spool({ id: "spl-moving", spoolNumber: 3 });
     let resolveMove!: (value: unknown) => void;

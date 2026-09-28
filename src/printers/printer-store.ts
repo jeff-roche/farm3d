@@ -369,7 +369,8 @@ async function buildWebHostOpsPrinters(): Promise<ResolvedPrinter[]> {
       profileDrift: [],
       unknownOverrideKeys: [],
       startSafety: "confirmBedClear",
-      materialSlots: defaultWebMaterialSlots(spec.id),
+      materialSlots: defaultWebMaterialSlots(spec.id).map((slot) =>
+        spec.loadedSpoolId ? { ...slot, occupantSpoolId: spec.loadedSpoolId } : slot),
       setupGaps: [],
       connection: spec.connection,
       runtimeStatus: spec.status,

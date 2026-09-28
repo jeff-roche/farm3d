@@ -700,7 +700,15 @@ fn no_command_request_carries_a_filesystem_path() {
         let text = fs::read_to_string(&file).unwrap();
         let declaration = text
             .lines()
-            .filter(|line| !line.starts_with("import ") && !line.starts_with("//"))
+            // Doc comments are prose: a capitalised word there ("a Queue
+            // Entry's rule for becoming a Job") names no referenced type.
+            .filter(|line| {
+                let trimmed = line.trim_start();
+                !line.starts_with("import ")
+                    && !trimmed.starts_with("//")
+                    && !trimmed.starts_with("/*")
+                    && !trimmed.starts_with('*')
+            })
             .collect::<Vec<_>>()
             .join("\n");
         for field in declared_fields(&declaration) {
@@ -1544,15 +1552,6 @@ fn gcode_is_retained_byte_for_byte_with_its_claims_untrusted() {
             .iter()
             .any(|claim| claim["key"] == "printer_model" && claim["value"] == "MK4S"),
         "{stored}"
-    );
-
-    // P5 adds the slicing tables; Queue data still waits for P7.
-    assert_eq!(
-        env.count(
-            "SELECT COUNT(*) FROM sqlite_schema
-             WHERE type = 'table' AND (name LIKE '%queue%' OR name LIKE '%job%')"
-        ),
-        0
     );
 }
 

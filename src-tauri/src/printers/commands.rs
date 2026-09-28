@@ -181,6 +181,9 @@ pub async fn create_printer<R: tauri::Runtime>(
             std::slice::from_ref(&outcome.printer.id),
         );
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
@@ -210,6 +213,9 @@ pub fn set_material_slot_layout<R: tauri::Runtime>(
         &[],
         &[crate::spools::events::PrinterSlots::from(&updated)],
     );
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -259,6 +265,9 @@ pub fn update_printer<R: tauri::Runtime>(
             }
         })
         .map_err(CommandError::from_repository)?;
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -354,6 +363,9 @@ pub async fn archive_printer<R: tauri::Runtime>(
             &relocation.printer_ids,
         );
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
         warnings,
@@ -388,6 +400,9 @@ pub async fn unarchive_printer<R: tauri::Runtime>(
     {
         warnings.push(OperationWarning::credential_required(&id));
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &unarchived),
         warnings,
@@ -430,6 +445,9 @@ pub async fn delete_printer<R: tauri::Runtime>(
             warnings.push(OperationWarning::cleanup());
         }
     }
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(DeletePrinterResult {
         deleted_id: id,
         deleted_revision: expected_revision,
@@ -466,6 +484,9 @@ pub fn set_printer_override<R: tauri::Runtime>(
             printer.overrides = overrides;
         })
         .map_err(CommandError::from_repository)?;
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -499,6 +520,9 @@ pub fn rebind_printer<R: tauri::Runtime>(
             printer.last_known_good = Some(baseline);
         })
         .map_err(CommandError::from_repository)?;
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -567,6 +591,9 @@ pub fn resolve_profile_drift<R: tauri::Runtime>(
             }
         })
         .map_err(CommandError::from_repository)?;
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -848,6 +875,9 @@ pub async fn import_printers<R: tauri::Runtime>(
         .iter()
         .map(|printer| crate::catalog::resolve::resolve_printer(&services.catalog, printer))
         .collect();
+    services
+        .evaluator
+        .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     Ok(CommandSuccess::new(PrintersImportResult::Applied {
         printers: resolved,
         created_count: imported_ids.difference(&old).count(),

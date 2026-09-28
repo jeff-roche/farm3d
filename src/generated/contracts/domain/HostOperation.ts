@@ -11,4 +11,9 @@ import type { HostOperationState } from "./HostOperationState";
  * (D2/"Wire types"): present here for the reconciler and executor, never
  * serialized or exported.
  */
-export type HostOperation = { id: string, printerId: string, kind: HostOperationKind, state: HostOperationState, sliceRevisionId: string | null, sourceHostOperationId: string | null, gcodeSha256: string | null, gcodeSize: number | null, hostPath: string, endpoint: HostOperationEndpoint, failure: HostOperationFailure | null, resolution: HostOperationResolution | null, attempts: number, lastAttempt: HostOperationLastAttempt | null, noLongerPending: boolean, abandonedAt: string | null, abandonNote: string | null, createdAt: string, dispatchedAt: string | null, uncertainSince: string | null, resolvedAt: string | null, };
+export type HostOperation = { id: string, printerId: string, kind: HostOperationKind, state: HostOperationState, sliceRevisionId: string | null, sourceHostOperationId: string | null, gcodeSha256: string | null, gcodeSize: number | null, hostPath: string, endpoint: HostOperationEndpoint, failure: HostOperationFailure | null, resolution: HostOperationResolution | null, attempts: number, lastAttempt: HostOperationLastAttempt | null, noLongerPending: boolean, abandonedAt: string | null, abandonNote: string | null, createdAt: string, dispatchedAt: string | null, uncertainSince: string | null, resolvedAt: string | null,
+/**
+ * P7 D4: the Job this row was handed off for; `null` for a raw P6
+ * write.
+ */
+jobId: string | null, };

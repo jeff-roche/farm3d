@@ -1,6 +1,10 @@
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { Tare } from "../generated/contracts/domain/Tare";
 import { WEB_FIXTURE_EQUIPPED_PRINTER_ID, WEB_FIXTURE_EQUIPPED_SLOT_ID } from "../printers/printer-store";
+import { WEB_HOST_OPS_PRINTER_FINISHED } from "../host-ops/web-fixtures";
+
+/** P7's awaiting-start Job's Spool (`queue/web-fixtures.ts`). */
+export const WEB_QUEUE_AWAITING_START_SPOOL_ID = "spl-web-10";
 
 /** `just web`'s Spool inventory seed data -- no Rust backend, so this
  *  stands in for the Farm's persisted Spools/tares (P3 design's Frontend
@@ -40,7 +44,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "slot", slotId: WEB_FIXTURE_EQUIPPED_SLOT_ID, printerId: WEB_FIXTURE_EQUIPPED_PRINTER_ID },
       availability: { currentMg: 812_000, reservedMg: 0, availableMg: 812_000 },
-      facets: { loaded: true, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: true, reserved: false, low: false, confidence: "measured", reconciliation: false },
       lastMeasuredAt: "2026-09-10T09:00:00Z",
       createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-09-10T09:00:00Z",
     },
@@ -53,7 +57,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: "Shelf A2" },
       availability: { currentMg: 80_000, reservedMg: 0, availableMg: 80_000 },
-      facets: { loaded: false, reserved: false, low: true, confidence: "estimated" },
+      facets: { loaded: false, reserved: false, low: true, confidence: "estimated", reconciliation: false },
       createdAt: "2026-07-15T00:00:00Z", updatedAt: "2026-09-05T00:00:00Z",
     },
     // 3. Seeded reserved (D8's debug fixture aid, done directly here rather
@@ -66,7 +70,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: "Shelf A1" },
       availability: { currentMg: 500_000, reservedMg: 200_000, availableMg: 300_000 },
-      facets: { loaded: false, reserved: true, low: false, confidence: "measured" },
+      facets: { loaded: false, reserved: true, low: false, confidence: "measured", reconciliation: false },
       createdAt: "2026-07-20T00:00:00Z", updatedAt: "2026-09-12T00:00:00Z",
     },
     // 4. Empty.
@@ -78,7 +82,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "empty",
       location: { kind: "storage", storageLabel: "Shelf B1" },
       availability: { currentMg: 0, reservedMg: 0, availableMg: 0 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
       lastMeasuredAt: "2026-09-01T00:00:00Z",
       createdAt: "2026-05-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
     },
@@ -91,7 +95,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "archived",
       location: { kind: "storage", storageLabel: null },
       availability: { currentMg: 0, reservedMg: 0, availableMg: 0 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
       createdAt: "2026-01-10T00:00:00Z", updatedAt: "2026-06-01T00:00:00Z",
     },
     // 6-8. Three more active Spools.
@@ -103,7 +107,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: "Shelf B2" },
       availability: { currentMg: 480_000, reservedMg: 0, availableMg: 480_000 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
       createdAt: "2026-08-20T00:00:00Z", updatedAt: "2026-08-20T00:00:00Z",
     },
     {
@@ -114,7 +118,7 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: "Shelf B3" },
       availability: { currentMg: 990_000, reservedMg: 0, availableMg: 990_000 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "estimated" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "estimated", reconciliation: false },
       createdAt: "2026-09-15T00:00:00Z", updatedAt: "2026-09-15T00:00:00Z",
     },
     {
@@ -125,8 +129,40 @@ function buildWebSpools(): SpoolRecord[] {
       lifecycle: "active",
       location: { kind: "storage", storageLabel: null },
       availability: { currentMg: 750_000, reservedMg: 0, availableMg: 750_000 },
-      facets: { loaded: false, reserved: false, low: false, confidence: "estimated" },
+      facets: { loaded: false, reserved: false, low: false, confidence: "estimated", reconciliation: false },
       createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-18T00:00:00Z",
+    },
+    // 9. Needs reconciliation: an unresolved reservation from P7's deferred
+    // Job (`queue/web-fixtures.ts`'s `WEB_QUEUE_JOB_DEFERRED`) outlives the
+    // Spool's own measured weight, so it's over-reserved (P7's Spool
+    // inventory chip and "Over-reserved" marker, neither of which `just
+    // web` otherwise demonstrates).
+    {
+      id: "spl-web-9", revision: 1, spoolNumber: 9,
+      manufacturer: "Polymaker", product: "PolyLite PLA", materialFamily: "PLA",
+      colorName: "Sunset Orange", diameter: "1.75",
+      nominalMg: 1_000_000, lowThresholdMg: 10_000,
+      lifecycle: "active",
+      location: { kind: "storage", storageLabel: "Shelf A3" },
+      availability: { currentMg: 20_000, reservedMg: 25_000, availableMg: -5_000 },
+      facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: true },
+      lastMeasuredAt: "2026-09-20T00:00:00Z",
+      createdAt: "2026-06-01T00:00:00Z", updatedAt: "2026-09-20T00:00:00Z",
+    },
+    // 10. Loaded on the host-ops fixture's Finished Printer and reserved by
+    // P7's awaiting-start Job (`queue/web-fixtures.ts`), so that Job has no
+    // start blockers and `just web` can show its Start confirmation.
+    {
+      id: WEB_QUEUE_AWAITING_START_SPOOL_ID, revision: 1, spoolNumber: 10,
+      manufacturer: "Prusament", product: "PLA", materialFamily: "PLA",
+      colorName: "Azure Blue", colorHex: "#2F6FB5", diameter: "1.75",
+      nominalMg: 1_000_000, lowThresholdMg: 100_000,
+      lifecycle: "active",
+      location: { kind: "slot", slotId: `slt-web-${WEB_HOST_OPS_PRINTER_FINISHED}`, printerId: WEB_HOST_OPS_PRINTER_FINISHED },
+      availability: { currentMg: 750_000, reservedMg: 38_600, availableMg: 711_400 },
+      facets: { loaded: true, reserved: true, low: false, confidence: "measured", reconciliation: false },
+      lastMeasuredAt: "2026-09-22T00:00:00Z",
+      createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-25T09:30:00Z",
     },
   ];
 }

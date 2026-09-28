@@ -24,6 +24,7 @@ use crate::library::content::CancelFlag;
 use crate::persistence::{RepositoryError, Storage};
 use crate::printers::repository::PrinterRepository;
 use crate::printers::CatalogRef;
+use crate::slicing::compat::profiles_match;
 use crate::spools::MaterialFamily;
 
 use super::{
@@ -672,16 +673,6 @@ fn catalog_ref_for(catalog: &Catalog, variant: &CatalogVariant) -> Option<Catalo
         model_id: model.model_id.clone(),
         printer_variant: variant.printer_variant.clone(),
     })
-}
-
-/// D15: whether two profiles match on the fields the matching-Printer
-/// count compares.
-fn profiles_match(a: &PrinterProfile, b: &PrinterProfile) -> bool {
-    a.bed_shape == b.bed_shape
-        && a.printable_height_mm == b.printable_height_mm
-        && a.nozzle_diameter_mm == b.nozzle_diameter_mm
-        && a.nozzle_type == b.nozzle_type
-        && a.gcode_flavor == b.gcode_flavor
 }
 
 /// D15: the active (unarchived) Printers whose resolved profile equals

@@ -10,7 +10,11 @@
 //! - [`UnresolvedHostOperationBlocksRevisionDeletion`]: the Slice Revision
 //!   deletion blocker.
 //! - [`check_connection_change`]: `set_printer_connection` and
-//!   `clear_printer_connection` (`CONNECTION_IN_USE`).
+//!   `clear_printer_connection` (`CONNECTION_IN_USE`). Unchanged by P7
+//!   ruling R5(b): an active Job alone never blocks a Connection change,
+//!   only an unresolved Host Operation does; `RepositoryError::
+//!   ConnectionInUse::job_id` carries that operation's own `job_id`
+//!   through to `CommandError` for the Job-specific message.
 //! - [`check_import`]: `import_printers` (`HOST_OPERATION_PENDING`).
 //!
 //! `succeeded`, `failed`, and `abandoned` rows never block (D8: abandoning
@@ -148,6 +152,7 @@ pub fn check_connection_change(
         Some(pending) => Err(RepositoryError::ConnectionInUse {
             printer_id: printer_id.to_string(),
             host_operation_id: pending.id,
+            job_id: pending.job_id,
         }),
         None => Ok(()),
     }
@@ -278,6 +283,7 @@ mod tests {
                 host: "192.0.2.1".to_string(),
                 port: 7125,
             },
+            job_id: None,
         }
     }
 

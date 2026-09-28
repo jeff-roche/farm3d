@@ -1,7 +1,8 @@
 #[test]
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
-    // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8);
+    // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
+    // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -94,6 +95,24 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "cancel_host_print",
             "reconcile_host_operation",
             "abandon_host_operation",
+            "list_queue",
+            "add_to_queue",
+            "update_queue_entry",
+            "move_queue_entry",
+            "remove_queue_entry",
+            "explain_queue_entry",
+            "assign_queue_entry",
+            "release_job",
+            "retry_job",
+            "cancel_job",
+            "get_job_history",
+            "stage_job",
+            "start_job",
+            "pause_job",
+            "resume_job",
+            "declare_job_outcome",
+            "settle_job_material",
+            "correct_job_material",
         ]
     );
 }
@@ -237,6 +256,24 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::host_ops::commands::cancel_host_print,
             farm3d_lib::host_ops::commands::reconcile_host_operation,
             farm3d_lib::host_ops::commands::abandon_host_operation,
+            farm3d_lib::queue::commands::list_queue,
+            farm3d_lib::queue::commands::add_to_queue,
+            farm3d_lib::queue::commands::update_queue_entry,
+            farm3d_lib::queue::commands::move_queue_entry,
+            farm3d_lib::queue::commands::remove_queue_entry,
+            farm3d_lib::queue::commands::explain_queue_entry,
+            farm3d_lib::jobs::commands::assign_queue_entry,
+            farm3d_lib::jobs::commands::release_job,
+            farm3d_lib::jobs::commands::retry_job,
+            farm3d_lib::jobs::commands::cancel_job,
+            farm3d_lib::jobs::commands::get_job_history,
+            farm3d_lib::jobs::commands::stage_job,
+            farm3d_lib::jobs::commands::start_job,
+            farm3d_lib::jobs::commands::pause_job,
+            farm3d_lib::jobs::commands::resume_job,
+            farm3d_lib::jobs::commands::declare_job_outcome,
+            farm3d_lib::jobs::commands::settle_job_material,
+            farm3d_lib::jobs::commands::correct_job_material,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -498,6 +535,51 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         (
             "abandon_host_operation",
             json!({"operationId": "o", "hostOperationId": "h", "acknowledgement": "hostStateUnknown"}),
+        ),
+        ("list_queue", json!({})),
+        (
+            "add_to_queue",
+            json!({"operationId": "o", "sliceRevisionId": "s", "quantity": 1, "policy": "manual", "preference": "loadedFirst"}),
+        ),
+        (
+            "update_queue_entry",
+            json!({"operationId": "o", "entryId": "e", "expectedRevision": 1}),
+        ),
+        (
+            "move_queue_entry",
+            json!({"operationId": "o", "entryId": "e", "expectedRevision": 1, "toPosition": 1}),
+        ),
+        (
+            "remove_queue_entry",
+            json!({"operationId": "o", "entryId": "e", "expectedRevision": 1}),
+        ),
+        ("explain_queue_entry", json!({"entryId": "e"})),
+        (
+            "assign_queue_entry",
+            json!({"operationId": "o", "entryId": "e", "printerId": "p", "spoolId": "s"}),
+        ),
+        ("release_job", json!({"operationId": "o", "jobId": "j"})),
+        ("retry_job", json!({"operationId": "o", "jobId": "j"})),
+        ("cancel_job", json!({"operationId": "o", "jobId": "j"})),
+        ("get_job_history", json!({"jobId": "j"})),
+        ("stage_job", json!({"operationId": "o", "jobId": "j"})),
+        (
+            "start_job",
+            json!({"operationId": "o", "jobId": "j", "priorState": "ready", "acknowledgement": "bedClear"}),
+        ),
+        ("pause_job", json!({"operationId": "o", "jobId": "j"})),
+        ("resume_job", json!({"operationId": "o", "jobId": "j"})),
+        (
+            "declare_job_outcome",
+            json!({"operationId": "o", "jobId": "j", "outcome": "failed", "acknowledgement": "hostStateUnknown"}),
+        ),
+        (
+            "settle_job_material",
+            json!({"operationId": "o", "jobId": "j", "choice": {"kind": "estimated"}}),
+        ),
+        (
+            "correct_job_material",
+            json!({"operationId": "o", "jobId": "j", "entry": {"kind": "net", "netMg": 1000, "confidence": "measured"}}),
         ),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());

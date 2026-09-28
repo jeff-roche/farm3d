@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { Button, Chip, ColorSwatch, DataTable, DropdownMenu, Select, TextField } from "../design-system";
+import { Button, Chip, ColorSwatch, DataTable, DropdownMenu, Select, SeverityMarker, TextField } from "../design-system";
 import type { DataTableColumn } from "../design-system";
 import {
   applySpoolFilter,
@@ -22,9 +22,10 @@ import { SpoolFormDialog } from "./SpoolFormDialog";
 import { TareManagerDialog } from "./TareManagerDialog";
 import styles from "./SpoolInventory.module.css";
 
-const FACET_ORDER: SpoolFacetKey[] = ["loaded", "reserved", "low", "measured", "estimated"];
+const FACET_ORDER: SpoolFacetKey[] = ["loaded", "reserved", "low", "measured", "estimated", "reconciliation"];
 const FACET_LABELS: Record<SpoolFacetKey, string> = {
   loaded: "Loaded", reserved: "Reserved", low: "Low", measured: "Measured", estimated: "Estimated",
+  reconciliation: "Needs reconciliation",
 };
 
 const LIFECYCLE_OPTIONS: SpoolFilter["lifecycle"][] = ["active", "empty", "archived", "all"];
@@ -151,7 +152,16 @@ export function SpoolInventory() {
     },
     {
       id: "available", header: "Available", align: "end",
-      cell: (s) => (s.availability.reservedMg > 0 ? formatGrams(s.availability.availableMg, 0) : ""),
+      cell: (s) => (
+        <Show when={s.availability.reservedMg > 0}>
+          <span class={styles.availableCell}>
+            {formatGrams(s.availability.availableMg, 0)}
+            <Show when={s.availability.availableMg < 0}>
+              <SeverityMarker severity="warning" label="Over-reserved" />
+            </Show>
+          </span>
+        </Show>
+      ),
       sortValue: (s) => s.availability.availableMg,
     },
     {
@@ -165,6 +175,7 @@ export function SpoolInventory() {
           <Show when={s.facets.loaded}><span class={styles.chip}>Loaded</span></Show>
           <Show when={s.facets.reserved}><span class={styles.chip}>Reserved</span></Show>
           <Show when={s.facets.low}><span class={styles.chip}>Low</span></Show>
+          <Show when={s.facets.reconciliation}><span class={styles.chip}>Needs reconciliation</span></Show>
         </span>
       ),
     },

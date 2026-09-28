@@ -1,0 +1,47 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: min(26rem, 80vw);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.groupLabel {
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+}
+
+.text,
+.muted,
+.error {
+  margin: 0;
+  font-family: var(--f3d-type-body-small-font);
+  font-size: var(--f3d-type-body-small-size);
+}
+
+.text {
+  color: var(--f3d-color-text);
+}
+
+.muted {
+  color: var(--f3d-color-text-muted);
+}
+
+.error {
+  color: var(--f3d-color-danger);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

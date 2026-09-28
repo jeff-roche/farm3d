@@ -39,7 +39,8 @@ macro_rules! host_operation_columns {
         "id, printer_id, kind, slice_revision_id, source_host_operation_id, \
          gcode_sha256, gcode_size, host_path, history_mark, endpoint_json, state, failure_json, \
          resolution_json, attempts, last_attempt_at, last_attempt_reason, no_longer_pending, \
-         abandoned_at, abandon_note, created_at, dispatched_at, uncertain_since, resolved_at"
+         abandoned_at, abandon_note, created_at, dispatched_at, uncertain_since, resolved_at, \
+         job_id"
     };
 }
 
@@ -130,6 +131,7 @@ fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HostOperation> {
         dispatched_at: row.get(20)?,
         uncertain_since: row.get(21)?,
         resolved_at: row.get(22)?,
+        job_id: row.get(23)?,
     })
 }
 
@@ -268,6 +270,9 @@ pub struct NewHostOperation {
     pub host_path: String,
     pub history_mark: Option<i64>,
     pub endpoint: HostOperationEndpoint,
+    /// P7 D4: the Job this write hands off for, written only here (never
+    /// updated). `None` for a raw P6 write.
+    pub job_id: Option<String>,
 }
 
 /// D2 "Write-ahead": claims `operation_id` in the operations ledger, then
@@ -297,8 +302,9 @@ pub fn insert_dispatching(
     tx.execute(
         "INSERT INTO host_operations(
              id, operation_id, printer_id, kind, slice_revision_id, source_host_operation_id,
-             gcode_sha256, gcode_size, host_path, history_mark, endpoint_json, state, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'dispatching', ?12)",
+             gcode_sha256, gcode_size, host_path, history_mark, endpoint_json, state, created_at,
+             job_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'dispatching', ?12, ?13)",
         params![
             id,
             new_operation.operation_id,
@@ -312,6 +318,7 @@ pub fn insert_dispatching(
             new_operation.history_mark,
             to_json(&new_operation.endpoint),
             now_rfc3339(),
+            new_operation.job_id,
         ],
     )?;
     load(tx, &id)?.ok_or_else(|| not_found(&id))
@@ -659,6 +666,7 @@ mod tests {
             host_path: host_path.to_string(),
             history_mark: None,
             endpoint: endpoint(),
+            job_id: None,
         }
     }
 
@@ -678,6 +686,7 @@ mod tests {
             host_path: host_path.to_string(),
             history_mark: None,
             endpoint: endpoint(),
+            job_id: None,
         }
     }
 
@@ -1430,6 +1439,7 @@ mod tests {
             host_path: "farm3d/a.gcode".to_string(),
             history_mark: Some(0),
             endpoint: endpoint(),
+            job_id: None,
         };
         let operation = storage
             .write_repo(|tx| insert_dispatching(tx, &start))
@@ -1475,6 +1485,7 @@ mod tests {
             host_path: "farm3d/a.gcode".to_string(),
             history_mark: None,
             endpoint: endpoint(),
+            job_id: None,
         };
         let pause_operation = storage
             .write_repo(|tx| insert_dispatching(tx, &pause))

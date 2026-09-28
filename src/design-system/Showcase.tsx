@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { IconLayoutGrid, IconLayoutList } from "@tabler/icons-solidjs";
 import {
   useTheme,
@@ -32,6 +32,7 @@ import {
   ColorSwatch,
   FileDropSurface,
   SegmentedControl,
+  ReorderHandle,
   type DataTableColumn,
   type DataTableSort,
 } from ".";
@@ -219,6 +220,7 @@ export function Showcase() {
             { value: "a", label: "Option A" },
             { value: "b", label: "Option B" },
             { value: "c", label: "Option C" },
+            { value: "d", label: "Option D (disabled)", disabled: true },
           ]}
           value={radioValue()}
           onChange={setRadioValue}
@@ -312,6 +314,10 @@ export function Showcase() {
             { label: "Delete", onSelect: () => {} },
           ]}
         />
+      </Panel>
+
+      <Panel title="ReorderHandle">
+        <ReorderHandleDemo />
       </Panel>
 
       <Panel title="Progress">
@@ -488,6 +494,36 @@ export function Showcase() {
         />
       </Panel>
     </div>
+  );
+}
+
+/** A small reorderable list — each row gets its own `ReorderHandle`, driven
+ *  by keyboard (Alt+ArrowUp/Down, Alt+Home/End), its companion menu, or a
+ *  pointer drag. Each `<li>` carries `data-reorder-row`, so a drag reads
+ *  real per-row geometry instead of `ReorderHandle`'s own-height fallback. */
+function ReorderHandleDemo() {
+  const [items, setItems] = createSignal(["Bracket v3", "Hinge clip", "Enclosure lid", "Mount plate"]);
+
+  const move = (from: number, to: number) => {
+    setItems((current) => {
+      const next = current.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  return (
+    <ol class={styles.column} style={{ "list-style": "none", margin: 0, padding: 0 }}>
+      <For each={items()}>
+        {(label, index) => (
+          <li class={styles.row} data-reorder-row>
+            <ReorderHandle label={label} index={index()} count={items().length} onMove={move} />
+            <span>{label}</span>
+          </li>
+        )}
+      </For>
+    </ol>
   );
 }
 

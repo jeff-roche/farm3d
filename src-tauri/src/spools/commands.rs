@@ -484,6 +484,12 @@ pub fn debug_seed_reservation<R: tauri::Runtime>(
                 ReservationError::InvalidTransition { .. } => {
                     RepositoryError::Storage(StorageError::OperationFailed)
                 }
+                // `reserve` (the only caller here) never raises `Validation`
+                // (only `consume_measured` does) -- this arm exists only to
+                // keep this match exhaustive.
+                ReservationError::Validation { field_path } => {
+                    RepositoryError::Validation { field_path }
+                }
                 ReservationError::Storage(error) => RepositoryError::Storage(error),
             },
         )?;

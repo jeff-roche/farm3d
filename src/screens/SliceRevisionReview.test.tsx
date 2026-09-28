@@ -14,6 +14,7 @@ import {
   WEB_SLICING_REVISION_FARM3D,
   WEB_SLICING_REVISION_FARM3D_OLDER,
 } from "../slicing/web-fixtures";
+import { queueEntry } from "../queue/test-records";
 import { ModelDetailsPanel } from "./ModelDetailsPanel";
 
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
@@ -23,6 +24,7 @@ vi.mock("../host-ops/host-operations-store", async () =>
   (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
 vi.mock("../host-ops/capabilities-store", async () =>
   (await import("../host-ops/capabilities-store-mock")).capabilitiesStoreMock);
+vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 // The 3D inspector isn't under test here.
 vi.mock("./ModelPlateInspector", () => ({ ModelPlateInspector: () => <p>Inspector</p> }));
 
@@ -144,19 +146,27 @@ describe("SliceRevisionReview", () => {
     expect(screen.queryByText(/^Engine/)).toBeNull();
   });
 
-  it("announces the disabled Add to Queue… with its visible reason", async () => {
+  it("adds to the Queue from Add to Queue…, then opens the first new entry in the Queue", async () => {
+    const { queueStoreMock } = await import("../queue/queue-store-mock");
+    queueStoreMock.addToQueue.mockResolvedValueOnce({
+      entries: [queueEntry({ id: "qen-new-1", copyIndex: 1 })], jobs: [], requirements: [],
+    });
+    window.location.hash = "";
     await openReview(model("mdl-web-enclosure"), LID);
-    const queue = await screen.findByRole("button", { name: "Add to Queue…" });
-    expect(queue).toBeDisabled();
-    expect(queue).toHaveAccessibleDescription("The Queue arrives in a later version.");
-    expect(screen.getByText("The Queue arrives in a later version.")).toBeVisible();
+    const queue = screen.getByRole("button", { name: "Add to Queue…" });
+    expect(queue).toBeEnabled();
+    expect(screen.queryByText("The Queue arrives in a later version.")).toBeNull();
+    fireEvent.click(queue);
+    const dialog = await screen.findByRole("dialog", { name: "Add to Queue" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add 1 copy" }));
+    await waitFor(() => expect(window.location.hash).toBe("#nav=v1/queue/job/qen-new-1"));
+    expect(queueStoreMock.addToQueue).toHaveBeenCalledWith(WEB_SLICING_REVISION_FARM3D, 1, "recommended", "loadedFirst", {});
   });
 
-  it("offers Stage on Printer…, which opens the Stage dialog, while Add to Queue… stays disabled", async () => {
+  it("offers Stage on Printer…, which opens the Stage dialog", async () => {
     await openReview(model("mdl-web-enclosure"), LID);
     const stage = screen.getByRole("button", { name: "Stage on Printer…" });
     expect(stage).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Add to Queue…" })).toBeDisabled();
     fireEvent.click(stage);
     const dialog = await screen.findByRole("dialog", { name: "Stage on Printer" });
     expect(dialog).toHaveTextContent("Plate 1: Lid");

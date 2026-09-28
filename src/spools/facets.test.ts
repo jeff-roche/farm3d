@@ -21,7 +21,7 @@ function spool(overrides: Partial<SpoolRecord> = {}): SpoolRecord {
     lifecycle: "active",
     location: { kind: "storage", storageLabel: null },
     availability: { currentMg: 500_000, reservedMg: 0, availableMg: 500_000 },
-    facets: { loaded: false, reserved: false, low: false, confidence: "measured" },
+    facets: { loaded: false, reserved: false, low: false, confidence: "measured", reconciliation: false },
     createdAt: "2026-09-01T00:00:00Z",
     updatedAt: "2026-09-01T00:00:00Z",
     ...overrides,
@@ -77,25 +77,25 @@ describe("applySpoolFilter", () => {
     const match = spool({
       id: "spl-match", materialFamily: "PLA",
       location: { kind: "slot", slotId: "slt-x", printerId: "prn-x" },
-      facets: { loaded: true, reserved: false, low: true, confidence: "estimated" },
+      facets: { loaded: true, reserved: false, low: true, confidence: "estimated", reconciliation: false },
     });
     // Low + Estimated + PLA, but on the wrong Printer.
     const wrongPrinter = spool({
       id: "spl-wrong-printer", materialFamily: "PLA",
       location: { kind: "slot", slotId: "slt-y", printerId: "prn-y" },
-      facets: { loaded: true, reserved: false, low: true, confidence: "estimated" },
+      facets: { loaded: true, reserved: false, low: true, confidence: "estimated", reconciliation: false },
     });
     // Low + Estimated + on Printer X, but PETG.
     const wrongMaterial = spool({
       materialFamily: "PETG",
       location: { kind: "storage", storageLabel: null },
-      facets: { loaded: false, reserved: false, low: true, confidence: "estimated" },
+      facets: { loaded: false, reserved: false, low: true, confidence: "estimated", reconciliation: false },
     });
     // PLA + Printer X-ish + Low, but measured (not estimated).
     const wrongConfidence = spool({
       materialFamily: "PLA",
       location: { kind: "storage", storageLabel: null },
-      facets: { loaded: false, reserved: false, low: true, confidence: "measured" },
+      facets: { loaded: false, reserved: false, low: true, confidence: "measured", reconciliation: false },
     });
 
     const result = applySpoolFilter(
@@ -146,6 +146,22 @@ describe("applySpoolFilter", () => {
     const result = applySpoolFilter([active, archived], [], filter({ lifecycle: "all" }));
 
     expect(result.map((s) => s.id).sort()).toEqual([active.id, archived.id].sort());
+  });
+
+  it("narrows to Spools with the reconciliation facet (P7 D8)", () => {
+    const needsReconciliation = spool({
+      id: "spl-needs-reconciliation",
+      facets: { loaded: false, reserved: true, low: false, confidence: "measured", reconciliation: true },
+    });
+    const settled = spool({ id: "spl-settled" });
+
+    const result = applySpoolFilter(
+      [needsReconciliation, settled],
+      [],
+      filter({ facets: new Set(["reconciliation"]) }),
+    );
+
+    expect(result.map((s) => s.id)).toEqual([needsReconciliation.id]);
   });
 });
 

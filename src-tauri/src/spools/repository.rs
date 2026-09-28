@@ -178,11 +178,12 @@ fn query_records<P: rusqlite::Params>(
     params: P,
 ) -> Result<Vec<SpoolRecord>, StorageError> {
     let query = format!(
-        "SELECT {columns}, ms.printer_id, COALESCE(r.reserved_mg, 0)
+        "SELECT {columns}, ms.printer_id, COALESCE(r.reserved_mg, 0), COALESCE(r.has_unresolved, 0)
          FROM spools s
          LEFT JOIN material_slots ms ON ms.id = s.slot_id
          LEFT JOIN (
-             SELECT spool_id, SUM(amount_mg) AS reserved_mg
+             SELECT spool_id, SUM(amount_mg) AS reserved_mg,
+                    MAX(CASE WHEN state = 'unresolved' THEN 1 ELSE 0 END) AS has_unresolved
              FROM spool_reservations
              WHERE state IN ('active', 'unresolved')
              GROUP BY spool_id
@@ -408,9 +409,15 @@ pub(crate) fn reserved_mg(tx: &Transaction<'_>, spool_id: &str) -> Result<i64, S
 }
 
 /// D9's derivation from a [`StoredSpool`] row plus its join results
-/// (`printer_id` for an occupied slot, the summed `reserved_mg`) to the
-/// wire-shaped [`SpoolRecord`]: `location`, `availability`, and `facets`.
-fn to_record(stored: StoredSpool, printer_id: Option<String>, reserved_mg: i64) -> SpoolRecord {
+/// (`printer_id` for an occupied slot, the summed `reserved_mg`, and P7's
+/// `has_unresolved`) to the wire-shaped [`SpoolRecord`]: `location`,
+/// `availability`, and `facets`.
+fn to_record(
+    stored: StoredSpool,
+    printer_id: Option<String>,
+    reserved_mg: i64,
+    has_unresolved: bool,
+) -> SpoolRecord {
     let location = match (stored.slot_id.clone(), printer_id) {
         (Some(slot_id), Some(printer_id)) => SpoolLocation::Slot {
             slot_id,
@@ -425,6 +432,7 @@ fn to_record(stored: StoredSpool, printer_id: Option<String>, reserved_mg: i64) 
         reserved: reserved_mg > 0,
         low: matches!(stored.lifecycle, SpoolLifecycle::Active)
             && stored.current_mg <= stored.low_threshold_mg,
+        reconciliation: has_unresolved,
         confidence: stored.confidence,
     };
     SpoolRecord {
@@ -460,7 +468,8 @@ fn decode_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpoolRecord> {
     let stored = decode_stored(row)?;
     let printer_id: Option<String> = row.get(23)?;
     let reserved_mg: i64 = row.get(24)?;
-    Ok(to_record(stored, printer_id, reserved_mg))
+    let has_unresolved: i64 = row.get(25)?;
+    Ok(to_record(stored, printer_id, reserved_mg, has_unresolved != 0))
 }
 
 fn decode_stored(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSpool> {
