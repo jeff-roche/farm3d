@@ -46,11 +46,12 @@ Run `just` with no argument to list recipes. Each wraps the equivalent npm scrip
 | `just test` | `npm test` | Run the frontend test suite (Vitest) |
 | `just test-rust` | — | Run the Tauri backend's Rust test suite; builds with `--features test-support`, which adds the `fake-orca` OrcaSlicer test double |
 | `just test-orca` | — | Run the ignored `real_orca*` tests against a real OrcaSlicer; set `FARM3D_ORCA` to the engine (for example the v2.4.2 AppImage), and optionally `FARM3D_ORCA_PRESETS` to a preset source |
-| `just sim-up` | — | Start the printer simulators (Klipper + Moonraker, OctoPrint, and a fault proxy) and wait until they are ready; the first run builds the Klipper image (10–20 minutes). See [Printer simulators](#printer-simulators) |
+| `just sim-up` | — | Start the printer simulators (Klipper + Moonraker, OctoPrint, a snapshot camera, and a fault proxy) and wait until they are ready; the first run builds the Klipper image (10–20 minutes). See [Printer simulators](#printer-simulators) |
 | `just sim-status` | — | Show the simulators' containers and readiness |
 | `just test-sim` | — | Run the simulator-backed adapter tests; skips with a message if the simulators are not running |
 | `just sim-down` | — | Stop the simulators and delete their state |
 | `just sim <args>` | — | Pass-through to `sim/simctl`, for example `just sim fault klipper-shutdown` |
+| `just moonraker-live <mode>` | — | Run one ignored real-Moonraker check (`mode` defaults to `probe`) against the host in `FARM3D_MOONRAKER_HOST` (required, no default). `probe` and `watch` only read. `camera` is read-only too: it lists the host's webcams and fetches **one** snapshot with a `GET`, printing only the webcam count, each webcam's service and URL form (relative or absolute), and the frame's size, content type, and SHA-256 — never a name, URL, or host — and writes no file (`FARM3D_MOONRAKER_WEB_PORT`, default 80, is the port a relative webcam URL resolves against). `drive` **sends M112 and `FIRMWARE_RESTART`**: never point it at a printer you care about. For example `FARM3D_MOONRAKER_HOST=192.0.2.10 just moonraker-live camera` |
 | `just check-hosts` | — | Fail if a tracked or staged file names a private host from `FARM3D_PRIVATE_HOSTS` or an untracked `.private-hosts` file |
 | `just check-windows` | — | Type-check the backend for Windows (`x86_64-pc-windows-gnu`) from Linux, with no mingw toolchain: bundled C is stubbed and nothing is linked, so it proves the code compiles, not that it runs. `just check-windows clippy` lints instead. Needs `rustup target add x86_64-pc-windows-gnu` and LLVM (`llvm-ar`, `llvm-windres`) |
 | `just gen-catalog` | — | Build the disabled-by-default developer generator and regenerate the bundled printer catalog from a pinned OrcaSlicer git tag |
@@ -63,8 +64,12 @@ Adapter tests run against containerized printer simulators instead of
 real printers ([ADR-0012](./docs/adr/0012-printer-simulators-for-adapter-tests.md)):
 real Klipper on an emulated MCU behind real Moonraker (a one-extruder and
 a four-toolhead printer), real OctoPrint with its Virtual Printer, and a
-fault proxy in front of both. Needs Linux and Docker or podman with a
-compose tool.
+fault proxy in front of both. A static snapshot camera (nginx, serving a
+committed synthetic test pattern on 127.0.0.1 only) sits behind the same
+proxy, and the one-extruder Moonraker lists it as the webcam
+`farm3d-sim`, so the P8 camera and Incident-evidence tests fetch real
+frames (see [the sim camera](./sim/README.md#the-sim-camera)). Needs
+Linux and Docker or podman with a compose tool.
 
 ```sh
 just sim-up      # first run builds the Klipper image (10–20 minutes)

@@ -365,8 +365,10 @@ read, and resolved is final. An acknowledged Event stays open and
 actionable until it resolves. It resolves when its Condition clears, when
 its action completes, or, for a failed or host-cancelled Job, when the
 operator resolves it. While open, repeated observations amend it rather
-than add Events. If the Condition returns after resolution, a new Event
-is created and linked to the previous one (a recurrence).
+than add Events. If a Printer Condition, a low Spool, or a Job's start
+confirmation returns after resolution, a new Event is created and linked
+to the previous one (a recurrence). A Job's end and a Reconciliation
+Requirement get one Event each and never recur.
 _Avoid_: Toast, notification, alert
 
 **Snapshot**:

@@ -24,10 +24,15 @@ Research on 2026-09-27 found:
   always `Granted`.
 - **`notify-rust` 4.18.1**, which the plugin uses, blocks one thread per
   notification to wait for an action, and ignores `ActivationToken`.
-- **The freedesktop Desktop Notifications spec (1.3)** has everything
-  needed: the `default` action, `ActionInvoked`, `ActivationToken` (so a
-  Wayland compositor lets the clicked app raise itself), and
+- **The freedesktop Desktop Notifications spec** has everything needed:
+  the `default` action, `ActionInvoked`, `ActivationToken` (so a Wayland
+  compositor lets the clicked app raise itself), and
   `NotificationClosed`, plus the `desktop-entry` hint for attribution.
+  The owner's notification server (Plasma 6.7.5) reports spec version
+  **1.2** from `GetServerInformation` and implements all of these,
+  including the `ActivationToken` signal (P8 notification spike,
+  [`2026-09-27-p8-notification-spike.md`](../superpowers/baselines/2026-09-27-p8-notification-spike.md)).
+  farm3d doesn't gate on the reported version.
 - **Focus.** Tauri's `is_focused()` is unreliable on Linux (tauri#11323);
   `WindowEvent::Focused` is the dependable signal. Tao's `set_focus` does
   nothing for a minimized window, and Wayland needs the activation token

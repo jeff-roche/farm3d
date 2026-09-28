@@ -479,7 +479,10 @@ An opened Incident with `origin: live` and the Printer's
 `snapshotOnIncident` on yields a `CaptureIntent::Incident`. An inserted
 `job.completed` with `origin: live` and `snapshotOnCompletion` on yields a
 `CaptureIntent::Completion`. Every inserted Event with `origin: live`
-yields a notify candidate. Backfilled inserts yield neither.
+yields a notify candidate, `NotifyCandidate { event: AttentionEvent,
+change: EventChange }` (the insert's own `EventChange`, so `Inserted {
+recurred }` carries whether it is a recurrence; decision 38). Backfilled
+inserts yield neither.
 
 `AppliedChanges { events: Vec<AppliedEvent>, incidents: Vec<Incident>,
 capture: Vec<CaptureIntent>, notify: Vec<NotifyCandidate> }`, where
@@ -534,8 +537,17 @@ transaction, which rolls back and is retried once as a full pass.
 RepositoryError>` runs once in `build_runtime_services`, right after
 `jobs::recover_after_restart` and before `restore_persisted_connections`
 (no command is served yet). It is the pass above with an empty status map
-and `supervisors_started_at: None`, so every `printer.*` and `job.completed`
-entry is `Unknown`: a restart neither opens nor resolves them. Its inserts
+and `supervisors_started_at: None`, so every judgement that needs a live
+status is `Unknown`: a restart never opens a `printer.*` or
+`job.completed` Event, and never resolves one on live status. A durable
+`Absent` still beats the backfill's `Unknown`, because the durable fact
+is known before any live status is: an archived or Setup-incomplete
+Printer, or one whose offline alerts are off, makes the matching
+`printer.*` Conditions `Absent`, and a `job.completed` whose Job is no
+longer its Printer's latest (or has any other durable `Absent` fact in
+the "Observation rules" table) is `Absent` too, so the backfill resolves
+those open Events `conditionCleared` (fixtures x1–x4 and x11 in
+`p8_observe_plan.rs`; decision 35). Its inserts
 have `origin: backfill`, never notify, and never capture. Its changes are
 published once the attention runtime starts (as `jobs` publishes its
 recovered Jobs).
@@ -591,9 +603,13 @@ database. The Job's own timeline is merged in at read time, never copied.**
   Incident reopens it (`reopened`, `closed_at` NULL). At most one Incident
   per Job (a partial UNIQUE index on `job_id`). A `printer.hostFailed`
   recurrence opens a new Incident.
-- **Revision and publishing.** Every `incident_events` append, and every
-  change to the `incidents` row itself (open, close, reopen), bumps
-  `incidents.revision` by one in the same transaction. After commit, each
+- **Revision and publishing.** A new Incident row is inserted at
+  `revision` 1 together with its `opened` entry (the insert convention:
+  "opening bumps by one" counts from 0, so opening is not a second bump).
+  After that, every `incident_events` append bumps `incidents.revision`
+  by one in the same transaction. A close or a reopen changes the row and
+  appends its `closed` or `reopened` entry, and the pair costs exactly one
+  bump, so "reopen and link" costs two (decision 36). After commit, each
   Incident touched by that transaction is published **once**, as one
   `attention.incident.changed` carrying its final row (final `revision`),
   however many entries the transaction appended. The same holds for the
@@ -616,7 +632,7 @@ database. The Job's own timeline is merged in at read time, never copied.**
   | `eventAcknowledged` | `{ eventId, by: "operator" \| "system" }` | `acknowledge_attention_event`; projector (deferral) |
   | `eventResolved` | `{ eventId, resolution }` | `resolve_attention_event`; projector; Printer delete |
   | `evidenceCaptured` | `{ snapshotId, trigger }` | capture (D4) |
-  | `evidenceSkipped` | `{ reason: "cameraError" \| "diskCap", errorKind: CameraErrorKind \| null }` | capture (D4) |
+  | `evidenceSkipped` | `{ reason: "cameraError" \| "diskCap" \| "storage", errorKind: CameraErrorKind \| null }` | capture (D4) |
   | `evidencePruned` | `{ snapshotId, reason: PruneReason }` | `MediaJanitor`, startup sweep |
   | `evidencePinned` | `{ snapshotId }` | `set_snapshot_pinned` |
   | `evidenceUnpinned` | `{ snapshotId }` | `set_snapshot_pinned` |
@@ -742,7 +758,12 @@ port, in `Display`, `Debug`, or serialization):
 - **Recorded outcome.** For an `incident` capture: `evidenceCaptured` on
   success, `evidenceSkipped { reason: "cameraError", errorKind }` on a
   fetch failure, `evidenceSkipped { reason: "diskCap" }` when the cap
-  can't be met (D5). For a `completion` capture:
+  can't be met (D5), and `evidenceSkipped { reason: "storage" }` when the
+  media store is unavailable: the startup sweep failed (a failed sweep
+  never fails startup; capture stays off, with no fetch, until a later
+  janitor sweep succeeds, and `capture_snapshot` fails
+  `PERSISTENCE_UNAVAILABLE` meanwhile), or the image couldn't be written
+  (decision 37). For a `completion` capture:
   `attention::repository::record_evidence` writes the same outcome to
   the `job.completed` Event's `evidence` field (D2 "Condition detail and
   subject"), never to its planner-owned `detail`. P8 adds no kinds to
@@ -1026,9 +1047,13 @@ Task 17 (the spike host has no installed `farm3d.desktop`, so under
   classes ("farm3d test notification"), with target `{ destination:
   "monitor" }`.
 
-The candidate channel from the projector to the service is an `mpsc` of
-256. A full channel drops the candidate (the Event is still in the
-center). After `show` succeeds, the service writes `notified_at` on each
+The candidate channel from the projector to the service is a `tokio`
+`broadcast` of each committed live pass's `Arc<AppliedChanges>`
+(`AttentionServices::subscribe_applied`), with a capacity of 64 passes;
+the capture hand-off subscribes to the same channel (decision 39). A
+receiver that lags drops the passes it missed (it logs a count) and never
+shows a stale Event late: the Event is still in the center. After `show`
+succeeds, the service writes `notified_at` on each
 Event it covered (no `revision` bump, no event).
 
 ### D7. Commands and events
@@ -1529,9 +1554,12 @@ type AttentionSubject = {
   printerName: string | null; printerLocation: string | null; jobLabel: string | null;
   spoolNumber: number | null; spoolLabel: string | null;
 };
+// "storage": the media store is unavailable (the startup sweep failed, so
+// capture is disabled, or an image couldn't be written). Decision 37.
+type EvidenceSkipReason = "cameraError" | "diskCap" | "storage";
 type EvidenceOutcome =
   | { status: "captured"; snapshotId: string }
-  | { status: "skipped"; reason: "cameraError" | "diskCap"; errorKind: CameraErrorKind | null };
+  | { status: "skipped"; reason: EvidenceSkipReason; errorKind: CameraErrorKind | null };
 type AttentionDetail =
   | { kind: "printerOffline"; unreachableSince: string }
   | { kind: "printerConnectionError"; cause: "auth" | "protocol" }
@@ -1592,7 +1620,7 @@ type IncidentEntryDetail =
   | { kind: "eventAcknowledged"; eventId: string; by: "operator" | "system" }
   | { kind: "eventResolved"; eventId: string; resolution: AttentionResolution }
   | { kind: "evidenceCaptured"; snapshotId: string; trigger: SnapshotTrigger }
-  | { kind: "evidenceSkipped"; reason: "cameraError" | "diskCap"; errorKind: CameraErrorKind | null }
+  | { kind: "evidenceSkipped"; reason: EvidenceSkipReason; errorKind: CameraErrorKind | null }
   | { kind: "evidencePruned"; snapshotId: string; reason: PruneReason }
   | { kind: "evidencePinned" | "evidenceUnpinned"; snapshotId: string }
   | { kind: "noteAdded"; text: string }
@@ -2132,6 +2160,37 @@ Each departs from, or sharpens, the plan's Design reference.
     ignores the attention epoch: a pre-epoch tracker failure still
     covers, since the epoch deliberately silences it (P1 still shows the
     Printer `failed`, and its requirement still projects).
+35. **(Task 18, aligned with the implementation) A durable `Absent`
+    beats the backfill's `Unknown`.** "Startup backfill" said every
+    `printer.*` and `job.completed` entry is `Unknown` during the backfill.
+    The observer instead applies the "Observation rules" precedence there
+    too: an archived or Setup-incomplete Printer, or one with offline
+    alerts off, is `Absent` for its `printer.*` Conditions, and a
+    `job.completed` whose Job is no longer the latest (or has another
+    durable `Absent` fact) is `Absent`, so the backfill resolves those open
+    Events `conditionCleared`. Only judgements that need a live status stay
+    `Unknown`. Fixtures x1–x4 and x11 in `p8_observe_plan.rs`.
+36. **(Task 18, aligned with the implementation) A new Incident starts at
+    `revision` 1.** D3 said opening "bumps by one"; that counts from 0. The
+    row is inserted at 1 with its `opened` entry, and a close or reopen
+    (row change plus its entry) costs one bump
+    (`incidents::repository`'s tests and
+    `a_jobs_incident_opens_links_closes_and_reopens_with_the_right_revision_math`).
+37. **(Task 8 fix round 1, recorded by Task 18) `EvidenceSkipReason` gains
+    `storage`.** When the startup media sweep fails, farm3d still starts
+    (the camera is optional), and capture records
+    `evidenceSkipped { reason: "storage" }` without fetching until a later
+    janitor sweep succeeds. The same reason records an image that couldn't
+    be written.
+38. **(Task 18, aligned with the implementation) `NotifyCandidate` is
+    `{ event, change: EventChange }`**, not a `recurred` flag of its own:
+    the insert's `EventChange::Inserted { recurred }` carries it, and
+    `decide` refuses every change other than `Inserted`.
+39. **(Task 18, aligned with the implementation) The candidate channel is
+    a `broadcast` of 64 committed passes, not an `mpsc` of 256
+    candidates.** The notification service and the capture hand-off both
+    subscribe to `AttentionServices::subscribe_applied`. A lagging
+    receiver drops what it missed and never shows a stale Event late.
 
 ## Residual risks
 
@@ -2158,3 +2217,11 @@ Each departs from, or sharpens, the plan's Design reference.
   format must absorb.
 - **Notes are verbatim operator text.** farm3d never writes a URL into
   one, but an operator can.
+- **A transient protocol error opens `printer.connectionError` with no
+  grace.** A `Protocol` cause (which also covers a host that answers but
+  reports it isn't ready, `HostNotReady`) is `Misconfigured` the moment it
+  is reported, and `printer.connectionError` has no offline-style grace.
+  So a transient protocol failure from an otherwise healthy host opens an
+  Event (and notifies, if the `connectivity` class is on), which the next
+  live status then resolves
+  (`a_protocol_error_opens_a_connection_error_and_a_live_status_clears_it`).
