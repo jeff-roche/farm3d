@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft — pending controller review.
+Approved by the controller, 2026-09-27, after one review round (issue #18
+decision gate satisfied).
 
 This is the focused design for GitHub issue #18 (P8). It is Task 1 of
 `docs/superpowers/plans/2026-09-27-p8-attention-incidents-cameras-notifications.md`.

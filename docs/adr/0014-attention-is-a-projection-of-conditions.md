@@ -1,7 +1,6 @@
 # Attention is a projection of Conditions
 
-**Status:** Proposed, 2026-09-27, with the P8 spec. Pending controller
-review.
+**Status:** Accepted, 2026-09-27, with the P8 spec.
 
 ## Context
 

@@ -1,9 +1,9 @@
 # Desktop notifications over D-Bus
 
-**Status:** Proposed, 2026-09-27, with the P8 spec. Pending controller
-review. The click-activation sequence is to be confirmed by the P8
-notification spike (Task 2, automatable parts) and the installed-bundle
-pass (Task 17, owner at the desktop).
+**Status:** Accepted, 2026-09-27, with the P8 spec. The click-activation
+sequence is to be confirmed by the P8 notification spike (Task 2,
+automatable parts) and the installed-bundle pass (Task 17, owner at the
+desktop).
 
 ## Context
 
