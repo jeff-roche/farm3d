@@ -129,14 +129,6 @@ export function AttentionEventDetail(props: AttentionEventDetailProps) {
           <dd>{formatDateTime(props.event.firstObservedAt)}</dd>
         </div>
         <div class={styles.field}>
-          <dt>Last observed</dt>
-          <dd>{formatDateTime(props.event.lastObservedAt)}</dd>
-        </div>
-        <div class={styles.field}>
-          <dt>Observations</dt>
-          <dd>{props.event.observationCount}</dd>
-        </div>
-        <div class={styles.field}>
           <dt>Origin</dt>
           <dd>{ORIGIN_LABEL[props.event.origin]}</dd>
         </div>

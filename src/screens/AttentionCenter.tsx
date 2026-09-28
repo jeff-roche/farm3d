@@ -29,9 +29,11 @@ export interface AttentionCenterProps {
 const FILTER_OPTIONS: AttentionFilter[] = ["actionable", "unread", "allOpen", "resolved"];
 
 /** The row's own timestamp: when resolved, the resolution time; otherwise
- *  the Event's most recent observation. */
+ *  when the Event was first observed. Never `lastObservedAt`: an unchanged
+ *  observation publishes nothing (spec decision 40), so it would sit stale
+ *  while looking live. */
 function rowTimestamp(event: AttentionEvent): string {
-  return event.resolvedAt ?? event.lastObservedAt;
+  return event.resolvedAt ?? event.firstObservedAt;
 }
 
 /** The filters (a `SegmentedControl` for Actionable/Unread/All open/

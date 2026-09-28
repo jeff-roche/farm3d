@@ -44,6 +44,34 @@ describe("AttentionCenter", () => {
     expect(screen.queryByText("Nothing needs your attention.")).not.toBeInTheDocument();
   });
 
+  it("dates an open row by its first observation and a resolved row by its resolution", () => {
+    setAttentionStoreState({
+      events: [
+        attentionEvent({
+          id: "atn-open", resolvedAt: null, summary: "Open one.",
+          firstObservedAt: "2026-09-25T08:00:00Z", lastObservedAt: "2026-09-25T09:30:00Z",
+        }),
+      ],
+    });
+    harness({ filter: "allOpen" });
+    const openRow = screen.getByText("Open one.").closest("li")!;
+    expect(openRow.querySelector("time")!.getAttribute("datetime")).toBe("2026-09-25T08:00:00Z");
+    cleanup();
+
+    setAttentionStoreState({
+      events: [
+        attentionEvent({
+          id: "atn-done", resolvedAt: "2026-09-25T10:00:00Z", readAt: "2026-09-25T10:00:00Z",
+          resolution: "conditionCleared", summary: "Resolved one.",
+          firstObservedAt: "2026-09-25T08:00:00Z", lastObservedAt: "2026-09-25T09:30:00Z",
+        }),
+      ],
+    });
+    harness({ filter: "resolved" });
+    const resolvedRow = screen.getByText("Resolved one.").closest("li")!;
+    expect(resolvedRow.querySelector("time")!.getAttribute("datetime")).toBe("2026-09-25T10:00:00Z");
+  });
+
   it("lists open Events with severity, summary, and selecting a row calls onSelect", async () => {
     const event = attentionEvent({
       id: "atn-1", requiresAction: true, resolvedAt: null, severity: "fatal", summary: "Bay 1 printer-reported failure.",

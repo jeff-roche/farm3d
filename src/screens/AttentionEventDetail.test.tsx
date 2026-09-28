@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("AttentionEventDetail", () => {
-  it("shows the severity marker (shape/label/color), source, timestamps, and observation count", () => {
+  it("shows the severity marker (shape/label/color), source, and first-observed time", () => {
     printersState.push({ id: "prn-1" });
     const event = attentionEvent({
       id: "atn-1", severity: "fatal", firstObservedAt: "2026-09-25T00:00:00Z",
@@ -31,8 +31,20 @@ describe("AttentionEventDetail", () => {
 
     expect(screen.getByRole("status", { name: "Fatal" })).toBeInTheDocument();
     expect(screen.getByText("Printer")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("First observed")).toBeInTheDocument();
     expect(screen.getAllByText(/2026/).length).toBeGreaterThan(0);
+  });
+
+  it("never shows the last-observed time or the observation count, which don't update live", () => {
+    const event = attentionEvent({
+      id: "atn-1", firstObservedAt: "2026-09-25T00:00:00Z",
+      lastObservedAt: "2026-09-26T00:00:00Z", observationCount: 3,
+    });
+    render(() => <AttentionEventDetail event={event} mode="inline" onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Last observed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Observations")).not.toBeInTheDocument();
+    expect(screen.queryByText("3")).not.toBeInTheDocument();
   });
 
   it("shows the recurrence link and navigates to the earlier occurrence", async () => {
