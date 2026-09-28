@@ -313,6 +313,48 @@ pub fn start<R: tauri::Runtime>(services: &Arc<RuntimeServices<R>>, app: &AppHan
     tauri::async_runtime::spawn(task.run());
 }
 
+/// How often a pass that keeps failing is logged again.
+const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Rate-limits the projector's failure log: a pass that keeps failing
+/// (about once a second, on every wake and tick) logs its first failure,
+/// then at most once per [`FAILURE_LOG_INTERVAL`] with how many failures it
+/// held back. A successful pass starts over.
+#[derive(Default, Debug)]
+struct FailureLog {
+    last_logged: Option<std::time::Instant>,
+    held_back: u64,
+}
+
+impl FailureLog {
+    /// A pass failed at `now`. `Some(held_back)` when this failure should
+    /// be logged, with how many were held back since the last one logged.
+    fn failed(&mut self, now: std::time::Instant) -> Option<u64> {
+        match self.last_logged {
+            Some(last) if now.duration_since(last) < FAILURE_LOG_INTERVAL => {
+                self.held_back += 1;
+                None
+            }
+            _ => {
+                self.last_logged = Some(now);
+                Some(std::mem::take(&mut self.held_back))
+            }
+        }
+    }
+
+    fn succeeded(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn held_back_note(held_back: u64) -> String {
+    match held_back {
+        0 => String::new(),
+        1 => " (and 1 more failure since the last report)".to_string(),
+        n => format!(" (and {n} more failures since the last report)"),
+    }
+}
+
 struct Projector<R: tauri::Runtime> {
     _task: TaskGuard,
     services: Weak<RuntimeServices<R>>,
@@ -366,6 +408,7 @@ impl<R: tauri::Runtime> Projector<R> {
             }
         }
         let mut last_pass: Option<tokio::time::Instant> = None;
+        let mut failures = FailureLog::default();
         loop {
             if !self.wait_while_held().await || !self.pace(last_pass).await {
                 return;
@@ -379,9 +422,18 @@ impl<R: tauri::Runtime> Projector<R> {
             }
             let waiting = std::mem::take(&mut *lock(&services.attention.barriers));
             last_pass = Some(tokio::time::Instant::now());
-            if let Err(error) = run_pass(&services) {
-                // Repository errors carry no credential, so neither does this.
-                eprintln!("farm3d: attention projector: a pass failed: {error:?}");
+            match run_pass(&services) {
+                Ok(_) => failures.succeeded(),
+                Err(error) => {
+                    if let Some(held_back) = failures.failed(std::time::Instant::now()) {
+                        // Repository errors carry no credential, so neither
+                        // does this.
+                        eprintln!(
+                            "farm3d: attention projector: a pass failed: {error:?}{}",
+                            held_back_note(held_back)
+                        );
+                    }
+                }
             }
             for done in waiting {
                 let _ = done.send(());
@@ -479,5 +531,29 @@ impl<R: tauri::Runtime> Projector<R> {
             // A wake source went away with the runtime.
             Err(RecvError::Closed) => Wake::Stop,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failing_pass_logs_first_then_once_a_minute_with_what_it_held_back() {
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut log = FailureLog::default();
+        assert_eq!(log.failed(at(0)), Some(0), "the first failure is logged");
+        for second in 1..60 {
+            assert_eq!(log.failed(at(second)), None, "held back at {second}s");
+        }
+        assert_eq!(log.failed(at(60)), Some(59), "a minute on, with the count");
+        assert_eq!(log.failed(at(61)), None);
+
+        // A success starts over: the next failure is logged at once.
+        log.succeeded();
+        assert_eq!(log.failed(at(62)), Some(0));
+        assert_eq!(held_back_note(0), "");
+        assert_eq!(held_back_note(59), " (and 59 more failures since the last report)");
     }
 }
