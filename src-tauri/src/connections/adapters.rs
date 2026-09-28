@@ -137,7 +137,12 @@ pub const MOONRAKER_SIM_VERSION: &str = "Moonraker v0.11.0-1-g1cfb0c4-prind API 
 pub const MOONRAKER_READ_ONLY_VERSION: &str = "Moonraker 1.5.2 API 1.4.0 (read-only hardware)";
 
 /// D6 "Rows at the end of P6": a `sim` row for every Moonraker capability.
-/// `camera` is the camera query only; the simulator has no webcam (Gate H).
+/// `camera` is the camera query only. The P6 simulator listed no webcam
+/// (Gate H); since P8 the single-extruder simulator lists `[webcam
+/// farm3d-sim]`, so the query has a non-empty `sim` answer, and the P8 run
+/// `docs/superpowers/baselines/2026-09-28-p8-sim-manifest-20260928T150610Z.json`
+/// resolved and fetched a frame from it (`tests/sim_moonraker.rs`'s P8
+/// section and `tests/p8_tracer.rs`).
 static MOONRAKER_EVIDENCE: LazyLock<Vec<(CapabilityKey, CapabilityEvidence)>> =
     LazyLock::new(|| {
         CapabilityKey::ALL
