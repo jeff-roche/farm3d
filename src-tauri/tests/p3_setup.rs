@@ -956,7 +956,7 @@ fn export_v3_carries_material_slots_without_occupancy() {
     let writes = documents.writes.lock().unwrap();
     assert_eq!(writes.len(), 1);
     let document: Value = serde_json::from_slice(&writes[0]).unwrap();
-    assert_eq!(document["schemaVersion"], json!(3));
+    assert_eq!(document["schemaVersion"], json!(4));
     let exported_slots = document["printers"][0]["materialSlots"].as_array().unwrap();
     assert_eq!(exported_slots.len(), 2);
     assert_eq!(

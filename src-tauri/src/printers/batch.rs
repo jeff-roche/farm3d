@@ -32,12 +32,14 @@ use tokio::sync::watch;
 use ts_rs::TS;
 use zeroize::Zeroizing;
 
+use crate::cameras::{config as camera_config, CameraSource, CameraSourceInput};
 use crate::catalog::resolve::{resolve_catalog_ref, resolve_printer, ResolvedPrinter};
 use crate::catalog::{BedShape, PrinterProfile};
 use crate::connections::{ConnectionConfig, ProbeResult, ReportedCapabilities};
 use crate::contracts::command::{
     CommandError, CommandSuccess, ErrorCode, IncomingContractVersion, JsonValue,
 };
+use crate::printers::alerts::AlertDefaults;
 use crate::printers::commands::{OperationWarning, OperationWarningCode};
 use crate::printers::create::{
     create_printer_with, probe_submission, validate_location, validate_name, CreatePrinterOptions,
@@ -115,9 +117,76 @@ pub struct BatchShared {
     #[serde(default)]
     #[ts(optional)]
     pub slot_layout: Option<Vec<crate::spools::slots::SlotSpec>>,
+    /// P8 D4: the camera shape every row's own camera is built from (see
+    /// `CameraTemplate`). Validated once, up front. `None`: no row gets a
+    /// camera.
+    #[serde(default)]
+    #[ts(optional)]
+    pub camera_template: Option<CameraTemplate>,
+    /// P8: written as each created Printer's own alert defaults. `None`:
+    /// no row (the defaults apply).
+    #[serde(default)]
+    #[ts(optional)]
+    pub alert_defaults: Option<AlertDefaults>,
 }
 
-#[derive(Deserialize, Debug, TS)]
+/// P8 "Wire types": a batch's shared camera shape. It never holds an
+/// endpoint: each row's camera is built on its own at commit.
+///
+/// - `hostWebcam` stores `webcamName` (and `webPort`) on every row with a
+///   Connection that can list webcams; each resolves against that row's
+///   own Connection at fetch time.
+/// - `snapshotUrl` builds `http://<host>:<port><path>` per row, `host`
+///   being the row's `cameraHostOverride`, else its Connection host, and
+///   validates it like a manual URL. `path` starts with `/`, is at most
+///   1024 characters, and has no `#`, backslash, or whitespace.
+///
+/// A row with neither a Connection nor an override gets no camera.
+#[derive(Deserialize, Clone, PartialEq, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "command/CameraTemplate.ts"
+)]
+pub enum CameraTemplate {
+    HostWebcam {
+        webcam_name: String,
+        web_port: Option<u16>,
+    },
+    SnapshotUrl {
+        path: String,
+        port: u16,
+    },
+}
+
+/// Never prints a snapshot path: its query can carry a camera token.
+impl fmt::Debug for CameraTemplate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CameraTemplate::HostWebcam {
+                webcam_name,
+                web_port,
+            } => formatter
+                .debug_struct("HostWebcam")
+                .field("webcam_name", webcam_name)
+                .field("web_port", web_port)
+                .finish(),
+            CameraTemplate::SnapshotUrl { port, .. } => formatter
+                .debug_struct("SnapshotUrl")
+                .field("path", &"<redacted>")
+                .field("port", port)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "command/BatchRowInput.ts")]
 pub struct BatchRowInput {
@@ -129,6 +198,30 @@ pub struct BatchRowInput {
     #[serde(default)]
     #[ts(optional)]
     pub connection: Option<BatchRowConnection>,
+    /// P8 D4: the host this row's `snapshotUrl` camera uses instead of its
+    /// Connection host (a camera on another box). A bare host: no user
+    /// name, port, or path. Blank is none. Only meaningful with a
+    /// `snapshotUrl` camera template.
+    #[serde(default)]
+    #[ts(optional)]
+    pub camera_host_override: Option<String>,
+}
+
+/// Redacts the camera host override: it only ever reaches a camera URL.
+impl fmt::Debug for BatchRowInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BatchRowInput")
+            .field("row_id", &self.row_id)
+            .field("name", &self.name)
+            .field("location", &self.location)
+            .field("connection", &self.connection)
+            .field(
+                "camera_host_override",
+                &self.camera_host_override.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Deserialize, Debug, TS)]
@@ -453,6 +546,8 @@ struct PlannedRow {
     name: String,
     location: Option<String>,
     connection: Option<PlannedConnection>,
+    /// Trimmed, checked against the `snapshotUrl` template at plan time.
+    camera_host_override: Option<String>,
     errors: Vec<BatchRowError>,
     warnings: Vec<BatchRowWarning>,
 }
@@ -544,10 +639,117 @@ fn validate_shared_layout(shared: &BatchShared) -> Result<(), CommandError> {
     crate::spools::slots::validate_layout(layout).map_err(CommandError::from_repository)
 }
 
+/// P8 D4: the shared camera template, validated once, up front (like the
+/// layout), with a batch-wide `VALIDATION` on
+/// `shared.cameraTemplate.<field>`. Returns it normalized (the webcam name
+/// trimmed).
+fn normalize_camera_template(template: &CameraTemplate) -> Result<CameraTemplate, CommandError> {
+    const PREFIX: &str = "shared.cameraTemplate";
+    match template {
+        CameraTemplate::HostWebcam {
+            webcam_name,
+            web_port,
+        } => {
+            let source = camera_config::validate_source(
+                &CameraSource::HostWebcam {
+                    webcam_name: webcam_name.clone(),
+                    webcam_service: None,
+                    web_port: *web_port,
+                },
+                PREFIX,
+            )?;
+            match source {
+                CameraSource::HostWebcam {
+                    webcam_name,
+                    web_port,
+                    ..
+                } => Ok(CameraTemplate::HostWebcam {
+                    webcam_name,
+                    web_port,
+                }),
+                CameraSource::SnapshotUrl { .. } => Err(CommandError::internal()),
+            }
+        }
+        CameraTemplate::SnapshotUrl { path, port } => {
+            let path = camera_config::validate_template_path(path, &format!("{PREFIX}.path"))?;
+            if *port == 0 {
+                return Err(CommandError::validation_at(
+                    format!("{PREFIX}.port"),
+                    "The camera port must be between 1 and 65535.",
+                ));
+            }
+            Ok(CameraTemplate::SnapshotUrl { path, port: *port })
+        }
+    }
+}
+
+/// P8 D4: one row's own camera, built from the template and the row's own
+/// Connection (the one it is committed with) or its host override. Nothing
+/// comes from another row. A row whose camera can't be built keeps its
+/// Printer and gets a row error instead.
+fn row_camera(
+    template: Option<&CameraTemplate>,
+    index: usize,
+    host_override: Option<&str>,
+    connection: Option<&ConnectionConfig>,
+) -> (Option<CameraSourceInput>, Option<BatchRowError>) {
+    match template {
+        None => (None, None),
+        Some(CameraTemplate::HostWebcam {
+            webcam_name,
+            web_port,
+        }) => match connection {
+            None => (None, None),
+            Some(config) if !crate::cameras::resolve::supports_host_webcams(&config.kind) => (
+                None,
+                Some(validation_error(
+                    "shared.cameraTemplate.kind".to_string(),
+                    "This Printer's adapter can't list webcams, so it has no camera. Set a \
+                     snapshot URL in its Setup.",
+                )),
+            ),
+            Some(_) => (
+                Some(CameraSourceInput(CameraSource::HostWebcam {
+                    webcam_name: webcam_name.clone(),
+                    webcam_service: None,
+                    web_port: *web_port,
+                })),
+                None,
+            ),
+        },
+        Some(CameraTemplate::SnapshotUrl { path, port }) => {
+            let (host, field_path) = match (host_override, connection) {
+                (Some(host), _) => (host, format!("rows[{index}].cameraHostOverride")),
+                (None, Some(config)) => (
+                    config.host.as_str(),
+                    "shared.cameraTemplate.path".to_string(),
+                ),
+                (None, None) => return (None, None),
+            };
+            match camera_config::template_snapshot_url(host, *port, path) {
+                Some(snapshot_url) => (
+                    Some(CameraSourceInput(CameraSource::SnapshotUrl {
+                        snapshot_url,
+                    })),
+                    None,
+                ),
+                None => (
+                    None,
+                    Some(validation_error(
+                        field_path,
+                        "This Printer's camera URL would not be valid, so it has no camera.",
+                    )),
+                ),
+            }
+        }
+    }
+}
+
 /// Tracks what earlier rows in the batch have claimed.
 struct PlanState<'a> {
     repository: PrinterRepository,
     shared_secret: Option<&'a Zeroizing<String>>,
+    camera_template: Option<&'a CameraTemplate>,
     existing_names: HashSet<String>,
     batch_names: HashSet<String>,
     /// Host identity -> the `rowId` that claimed it.
@@ -632,6 +834,36 @@ impl PlanState<'_> {
         }))
     }
 
+    /// P8 D4: a row's camera host override, trimmed (blank is none). It
+    /// rejects the row, like an invalid name, when it is not a bare host
+    /// that makes a valid URL with the `snapshotUrl` template, or when the
+    /// template is not a `snapshotUrl` one. The message never quotes it.
+    fn plan_camera_host_override(
+        &self,
+        index: usize,
+        value: Option<&str>,
+        errors: &mut Vec<BatchRowError>,
+    ) -> Option<String> {
+        let host = value.map(str::trim).filter(|host| !host.is_empty())?;
+        let field_path = format!("rows[{index}].cameraHostOverride");
+        match self.camera_template {
+            Some(CameraTemplate::SnapshotUrl { path, port }) => {
+                if camera_config::template_snapshot_url(host, *port, path).is_some() {
+                    return Some(host.to_string());
+                }
+                errors.push(validation_error(
+                    field_path,
+                    "Enter a camera host name or address with no user name, port, or path.",
+                ));
+            }
+            _ => errors.push(validation_error(
+                field_path,
+                "A camera host override applies only to a snapshot URL camera template.",
+            )),
+        }
+        None
+    }
+
     fn plan_row(&mut self, index: usize, row: BatchRowInput) -> Result<Plan, CommandError> {
         let mut errors = Vec::new();
         let name = validate_name(&row.name)
@@ -642,7 +874,9 @@ impl PlanState<'_> {
                 errors.push(row_error(&error, Some(format!("rows[{index}].location"))))
             })
             .ok();
-        let (Some(name), Some(location)) = (name, location) else {
+        let camera_host_override =
+            self.plan_camera_host_override(index, row.camera_host_override.as_deref(), &mut errors);
+        let (Some(name), Some(location), true) = (name, location, errors.is_empty()) else {
             return Ok(Plan::Rejected(index, rejected(row.row_id, errors)));
         };
 
@@ -673,6 +907,7 @@ impl PlanState<'_> {
             name,
             location,
             connection,
+            camera_host_override,
             errors,
             warnings,
         }))
@@ -688,6 +923,7 @@ enum Plan {
 
 async fn commit_row<R: tauri::Runtime>(
     services: &RuntimeServices<R>,
+    app: &AppHandle<R>,
     shared: &BatchShared,
     profile: &PrinterProfile,
     mut row: PlannedRow,
@@ -710,7 +946,7 @@ async fn commit_row<R: tauri::Runtime>(
         None => {}
     }
 
-    let options = |connection| CreatePrinterOptions {
+    let options = |connection, camera| CreatePrinterOptions {
         name: row.name.clone(),
         catalog_ref: shared.catalog_ref.clone(),
         location: row.location.clone(),
@@ -723,13 +959,26 @@ async fn commit_row<R: tauri::Runtime>(
             .unwrap_or_else(crate::spools::slots::default_layout),
         // D12: batch never loads Spools (user decision 3).
         initial_loads: Vec::new(),
+        camera,
+        // P8: each Printer gets its own row of the shared values.
+        alert_defaults: shared.alert_defaults,
     };
     let connection = row
         .connection
         .take()
         .map(|planned| (planned.config, planned.secret));
     let had_connection = connection.is_some();
-    let mut created = create_printer_with(services, options(connection)).await;
+    let camera_for = |connection: Option<&ConnectionConfig>| {
+        row_camera(
+            shared.camera_template.as_ref(),
+            row.index,
+            row.camera_host_override.as_deref(),
+            connection,
+        )
+    };
+    let (camera, camera_error) = camera_for(connection.as_ref().map(|(config, _)| config));
+    row.errors.extend(camera_error);
+    let mut created = create_printer_with(services, options(connection, camera)).await;
     if let Err(error) = &created {
         // A host claimed since planning, or an unwritable credential store,
         // costs the row its Connection, not its Printer (D1).
@@ -740,7 +989,10 @@ async fn commit_row<R: tauri::Runtime>(
             )
         {
             row.errors.push(row_error(error, None));
-            created = create_printer_with(services, options(None)).await;
+            // Without its Connection the row's camera is rebuilt from its
+            // override alone (a host webcam has nothing to resolve against).
+            let (camera, _) = camera_for(None);
+            created = create_printer_with(services, options(None, camera)).await;
         }
     }
 
@@ -748,6 +1000,16 @@ async fn commit_row<R: tauri::Runtime>(
         Ok(created) => {
             row.warnings
                 .extend(created.warnings.iter().filter_map(operation_warning));
+            // P8 D4: the new source's own fresh health (`unknown`), never
+            // another row's.
+            if let Some(kind) = created.camera_kind {
+                services.cameras.source_changed(
+                    app,
+                    &services.attention.stream,
+                    &created.printer.id,
+                    Some(kind),
+                );
+            }
             let outcome = if created.printer.connection.is_some() {
                 BatchRowOutcome::Created
             } else {
@@ -772,17 +1034,25 @@ async fn commit_row<R: tauri::Runtime>(
 /// bounded concurrency. Results come back in request order.
 pub async fn create_printers_batch_with<R: tauri::Runtime>(
     services: &RuntimeServices<R>,
+    app: &AppHandle<R>,
     input: CreatePrintersBatchInput,
 ) -> Result<CreatePrintersBatchOutput, CommandError> {
     validate_correlation(&input)?;
     validate_shared_layout(&input.shared)?;
+    let camera_template = input
+        .shared
+        .camera_template
+        .as_ref()
+        .map(normalize_camera_template)
+        .transpose()?;
     let CreatePrintersBatchInput {
         batch_id,
-        shared,
+        mut shared,
         shared_credential,
         probe,
         rows,
     } = input;
+    shared.camera_template = camera_template;
     let shared_secret = shared_credential.as_ref().and_then(SecretInput::non_blank);
     drop(shared_credential);
 
@@ -822,6 +1092,7 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
     let mut state = PlanState {
         repository,
         shared_secret: shared_secret.as_ref(),
+        camera_template: shared.camera_template.as_ref(),
         existing_names,
         batch_names: HashSet::new(),
         batch_hosts: HashMap::new(),
@@ -867,7 +1138,7 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
                 if *cancel.borrow() {
                     return row.cancelled();
                 }
-                commit_row(services, shared, profile, row, probed).await
+                commit_row(services, app, shared, profile, row, probed).await
             }
         })
         .buffer_unordered(PROBE_CONCURRENCY)
@@ -879,6 +1150,11 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
 
     let rows: Vec<BatchRowResult> = results.into_iter().flatten().collect();
     debug_assert_eq!(rows.len(), row_count, "every row yields exactly one result");
+    // P8 D2 "Wakes": the Attention projector re-reads Printers, and the new
+    // ones' alert defaults.
+    if rows.iter().any(|row| row.printer.is_some()) {
+        services.attention.poke();
+    }
     Ok(CreatePrintersBatchOutput { batch_id, rows })
 }
 
@@ -886,14 +1162,14 @@ pub async fn create_printers_batch_with<R: tauri::Runtime>(
 
 #[tauri::command]
 pub async fn create_printers_batch<R: tauri::Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     bootstrap: tauri::State<'_, crate::bootstrap::BootstrapState<RuntimeServices<R>>>,
     contract_version: IncomingContractVersion,
     input: CreatePrintersBatchInput,
 ) -> Result<CommandSuccess<CreatePrintersBatchOutput>, CommandError> {
     contract_version.validate()?;
     let services = bootstrap.ready()?;
-    create_printers_batch_with(&services, input)
+    create_printers_batch_with(&services, &app, input)
         .await
         .map(CommandSuccess::new)
 }
@@ -1009,6 +1285,8 @@ mod tests {
             default_bed_type: None,
             start_safety: StartSafety::ConfirmBedClear,
             slot_layout,
+            camera_template: None,
+            alert_defaults: None,
         }
     }
 

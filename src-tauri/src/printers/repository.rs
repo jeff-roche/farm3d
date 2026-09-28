@@ -8,6 +8,7 @@ use crate::spools::movement::{self, MoveOutcome};
 use crate::spools::operations::{self, Claim, OperationKind};
 use crate::spools::slots::{self, InitialLoad, SlotSpec};
 
+use super::create::PrinterSetupExtras;
 use super::host_identity::canonical_host_identity;
 use super::lifecycle::{evaluate, LifecycleAction};
 use super::{StartSafety, StoredPrinter};
@@ -196,10 +197,32 @@ impl PrinterRepository {
     /// load, if any).
     pub fn create_with_layout(
         &self,
+        printer: StoredPrinter,
+        provisional_reference: Option<&str>,
+        slot_layout: &[SlotSpec],
+        initial_loads: &[InitialLoad],
+    ) -> Result<StoredPrinter, RepositoryError> {
+        self.create_with_setup(
+            printer,
+            provisional_reference,
+            slot_layout,
+            initial_loads,
+            &PrinterSetupExtras::default(),
+        )
+    }
+
+    /// [`create_with_layout`](Self::create_with_layout), plus P8's setup
+    /// rows: the camera source and alert defaults in `setup` (already
+    /// validated) are written right after the Printer row, in the same
+    /// transaction, so anything that rolls the create back (an invalid
+    /// layout, a rejected initial load) takes them with it.
+    pub fn create_with_setup(
+        &self,
         mut printer: StoredPrinter,
         provisional_reference: Option<&str>,
         slot_layout: &[SlotSpec],
         initial_loads: &[InitialLoad],
+        setup: &PrinterSetupExtras,
     ) -> Result<StoredPrinter, RepositoryError> {
         validate_id(&printer.id).map_err(|_| RepositoryError::Validation { field_path: "id" })?;
         let now = crate::printers::now_rfc3339();
@@ -215,6 +238,7 @@ impl PrinterRepository {
                     [reference],
                 )?;
             }
+            write_setup(transaction, &printer.id, setup, &printer.created_at)?;
             let created_slots = slots::insert_layout(transaction, &printer.id, slot_layout)?;
             if let Some((revision, updated_at)) = crate::spools::initial_loads::apply_initial_loads(
                 transaction,
@@ -609,9 +633,33 @@ impl PrinterRepository {
     pub fn replace_all(
         &self,
         expected: &[(String, i64)],
-        mut imported: Vec<StoredPrinter>,
+        imported: Vec<StoredPrinter>,
         layouts: &std::collections::HashMap<String, Vec<SlotSpec>>,
     ) -> Result<Vec<StoredPrinter>, RepositoryError> {
+        self.replace_all_with_setup(expected, imported, layouts, &Default::default())
+            .map(|(stored, _)| stored)
+    }
+
+    /// [`replace_all`](Self::replace_all), plus P8's setup rows (schema 4):
+    /// the replaced Printers' `printer_cameras` and `printer_alert_defaults`
+    /// rows cascade with the `DELETE FROM printers`, and each imported
+    /// Printer's `setups` entry (already validated) is written after its
+    /// row. Also returns every camera source stored before the import, read
+    /// in the same transaction, so the caller can tell which Printers'
+    /// sources changed.
+    pub fn replace_all_with_setup(
+        &self,
+        expected: &[(String, i64)],
+        mut imported: Vec<StoredPrinter>,
+        layouts: &std::collections::HashMap<String, Vec<SlotSpec>>,
+        setups: &std::collections::HashMap<String, PrinterSetupExtras>,
+    ) -> Result<
+        (
+            Vec<StoredPrinter>,
+            std::collections::HashMap<String, crate::cameras::CameraSource>,
+        ),
+        RepositoryError,
+    > {
         self.storage.write_repo(|transaction| {
             let mut statement = transaction
                 .prepare("SELECT id, revision FROM printers ORDER BY CAST(id AS BLOB)")?;
@@ -649,6 +697,10 @@ impl PrinterRepository {
             let old_references = transaction.prepare("SELECT DISTINCT json_extract(connection_json, '$.credentialRef') FROM printers WHERE json_extract(connection_json, '$.credentialRef') IS NOT NULL")?
                 .query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
             let imported_references = imported.iter().filter_map(|printer| printer.connection.as_ref()?.credential_ref.clone()).collect::<std::collections::HashSet<_>>();
+            let previous_cameras = crate::cameras::config::list_all(transaction)?
+                .into_iter()
+                .map(|camera| (camera.printer_id, camera.source))
+                .collect();
             transaction.execute("DELETE FROM printers", [])?;
             let now = crate::printers::now_rfc3339();
             for printer in &mut imported {
@@ -664,6 +716,9 @@ impl PrinterRepository {
                 let default_layout = slots::default_layout();
                 let layout = layouts.get(&printer.id).unwrap_or(&default_layout);
                 printer.material_slots = slots::insert_layout(transaction, &printer.id, layout)?;
+                if let Some(setup) = setups.get(&printer.id) {
+                    write_setup(transaction, &printer.id, setup, &now)?;
+                }
             }
             for reference in old_references.difference(&imported_references) {
                 enqueue_credential_cleanup(
@@ -674,9 +729,27 @@ impl PrinterRepository {
                 )?;
             }
             imported.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
-            Ok(imported)
+            Ok((imported, previous_cameras))
         })
     }
+}
+
+/// Writes a new (or just re-inserted) Printer's P8 setup rows inside the
+/// caller's transaction: its camera source and its alert defaults, each at
+/// revision 1. Nothing for a `None`.
+fn write_setup(
+    transaction: &rusqlite::Transaction<'_>,
+    printer_id: &str,
+    setup: &PrinterSetupExtras,
+    now: &str,
+) -> Result<(), RepositoryError> {
+    if let Some(camera) = &setup.camera {
+        crate::cameras::config::put(transaction, printer_id, camera, now)?;
+    }
+    if let Some(defaults) = &setup.alert_defaults {
+        super::alerts::set(transaction, printer_id, defaults, now)?;
+    }
+    Ok(())
 }
 
 fn classify_entity_write(

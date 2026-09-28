@@ -138,6 +138,77 @@ pub fn validate_source(source: &CameraSource, prefix: &str) -> Result<CameraSour
     }
 }
 
+// --- batch camera templates (P8 "Wire types", `CameraTemplate`) -------------
+
+/// A batch `snapshotUrl` template's path bound, in characters.
+pub const TEMPLATE_PATH_MAX_CHARS: usize = 1024;
+
+/// A batch `snapshotUrl` template's path: starts with `/`, at most 1024
+/// characters, with no `#`, whitespace, or control characters (a query
+/// string is allowed). `VALIDATION` on `field_path` otherwise; the message
+/// never quotes the value (a query can carry a token).
+pub fn validate_template_path(path: &str, field_path: &str) -> Result<String, CommandError> {
+    let valid = path.starts_with('/')
+        && path.chars().count() <= TEMPLATE_PATH_MAX_CHARS
+        && !path.contains(['#', '\\'])
+        && !path.chars().any(|c| c.is_whitespace() || c.is_control());
+    if !valid {
+        return Err(CommandError::validation_at(
+            field_path,
+            "The snapshot path must start with \"/\", be at most 1024 characters, and have \
+             no spaces, backslash, or fragment.",
+        ));
+    }
+    Ok(path.to_string())
+}
+
+/// Whether `host` is a bare host (a name, an IPv4 address, or an IPv6
+/// literal, bracketed or not) with no userinfo, port, path, query, or
+/// fragment folded into it.
+fn is_bare_host(host: &str) -> bool {
+    if host.is_empty()
+        || host.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '/' | '?' | '#' | '@' | '\\' | '%')
+        })
+    {
+        return false;
+    }
+    match host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+    {
+        Some(inner) => inner.parse::<std::net::Ipv6Addr>().is_ok(),
+        None => {
+            !host.contains(['[', ']'])
+                && (!host.contains(':') || host.parse::<std::net::Ipv6Addr>().is_ok())
+        }
+    }
+}
+
+/// A batch row's snapshot URL: `http://<host>:<port><path>`, where `host`
+/// is the row's camera host override or its Connection host, validated
+/// like a manual URL ([`validate_snapshot_url`]). `None` when `host` is not
+/// a bare host or the URL would not be valid; the caller reports the field.
+pub fn template_snapshot_url(host: &str, port: u16, path: &str) -> Option<String> {
+    let host = host.trim();
+    if port == 0 || !is_bare_host(host) {
+        return None;
+    }
+    let authority_host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    let url = format!("{SCHEME_PREFIX}{authority_host}:{port}{path}");
+    if !is_valid_snapshot_url(&url) {
+        return None;
+    }
+    // The parsed URL must keep exactly this port and path: nothing in the
+    // host may have moved part of it into another component.
+    let parsed = reqwest::Url::parse(&url).ok()?;
+    (parsed.port_or_known_default() == Some(port)).then_some(url)
+}
+
 // --- the `printer_cameras` repository ---------------------------------------
 
 /// One `printer_cameras` row, as [`SELECT`] lists its columns.
@@ -184,6 +255,14 @@ pub fn get(connection: &Connection, printer_id: &str) -> rusqlite::Result<Option
             decode,
         )
         .optional()
+}
+
+/// Every Printer's camera source, by Printer id (the Printers export and
+/// import; a manual URL included, so never for a command result).
+pub fn list_all(connection: &Connection) -> rusqlite::Result<Vec<PrinterCamera>> {
+    let mut statement = connection.prepare(&format!("{SELECT} ORDER BY printer_id"))?;
+    let rows = statement.query_map([], decode)?;
+    rows.collect()
 }
 
 /// Every Printer with a camera source and its kind, by Printer id. Never a

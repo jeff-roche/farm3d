@@ -117,6 +117,65 @@ impl Default for AlertDefaults {
     }
 }
 
+/// Reads an `AlertDefaults` from a submitted JSON value field by field, so
+/// a bad value is `VALIDATION` on `<prefix>.<field>` (`create_printer`'s
+/// `alertDefaults`, an imported Printer's `alertDefaults`) rather than an
+/// untyped argument error. Every field is required (`offlineAfterMinutes`
+/// may be `null`: off); unknown fields are ignored, as serde would.
+pub fn parse_alert_defaults(
+    value: &serde_json::Value,
+    prefix: &str,
+) -> Result<AlertDefaults, CommandError> {
+    let invalid = |field: &str, message: &str| {
+        CommandError::validation_at(format!("{prefix}.{field}"), message)
+    };
+    let object = value.as_object().ok_or_else(|| {
+        CommandError::validation_at(prefix, "The alert defaults must be an object.")
+    })?;
+    let offline_after_minutes = match object.get("offlineAfterMinutes") {
+        Some(serde_json::Value::Null) => None,
+        None => {
+            return Err(invalid(
+                "offlineAfterMinutes",
+                "The offline alert must be 1, 5, or 15 minutes, or off.",
+            ))
+        }
+        Some(minutes) => Some(
+            minutes
+                .as_i64()
+                .and_then(OfflineAlertMinutes::from_minutes)
+                .ok_or_else(|| {
+                    invalid(
+                        "offlineAfterMinutes",
+                        "The offline alert must be 1, 5, or 15 minutes, or off.",
+                    )
+                })?,
+        ),
+    };
+    let notifications = match object.get("notifications").and_then(|mode| mode.as_str()) {
+        Some("follow") => NotificationMode::Follow,
+        Some("muted") => NotificationMode::Muted,
+        _ => {
+            return Err(invalid(
+                "notifications",
+                "Notifications must be \"follow\" or \"muted\".",
+            ))
+        }
+    };
+    let flag = |field: &str| {
+        object
+            .get(field)
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| invalid(field, "This setting must be true or false."))
+    };
+    Ok(AlertDefaults {
+        offline_after_minutes,
+        notifications,
+        snapshot_on_incident: flag("snapshotOnIncident")?,
+        snapshot_on_completion: flag("snapshotOnCompletion")?,
+    })
+}
+
 /// `get_printer_alert_defaults`/`set_printer_alert_defaults`'s result. No
 /// `printer_alert_defaults` row means [`AlertDefaults::default`]
 /// (`revision`/`updatedAt` both `null`).

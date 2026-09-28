@@ -98,7 +98,7 @@ use farm3d_lib::notifications::{
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
-    CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
+    CameraTemplate, CancelPrinterBatchData, CreatePrintersBatchInput, CreatePrintersBatchOutput,
 };
 use farm3d_lib::printers::commands::{
     DeletePrinterResult, ExportResult as PrintersExportResult, OperationWarning,
@@ -414,6 +414,7 @@ fn export_registry() -> Vec<Export> {
         export::<PrintersImportResult>(),
         export::<CreatePrintersBatchInput>(),
         export::<BatchShared>(),
+        export::<CameraTemplate>(),
         export::<BatchRowInput>(),
         export::<BatchRowConnection>(),
         export::<BatchCredentialSource>(),
@@ -1326,7 +1327,7 @@ fn command_contracts_use_the_approved_create_settings_and_web_fallback_shapes() 
         fs::read_to_string(temporary.path().join("command/PrintersImportOutcome.ts")).unwrap();
 
     assert!(commands.contains(
-        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[] }"
+        "CreatePrinterRequest = ContractRequest & { name: string; catalogRef: CatalogRef; location?: string; startSafety?: StartSafety; defaultBedType?: string; connection?: ConnectionSubmission; slotLayout?: SlotSpec[]; initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[]; camera?: CameraSourceInput; alertDefaults?: AlertDefaults }"
     ));
     assert!(!commands.contains("draft: PrinterDraft"));
     assert!(settings.contains("export type SettingsRecord ="));
