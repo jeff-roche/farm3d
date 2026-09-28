@@ -3,13 +3,16 @@
 //! `attention_events` record itself. See the P8 design spec's D1
 //! ("Vocabulary and ownership") and "Backend model" module layout table.
 //!
-//! This module (Task 3) is wire types only, plus the Attention lifecycle
-//! rules ([`lifecycle`]). The Condition catalogue and observation
-//! (`observe.rs`), the planner (`plan.rs`), the repository, the
-//! projector, deep links, services, the event stream, and commands are
-//! later tasks (see the module layout table in the design spec).
+//! It holds the wire types, the Rust-only [`Condition`] and the D2
+//! catalogue ([`ConditionKind::spec`]), plus the Attention lifecycle
+//! rules ([`lifecycle`]), the pure observer ([`observe`]), and the pure
+//! planner ([`plan`]). The repository, the projector, deep links,
+//! services, the event stream, and commands are later tasks (see the
+//! module layout table in the design spec).
 
 pub mod lifecycle;
+pub mod observe;
+pub mod plan;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -19,8 +22,7 @@ use crate::incidents::Incident;
 
 /// D2's Condition catalogue: exactly ten Conditions. Severity, action
 /// requirement, resolution mode, recurrence, Incident behavior, and
-/// notification class are fixed per Condition (the catalogue itself,
-/// `ConditionKind::spec()`, is a later task's Rust-only addition).
+/// notification class are fixed per Condition ([`ConditionKind::spec`]).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
 #[ts(export_to = "domain/ConditionKind.ts")]
 pub enum ConditionKind {
@@ -428,4 +430,574 @@ pub struct AttentionBackfill {
 pub struct AttentionChange {
     pub events: Vec<AttentionEvent>,
     pub incidents: Vec<Incident>,
+}
+
+impl ConditionKind {
+    /// The wire string (`"printer.offline"`, …), the dedup key's first
+    /// segment.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConditionKind::PrinterOffline => "printer.offline",
+            ConditionKind::PrinterConnectionError => "printer.connectionError",
+            ConditionKind::PrinterHostFailed => "printer.hostFailed",
+            ConditionKind::JobStartConfirmation => "job.startConfirmation",
+            ConditionKind::JobFailed => "job.failed",
+            ConditionKind::JobHostCancelled => "job.hostCancelled",
+            ConditionKind::RequirementMaterialReconciliation => {
+                "requirement.materialReconciliation"
+            }
+            ConditionKind::RequirementJobOutcomeUnknown => "requirement.jobOutcomeUnknown",
+            ConditionKind::SpoolLow => "spool.low",
+            ConditionKind::JobCompleted => "job.completed",
+        }
+    }
+
+    /// D2's Condition catalogue: every fixed property of this Condition.
+    /// No Condition changes severity while open.
+    pub fn spec(self) -> ConditionSpec {
+        use AttentionSeverity::{Fatal, Info, Warning};
+        use AttentionSourceKind as S;
+        use IncidentRule as I;
+        use NotificationClass as N;
+        use ResolutionMode::{Action, Auto, Manual};
+        let (source_kind, severity, requires_action, resolution_mode, recurs, incident, class) =
+            match self {
+                ConditionKind::PrinterOffline => (
+                    S::Printer,
+                    Warning,
+                    true,
+                    Auto,
+                    true,
+                    I::None,
+                    N::Connectivity,
+                ),
+                ConditionKind::PrinterConnectionError => (
+                    S::Printer,
+                    Warning,
+                    true,
+                    Auto,
+                    true,
+                    I::None,
+                    N::Connectivity,
+                ),
+                ConditionKind::PrinterHostFailed => {
+                    (S::Printer, Fatal, true, Auto, true, I::OpensNew, N::Fatal)
+                }
+                ConditionKind::JobStartConfirmation => (
+                    S::Job,
+                    Info,
+                    true,
+                    Action,
+                    true,
+                    I::LinksJob,
+                    N::Confirmation,
+                ),
+                ConditionKind::JobFailed => (
+                    S::Job,
+                    Fatal,
+                    true,
+                    Manual,
+                    false,
+                    I::OpensOrLinksJob,
+                    N::Fatal,
+                ),
+                ConditionKind::JobHostCancelled => (
+                    S::Job,
+                    Warning,
+                    true,
+                    Manual,
+                    false,
+                    I::OpensOrLinksJob,
+                    N::Connectivity,
+                ),
+                ConditionKind::RequirementMaterialReconciliation => (
+                    S::ReconciliationRequirement,
+                    Warning,
+                    true,
+                    Action,
+                    false,
+                    I::LinksJob,
+                    N::Reconciliation,
+                ),
+                ConditionKind::RequirementJobOutcomeUnknown => (
+                    S::ReconciliationRequirement,
+                    Fatal,
+                    true,
+                    Action,
+                    false,
+                    I::OpensOrLinksJob,
+                    N::Fatal,
+                ),
+                ConditionKind::SpoolLow => {
+                    (S::Spool, Warning, false, Auto, true, I::None, N::Inventory)
+                }
+                ConditionKind::JobCompleted => {
+                    (S::Job, Info, false, Auto, false, I::None, N::Completion)
+                }
+            };
+        ConditionSpec {
+            source_kind,
+            severity,
+            requires_action,
+            resolution_mode,
+            recurs,
+            incident,
+            notification_class: class,
+        }
+    }
+}
+
+impl AttentionSourceKind {
+    /// The wire string (`"printer"`, …), the dedup key's second segment.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AttentionSourceKind::Printer => "printer",
+            AttentionSourceKind::Job => "job",
+            AttentionSourceKind::ReconciliationRequirement => "reconciliationRequirement",
+            AttentionSourceKind::Spool => "spool",
+        }
+    }
+}
+
+/// D2 "Dedup keys": `"<ConditionKind>:<AttentionSourceKind>:<sourceId>"`.
+/// Neither the condition nor the source kind contains `:`, and the id is
+/// last, so a key is unique without escaping. Keys are compared, never
+/// parsed.
+pub fn dedup_key(kind: ConditionKind, source_id: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        kind.as_str(),
+        kind.spec().source_kind.as_str(),
+        source_id
+    )
+}
+
+/// D2 catalogue "Incident" column: what an inserted Event of this
+/// Condition does to Incidents (applied by the projector, D2 "Apply").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IncidentRule {
+    /// Never opens or links an Incident.
+    None,
+    /// Opens a new Incident with no Job (`printer.hostFailed`).
+    OpensNew,
+    /// Opens the Job's Incident, or links to it if it exists.
+    OpensOrLinksJob,
+    /// Links to the Job's Incident, if any.
+    LinksJob,
+}
+
+/// One row of D2's Condition catalogue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConditionSpec {
+    pub source_kind: AttentionSourceKind,
+    pub severity: AttentionSeverity,
+    pub requires_action: bool,
+    pub resolution_mode: ResolutionMode,
+    /// A recurring Condition that returns after its Event resolved inserts
+    /// a new Event with `recurrenceOf`; a once-per-source one never gets a
+    /// second Event for the same key.
+    pub recurs: bool,
+    pub incident: IncidentRule,
+    pub notification_class: NotificationClass,
+}
+
+/// D2: a current fact that needs the operator's attention (Rust-only,
+/// never stored). `observe` builds it from the `FarmView`; the planner
+/// inserts it as an Attention Event or amends the open one.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Condition {
+    pub kind: ConditionKind,
+    pub source_id: String,
+    /// The source for `printer.*`; the Job's Printer for `job.*` and
+    /// `requirement.*`; `None` for `spool.low` (and when the Job isn't in
+    /// the view).
+    pub printer_id: Option<String>,
+    /// The source for `job.*`; the requirement's Job for `requirement.*`.
+    pub job_id: Option<String>,
+    /// The source for `spool.low`; the requirement's Spool for
+    /// `requirement.materialReconciliation`; `None` otherwise.
+    pub spool_id: Option<String>,
+    /// The source for `requirement.*`.
+    pub requirement_id: Option<String>,
+    /// Fixed at insert; never rewritten by `Amend`.
+    pub subject: AttentionSubject,
+    /// Planner-owned: a pure function of the `FarmView`.
+    pub detail: AttentionDetail,
+    /// D2 planner rule: insert (or acknowledge) the Event as acknowledged
+    /// by the system — a `deferred` material requirement.
+    pub acknowledge: bool,
+}
+
+impl Condition {
+    pub fn spec(&self) -> ConditionSpec {
+        self.kind.spec()
+    }
+
+    pub fn dedup_key(&self) -> String {
+        dedup_key(self.kind, &self.source_id)
+    }
+
+    pub fn source(&self) -> AttentionSource {
+        AttentionSource {
+            kind: self.spec().source_kind,
+            id: self.source_id.clone(),
+        }
+    }
+
+    /// The Event's one-sentence summary for this Condition's own subject
+    /// and detail (see [`summary`]).
+    pub fn summary(&self) -> String {
+        summary(self.kind, &self.subject, &self.detail)
+    }
+}
+
+/// The longest `attention_events.summary` the schema accepts.
+pub const SUMMARY_MAX_CHARS: usize = 500;
+
+/// D2 "Condition detail and subject": the Rust-built, one-sentence
+/// summary shown in the center and used as the notification body. A pure
+/// function of the Condition kind, the Event's subject (fixed at insert),
+/// and its detail, so an `Amend` that changes the detail re-derives it
+/// (a `spool.low` "80 g left" never goes stale). Never empty; at most
+/// [`SUMMARY_MAX_CHARS`] characters. Never holds a host, URL, or
+/// credential: the subject can't.
+pub fn summary(
+    kind: ConditionKind,
+    subject: &AttentionSubject,
+    detail: &AttentionDetail,
+) -> String {
+    let printer_name = subject.printer_name.as_deref().unwrap_or("A Printer");
+    let printer = match (&subject.printer_name, &subject.printer_location) {
+        (Some(name), Some(location)) => format!("{name} ({location})"),
+        _ => printer_name.to_string(),
+    };
+    let job = subject.job_label.as_deref().unwrap_or("A Job");
+    let on = subject
+        .printer_name
+        .as_deref()
+        .map(|name| format!(" on {name}"))
+        .unwrap_or_default();
+    let spool = subject
+        .spool_number
+        .map(|number| format!("Spool #{number}"))
+        .unwrap_or_else(|| "A Spool".to_string());
+    let text = match (kind, detail) {
+        (ConditionKind::PrinterOffline, _) => format!("{printer} is offline."),
+        (
+            ConditionKind::PrinterConnectionError,
+            AttentionDetail::PrinterConnectionError {
+                cause: PrinterConnectionErrorCause::Auth,
+            },
+        ) => format!("{printer} rejected its connection credentials."),
+        (ConditionKind::PrinterConnectionError, _) => {
+            format!("{printer} answered in a way farm3d couldn't read.")
+        }
+        (ConditionKind::PrinterHostFailed, _) => format!("{printer} reported a failed print."),
+        (
+            ConditionKind::JobStartConfirmation,
+            AttentionDetail::JobStartConfirmation {
+                awaiting_material: true,
+            },
+        ) => format!("{job} is waiting to start{on}, but its Spool isn't loaded."),
+        (ConditionKind::JobStartConfirmation, _) => format!("{job} is waiting to start{on}."),
+        (ConditionKind::JobFailed, _) => format!("{job} failed{on}."),
+        (ConditionKind::JobHostCancelled, _) => format!("{job} was cancelled by the host{on}."),
+        (
+            ConditionKind::RequirementMaterialReconciliation,
+            AttentionDetail::RequirementMaterialReconciliation {
+                requirement_status: MaterialReconciliationStatus::Deferred,
+                ..
+            },
+        ) => format!("{job} has deferred material to settle."),
+        (ConditionKind::RequirementMaterialReconciliation, _) => {
+            format!("{job} needs its material settled.")
+        }
+        (ConditionKind::RequirementJobOutcomeUnknown, _) => {
+            format!("{job} has an unknown outcome{on}.")
+        }
+        (ConditionKind::SpoolLow, AttentionDetail::SpoolLow { current_mg, .. }) => {
+            format!("{spool} is low ({} left).", grams(*current_mg))
+        }
+        (ConditionKind::SpoolLow, _) => format!("{spool} is low."),
+        (ConditionKind::JobCompleted, _) => format!("{job} finished{on}."),
+    };
+    truncate_chars(text, SUMMARY_MAX_CHARS)
+}
+
+/// Milligrams as whole grams, rounded half up ("80 g").
+fn grams(mg: i64) -> String {
+    let g = if mg >= 0 {
+        (mg + 500) / 1000
+    } else {
+        -((-mg + 500) / 1000)
+    };
+    format!("{g} g")
+}
+
+fn truncate_chars(text: String, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text;
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wire(value: impl Serialize) -> String {
+        serde_json::to_value(value)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn as_str_matches_the_wire_names() {
+        for kind in ConditionKind::ALL {
+            assert_eq!(kind.as_str(), wire(kind));
+        }
+        for kind in AttentionSourceKind::ALL {
+            assert_eq!(kind.as_str(), wire(kind));
+        }
+    }
+
+    /// D2's Condition catalogue, copied row by row.
+    #[test]
+    fn catalogue_matches_the_spec_table() {
+        use AttentionSeverity::*;
+        use AttentionSourceKind as S;
+        use IncidentRule as I;
+        use NotificationClass as N;
+        use ResolutionMode::*;
+        let table = [
+            (
+                "printer.offline",
+                S::Printer,
+                Warning,
+                true,
+                Auto,
+                true,
+                I::None,
+                N::Connectivity,
+            ),
+            (
+                "printer.connectionError",
+                S::Printer,
+                Warning,
+                true,
+                Auto,
+                true,
+                I::None,
+                N::Connectivity,
+            ),
+            (
+                "printer.hostFailed",
+                S::Printer,
+                Fatal,
+                true,
+                Auto,
+                true,
+                I::OpensNew,
+                N::Fatal,
+            ),
+            (
+                "job.startConfirmation",
+                S::Job,
+                Info,
+                true,
+                Action,
+                true,
+                I::LinksJob,
+                N::Confirmation,
+            ),
+            (
+                "job.failed",
+                S::Job,
+                Fatal,
+                true,
+                Manual,
+                false,
+                I::OpensOrLinksJob,
+                N::Fatal,
+            ),
+            (
+                "job.hostCancelled",
+                S::Job,
+                Warning,
+                true,
+                Manual,
+                false,
+                I::OpensOrLinksJob,
+                N::Connectivity,
+            ),
+            (
+                "requirement.materialReconciliation",
+                S::ReconciliationRequirement,
+                Warning,
+                true,
+                Action,
+                false,
+                I::LinksJob,
+                N::Reconciliation,
+            ),
+            (
+                "requirement.jobOutcomeUnknown",
+                S::ReconciliationRequirement,
+                Fatal,
+                true,
+                Action,
+                false,
+                I::OpensOrLinksJob,
+                N::Fatal,
+            ),
+            (
+                "spool.low",
+                S::Spool,
+                Warning,
+                false,
+                Auto,
+                true,
+                I::None,
+                N::Inventory,
+            ),
+            (
+                "job.completed",
+                S::Job,
+                Info,
+                false,
+                Auto,
+                false,
+                I::None,
+                N::Completion,
+            ),
+        ];
+        assert_eq!(table.len(), ConditionKind::ALL.len());
+        for (kind, row) in ConditionKind::ALL.into_iter().zip(table) {
+            let spec = kind.spec();
+            assert_eq!(kind.as_str(), row.0);
+            assert_eq!(
+                (
+                    spec.source_kind,
+                    spec.severity,
+                    spec.requires_action,
+                    spec.resolution_mode,
+                    spec.recurs,
+                    spec.incident,
+                    spec.notification_class
+                ),
+                (row.1, row.2, row.3, row.4, row.5, row.6, row.7),
+                "{}",
+                row.0
+            );
+        }
+    }
+
+    #[test]
+    fn dedup_key_is_condition_source_kind_and_id() {
+        assert_eq!(
+            dedup_key(ConditionKind::PrinterOffline, "prn-7f3c"),
+            "printer.offline:printer:prn-7f3c"
+        );
+        assert_eq!(
+            dedup_key(ConditionKind::RequirementJobOutcomeUnknown, "rrq-1"),
+            "requirement.jobOutcomeUnknown:reconciliationRequirement:rrq-1"
+        );
+    }
+
+    fn subject() -> AttentionSubject {
+        AttentionSubject {
+            printer_name: Some("Voron".into()),
+            printer_location: Some("Bay A".into()),
+            job_label: Some("Cube — Plate 1".into()),
+            spool_number: Some(12),
+            spool_label: Some("Polymaker PLA".into()),
+        }
+    }
+
+    #[test]
+    fn summaries_follow_the_spec_examples() {
+        assert_eq!(
+            summary(
+                ConditionKind::PrinterOffline,
+                &subject(),
+                &AttentionDetail::PrinterOffline {
+                    unreachable_since: "2026-09-27T11:50:00Z".into()
+                }
+            ),
+            "Voron (Bay A) is offline."
+        );
+        assert_eq!(
+            summary(
+                ConditionKind::JobFailed,
+                &subject(),
+                &AttentionDetail::JobFailed {
+                    ended_at: "2026-09-27T11:30:00Z".into()
+                }
+            ),
+            "Cube — Plate 1 failed on Voron."
+        );
+        assert_eq!(
+            summary(
+                ConditionKind::SpoolLow,
+                &subject(),
+                &AttentionDetail::SpoolLow {
+                    current_mg: 80_000,
+                    low_threshold_mg: 100_000
+                }
+            ),
+            "Spool #12 is low (80 g left)."
+        );
+    }
+
+    #[test]
+    fn summary_follows_the_detail_so_an_amend_can_rederive_it() {
+        let low = |mg| {
+            summary(
+                ConditionKind::SpoolLow,
+                &subject(),
+                &AttentionDetail::SpoolLow {
+                    current_mg: mg,
+                    low_threshold_mg: 100_000,
+                },
+            )
+        };
+        assert_eq!(low(90_000), "Spool #12 is low (90 g left).");
+        assert_eq!(low(79_600), "Spool #12 is low (80 g left).");
+        assert_eq!(low(0), "Spool #12 is low (0 g left).");
+    }
+
+    #[test]
+    fn summary_is_never_empty_and_never_over_the_schema_limit() {
+        let empty = AttentionSubject {
+            printer_name: None,
+            printer_location: None,
+            job_label: None,
+            spool_number: None,
+            spool_label: None,
+        };
+        assert_eq!(
+            summary(
+                ConditionKind::PrinterHostFailed,
+                &empty,
+                &AttentionDetail::PrinterHostFailed
+            ),
+            "A Printer reported a failed print."
+        );
+        let long = AttentionSubject {
+            job_label: Some("x".repeat(2000)),
+            ..empty
+        };
+        let text = summary(
+            ConditionKind::JobCompleted,
+            &long,
+            &AttentionDetail::JobCompleted {
+                ended_at: "2026-09-27T11:30:00Z".into(),
+            },
+        );
+        assert_eq!(text.chars().count(), SUMMARY_MAX_CHARS);
+    }
 }

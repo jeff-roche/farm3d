@@ -3,7 +3,6 @@
 /**
  * D2's Condition catalogue: exactly ten Conditions. Severity, action
  * requirement, resolution mode, recurrence, Incident behavior, and
- * notification class are fixed per Condition (the catalogue itself,
- * `ConditionKind::spec()`, is a later task's Rust-only addition).
+ * notification class are fixed per Condition ([`ConditionKind::spec`]).
  */
 export type ConditionKind = "printer.offline" | "printer.connectionError" | "printer.hostFailed" | "job.startConfirmation" | "job.failed" | "job.hostCancelled" | "requirement.materialReconciliation" | "requirement.jobOutcomeUnknown" | "spool.low" | "job.completed";
