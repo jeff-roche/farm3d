@@ -587,6 +587,7 @@ impl ProjectorRig {
                     safety_tick: Duration::from_secs(3600),
                 },
                 clock: Some(clock.clone() as Arc<dyn Clock>),
+                cameras: None,
             },
         );
         app.attention_pass();

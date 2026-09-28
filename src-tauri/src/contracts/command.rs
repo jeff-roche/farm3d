@@ -389,6 +389,12 @@ pub enum ErrorCode {
     CameraFailed,
     /// P8 D4: a host webcam's absolute URL names another host.
     CameraHostMismatch,
+    /// P8 D5: `snapshot_image`, or `set_snapshot_pinned(true)`, on a
+    /// pruned snapshot.
+    EvidencePruned,
+    /// P8 D5: `capture_snapshot` when only pinned snapshots would be left
+    /// to prune.
+    SnapshotDiskCap,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -839,6 +845,49 @@ impl CommandError {
             false,
         )
         .with_string_details(&[("printerId", printer_id)])
+    }
+
+    /// P8 `EVIDENCE_PRUNED`: the snapshot's image was removed (`reason`).
+    /// The row, its links, and its timeline stay.
+    pub fn evidence_pruned(snapshot_id: &str, reason: crate::cameras::PruneReason) -> Self {
+        use crate::cameras::PruneReason;
+        let label = match reason {
+            PruneReason::Age => "past the retention period",
+            PruneReason::DiskCap => "to stay under the disk cap",
+            PruneReason::MissingFile => "its file was missing",
+        };
+        Self::typed(
+            ErrorCode::EvidencePruned,
+            format!("This snapshot's image was removed ({label})."),
+            vec![],
+            false,
+        )
+        .with_string_details(&[
+            ("snapshotId", snapshot_id),
+            ("reason", &crate::spools::encode_enum(reason)),
+        ])
+    }
+
+    /// P8 `SNAPSHOT_DISK_CAP`: a manual capture the cap refuses because
+    /// only pinned snapshots are left to prune.
+    pub fn snapshot_disk_cap(used_bytes: i64, cap_bytes: i64, pinned_bytes: i64) -> Self {
+        let number = |value: i64| {
+            JsonValue::Number(JsonNumber::try_from(value).unwrap_or_else(|_| {
+                JsonNumber::try_from(0_i64).expect("zero is JS-safe")
+            }))
+        };
+        let mut error = Self::typed(
+            ErrorCode::SnapshotDiskCap,
+            "The snapshot disk cap is full of pinned evidence. Unpin some or raise the cap.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("usedBytes".to_string(), number(used_bytes)),
+            ("capBytes".to_string(), number(cap_bytes)),
+            ("pinnedBytes".to_string(), number(pinned_bytes)),
+        ]));
+        error
     }
 
     /// P8 `CAMERA_FAILED`: a frame fetch failed with `kind` (a
@@ -1791,6 +1840,15 @@ impl CommandError {
                 condition,
                 resolution_mode,
             } => Self::attention_not_manual(&event_id, condition, resolution_mode),
+            RepositoryError::EvidencePruned {
+                snapshot_id,
+                reason,
+            } => Self::evidence_pruned(&snapshot_id, reason),
+            RepositoryError::SnapshotDiskCap {
+                used_bytes,
+                cap_bytes,
+                pinned_bytes,
+            } => Self::snapshot_disk_cap(used_bytes, cap_bytes, pinned_bytes),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

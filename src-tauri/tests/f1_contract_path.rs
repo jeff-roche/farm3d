@@ -2,8 +2,8 @@
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
     // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
-    // P8 Task 6's 7 and Task 7's 6.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6);
+    // P8 Task 6's 7, Task 7's 6, and Task 8's 5.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -127,6 +127,11 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "list_host_webcams",
             "test_camera",
             "camera_preview_frame",
+            "capture_snapshot",
+            "list_snapshots",
+            "snapshot_image",
+            "set_snapshot_pinned",
+            "media_usage",
         ]
     );
 }
@@ -301,6 +306,11 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::cameras::commands::list_host_webcams,
             farm3d_lib::cameras::commands::test_camera,
             farm3d_lib::cameras::commands::camera_preview_frame,
+            farm3d_lib::cameras::commands::capture_snapshot,
+            farm3d_lib::cameras::commands::list_snapshots,
+            farm3d_lib::cameras::commands::snapshot_image,
+            farm3d_lib::cameras::commands::set_snapshot_pinned,
+            farm3d_lib::cameras::commands::media_usage,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -642,6 +652,17 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             json!({"source": {"kind": "snapshotUrl", "snapshotUrl": "http://192.0.2.10/snap"}}),
         ),
         ("camera_preview_frame", json!({"printerId": "p"})),
+        (
+            "capture_snapshot",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        ("list_snapshots", json!({})),
+        ("snapshot_image", json!({"snapshotId": "s"})),
+        (
+            "set_snapshot_pinned",
+            json!({"operationId": "o", "snapshotId": "s", "pinned": true}),
+        ),
+        ("media_usage", json!({})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

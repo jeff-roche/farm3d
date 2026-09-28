@@ -42,9 +42,10 @@ const P6_COMMAND_COUNT: usize = 2 + 8;
 const P7_COMMAND_COUNT: usize = 11 + 4 + 1 + 2;
 
 /// Commands P8 added: Task 6's 7 Attention and Incident commands
-/// (`tests/p8_attention.rs` drives them) and Task 7's 6 camera commands
-/// (`tests/p8_cameras.rs`).
-const P8_COMMAND_COUNT: usize = 7 + 6;
+/// (`tests/p8_attention.rs` drives them), Task 7's 6 camera commands
+/// (`tests/p8_cameras.rs`), and Task 8's 5 snapshot commands
+/// (`tests/p8_media.rs`).
+const P8_COMMAND_COUNT: usize = 7 + 6 + 5;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 120] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 125] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -524,9 +524,30 @@ contracts![
         "CameraPreviewFrameRequest",
         "CameraPreviewFrameResult"
     ),
+    (
+        "capture_snapshot",
+        "CaptureSnapshotRequest",
+        "CaptureSnapshotResult"
+    ),
+    (
+        "list_snapshots",
+        "ListSnapshotsRequest",
+        "ListSnapshotsResult"
+    ),
+    (
+        "snapshot_image",
+        "SnapshotImageRequest",
+        "SnapshotImageResult"
+    ),
+    (
+        "set_snapshot_pinned",
+        "SetSnapshotPinnedRequest",
+        "SetSnapshotPinnedResult"
+    ),
+    ("media_usage", "MediaUsageRequest", "MediaUsageResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 120] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 125] {
     &COMMAND_CONTRACTS
 }
 
@@ -788,7 +809,17 @@ export type ListHostWebcamsResult = CommandSuccess<HostWebcam[]>;
 export type TestCameraRequest = ContractRequest & { printerId?: string; connection?: ConnectionSubmission; source: CameraSourceInput };
 export type TestCameraResult = ArrayBuffer;
 export type CameraPreviewFrameRequest = ContractRequest & { printerId: string };
-export type CameraPreviewFrameResult = ArrayBuffer;"#.to_string()
+export type CameraPreviewFrameResult = ArrayBuffer;
+export type CaptureSnapshotRequest = ContractRequest & { operationId: string; printerId: string };
+export type CaptureSnapshotResult = CommandSuccess<CameraSnapshot>;
+export type ListSnapshotsRequest = ContractRequest & { printerId?: string; incidentId?: string; jobId?: string; includePruned?: boolean; before?: string; limit?: number };
+export type ListSnapshotsResult = CommandSuccess<SnapshotPage>;
+export type SnapshotImageRequest = ContractRequest & { snapshotId: string };
+export type SnapshotImageResult = ArrayBuffer;
+export type SetSnapshotPinnedRequest = ContractRequest & { operationId: string; snapshotId: string; pinned: boolean };
+export type SetSnapshotPinnedResult = CommandSuccess<CameraSnapshot>;
+export type MediaUsageRequest = NoArgsRequest;
+export type MediaUsageResult = CommandSuccess<MediaUsage>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -900,6 +931,9 @@ export type CameraPreviewFrameResult = ArrayBuffer;"#.to_string()
         visitor.visit::<crate::cameras::PrinterCameraSummary>();
         visitor.visit::<crate::cameras::commands::PrinterCameraCleared>();
         visitor.visit::<crate::cameras::HostWebcam>();
+        visitor.visit::<crate::cameras::CameraSnapshot>();
+        visitor.visit::<crate::cameras::SnapshotPage>();
+        visitor.visit::<crate::cameras::MediaUsage>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

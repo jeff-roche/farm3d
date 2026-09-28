@@ -12,8 +12,14 @@
 //!   and `camera.health.changed` only on a change; one fetch per Printer
 //!   at a time), OctoPrint's `unsupportedAdapter`, and the seeded-secret
 //!   scans (global constraint 3).
+//! - Task 8, the optionality tests (global constraint 5): with a capture
+//!   hanging on `FakeCamera`, `printer_statuses`, a slice start,
+//!   `assign_queue_entry`, and `start_job` each complete within their
+//!   normal bounds, and the Attention projector keeps passing.
 
 mod common;
+mod p5_harness;
+mod p7_dispatch_rig;
 
 use farm3d_lib::cameras::config::{validate_snapshot_url, validate_source};
 use farm3d_lib::cameras::resolve::{resolve_listed, resolve_webcam_url};
@@ -1244,4 +1250,162 @@ fn the_host_comparison_uses_the_parsed_connection_host() {
         CameraErrorKind::HostMismatch,
         "another IPv6 host still mismatches"
     );
+}
+
+// --- Task 8: a camera can never block the four core flows (global constraint 5) --------
+
+use farm3d_lib::jobs::JobTimings;
+use farm3d_lib::printers::operational::OperationalState;
+use farm3d_lib::printers::StartSafety;
+
+/// Well past every core flow's normal bound, and far below the capture's
+/// own budget: a flow that waited for the hanging camera would blow it.
+const FLOW_BOUND: Duration = Duration::from_secs(5);
+/// `printer_statuses` reads memory only.
+const STATUS_BOUND: Duration = Duration::from_secs(1);
+
+/// A capture budget longer than any test: the capture hangs for as long
+/// as the camera holds its answer (released at each test's end).
+fn hanging_timings() -> CameraTimings {
+    CameraTimings {
+        fetch: Duration::from_secs(60),
+        ..CameraTimings::default()
+    }
+}
+
+fn store_camera(storage: &Storage, printer_id: &str, camera: &FakeCamera) {
+    storage
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO printer_cameras(printer_id, source_kind, snapshot_url, updated_at) \
+                 VALUES (?1, 'snapshotUrl', ?2, '2026-09-28T09:00:00.000Z')",
+                rusqlite::params![printer_id, camera.url("/hang.jpg")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Starts a `capture_snapshot` of `printer_id` on its own thread and waits
+/// until the camera has the request (which it holds): a capture is hanging.
+fn hang_a_capture(
+    webview: &tauri::WebviewWindow<MockRuntime>,
+    printer_id: &str,
+    camera: &FakeCamera,
+) -> std::thread::JoinHandle<Result<Value, Value>> {
+    let webview = webview.clone();
+    let body = json!({"contractVersion": 1, "operationId": "op-hang", "printerId": printer_id});
+    let capture = std::thread::spawn(move || common::invoke(&webview, "capture_snapshot", body));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while camera.requests().is_empty() {
+        assert!(Instant::now() < deadline, "the capture never reached the camera");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    capture
+}
+
+/// The dispatch rig with the capture runtime on and a camera that holds
+/// every answer.
+fn hanging_dispatch_rig() -> (p7_dispatch_rig::Roots, p7_dispatch_rig::Running, FakeCamera) {
+    let roots = p7_dispatch_rig::Roots::new(StartSafety::ConfirmBedClear);
+    let (app, _) = p7_dispatch_rig::boot_with_attention(
+        &roots,
+        p7_dispatch_rig::status_of(OperationalState::Ready),
+        JobTimings::default(),
+        p7_dispatch_rig::AttentionBoot {
+            timings: farm3d_lib::attention::services::AttentionTimings {
+                pass_min_interval: Duration::ZERO,
+                safety_tick: Duration::from_secs(3600),
+            },
+            clock: None,
+            cameras: Some(hanging_timings()),
+        },
+    );
+    let camera = FakeCamera::start(Answer::Held);
+    store_camera(&app.storage, p7_dispatch_rig::PRINTER, &camera);
+    (roots, app, camera)
+}
+
+fn timed<T>(flow: impl FnOnce() -> T) -> (T, Duration) {
+    let started = Instant::now();
+    let result = flow();
+    (result, started.elapsed())
+}
+
+/// Releases the camera and checks the capture it held then finished.
+fn finish(capture: std::thread::JoinHandle<Result<Value, Value>>, camera: &FakeCamera) {
+    camera.release();
+    let snapshot = capture.join().unwrap().expect("the held capture finishes once released");
+    assert_eq!(snapshot["data"]["trigger"], "manual");
+}
+
+#[test]
+fn printer_statuses_and_the_projector_never_wait_for_a_hanging_camera() {
+    let (_roots, app, camera) = hanging_dispatch_rig();
+    let capture = hang_a_capture(&app.webview, p7_dispatch_rig::PRINTER, &camera);
+
+    let (statuses, took) = timed(|| app.ok("printer_statuses", json!({})));
+    assert!(took < STATUS_BOUND, "printer_statuses took {took:?}");
+    assert!(statuses.to_string().contains(p7_dispatch_rig::PRINTER), "{statuses}");
+    // Monitoring goes on: a whole projector pass completes.
+    let (_, took) = timed(|| app.attention_pass());
+    assert!(took < FLOW_BOUND, "an attention pass took {took:?}");
+    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    finish(capture, &camera);
+}
+
+#[test]
+fn assign_queue_entry_succeeds_while_a_camera_hangs() {
+    let (_roots, app, camera) = hanging_dispatch_rig();
+    let spool = app.spool();
+    app.load(&spool);
+    let capture = hang_a_capture(&app.webview, p7_dispatch_rig::PRINTER, &camera);
+
+    let (job, took) = timed(|| app.assign(&spool));
+    assert!(took < FLOW_BOUND, "assign_queue_entry took {took:?}");
+    assert!(job.starts_with("job-"), "{job}");
+    app.wait_job(&job, "awaitingStart");
+    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    finish(capture, &camera);
+}
+
+#[test]
+fn start_job_succeeds_while_a_camera_hangs() {
+    let (_roots, app, camera) = hanging_dispatch_rig();
+    let job = app.awaiting_start();
+    let capture = hang_a_capture(&app.webview, p7_dispatch_rig::PRINTER, &camera);
+
+    let (started, took) = timed(|| app.start("op-start", &job, "ready"));
+    assert!(took < FLOW_BOUND, "start_job took {took:?}");
+    started.expect("start_job");
+    app.wait_job(&job, "printing");
+    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    finish(capture, &camera);
+}
+
+#[test]
+fn a_slice_starts_while_a_camera_hangs() {
+    let farm = p5_harness::Farm::new();
+    let running = p5_harness::Running::boot_with_cameras(
+        &farm.paths,
+        &farm.lease,
+        farm.probe_timeout,
+        Some(hanging_timings()),
+    );
+    PrinterRepository::new(Arc::clone(&running.services.storage))
+        .create(common::a_stored_printer("prn-slice-cam"))
+        .unwrap();
+    let camera = FakeCamera::start(Answer::Held);
+    store_camera(&running.services.storage, "prn-slice-cam", &camera);
+    let model = running.import(&farm.source("orca-two-plates.3mf", "two.3mf"), "managed");
+    let preparation = running.prepare(model["id"].as_str().unwrap());
+    let plates = p5_harness::plates(&preparation);
+    let capture = hang_a_capture(&running.webview, "prn-slice-cam", &camera);
+
+    let (operations, took) = timed(|| running.start("op-slice", &preparation, &[&plates[0]]));
+    assert!(took < FLOW_BOUND, "start_slice took {took:?}");
+    let id = p5_harness::ids(&operations).remove(0);
+    running.wait_state(&id, "succeeded");
+    assert_eq!(running.services.cameras.in_flight("prn-slice-cam"), 1, "the capture still hangs");
+    finish(capture, &camera);
 }

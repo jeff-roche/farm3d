@@ -98,6 +98,8 @@ pub struct AttentionServices<R: tauri::Runtime> {
     stop: watch::Sender<bool>,
     passes: AtomicU64,
     lagged: AtomicU64,
+    /// Committed changes handed to `subscribe_applied` so far.
+    applied_sent: AtomicU64,
     tasks: Arc<AtomicUsize>,
 }
 
@@ -132,6 +134,7 @@ impl<R: tauri::Runtime> AttentionServices<R> {
             stop: watch::channel(false).0,
             passes: AtomicU64::new(0),
             lagged: AtomicU64::new(0),
+            applied_sent: AtomicU64::new(0),
             tasks: Arc::default(),
         }
     }
@@ -198,6 +201,13 @@ impl<R: tauri::Runtime> AttentionServices<R> {
         self.passes.load(Ordering::SeqCst)
     }
 
+    /// Test hook: how many committed changes were handed to
+    /// [`subscribe_applied`](Self::subscribe_applied) receivers so far (a
+    /// consumer that has taken this many has seen everything).
+    pub fn applied_sent(&self) -> u64 {
+        self.applied_sent.load(Ordering::SeqCst)
+    }
+
     /// Test hook: how many times a wake receiver reported `Lagged`.
     pub fn lagged(&self) -> u64 {
         self.lagged.load(Ordering::SeqCst)
@@ -229,7 +239,9 @@ impl<R: tauri::Runtime> AttentionServices<R> {
                 .publish_change(app, &changes.event_rows(), &changes.incidents, &[]);
         }
         // An error only means nobody is subscribed yet.
-        let _ = self.applied.send(Arc::new(changes.clone()));
+        if self.applied.send(Arc::new(changes.clone())).is_ok() {
+            self.applied_sent.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 

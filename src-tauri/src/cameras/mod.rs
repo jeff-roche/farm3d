@@ -7,9 +7,12 @@
 //! - `fetch.rs`: the bounded `FrameFetcher` and its typed `CameraError`;
 //! - `services.rs`: `CameraServices` (in-memory health, one fetch per
 //!   Printer at a time, the last preview frame);
-//! - `commands.rs`: the camera commands;
-//! - `capture.rs`: the projector's `CaptureIntent` (consumed by Task 8's
-//!   capture path, with the media store and retention).
+//! - `commands.rs`: the camera and snapshot commands;
+//! - `capture.rs`: the projector's `CaptureIntent` and the capture runtime
+//!   that turns each into a stored frame and a recorded outcome;
+//! - `media.rs`: the media root, the `camera_snapshots` repository, the
+//!   capture write, the prune pass, and the startup sweep;
+//! - `retention.rs`: the pure `plan_prune` and the `MediaJanitor` lock.
 //!
 //! Global constraint 3: a camera URL never leaves this module except
 //! through `get_printer_camera`'s manual URL (and the Printers export
@@ -20,7 +23,9 @@ pub mod capture;
 pub mod commands;
 pub mod config;
 pub mod fetch;
+pub mod media;
 pub mod resolve;
+pub mod retention;
 pub mod services;
 
 use serde::{Deserialize, Serialize};
@@ -336,6 +341,16 @@ pub struct CameraSnapshot {
     pub pinned_at: Option<String>,
     pub pruned_at: Option<String>,
     pub prune_reason: Option<PruneReason>,
+}
+
+/// `list_snapshots`' page: `capturedAt` descending, then id. `nextCursor`
+/// is opaque (`before` of the next call), null on the last page.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/SnapshotPage.ts")]
+pub struct SnapshotPage {
+    pub snapshots: Vec<CameraSnapshot>,
+    pub next_cursor: Option<String>,
 }
 
 /// `media_usage`'s result (D11): usage is the sum of stored `byteLen`

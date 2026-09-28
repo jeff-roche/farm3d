@@ -22,8 +22,9 @@ use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
 use cameras::commands::{
-    camera_preview_frame, clear_printer_camera, get_printer_camera, list_host_webcams,
-    set_printer_camera, test_camera,
+    camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
+    list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
+    snapshot_image, test_camera,
 };
 use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
@@ -101,7 +102,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub evaluator: Arc<queue::evaluator::Evaluator>,
     /// P8 D2: the Attention projector's runtime and the `attention` stream.
     pub attention: Arc<attention::services::AttentionServices<R>>,
-    /// P8 D4: camera health, one fetch per Printer, the last preview frame.
+    /// P8 D4/D5: camera health, one fetch per Printer, the last preview
+    /// frame, the capture runtime, and the `MediaJanitor`.
     pub cameras: Arc<cameras::services::CameraServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
@@ -174,7 +176,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 120] = [
+pub const COMMAND_NAMES: [&str; 125] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -295,6 +297,11 @@ pub const COMMAND_NAMES: [&str; 120] = [
     "list_host_webcams",
     "test_camera",
     "camera_preview_frame",
+    "capture_snapshot",
+    "list_snapshots",
+    "snapshot_image",
+    "set_snapshot_pinned",
+    "media_usage",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -394,6 +401,22 @@ pub fn start_attention_runtime<R: tauri::Runtime>(
     attention::services::start(services, app);
 }
 
+/// P8 D4/D5: starts the camera capture runtime for `services` — it
+/// publishes the startup sweep's changes, subscribes to the Attention
+/// projector's committed passes (capture intents run on their own tasks,
+/// never inside a pass), and starts the `MediaJanitor`, whose first prune
+/// pass runs at once. It must start **before** `start_attention_runtime`,
+/// so the projector's first pass is heard. The startup sweep
+/// (`cameras::media::startup_sweep`) must already have run.
+/// `build_runtime_services` calls it; tests call it the same way. A second
+/// call does nothing.
+pub fn start_camera_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    cameras::capture::start(services, app);
+}
+
 enum StartupFailure {
     Fatal,
     Recoverable(contracts::command::CommandError),
@@ -490,6 +513,15 @@ fn build_runtime_services<R: tauri::Runtime>(
             persistence::RepositoryError::Storage(error) => startup_error(error),
             _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
         })?;
+    // P8 D5 "Startup sweep": repair whatever a crash left in the media
+    // store, before any command is served. Published once the camera
+    // runtime starts.
+    let swept = cameras::media::startup_sweep(&storage, chrono::Utc::now()).map_err(|error| {
+        match error {
+            persistence::RepositoryError::Storage(error) => startup_error(error),
+            _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
+        }
+    })?;
 
     let resource_path = app
         .path()
@@ -593,6 +625,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     start_host_ops_runtime(&services, app);
     // P7 D4: then the dispatch driver.
     start_jobs_runtime(&services, app);
+    // P8 D4/D5: the capture runtime and the janitor, subscribed before the
+    // projector's first pass.
+    services.cameras.set_swept(swept);
+    start_camera_runtime(&services, app);
     // P8 D2: then the Attention projector.
     start_attention_runtime(&services, app);
     // D2: the startup probe runs in the background; `get_slicer_runtime`
@@ -849,6 +885,11 @@ pub fn run() {
             list_host_webcams,
             test_camera,
             camera_preview_frame,
+            capture_snapshot,
+            list_snapshots,
+            snapshot_image,
+            set_snapshot_pinned,
+            media_usage,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

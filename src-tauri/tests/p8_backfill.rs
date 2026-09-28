@@ -33,6 +33,7 @@ fn attention() -> AttentionBoot {
             safety_tick: Duration::from_secs(3600),
         },
         clock: None,
+        cameras: None,
     }
 }
 

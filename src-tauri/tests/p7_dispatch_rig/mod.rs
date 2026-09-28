@@ -524,6 +524,7 @@ impl Drop for Running {
     fn drop(&mut self) {
         self.services.jobs.stop();
         self.services.attention.stop();
+        self.services.cameras.stop();
     }
 }
 
@@ -581,6 +582,10 @@ pub struct AttentionBoot {
     pub timings: AttentionTimings,
     /// The projector's clock (the offline grace); the real time if `None`.
     pub clock: Option<Arc<dyn Clock>>,
+    /// P8 Task 8: `Some` starts the camera capture runtime (and the
+    /// `MediaJanitor`) with these timings, before the projector, as
+    /// `build_runtime_services` does; `None` leaves captures off.
+    pub cameras: Option<farm3d_lib::cameras::services::CameraTimings>,
 }
 
 /// [`boot_tuned`] with the Attention projector as `build_runtime_services`
@@ -622,6 +627,12 @@ fn boot_inner(
     let backfilled = attention
         .as_ref()
         .map(|_| farm3d_lib::attention::projector::backfill(&storage, SystemClock.now()).unwrap());
+    // P8 D5 "Startup sweep", when captures are on: before any command is
+    // served, published once the camera runtime starts.
+    let swept = attention
+        .as_ref()
+        .and_then(|boot| boot.cameras)
+        .map(|_| farm3d_lib::cameras::media::startup_sweep(&storage, SystemClock.now()).unwrap());
     let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
         upload_unsupported: Arc::clone(&roots.upload_unsupported),
         tier: Arc::clone(&roots.evidence_tier),
@@ -630,6 +641,7 @@ fn boot_inner(
     });
     let host_ops_timings = roots.timings.host_ops;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let camera_timings = attention.as_ref().and_then(|boot| boot.cameras);
     let attention_services = attention.as_ref().map(|boot| {
         Arc::new(AttentionServices::with_clock(
             boot.timings,
@@ -669,6 +681,13 @@ fn boot_inner(
             farm3d_lib::incidents::commands::list_incidents,
             farm3d_lib::incidents::commands::get_incident,
             farm3d_lib::incidents::commands::add_incident_note,
+            farm3d_lib::cameras::commands::set_printer_camera,
+            farm3d_lib::cameras::commands::capture_snapshot,
+            farm3d_lib::cameras::commands::list_snapshots,
+            farm3d_lib::cameras::commands::snapshot_image,
+            farm3d_lib::cameras::commands::set_snapshot_pinned,
+            farm3d_lib::cameras::commands::media_usage,
+            farm3d_lib::connections::commands::printer_statuses,
         ],
         Arc::clone(&storage),
         Arc::new(common::a_catalog()),
@@ -690,6 +709,9 @@ fn boot_inner(
             if let Some(attention) = attention_services {
                 services.attention = attention;
             }
+            if let Some(timings) = camera_timings {
+                services.cameras = Arc::new(farm3d_lib::cameras::services::CameraServices::new(timings));
+            }
         },
     );
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -706,6 +728,11 @@ fn boot_inner(
     }
     if let Some(changes) = &backfilled {
         services.attention.set_backfilled(changes.clone());
+        if let Some(swept) = swept {
+            services.cameras.set_swept(swept);
+            // Before the projector, so its first pass's captures are heard.
+            farm3d_lib::start_camera_runtime(&services, app.handle());
+        }
         farm3d_lib::start_attention_runtime(&services, app.handle());
     }
     (

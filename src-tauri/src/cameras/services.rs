@@ -37,6 +37,7 @@ use crate::RuntimeServices;
 
 use super::fetch::{CameraError, Frame, FrameFetcher};
 use super::resolve::{self, WebcamHost};
+use super::retention::MediaJanitor;
 use super::{
     config, CameraErrorKind, CameraHealth, CameraHealthState, CameraSource, CameraSourceKind,
 };
@@ -51,6 +52,9 @@ pub struct CameraTimings {
     /// A preview within this of the last successful preview frame gets
     /// that frame again from memory.
     pub preview_min_interval: Duration,
+    /// D5: the `MediaJanitor`'s prune pass runs this often (and at start,
+    /// and when the retention settings change).
+    pub janitor_every: Duration,
 }
 
 impl Default for CameraTimings {
@@ -58,6 +62,7 @@ impl Default for CameraTimings {
         Self {
             fetch: Duration::from_secs(5),
             preview_min_interval: Duration::from_secs(1),
+            janitor_every: super::retention::JANITOR_EVERY,
         }
     }
 }
@@ -117,6 +122,13 @@ pub struct CameraServices<R: tauri::Runtime> {
     /// One fetch per Printer at a time.
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     epochs: AtomicU64,
+    /// D5: the one lock every capture and prune takes, and the janitor's
+    /// wake.
+    janitor: MediaJanitor,
+    /// The capture runtime (`cameras::capture`): started once, stoppable,
+    /// its in-flight capture keys, and the startup sweep's changes to
+    /// publish when it starts.
+    pub(crate) runtime: super::capture::CaptureRuntime,
     _runtime: PhantomData<fn() -> R>,
 }
 
@@ -184,8 +196,60 @@ impl<R: tauri::Runtime> CameraServices<R> {
             entries: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
             epochs: AtomicU64::new(0),
+            janitor: MediaJanitor::default(),
+            runtime: super::capture::CaptureRuntime::default(),
             _runtime: PhantomData,
         }
+    }
+
+    /// D5: the lock every capture and prune takes, and the janitor's poke
+    /// (`save_settings` / `import_settings` call
+    /// [`MediaJanitor::poke`] when the retention settings change).
+    pub fn janitor(&self) -> &MediaJanitor {
+        &self.janitor
+    }
+
+    /// The startup sweep's changes, published once the capture runtime
+    /// starts (`build_runtime_services` runs the sweep before any command
+    /// is served).
+    pub fn set_swept(&self, changes: super::media::MediaChanges) {
+        self.runtime.set_swept(changes);
+    }
+
+    /// Test hook: stops the capture consumer and the janitor, as a crash
+    /// would.
+    pub fn stop(&self) {
+        self.runtime.stop();
+    }
+
+    /// Test hook: how many times the capture consumer's receiver lagged
+    /// and it re-derived the captures it missed.
+    pub fn capture_lags(&self) -> u64 {
+        self.runtime.lags()
+    }
+
+    /// Test hook: captures started and not yet finished.
+    pub fn captures_in_flight(&self) -> usize {
+        self.runtime.in_flight()
+    }
+
+    /// Test hook: how many committed projector changes the capture
+    /// consumer has taken (or skipped by lagging). Once it equals
+    /// `AttentionServices::applied_sent` and nothing is in flight, every
+    /// capture asked for so far has finished.
+    pub fn capture_rounds(&self) -> u64 {
+        self.runtime.rounds()
+    }
+
+    /// Test hook: the capture consumer stops taking changes (they queue,
+    /// and may lag) until [`release_captures`](Self::release_captures).
+    pub fn hold_captures(&self) {
+        self.runtime.hold(true);
+    }
+
+    /// Test hook: see [`hold_captures`](Self::hold_captures).
+    pub fn release_captures(&self) {
+        self.runtime.hold(false);
     }
 
     pub fn timings(&self) -> CameraTimings {

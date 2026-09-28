@@ -110,9 +110,20 @@ impl Running {
     /// Boots an app over `paths`, whose engine probe may take up to
     /// `probe_timeout`.
     pub fn boot(paths: &StoragePaths, lease: &MetadataRootLease, probe_timeout: Duration) -> Self {
+        Self::boot_with_cameras(paths, lease, probe_timeout, None)
+    }
+
+    /// [`Running::boot`], with the camera services' timings replaced (P8
+    /// Task 8: a capture can hang while a slice starts).
+    pub fn boot_with_cameras(
+        paths: &StoragePaths,
+        lease: &MetadataRootLease,
+        probe_timeout: Duration,
+        cameras: Option<farm3d_lib::cameras::services::CameraTimings>,
+    ) -> Self {
         let storage = Arc::new(Storage::open(paths.clone(), lease).unwrap());
         let credentials = tempfile::tempdir().unwrap();
-        let (app, webview, _manager, services) = crate::common::runtime_with_file_io(
+        let (app, webview, _manager, services) = crate::common::runtime_with(
             tauri::generate_handler![
                 farm3d_lib::library::commands::inspect_import_selection,
                 farm3d_lib::library::commands::import_models,
@@ -141,12 +152,22 @@ impl Running {
                 farm3d_lib::slicing::commands::get_slice_revision_log,
                 farm3d_lib::slicing::commands::create_external_slice_revision,
                 farm3d_lib::slicing::commands::delete_slice_revision,
+                farm3d_lib::cameras::commands::capture_snapshot,
             ],
             storage,
             Arc::new(a_catalog()),
             credentials.path().to_path_buf(),
             no_connection,
-            Arc::new(FakeModelFileIo { picks: None }),
+            move |services| {
+                services.library = Arc::new(farm3d_lib::library::LibraryServices::new(
+                    Arc::clone(&services.library.content),
+                    Arc::new(FakeModelFileIo { picks: None }),
+                ));
+                if let Some(timings) = cameras {
+                    services.cameras =
+                        Arc::new(farm3d_lib::cameras::services::CameraServices::new(timings));
+                }
+            },
         );
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);

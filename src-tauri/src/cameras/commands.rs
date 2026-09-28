@@ -1,7 +1,9 @@
 //! P8 D7 "Commands": the camera commands — `get_printer_camera`,
 //! `set_printer_camera`, `clear_printer_camera`, `list_host_webcams`,
-//! `test_camera`, and `camera_preview_frame`. (`capture_snapshot` and the
-//! snapshot commands arrive with Task 8's media store.)
+//! `test_camera`, `camera_preview_frame`, and `capture_snapshot` — and the
+//! snapshot commands (`list_snapshots`, `snapshot_image`,
+//! `set_snapshot_pinned`, `media_usage`) over the media store
+//! (`cameras::media`).
 //!
 //! Global constraint 3: `get_printer_camera` is the only command that
 //! returns a manual URL. `set_printer_camera` answers with the redacted
@@ -419,4 +421,290 @@ pub async fn camera_preview_frame<R: tauri::Runtime>(
         .await
         .map_err(|error| fetch_error(&printer_id, error))?;
     Ok(frame_response(&frame))
+}
+
+// --- Task 8: capture and the snapshot commands ----------------------------------------
+
+use super::media::{self, CaptureLink, MediaChanges, NewSnapshot, SnapshotFilter, StoreOutcome};
+use super::{CameraSnapshot, MediaUsage, SnapshotPage};
+
+/// Publishes a committed media change (after commit only).
+fn publish_media<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    app: &AppHandle<R>,
+    changes: &MediaChanges,
+) {
+    super::capture::publish(services, app, changes);
+}
+
+/// The operation `operation_id` already names, if any: `(kind, digest)`.
+fn recorded_operation(
+    conn: &rusqlite::Connection,
+    operation_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT kind, request_digest FROM operations WHERE id = ?1",
+        [operation_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
+/// `capture_snapshot`: fetches the Printer's saved source (updating its
+/// health) and stores one `manual` snapshot, linked to the Printer's
+/// active Job, if any. A replay is checked before any fetch, so it never
+/// touches the camera. Only pinned snapshots left to prune is
+/// `SNAPSHOT_DISK_CAP`.
+#[tauri::command]
+pub async fn capture_snapshot<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    printer_id: String,
+) -> Result<CommandSuccess<CameraSnapshot>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    if operation_id.trim().is_empty() {
+        return Err(CommandError::validation_at(
+            "operationId",
+            "operationId is required",
+        ));
+    }
+    let digest = operations::digest(&PrinterDigest {
+        printer_id: &printer_id,
+    });
+    let recorded = services
+        .storage
+        .read(|conn| recorded_operation(conn, &operation_id))
+        .map_err(storage_error)?;
+    if let Some((kind, recorded_digest)) = recorded {
+        if kind != crate::spools::encode_enum(OperationKind::CaptureSnapshot)
+            || recorded_digest != digest
+        {
+            return Err(CommandError::from_repository(
+                RepositoryError::OperationIdReused,
+            ));
+        }
+        return services
+            .storage
+            .read(|conn| Ok(media::snapshot_for_operation(conn, &operation_id)))
+            .map_err(storage_error)?
+            .map_err(storage_error)?
+            .map(CommandSuccess::new)
+            .ok_or_else(|| CommandError::not_found(&printer_id));
+    }
+    let frame = camera_services::fetch_saved(&services, &app, &printer_id, false)
+        .await
+        .map_err(|error| fetch_error(&printer_id, error))?;
+    let policy = services
+        .storage
+        .read(media::read_policy)
+        .map_err(storage_error)?;
+    let outcome = media::store_frame(
+        &services.storage,
+        services.cameras.janitor(),
+        policy,
+        services.attention.now(),
+        NewSnapshot {
+            printer_id: &printer_id,
+            link: CaptureLink::Manual {
+                operation_id: &operation_id,
+                digest: &digest,
+            },
+            frame: &frame,
+        },
+    )
+    .await
+    .map_err(CommandError::from_repository)?;
+    match outcome {
+        StoreOutcome::Stored { snapshot, changes } => {
+            publish_media(&services, &app, &changes);
+            Ok(CommandSuccess::new(snapshot))
+        }
+        StoreOutcome::DiskCap { totals, changes } => {
+            // Age prunes still applied; the capture itself is refused.
+            publish_media(&services, &app, &changes);
+            Err(CommandError::from_repository(
+                RepositoryError::SnapshotDiskCap {
+                    used_bytes: totals.used_bytes,
+                    cap_bytes: totals.cap_bytes,
+                    pinned_bytes: totals.pinned_bytes,
+                },
+            ))
+        }
+        // The same request committed meanwhile: a replay.
+        StoreOutcome::AlreadyRecorded(existing) => existing
+            .map(CommandSuccess::new)
+            .ok_or_else(|| CommandError::not_found(&printer_id)),
+    }
+}
+
+fn exists(conn: &rusqlite::Connection, table: &str, id: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id = ?1)"),
+        [id],
+        |row| row.get(0),
+    )
+}
+
+/// `list_snapshots`: `capturedAt` descending, then id, filtered by Printer,
+/// Incident, and Job, pruned rows included unless `includePruned` is
+/// false, paginated by the opaque `before` cursor. A named Printer,
+/// Incident, or Job that doesn't exist is `NOT_FOUND`.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn list_snapshots<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    printer_id: Option<String>,
+    incident_id: Option<String>,
+    job_id: Option<String>,
+    include_pruned: Option<bool>,
+    before: Option<String>,
+    limit: Option<i64>,
+) -> Result<CommandSuccess<SnapshotPage>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let limit = crate::attention::commands::page_limit(limit)?;
+    if let Some(cursor) = &before {
+        if !media::is_well_formed_cursor(cursor) {
+            return Err(CommandError::validation_at(
+                "before",
+                "before must be a cursor list_snapshots returned",
+            ));
+        }
+    }
+    let (missing, page) = services
+        .storage
+        .read_transaction(|tx| {
+            for (table, id) in [
+                ("printers", &printer_id),
+                ("incidents", &incident_id),
+                ("jobs", &job_id),
+            ] {
+                if let Some(id) = id {
+                    if !exists(tx, table, id)? {
+                        return Ok((Some(id.clone()), None));
+                    }
+                }
+            }
+            let filter = SnapshotFilter {
+                printer_id: printer_id.as_deref(),
+                incident_id: incident_id.as_deref(),
+                job_id: job_id.as_deref(),
+                include_pruned: include_pruned.unwrap_or(true),
+            };
+            Ok((
+                None,
+                Some(media::list(tx, filter, before.as_deref(), limit)),
+            ))
+        })
+        .map_err(storage_error)?;
+    if let Some(id) = missing {
+        return Err(CommandError::not_found(&id));
+    }
+    let page = page
+        .expect("listed when nothing was missing")
+        .map_err(storage_error)?;
+    Ok(CommandSuccess::new(page))
+}
+
+/// `snapshot_image`: the stored image as a binary frame whose header names
+/// the snapshot. A pruned snapshot is `EVIDENCE_PRUNED`; one whose file
+/// has gone missing becomes `pruned: missingFile` (published) and is
+/// `EVIDENCE_PRUNED` too.
+#[tauri::command]
+pub async fn snapshot_image<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    snapshot_id: String,
+) -> Result<Response, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let found = services
+        .storage
+        .read_transaction(|tx| {
+            let snapshot = media::load_snapshot(tx, &snapshot_id);
+            let rel_path = media::rel_path_of(tx, &snapshot_id);
+            Ok((snapshot, rel_path))
+        })
+        .map_err(storage_error)?;
+    let snapshot = found.0.map_err(storage_error)?;
+    let rel_path = found.1.map_err(storage_error)?;
+    let (Some(snapshot), Some(rel_path)) = (snapshot, rel_path) else {
+        return Err(CommandError::not_found(&snapshot_id));
+    };
+    if let Some(reason) = snapshot.prune_reason {
+        return Err(CommandError::evidence_pruned(&snapshot_id, reason));
+    }
+    let store = media::MediaStore::for_storage(&services.storage);
+    let bytes = match store.read_image(&rel_path).map_err(storage_error)? {
+        Some(bytes) => bytes,
+        None => {
+            let changes = {
+                let _serialized = services.cameras.janitor().lock().await;
+                media::mark_missing(&services.storage, &snapshot_id, services.attention.now())
+                    .map_err(CommandError::from_repository)?
+            };
+            publish_media(&services, &app, &changes);
+            return Err(CommandError::evidence_pruned(
+                &snapshot_id,
+                super::PruneReason::MissingFile,
+            ));
+        }
+    };
+    let header = super::FrameHeader {
+        content_type: snapshot.content_type,
+        captured_at: snapshot.captured_at.clone(),
+        byte_len: bytes.len() as i64,
+        snapshot_id: Some(snapshot.id.clone()),
+    };
+    Ok(Response::new(encode_frame(&header, &bytes)))
+}
+
+/// `set_snapshot_pinned`: pins or unpins, idempotently (the same state is
+/// a no-op success that publishes nothing). Pinning a pruned snapshot is
+/// `EVIDENCE_PRUNED`; unpinning one is allowed. A linked snapshot's change
+/// adds `evidencePinned` / `evidenceUnpinned` to its Incident's timeline.
+#[tauri::command]
+pub async fn set_snapshot_pinned<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    snapshot_id: String,
+    pinned: bool,
+) -> Result<CommandSuccess<CameraSnapshot>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    // Under the janitor lock: a row planned for pruning can't be pinned
+    // between the plan and its commit.
+    let (snapshot, changes) = {
+        let _serialized = services.cameras.janitor().lock().await;
+        media::set_pinned(
+            &services.storage,
+            &operation_id,
+            &snapshot_id,
+            pinned,
+            services.attention.now(),
+        )
+        .map_err(CommandError::from_repository)?
+    };
+    publish_media(&services, &app, &changes);
+    Ok(CommandSuccess::new(snapshot))
+}
+
+/// `media_usage`: the stored totals and the retention settings.
+#[tauri::command]
+pub async fn media_usage<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<MediaUsage>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    services
+        .storage
+        .read(media::usage)
+        .map(CommandSuccess::new)
+        .map_err(storage_error)
 }

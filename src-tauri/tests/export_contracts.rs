@@ -15,7 +15,7 @@ use farm3d_lib::attention::{
 use farm3d_lib::cameras::{
     CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
     CameraSource, CameraSourceInput, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam,
-    MediaUsage, PrinterCamera, PrinterCameraSummary, PruneReason, SnapshotTrigger,
+    MediaUsage, PrinterCamera, PrinterCameraSummary, PruneReason, SnapshotPage, SnapshotTrigger,
 };
 use farm3d_lib::catalog::commands::{CatalogInfo, CatalogModelSummary, CatalogVariantSummary};
 use farm3d_lib::catalog::resolve::{
@@ -646,6 +646,7 @@ fn export_registry() -> Vec<Export> {
         export::<CameraContentType>(),
         export::<CameraSnapshot>(),
         export::<MediaUsage>(),
+        export::<SnapshotPage>(),
         export::<FrameHeader>(),
         export::<AttentionBackfill>(),
         export::<IncidentState>(),
@@ -921,6 +922,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::CameraNotConfigured,
         ErrorCode::CameraFailed,
         ErrorCode::CameraHostMismatch,
+        ErrorCode::EvidencePruned,
+        ErrorCode::SnapshotDiskCap,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -965,7 +968,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "ASSIGNMENT_BLOCKED", "JOB_START_BLOCKED", "JOB_NOT_ON_PRINTER",
                 "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
-                "CAMERA_HOST_MISMATCH"
+                "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

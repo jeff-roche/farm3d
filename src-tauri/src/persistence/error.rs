@@ -271,6 +271,19 @@ pub enum RepositoryError {
         condition: crate::attention::ConditionKind,
         resolution_mode: crate::attention::ResolutionMode,
     },
+    /// P8 D5: `snapshot_image`, or `set_snapshot_pinned(true)`, on a
+    /// pruned snapshot. `EVIDENCE_PRUNED`.
+    EvidencePruned {
+        snapshot_id: String,
+        reason: crate::cameras::PruneReason,
+    },
+    /// P8 D5: `capture_snapshot` when only pinned snapshots would be left
+    /// to prune. `SNAPSHOT_DISK_CAP`.
+    SnapshotDiskCap {
+        used_bytes: i64,
+        cap_bytes: i64,
+        pinned_bytes: i64,
+    },
     Storage(StorageError),
 }
 

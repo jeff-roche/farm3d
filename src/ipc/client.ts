@@ -174,6 +174,10 @@ type CommandMap = {
   set_printer_camera: [Contracts.SetPrinterCameraRequest, Contracts.SetPrinterCameraResult];
   clear_printer_camera: [Contracts.ClearPrinterCameraRequest, Contracts.ClearPrinterCameraResult];
   list_host_webcams: [Contracts.ListHostWebcamsRequest, Contracts.ListHostWebcamsResult];
+  capture_snapshot: [Contracts.CaptureSnapshotRequest, Contracts.CaptureSnapshotResult];
+  list_snapshots: [Contracts.ListSnapshotsRequest, Contracts.ListSnapshotsResult];
+  set_snapshot_pinned: [Contracts.SetSnapshotPinnedRequest, Contracts.SetSnapshotPinnedResult];
+  media_usage: [Contracts.MediaUsageRequest, Contracts.MediaUsageResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */
@@ -181,6 +185,7 @@ export type BinaryCommandMap = {
   get_revision_mesh: [Contracts.GetRevisionMeshRequest, Contracts.GetRevisionMeshResult];
   test_camera: [Contracts.TestCameraRequest, Contracts.TestCameraResult];
   camera_preview_frame: [Contracts.CameraPreviewFrameRequest, Contracts.CameraPreviewFrameResult];
+  snapshot_image: [Contracts.SnapshotImageRequest, Contracts.SnapshotImageResult];
 };
 
 type RequestArgs<K extends keyof CommandMap> = Omit<CommandMap[K][0], "contractVersion">;
