@@ -4,9 +4,10 @@
  *  in order. A sequence gap or a new `streamId` triggers a fresh backfill;
  *  a failed backfill retries after 1, 2, 4, 8, 16, then 30 s.
  *
- *  Only `library-store` uses this (P4 ruling M8). It knows nothing about
- *  event types: the caller filters the channel before `receive` and
- *  interprets each event in `applyEvent`. */
+ *  Shared by the library, slicing, host-operations, queue, and attention
+ *  stores (first extracted for `library-store`, P4 ruling M8). It knows
+ *  nothing about event types: the caller filters the channel before
+ *  `receive` and interprets each event in `applyEvent`. */
 
 export interface StreamEvent {
   streamId: string;
