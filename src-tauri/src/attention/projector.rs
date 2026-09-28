@@ -1102,6 +1102,24 @@ mod tests {
             .changes
     }
 
+    /// The total size of every `*-wal` file under `root`.
+    fn wal_bytes(root: &std::path::Path) -> u64 {
+        let mut total = 0;
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.to_string_lossy().ends_with("-wal") {
+                    total += entry.metadata().unwrap().len();
+                }
+            }
+        }
+        total
+    }
+
     fn the_event(storage: &Storage) -> AttentionEvent {
         storage
             .read(|connection| Ok(attention_repository::open_events(connection)))
@@ -1113,23 +1131,28 @@ mod tests {
 
     #[test]
     fn a_pass_persists_an_unchanged_amend_once_a_minute_and_a_changed_one_at_once() {
-        let (_temp, storage) = storage();
+        let (temp, storage) = storage();
         seed_low_spool(&storage, 80_000);
         let inserted = pass_at(&storage, at(0));
         assert_eq!(inserted.events.len(), 1);
         let first = the_event(&storage);
         assert_eq!(first.observation_count, 1);
 
-        // Passes inside the minute over the unchanged Event write nothing.
+        // Passes inside the minute over the unchanged Event write nothing:
+        // not the row, and not even a WAL frame for their empty commits.
+        let wal_before = wal_bytes(temp.path());
+        assert!(wal_before > 0, "the database runs in WAL mode");
         for seconds in [1, 10, 59] {
             let changes = pass_at(&storage, at(seconds));
             assert!(changes.is_empty(), "{changes:?}");
             assert_eq!(the_event(&storage), first, "no amendment written at +{seconds}s");
         }
+        assert_eq!(wal_bytes(temp.path()), wal_before, "a pass with nothing to write writes nothing");
 
         // A minute on: one persisted observation, and still nothing published.
         let changes = pass_at(&storage, at(60));
         assert!(changes.is_empty(), "an unchanged amendment emits nothing: {changes:?}");
+        assert!(wal_bytes(temp.path()) > wal_before, "the WAL measure sees a real write");
         let observed = the_event(&storage);
         assert_eq!(observed.observation_count, 2);
         assert_eq!(observed.last_observed_at, "2026-09-28T12:01:00Z");
