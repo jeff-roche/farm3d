@@ -16,7 +16,17 @@ import { SettingsMenu } from "./SettingsMenu";
 import { SlicerSettingsHost } from "./SlicerSettingsHost";
 
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
-vi.mock("../settings/settings-store", () => ({ exportSettings: vi.fn(), importSettings: vi.fn() }));
+vi.mock("../settings/settings-store", () => ({
+  exportSettings: vi.fn(),
+  importSettings: vi.fn(),
+  // SettingsMenu always renders NotificationSettingsDialog (Task 15), whose
+  // body reads `settings()` at construction regardless of `open` — this
+  // file isn't exercising that dialog, so a settled "nothing loaded yet"
+  // stub is enough to let SettingsMenu render.
+  settings: () => undefined,
+  loadSettings: vi.fn(() => Promise.resolve(undefined)),
+  updateSettings: vi.fn(() => Promise.resolve()),
+}));
 const desktop = vi.hoisted(() => ({ available: true }));
 vi.mock("../ipc/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/client")>()),

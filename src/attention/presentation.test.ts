@@ -5,6 +5,8 @@ import {
   evidenceSkipReasonLabel,
   matchesAttentionFilter,
   matchesSeverityFilter,
+  NOTIFICATION_CLASS_ORDER,
+  notificationClassLabel,
   snapshotTriggerLabel,
 } from "./presentation";
 import type { AttentionFilter, AttentionSeverityFilter } from "./presentation";
@@ -78,5 +80,21 @@ describe("snapshotTriggerLabel", () => {
     expect(snapshotTriggerLabel("incident")).toBe("Incident");
     expect(snapshotTriggerLabel("completion")).toBe("Completion");
     expect(snapshotTriggerLabel("manual")).toBe("Manual");
+  });
+});
+
+describe("notificationClassLabel", () => {
+  it("labels every class in D6's table, in order", () => {
+    expect(NOTIFICATION_CLASS_ORDER).toEqual([
+      "fatal",
+      "confirmation",
+      "completion",
+      "reconciliation",
+      "connectivity",
+      "inventory",
+    ]);
+    for (const key of NOTIFICATION_CLASS_ORDER) {
+      expect(notificationClassLabel(key)).toBeTruthy();
+    }
   });
 });

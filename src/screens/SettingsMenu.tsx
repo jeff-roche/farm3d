@@ -3,13 +3,16 @@ import { createSignal, onCleanup, onMount } from "solid-js";
 import { DropdownMenu } from "../design-system";
 import { exportSettings, importSettings } from "../settings/settings-store";
 import { openSlicerSettings, registerSlicerSettingsHome } from "../slicing/slicer-settings-opener";
+import { NotificationSettingsDialog } from "./NotificationSettingsDialog";
 import { ThemePopover } from "./ThemePopover";
 import styles from "./SettingsMenu.module.css";
 
-/** Compact settings entry point for the activity bar — opens the theme picker, the Slicer settings, or the settings file. */
+/** Compact settings entry point for the activity bar — opens the theme picker, the Slicer settings, the Notifications
+ *  and retention dialog, or the settings file. */
 export function SettingsMenu() {
   let triggerRef: HTMLSpanElement | undefined;
   const [themePopoverOpen, setThemePopoverOpen] = createSignal(false);
+  const [notificationSettingsOpen, setNotificationSettingsOpen] = createSignal(false);
   const [operationError, setOperationError] = createSignal<string | null>(null);
 
   function run<T>(operation: () => Promise<T>) {
@@ -29,6 +32,12 @@ export function SettingsMenu() {
   // renders from the opener (SlicerSettingsHost).
   function openSlicer() {
     setTimeout(() => openSlicerSettings(menuButton()), 0);
+  }
+
+  // Same race as the two above: the item's own pointer-up is still being
+  // processed when onSelect fires.
+  function openNotificationSettings() {
+    setTimeout(() => setNotificationSettingsOpen(true), 0);
   }
 
   // The focusable menu button is Kobalte's trigger around the icon. It is
@@ -52,6 +61,8 @@ export function SettingsMenu() {
           { label: "Theme...", onSelect: openThemePopover },
           { label: "Slicer...", onSelect: openSlicer },
           { type: "separator" as const },
+          { label: "Notifications and retention...", onSelect: openNotificationSettings },
+          { type: "separator" as const },
           { label: "Export settings...", onSelect: () => run(exportSettings) },
           { label: "Import settings...", onSelect: () => run(importSettings) },
         ]}
@@ -62,6 +73,7 @@ export function SettingsMenu() {
         onOpenChange={setThemePopoverOpen}
         anchorRef={() => triggerRef}
       />
+      <NotificationSettingsDialog open={notificationSettingsOpen()} onOpenChange={setNotificationSettingsOpen} />
     </>
   );
 }

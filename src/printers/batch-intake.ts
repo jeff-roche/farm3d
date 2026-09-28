@@ -8,7 +8,9 @@ import type { BatchCredentialSource } from "../generated/contracts/command/Batch
 import type { BatchRowInput } from "../generated/contracts/command/BatchRowInput";
 import type { BatchRowResult } from "../generated/contracts/command/BatchRowResult";
 import type { BatchShared } from "../generated/contracts/command/BatchShared";
+import type { CameraTemplate } from "../generated/contracts/command/CameraTemplate";
 import type { CreatePrintersBatchInput } from "../generated/contracts/command/CreatePrintersBatchInput";
+import type { CameraSourceInput } from "../generated/contracts/domain/CameraSourceInput";
 import { canonicalHostIdentity } from "./host-identity";
 import type { DiscoveredPrinter, ResolvedPrinter } from "./types";
 
@@ -26,6 +28,10 @@ export interface BatchRowDraft {
   printerId?: string;
   /** Latest result for this row, from a `create_printers_batch` response. */
   result?: BatchRowResult;
+  /** P8 D13: the host this row's `snapshotUrl` camera uses instead of its
+   *  own Connection host. Only meaningful with a `snapshotUrl` camera
+   *  template; blank means "use this row's own Connection host". */
+  cameraHostOverride?: string;
 }
 
 /** Whether this row already produced a Printer. Keyed on the latest
@@ -359,6 +365,28 @@ export function toBatchInput(
             },
           }
         : {}),
+      ...(row.cameraHostOverride?.trim() ? { cameraHostOverride: row.cameraHostOverride.trim() } : {}),
     })),
   };
+}
+
+/** The camera source a row's own Connection (or its `snapshotUrl`
+ *  override) would resolve to under `shared.cameraTemplate`, mirroring
+ *  the backend's `row_camera` (Task 10): a `hostWebcam` template needs the
+ *  row's own Connection to resolve against; a `snapshotUrl` template needs
+ *  a host, from the row's override or else its Connection. `undefined`
+ *  (D13) means this row gets no camera -- used both to decide whether a
+ *  batch row can offer "Test camera" and to build that test's `source`. */
+export function resolveRowCameraSource(
+  row: BatchRowDraft,
+  template: CameraTemplate | undefined,
+): CameraSourceInput | undefined {
+  if (!template) return undefined;
+  if (template.kind === "hostWebcam") {
+    if (row.host.trim() === "") return undefined;
+    return { kind: "hostWebcam", webcamName: template.webcamName, webcamService: null, webPort: template.webPort };
+  }
+  const host = row.cameraHostOverride?.trim() || row.host.trim();
+  if (host === "") return undefined;
+  return { kind: "snapshotUrl", snapshotUrl: `http://${host}:${template.port}${template.path}` };
 }

@@ -90,6 +90,8 @@ export async function updateSettings(partial: Partial<Settings>): Promise<void> 
     themeMode: next.themeMode,
     monitorSection: next.monitorSection,
     monitorDensity: next.monitorDensity,
+    notifications: next.notifications,
+    snapshotRetention: next.snapshotRetention,
   }));
 }
 

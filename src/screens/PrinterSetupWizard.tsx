@@ -9,6 +9,14 @@ import type {
   ResolvedPrinter,
   StartSafety,
 } from "../printers/types";
+import { AlertDefaultsSection, alertDefaultsSummary, DEFAULT_ALERT_DEFAULTS } from "./AlertDefaultsSection";
+import {
+  cameraDraftSummary,
+  CameraSourceSection,
+  draftToCameraSource,
+  EMPTY_CAMERA_DRAFT,
+  type CameraSourceDraft,
+} from "./CameraSourceSection";
 import { bedTypeLabel, bedTypeOptionsFor } from "./PrinterProfilePanel";
 import {
   buildMismatches,
@@ -110,6 +118,10 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
 
   const [slots, setSlots] = createSignal(defaultSlotDrafts());
   const [initialLoads, setInitialLoads] = createSignal<InitialLoad[]>([]);
+  // P8 D4/D12: optional, and never gates Next -- Equip's `canLeave` stays
+  // keyed only on `slotsValid()`.
+  const [camera, setCamera] = createSignal<CameraSourceDraft>({ ...EMPTY_CAMERA_DRAFT });
+  const [alertDefaults, setAlertDefaults] = createSignal(DEFAULT_ALERT_DEFAULTS);
 
   const [startSafety, setStartSafety] = createSignal<StartSafety>("confirmBedClear");
   const [bedType, setBedType] = createSignal("");
@@ -131,6 +143,8 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
     setLastProbe(null);
     setSlots(defaultSlotDrafts());
     setInitialLoads([]);
+    setCamera({ ...EMPTY_CAMERA_DRAFT });
+    setAlertDefaults(DEFAULT_ALERT_DEFAULTS);
     setStartSafety("confirmBedClear");
     setBedType("");
     setBedTypeTouched(false);
@@ -243,6 +257,8 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
           ...load,
           expectedSpoolRevision: spoolState.spools.find((s) => s.id === load.spoolId)?.revision ?? 1,
         })),
+        camera: draftToCameraSource(camera()),
+        alertDefaults: alertDefaults(),
       });
       // A failed save leaves Review open (the store's own error banner
       // explains why) rather than closing over a lost draft.
@@ -341,6 +357,12 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
               onInitialLoadsChange={setInitialLoads}
               multiMaterialHint={preview()?.supportsMultiFilament ?? false}
             />
+            <CameraSourceSection
+              mode="draft"
+              value={camera()}
+              onChange={setCamera}
+              connection={hasConnection() ? toSubmission(connectionDraft(), "create") : undefined}
+            />
           </div>
         </Show>
 
@@ -365,6 +387,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
                 setBedType(v);
               }}
             />
+            <AlertDefaultsSection mode="draft" value={alertDefaults()} onChange={setAlertDefaults} />
           </div>
         </Show>
 
@@ -388,6 +411,8 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
                 Start safety:{" "}
                 {START_SAFETY_OPTIONS.find((o) => o.value === startSafety())?.label ?? startSafety()}
               </p>
+              <p>Camera: {cameraDraftSummary(camera())}</p>
+              <p>Alerts: {alertDefaultsSummary(alertDefaults())}</p>
             </div>
 
             <Show

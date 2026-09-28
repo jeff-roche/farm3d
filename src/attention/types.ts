@@ -29,6 +29,17 @@ export type { CameraSnapshot } from "../generated/contracts/domain/CameraSnapsho
 export type { HostWebcam } from "../generated/contracts/domain/HostWebcam";
 export type { MediaUsage } from "../generated/contracts/domain/MediaUsage";
 export type { SnapshotPage } from "../generated/contracts/domain/SnapshotPage";
+export type { PrinterCamera } from "../generated/contracts/domain/PrinterCamera";
+export type { PrinterCameraSummary } from "../generated/contracts/domain/PrinterCameraSummary";
+export type { PrinterCameraCleared } from "../generated/contracts/domain/PrinterCameraCleared";
+export type { AlertDefaults } from "../generated/contracts/domain/AlertDefaults";
+export type { PrinterAlertDefaults } from "../generated/contracts/domain/PrinterAlertDefaults";
+export type { NotificationMode } from "../generated/contracts/domain/NotificationMode";
+export type { NotificationClassSettings } from "../generated/contracts/domain/NotificationClassSettings";
+export type { NotifierStatus } from "../generated/contracts/domain/NotifierStatus";
+export type { NotifierUnavailableReason } from "../generated/contracts/domain/NotifierUnavailableReason";
+export type { TestNotificationSent } from "../generated/contracts/domain/TestNotificationSent";
+export type { CameraTemplate } from "../generated/contracts/command/CameraTemplate";
 export type { ConditionKind } from "../generated/contracts/domain/ConditionKind";
 export type { EvidenceOutcome } from "../generated/contracts/domain/EvidenceOutcome";
 export type { EvidenceSkipReason } from "../generated/contracts/domain/EvidenceSkipReason";

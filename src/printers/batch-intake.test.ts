@@ -4,12 +4,14 @@ import {
   generateRows,
   mapDiscovery,
   parseIntake,
+  resolveRowCameraSource,
   toBatchInput,
   type BatchRowDraft,
 } from "./batch-intake";
 import type { DiscoveredPrinter } from "./types";
 import type { ResolvedPrinter } from "./types";
 import type { BatchShared } from "../generated/contracts/command/BatchShared";
+import type { CameraTemplate } from "../generated/contracts/command/CameraTemplate";
 
 function idGen(prefix = "row"): () => string {
   let n = 0;
@@ -254,5 +256,83 @@ describe("toBatchInput", () => {
     expect(withCred.sharedCredential).toBe("shared-secret");
     const withoutCred = toBatchInput([row({})], shared, undefined, true, "batch-1");
     expect(withoutCred.sharedCredential).toBeUndefined();
+  });
+
+  it("forwards a trimmed cameraHostOverride, and omits it when blank", () => {
+    const withOverride = toBatchInput([row({ cameraHostOverride: "  192.0.2.20  " })], shared, undefined, true, "batch-1");
+    expect(withOverride.rows[0].cameraHostOverride).toBe("192.0.2.20");
+    const withoutOverride = toBatchInput([row({ cameraHostOverride: "" })], shared, undefined, true, "batch-1");
+    expect(withoutOverride.rows[0].cameraHostOverride).toBeUndefined();
+  });
+
+  it("applying the same shared template to two rows never copies one row's own host override to the other", () => {
+    const rowA = row({ rowId: "row-a", host: "printer-a.local", cameraHostOverride: "192.0.2.21" });
+    const rowB = row({ rowId: "row-b", host: "printer-b.local" });
+    const input = toBatchInput([rowA, rowB], shared, undefined, true, "batch-1");
+    expect(input.rows[0].cameraHostOverride).toBe("192.0.2.21");
+    expect(input.rows[1].cameraHostOverride).toBeUndefined();
+  });
+});
+
+describe("resolveRowCameraSource", () => {
+  const row = (overrides: Partial<BatchRowDraft>): BatchRowDraft => ({
+    rowId: "row-1",
+    name: "Voron A",
+    location: "",
+    host: "",
+    port: null,
+    protocol: "moonraker",
+    useTls: false,
+    credential: { source: "none" },
+    selected: true,
+    ...overrides,
+  });
+
+  it("is undefined with no template", () => {
+    expect(resolveRowCameraSource(row({}), undefined)).toBeUndefined();
+  });
+
+  it("hostWebcam: undefined without a Connection; otherwise the template's name/port", () => {
+    const template: CameraTemplate = { kind: "hostWebcam", webcamName: "front", webPort: 8080 };
+    expect(resolveRowCameraSource(row({}), template)).toBeUndefined();
+    expect(resolveRowCameraSource(row({ host: "printer-a.local" }), template)).toEqual({
+      kind: "hostWebcam",
+      webcamName: "front",
+      webcamService: null,
+      webPort: 8080,
+    });
+  });
+
+  it("snapshotUrl: builds from the row's own Connection host by default", () => {
+    const template: CameraTemplate = { kind: "snapshotUrl", path: "/webcam/?action=snapshot", port: 8080 };
+    expect(resolveRowCameraSource(row({ host: "printer-a.local" }), template)).toEqual({
+      kind: "snapshotUrl",
+      snapshotUrl: "http://printer-a.local:8080/webcam/?action=snapshot",
+    });
+  });
+
+  it("snapshotUrl: the row's own override host takes precedence over its Connection host", () => {
+    const template: CameraTemplate = { kind: "snapshotUrl", path: "/snap", port: 80 };
+    expect(resolveRowCameraSource(row({ host: "printer-a.local", cameraHostOverride: "192.0.2.30" }), template)).toEqual({
+      kind: "snapshotUrl",
+      snapshotUrl: "http://192.0.2.30:80/snap",
+    });
+  });
+
+  it("snapshotUrl: undefined with neither a Connection host nor an override", () => {
+    const template: CameraTemplate = { kind: "snapshotUrl", path: "/snap", port: 80 };
+    expect(resolveRowCameraSource(row({}), template)).toBeUndefined();
+  });
+});
+
+describe("parseIntake — camera columns", () => {
+  it("ignores a cameraHostOverride column: no row gets a silent host mapping", () => {
+    const text = "name,host,cameraHostOverride\nVoron A,voron-a.local,192.0.2.40";
+    const result = parseIntake(text, idGen());
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      { line: 1, message: 'Unknown column ignored: cameraHostOverride.' },
+    ]);
+    expect(result.rows[0].cameraHostOverride).toBeUndefined();
   });
 });

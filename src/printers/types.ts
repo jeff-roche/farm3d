@@ -1,4 +1,6 @@
 import type { PrinterRecord } from "../generated/contracts/domain/PrinterRecord";
+import type { AlertDefaults } from "../generated/contracts/domain/AlertDefaults";
+import type { CameraSourceInput } from "../generated/contracts/domain/CameraSourceInput";
 import type { CatalogRef } from "../generated/contracts/domain/CatalogRef";
 import type { ConnectionSubmission } from "../generated/contracts/domain/ConnectionSubmission";
 import type { PrinterStatus } from "../generated/contracts/domain/PrinterStatus";
@@ -49,6 +51,12 @@ export interface CreatePrinterOptions {
   /** D12: Spools to load into slots by index, in the same create
    *  transaction. Each Spool must already be `active` and in storage. */
   initialLoads?: { slotIndex: number; spoolId: string; expectedSpoolRevision: number }[];
+  /** P8 D4: the camera source to create with, validated and written in the
+   *  same transaction. `undefined` means no camera. */
+  camera?: CameraSourceInput;
+  /** P8 D9/D12: the Printer's own alert defaults, written in the same
+   *  create transaction. `undefined` means Rust's own defaults. */
+  alertDefaults?: AlertDefaults;
 }
 
 /** Presentation-only live state layered over the generated durable wire record. */

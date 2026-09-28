@@ -151,6 +151,16 @@ describe("PrinterDetailDock", () => {
     expect(screen.getByText("Job panel for North Bay")).toBeInTheDocument();
   });
 
+  it("shows the camera source and alert defaults sections on Setup", async () => {
+    render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
+    await fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
+
+    expect(screen.getByRole("heading", { name: "Camera" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "None" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "5 minutes" })).toBeInTheDocument();
+  });
+
   it("has a Camera tab, whose 'Set up camera' switches the dock to Setup", async () => {
     render(() => <PrinterDetailDock printer={printer} mode="inline" onClose={vi.fn()} />);
     await fireEvent.click(screen.getByRole("tab", { name: "Camera" }));

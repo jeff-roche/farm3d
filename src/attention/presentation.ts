@@ -14,6 +14,7 @@ import type {
   ConditionKind,
   EvidenceSkipReason,
   IncidentEntryKind,
+  NotificationClassSettings,
   PruneReason,
   SnapshotTrigger,
 } from "./types";
@@ -200,4 +201,31 @@ export function attentionSeverityFilterLabel(filter: AttentionSeverityFilter): s
 
 export function matchesSeverityFilter(filter: AttentionSeverityFilter, event: AttentionEvent): boolean {
   return filter === "all" || event.severity === filter;
+}
+
+// --- Notification settings (Task 15) ----------------------------------------
+
+/** D6 "Classes and defaults": the six `settings.notifications` toggles, in
+ *  the same order as the spec's table (fatal, confirmation, completion,
+ *  reconciliation, connectivity, inventory). */
+export const NOTIFICATION_CLASS_ORDER: (keyof NotificationClassSettings)[] = [
+  "fatal",
+  "confirmation",
+  "completion",
+  "reconciliation",
+  "connectivity",
+  "inventory",
+];
+
+const NOTIFICATION_CLASS_LABEL: Record<keyof NotificationClassSettings, string> = {
+  fatal: "Fatal failures",
+  confirmation: "Start confirmations",
+  completion: "Job completion",
+  reconciliation: "Material reconciliation",
+  connectivity: "Connectivity (offline, connection errors, host-cancelled)",
+  inventory: "Spool low",
+};
+
+export function notificationClassLabel(key: keyof NotificationClassSettings): string {
+  return NOTIFICATION_CLASS_LABEL[key];
 }

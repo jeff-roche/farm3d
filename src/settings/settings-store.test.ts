@@ -62,7 +62,26 @@ describe("settings-store", () => {
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("save_settings", {
         contractVersion: 1, expectedRevision: 1, themeMode: "farm3d-light", monitorSection: "printerModel", monitorDensity: "comfortable",
+        notifications: { fatal: true, confirmation: true, completion: true, reconciliation: false, connectivity: false, inventory: false },
+        snapshotRetention: { retentionDays: 30, diskCapMb: 2048 },
       });
+    });
+
+    it("persists an explicit notifications/snapshotRetention change (Task 15's dialog)", async () => {
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "system", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "now" } });
+      const { loadSettings, updateSettings } = await import("./settings-store");
+      await loadSettings();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 2, themeMode: "system", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "later" } });
+
+      await updateSettings({
+        notifications: { fatal: true, confirmation: false, completion: true, reconciliation: true, connectivity: false, inventory: true },
+        snapshotRetention: { retentionDays: 7, diskCapMb: 512 },
+      });
+
+      expect(tauriMock.invoke).toHaveBeenCalledWith("save_settings", expect.objectContaining({
+        notifications: { fatal: true, confirmation: false, completion: true, reconciliation: true, connectivity: false, inventory: true },
+        snapshotRetention: { retentionDays: 7, diskCapMb: 512 },
+      }));
     });
 
     it("invokes export_settings", async () => {
