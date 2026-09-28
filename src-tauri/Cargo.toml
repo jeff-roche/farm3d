@@ -108,6 +108,19 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
 
+# ADR-0015: farm3d's own org.freedesktop.Notifications client. Pinned to
+# the 5.19 line the lockfile already carries through `keyring`, with the
+# same default features (the runtime-agnostic `async-io` backend, which
+# runs fine alongside Tauri's tokio runtime). Enabling `tokio` here would
+# switch keyring's zbus backend too, so don't.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "~5.19"
+
+# `examples/notify_spike.rs` applies a Wayland activation token with
+# `gtk::Window::set_startup_id`. Same gtk the Tauri runtime uses.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk = "0.18"
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3.27"
