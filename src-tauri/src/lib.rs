@@ -21,6 +21,10 @@ pub mod spools;
 use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
+use cameras::commands::{
+    camera_preview_frame, clear_printer_camera, get_printer_camera, list_host_webcams,
+    set_printer_camera, test_camera,
+};
 use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
 };
@@ -97,6 +101,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub evaluator: Arc<queue::evaluator::Evaluator>,
     /// P8 D2: the Attention projector's runtime and the `attention` stream.
     pub attention: Arc<attention::services::AttentionServices<R>>,
+    /// P8 D4: camera health, one fetch per Printer, the last preview frame.
+    pub cameras: Arc<cameras::services::CameraServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -162,12 +168,13 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             evaluator: Arc::default(),
             attention: Arc::default(),
+            cameras: Arc::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 114] = [
+pub const COMMAND_NAMES: [&str; 120] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -282,6 +289,12 @@ pub const COMMAND_NAMES: [&str; 114] = [
     "list_incidents",
     "get_incident",
     "add_incident_note",
+    "get_printer_camera",
+    "set_printer_camera",
+    "clear_printer_camera",
+    "list_host_webcams",
+    "test_camera",
+    "camera_preview_frame",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -569,6 +582,9 @@ fn build_runtime_services<R: tauri::Runtime>(
         jobs,
         evaluator: Arc::default(),
         attention,
+        cameras: Arc::new(cameras::services::CameraServices::new(
+            cameras::services::CameraTimings::default(),
+        )),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -827,6 +843,12 @@ pub fn run() {
             list_incidents,
             get_incident,
             add_incident_note,
+            get_printer_camera,
+            set_printer_camera,
+            clear_printer_camera,
+            list_host_webcams,
+            test_camera,
+            camera_preview_frame,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

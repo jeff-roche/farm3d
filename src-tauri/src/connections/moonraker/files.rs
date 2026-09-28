@@ -524,6 +524,35 @@ pub fn parse_webcams_list(body: &Value) -> Result<Vec<CameraInfo>, ConnectionErr
         .collect())
 }
 
+/// P8 D4 "Host-webcam lookup": the `snapshot_url` of the `server.webcams.list`
+/// entry whose `name` is exactly `name`, for one camera fetch only. `None`
+/// when no entry has that name; `Some("")` when the entry has an empty or
+/// missing `snapshot_url` (the caller's `noSnapshotUrl`). The value can
+/// embed the host's LAN address, so it is returned zeroizing and never
+/// kept, logged, or quoted in an error. [`parse_webcams_list`] still
+/// discards every URL.
+pub fn parse_webcam_snapshot_url(
+    body: &Value,
+    name: &str,
+) -> Result<Option<zeroize::Zeroizing<String>>, ConnectionError> {
+    let webcams = result(body, "webcams")?
+        .get("webcams")
+        .and_then(Value::as_array)
+        .ok_or_else(|| malformed("webcams"))?;
+    Ok(webcams
+        .iter()
+        .find(|webcam| webcam.get("name").and_then(Value::as_str) == Some(name))
+        .map(|webcam| {
+            zeroize::Zeroizing::new(
+                webcam
+                    .get("snapshot_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,6 +1219,41 @@ mod tests {
     }
 
     #[test]
+    fn a_webcam_snapshot_url_is_found_by_name_and_only_that_one() {
+        // Synthetic, RFC 5737. `top` has no snapshot_url; `side` an empty one.
+        let body = json!({"result": {"webcams": [
+            {"name": "front", "service": "webrtc-camerastreamer",
+             "stream_url": "http://192.0.2.10/webcam/webrtc",
+             "snapshot_url": "http://192.0.2.10/webcam/snapshot?token=abc"},
+            {"name": "top", "service": "mjpegstreamer-adaptive",
+             "stream_url": "/webcam2/?action=stream"},
+            {"name": "side", "service": "mjpegstreamer", "snapshot_url": ""}
+        ]}});
+        assert_eq!(
+            parse_webcam_snapshot_url(&body, "front")
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("http://192.0.2.10/webcam/snapshot?token=abc")
+        );
+        assert_eq!(
+            parse_webcam_snapshot_url(&body, "top").unwrap().as_deref().map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            parse_webcam_snapshot_url(&body, "side").unwrap().as_deref().map(String::as_str),
+            Some("")
+        );
+        assert!(parse_webcam_snapshot_url(&body, "missing").unwrap().is_none());
+        assert!(parse_webcam_snapshot_url(&body, "FRONT").unwrap().is_none());
+        assert!(
+            parse_webcam_snapshot_url(&fixture!("webcams_empty.json"), "front")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn parser_errors_never_quote_the_body() {
         let body = json!({"error": {"message": "secret-ish", "traceback": "/opt/klipper/x.py"}});
         for error in [
@@ -1197,6 +1261,7 @@ mod tests {
             parse_objects_list(&body).unwrap_err(),
             parse_history_list(&body).unwrap_err(),
             parse_webcams_list(&body).unwrap_err(),
+            parse_webcam_snapshot_url(&body, "front").unwrap_err(),
             parse_host_job_state(&body, &[]).unwrap_err(),
         ] {
             let text = format!("{error} {error:?}");

@@ -2,14 +2,26 @@
 //! camera source, its health, and the `camera_snapshots` evidence record.
 //! See the P8 design spec's "Backend model" module layout table.
 //!
-//! So far this module is wire types plus `capture.rs`'s `CaptureIntent`,
-//! which the attention projector emits (Task 6) and nothing consumes yet.
-//! Source resolution (`resolve.rs`), the frame fetcher (`fetch.rs`), the
-//! media store (`media.rs`), retention (`retention.rs`), capture behavior,
-//! services (`services.rs`), and commands (`commands.rs`) are later tasks
-//! (see the module layout table in the design spec).
+//! - `config.rs`: the `printer_cameras` repository and source validation;
+//! - `resolve.rs`: a source to one fetch's URL (host webcams included);
+//! - `fetch.rs`: the bounded `FrameFetcher` and its typed `CameraError`;
+//! - `services.rs`: `CameraServices` (in-memory health, one fetch per
+//!   Printer at a time, the last preview frame);
+//! - `commands.rs`: the camera commands;
+//! - `capture.rs`: the projector's `CaptureIntent` (consumed by Task 8's
+//!   capture path, with the media store and retention).
+//!
+//! Global constraint 3: a camera URL never leaves this module except
+//! through `get_printer_camera`'s manual URL (and the Printers export
+//! file). No error, event, log line, or persisted row other than
+//! `printer_cameras.snapshot_url` carries one.
 
 pub mod capture;
+pub mod commands;
+pub mod config;
+pub mod fetch;
+pub mod resolve;
+pub mod services;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -33,7 +45,7 @@ impl CameraSourceKind {
 /// fetch time; `SnapshotUrl` is a manual, fully-formed URL (global
 /// constraint 3: it never enters an event, error, log, or persisted
 /// payload other than this column and the Printers export file).
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, TS)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 #[ts(
     tag = "kind",
@@ -50,6 +62,29 @@ pub enum CameraSource {
     SnapshotUrl {
         snapshot_url: String,
     },
+}
+
+/// Never prints a manual URL (global constraint 3): `Debug` output can end
+/// up in a panic message or a log line.
+impl std::fmt::Debug for CameraSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CameraSource::HostWebcam {
+                webcam_name,
+                webcam_service,
+                web_port,
+            } => f
+                .debug_struct("HostWebcam")
+                .field("webcam_name", webcam_name)
+                .field("webcam_service", webcam_service)
+                .field("web_port", web_port)
+                .finish(),
+            CameraSource::SnapshotUrl { .. } => f
+                .debug_struct("SnapshotUrl")
+                .field("snapshot_url", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 /// `set_printer_camera`'s argument shape — structurally identical to
@@ -76,6 +111,58 @@ pub struct PrinterCamera {
     pub revision: i64,
     pub source: CameraSource,
     pub updated_at: String,
+}
+
+/// `set_printer_camera`'s result: a [`PrinterCamera`] with the manual URL
+/// redacted (only `get_printer_camera` returns one). The host-webcam
+/// fields are set for `hostWebcam` only; `hasSnapshotUrl` is true exactly
+/// for `snapshotUrl`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/PrinterCameraSummary.ts")]
+pub struct PrinterCameraSummary {
+    pub printer_id: String,
+    #[ts(type = "number")]
+    pub revision: i64,
+    pub source_kind: CameraSourceKind,
+    pub webcam_name: Option<String>,
+    pub webcam_service: Option<String>,
+    pub web_port: Option<u16>,
+    pub has_snapshot_url: bool,
+    pub updated_at: String,
+}
+
+impl CameraSource {
+    pub fn kind(&self) -> CameraSourceKind {
+        match self {
+            CameraSource::HostWebcam { .. } => CameraSourceKind::HostWebcam,
+            CameraSource::SnapshotUrl { .. } => CameraSourceKind::SnapshotUrl,
+        }
+    }
+}
+
+impl PrinterCamera {
+    /// The redacted form `set_printer_camera` returns.
+    pub fn summary(&self) -> PrinterCameraSummary {
+        let (webcam_name, webcam_service, web_port) = match &self.source {
+            CameraSource::HostWebcam {
+                webcam_name,
+                webcam_service,
+                web_port,
+            } => (Some(webcam_name.clone()), webcam_service.clone(), *web_port),
+            CameraSource::SnapshotUrl { .. } => (None, None, None),
+        };
+        PrinterCameraSummary {
+            printer_id: self.printer_id.clone(),
+            revision: self.revision,
+            source_kind: self.source.kind(),
+            webcam_name,
+            webcam_service,
+            web_port,
+            has_snapshot_url: matches!(self.source, CameraSource::SnapshotUrl { .. }),
+            updated_at: self.updated_at.clone(),
+        }
+    }
 }
 
 /// A Moonraker `webcams.list` entry, as `list_host_webcams` returns it.

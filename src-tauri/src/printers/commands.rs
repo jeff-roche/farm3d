@@ -460,6 +460,9 @@ pub async fn delete_printer<R: tauri::Runtime>(
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
     // P8 D2 "Wakes": the Attention projector re-reads Printers too.
     services.attention.poke();
+    // P8 D4: the deleted Printer's camera health and last preview frame go
+    // with it (its `printer_cameras` row cascaded in the delete).
+    services.cameras.forget_printer(&id);
     Ok(CommandSuccess::new(DeletePrinterResult {
         deleted_id: id,
         deleted_revision: expected_revision,

@@ -60,6 +60,20 @@ pub trait CameraDiscovery: Send + Sync {
     async fn cameras(&self) -> Result<Vec<CameraInfo>, ConnectionError>;
 }
 
+/// P8 D4 "Host-webcam lookup": one webcam's `snapshot_url` by exact name,
+/// for a single camera fetch (`cameras::resolve`). `None` when the host
+/// lists no webcam with that name; an empty string when the entry has no
+/// snapshot URL. A sibling of the public [`CameraDiscovery`] rather than a
+/// new method on it, so the URL-bearing lookup never leaves the crate.
+/// Built for Moonraker only (`adapters::AdapterDescriptor::webcam_snapshot`).
+#[async_trait::async_trait]
+pub(crate) trait WebcamSnapshotSource: Send + Sync {
+    async fn snapshot_url(
+        &self,
+        name: &str,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, ConnectionError>;
+}
+
 // --- D1: supporting types (Rust-only unless noted) ----------------------
 
 #[derive(Clone, PartialEq, Debug)]
@@ -707,6 +721,7 @@ mod tests {
             control: Some(dummy_control),
             host_state: Some(dummy_host_state),
             camera: Some(dummy_camera),
+            webcam_snapshot: None,
             evidence: Box::leak(evidence.into_boxed_slice()),
         }
     }

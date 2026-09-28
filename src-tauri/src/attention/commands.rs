@@ -105,7 +105,8 @@ fn publish<R: tauri::Runtime>(app: &AppHandle<R>, services: &RuntimeServices<R>,
 }
 
 /// `list_attention`: without `resolvedBefore`, every open Event, the first
-/// resolved page, the open Incidents, and camera health; with it, only the
+/// resolved page, the open Incidents, and camera health (in memory, one
+/// per Printer with a camera source); with it, only the
 /// next resolved page. The stream's sequence is read before the rows
 /// (listen before backfill).
 #[tauri::command]
@@ -129,17 +130,20 @@ pub async fn list_attention<R: tauri::Runtime>(
     let snapshot_sequence = services.attention.stream.snapshot_sequence();
     let stream_id = services.attention.stream.stream_id().to_string();
     let first_page = resolved_before.is_none();
-    let (page, open_incidents) = services
+    let (page, open_incidents, camera_sources) = services
         .storage
         .read_transaction(|tx| {
             Ok((|| -> Result<_, StorageError> {
                 let page = attention_repository::list_attention(tx, resolved_before.as_ref(), limit)?;
-                let incidents = if first_page {
-                    incidents_repository::list_open(tx)?
+                let (incidents, camera_sources) = if first_page {
+                    (
+                        incidents_repository::list_open(tx)?,
+                        crate::cameras::config::list_sources(tx)?,
+                    )
                 } else {
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 };
-                Ok((page, incidents))
+                Ok((page, incidents, camera_sources))
             })())
         })
         .map_err(storage_error)?
@@ -151,8 +155,8 @@ pub async fn list_attention<R: tauri::Runtime>(
         resolved: page.resolved,
         resolved_cursor: page.resolved_cursor,
         open_incidents,
-        // Camera sources and their health are Task 7's; none exist yet.
-        camera_health: Vec::new(),
+        // One per Printer with a camera source (none on a later page).
+        camera_health: services.cameras.health_for(&camera_sources),
     }))
 }
 

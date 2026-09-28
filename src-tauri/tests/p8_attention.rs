@@ -757,10 +757,33 @@ fn ok(app: &Running, command: &str, body: Value) -> Value {
     app.ok(command, body)
 }
 
+/// Task 7 (global constraint 3): a manual camera URL carrying a userinfo
+/// password, an RFC 5737 host, and a query token, stored on the Printer so
+/// every projector pass, command, and event below runs with it in place.
+const CAMERA_SEED_PASS: &str = "SEEDED-P8-ATTENTION-CAMERA-PASS-91ab";
+const CAMERA_SEED_TOKEN: &str = "SEEDED-P8-ATTENTION-CAMERA-TOKEN-4c7e";
+const CAMERA_SEED_HOST: &str = "192.0.2.61";
+
 /// A Job fails on the fake: the projector opens `job.failed` and the
 /// material requirement's Event, and one Incident for the Job links both.
+/// The Printer has the seeded camera URL (written as-is: the row, not its
+/// validation, is what's under test).
 fn failed_job_rig() -> (ProjectorRig, String) {
     let rig = ProjectorRig::new(StartSafety::ConfirmBedClear);
+    rig.app
+        .storage
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO printer_cameras(printer_id, source_kind, snapshot_url, updated_at) \
+                 VALUES (?1, 'snapshotUrl', ?2, '2026-09-28T09:00:00.000Z')",
+                rusqlite::params![
+                    PRINTER,
+                    format!("http://{CAMERA_SEED_HOST}:8080/snap?user={CAMERA_SEED_PASS}&token={CAMERA_SEED_TOKEN}")
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     let job = rig.app.printing();
     rig.roots.fake.finish_print("klippy_shutdown");
     rig.app.wait_job(&job, "failed");
@@ -797,7 +820,13 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     assert!(open_ids.contains(&failed.id.as_str()) && open_ids.contains(&material.id.as_str()));
     assert_eq!(listed["openIncidents"][0]["id"], json!(incident_id));
     assert_eq!(listed["openIncidents"][0]["kind"], "job.failed");
-    assert_eq!(listed["cameraHealth"], json!([]));
+    // The seeded camera's health, with no URL (scanned below).
+    assert_eq!(
+        listed["cameraHealth"],
+        json!([{"printerId": PRINTER, "state": "unknown", "sourceKind": "snapshotUrl",
+                "lastSuccessAt": null, "lastFailureAt": null, "lastFailureKind": null}])
+    );
+    let listed_text = listed.to_string();
     let older = ok(app, "list_attention", json!({"resolvedBefore": format!("2999-01-01T00:00:00Z|att-z"), "limit": 5}));
     assert_eq!(older["open"], json!([]));
     assert_eq!(older["openIncidents"], json!([]));
@@ -1014,11 +1043,16 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
         .filter(|text| text.contains("\"attention."))
         .cloned()
         .collect();
-    for haystack in [&rows, &emitted] {
+    for haystack in [&rows, &emitted, &listed_text] {
         assert!(!haystack.is_empty());
         assert!(!haystack.contains(SECRET), "the API key leaked");
         assert!(!haystack.contains(&format!("{host}:{port}")), "the endpoint leaked");
         assert!(!haystack.contains("credentialRef") && !haystack.contains("apikey"));
+        // Task 7: nothing of the Printer's camera URL crosses into
+        // Attention or Incident rows, events, or `list_attention`.
+        for needle in [CAMERA_SEED_PASS, CAMERA_SEED_TOKEN, CAMERA_SEED_HOST, "snap?user="] {
+            assert!(!haystack.contains(needle), "{needle} leaked");
+        }
     }
 }
 

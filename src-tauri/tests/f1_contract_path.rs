@@ -2,8 +2,8 @@
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
     // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
-    // P8 Task 6's 7.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7);
+    // P8 Task 6's 7 and Task 7's 6.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -121,6 +121,12 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "list_incidents",
             "get_incident",
             "add_incident_note",
+            "get_printer_camera",
+            "set_printer_camera",
+            "clear_printer_camera",
+            "list_host_webcams",
+            "test_camera",
+            "camera_preview_frame",
         ]
     );
 }
@@ -289,6 +295,12 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::incidents::commands::list_incidents,
             farm3d_lib::incidents::commands::get_incident,
             farm3d_lib::incidents::commands::add_incident_note,
+            farm3d_lib::cameras::commands::get_printer_camera,
+            farm3d_lib::cameras::commands::set_printer_camera,
+            farm3d_lib::cameras::commands::clear_printer_camera,
+            farm3d_lib::cameras::commands::list_host_webcams,
+            farm3d_lib::cameras::commands::test_camera,
+            farm3d_lib::cameras::commands::camera_preview_frame,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -615,6 +627,21 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             "add_incident_note",
             json!({"operationId": "o", "incidentId": "i", "text": "t"}),
         ),
+        ("get_printer_camera", json!({"printerId": "p"})),
+        (
+            "set_printer_camera",
+            json!({"operationId": "o", "printerId": "p", "source": {"kind": "hostWebcam", "webcamName": "w", "webcamService": null, "webPort": null}}),
+        ),
+        (
+            "clear_printer_camera",
+            json!({"operationId": "o", "printerId": "p"}),
+        ),
+        ("list_host_webcams", json!({"printerId": "p"})),
+        (
+            "test_camera",
+            json!({"source": {"kind": "snapshotUrl", "snapshotUrl": "http://192.0.2.10/snap"}}),
+        ),
+        ("camera_preview_frame", json!({"printerId": "p"})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

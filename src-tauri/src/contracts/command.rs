@@ -382,6 +382,13 @@ pub enum ErrorCode {
     /// P8 D2 "Lifecycle rules": `resolve_attention_event` on an Event whose
     /// Condition resolves by itself (`auto` or `action`).
     AttentionNotManual,
+    /// P8 D4: `camera_preview_frame` on a Printer with no camera source.
+    CameraNotConfigured,
+    /// P8 D4: a frame fetch failed (every `CameraErrorKind` except
+    /// `hostMismatch` and `unsupportedAdapter`).
+    CameraFailed,
+    /// P8 D4: a host webcam's absolute URL names another host.
+    CameraHostMismatch,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -465,6 +472,11 @@ pub struct CommandError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub details: Option<BTreeMap<String, JsonValue>>,
+}
+
+/// A detail value that is a string or `null`.
+fn optional_string(value: Option<&str>) -> JsonValue {
+    value.map_or(JsonValue::Null(()), |value| JsonValue::String(value.to_string()))
 }
 
 impl CommandError {
@@ -814,6 +826,79 @@ impl CommandError {
                 "resolutionMode".to_string(),
                 JsonValue::String(crate::spools::encode_enum(resolution_mode)),
             ),
+        ]));
+        error
+    }
+
+    /// P8 `CAMERA_NOT_CONFIGURED`: the Printer has no camera source.
+    pub fn camera_not_configured(printer_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::CameraNotConfigured,
+            "This Printer has no camera.",
+            vec![RecoveryCode::OpenPrinterSetup],
+            false,
+        )
+        .with_string_details(&[("printerId", printer_id)])
+    }
+
+    /// P8 `CAMERA_FAILED`: a frame fetch failed with `kind` (a
+    /// `CameraErrorKind` wire spelling). `message` is the kind's own
+    /// sentence; neither names the camera's address. `[OPEN_PRINTER_SETUP]`
+    /// joins `[RETRY]` when the Printer's setup is what needs changing.
+    pub fn camera_failed(
+        printer_id: Option<&str>,
+        kind: &str,
+        http_status: Option<u16>,
+        message: String,
+        open_setup: bool,
+    ) -> Self {
+        let mut recovery = vec![RecoveryCode::Retry];
+        if open_setup {
+            recovery.push(RecoveryCode::OpenPrinterSetup);
+        }
+        let mut error = Self::typed(ErrorCode::CameraFailed, message, recovery, true);
+        error.details = Some(BTreeMap::from([
+            ("printerId".to_string(), optional_string(printer_id)),
+            ("kind".to_string(), JsonValue::String(kind.to_string())),
+            (
+                "httpStatus".to_string(),
+                http_status.map_or(JsonValue::Null(()), |status| {
+                    JsonValue::Number(
+                        JsonNumber::try_from(i64::from(status)).expect("a status is JS-safe"),
+                    )
+                }),
+            ),
+        ]));
+        error
+    }
+
+    /// P8 `CAMERA_HOST_MISMATCH`: a host webcam's URL names another host
+    /// than the Printer's Connection.
+    pub fn camera_host_mismatch(printer_id: Option<&str>) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::CameraHostMismatch,
+            "The printer's webcam points at a different host. Use a manual snapshot URL.",
+            vec![RecoveryCode::OpenPrinterSetup],
+            false,
+        );
+        error.details = Some(BTreeMap::from([(
+            "printerId".to_string(),
+            optional_string(printer_id),
+        )]));
+        error
+    }
+
+    /// P8 D4: `hostWebcam` on an adapter without the webcam lookup is P6's
+    /// `CAPABILITY_UNSUPPORTED` (`capability: "camera"`, `reason:
+    /// "adapter"`); `printerId` is null for an unsaved Connection.
+    pub fn camera_unsupported_adapter(printer_id: Option<&str>) -> Self {
+        let detail = "This printer's connection can't list its webcams. Use a manual snapshot URL.";
+        let mut error = Self::typed(ErrorCode::CapabilityUnsupported, detail, vec![], false);
+        error.details = Some(BTreeMap::from([
+            ("printerId".to_string(), optional_string(printer_id)),
+            ("capability".to_string(), JsonValue::String("camera".to_string())),
+            ("reason".to_string(), JsonValue::String("adapter".to_string())),
+            ("detail".to_string(), JsonValue::String(detail.to_string())),
         ]));
         error
     }

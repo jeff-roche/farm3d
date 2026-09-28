@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 114] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 120] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -498,9 +498,35 @@ contracts![
         "AddIncidentNoteRequest",
         "AddIncidentNoteResult"
     ),
+    (
+        "get_printer_camera",
+        "GetPrinterCameraRequest",
+        "GetPrinterCameraResult"
+    ),
+    (
+        "set_printer_camera",
+        "SetPrinterCameraRequest",
+        "SetPrinterCameraResult"
+    ),
+    (
+        "clear_printer_camera",
+        "ClearPrinterCameraRequest",
+        "ClearPrinterCameraResult"
+    ),
+    (
+        "list_host_webcams",
+        "ListHostWebcamsRequest",
+        "ListHostWebcamsResult"
+    ),
+    ("test_camera", "TestCameraRequest", "TestCameraResult"),
+    (
+        "camera_preview_frame",
+        "CameraPreviewFrameRequest",
+        "CameraPreviewFrameResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 114] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 120] {
     &COMMAND_CONTRACTS
 }
 
@@ -750,7 +776,19 @@ export type ListIncidentsResult = CommandSuccess<IncidentPage>;
 export type GetIncidentRequest = ContractRequest & { incidentId: string };
 export type GetIncidentResult = CommandSuccess<IncidentDetail>;
 export type AddIncidentNoteRequest = ContractRequest & { operationId: string; incidentId: string; text: string };
-export type AddIncidentNoteResult = CommandSuccess<IncidentDetail>;"#.to_string()
+export type AddIncidentNoteResult = CommandSuccess<IncidentDetail>;
+export type GetPrinterCameraRequest = ContractRequest & { printerId: string };
+export type GetPrinterCameraResult = CommandSuccess<PrinterCamera | null>;
+export type SetPrinterCameraRequest = ContractRequest & { operationId: string; printerId: string; source: CameraSourceInput };
+export type SetPrinterCameraResult = CommandSuccess<PrinterCameraSummary>;
+export type ClearPrinterCameraRequest = ContractRequest & { operationId: string; printerId: string };
+export type ClearPrinterCameraResult = CommandSuccess<PrinterCameraCleared>;
+export type ListHostWebcamsRequest = ContractRequest & { printerId?: string; connection?: ConnectionSubmission };
+export type ListHostWebcamsResult = CommandSuccess<HostWebcam[]>;
+export type TestCameraRequest = ContractRequest & { printerId?: string; connection?: ConnectionSubmission; source: CameraSourceInput };
+export type TestCameraResult = ArrayBuffer;
+export type CameraPreviewFrameRequest = ContractRequest & { printerId: string };
+export type CameraPreviewFrameResult = ArrayBuffer;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -857,6 +895,11 @@ export type AddIncidentNoteResult = CommandSuccess<IncidentDetail>;"#.to_string(
         visitor.visit::<crate::attention::AttentionChange>();
         visitor.visit::<crate::incidents::IncidentPage>();
         visitor.visit::<crate::incidents::IncidentDetail>();
+        visitor.visit::<crate::cameras::PrinterCamera>();
+        visitor.visit::<crate::cameras::CameraSourceInput>();
+        visitor.visit::<crate::cameras::PrinterCameraSummary>();
+        visitor.visit::<crate::cameras::commands::PrinterCameraCleared>();
+        visitor.visit::<crate::cameras::HostWebcam>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {
