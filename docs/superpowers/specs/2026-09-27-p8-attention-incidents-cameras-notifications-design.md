@@ -872,6 +872,22 @@ URL, camera text, or credential. When the server advertises
 (tauri#11323). It starts `true`, so nothing notifies before the first
 focus-out.
 
+Task 2 observations (KDE Plasma 6.7.5 Wayland; baseline
+`docs/superpowers/baselines/2026-09-27-p8-notification-spike.md`):
+
+- `Focused(false)` fires on `minimize` and `hide`, and `Focused(true)` on
+  `show` and on `set_focus` of a visible window: confirmed (Task 2). On
+  alt-tab and around a GTK file dialog: deferred to Task 17.
+- `is_focused()` agreed with the events in every step of both runs. The
+  tauri#11323 mismatch did not reproduce, but the event stays the source.
+- Contradicted (Task 2): "nothing notifies before the first focus-out"
+  assumes the window opens focused. In one of two runs KWin opened it
+  unfocused and sent no `Focused(false)`. Starting `true` then keeps
+  notifications off until the operator focuses and leaves the window once.
+  That errs on the quiet side, and the Attention center still has every
+  Event. Seeding from `is_focused()` once the window is shown would close
+  the gap; the controller decides before Task 9.
+
 #### Sinks
 
 ```rust
@@ -901,7 +917,11 @@ farm3d asks for none. A reachable `org.freedesktop.Notifications` is
 available; Do Not Disturb is the daemon's business, and the Attention
 center keeps every Event regardless. `tauri-plugin-notification` is not
 added. At startup the sink calls `GetServerInformation` and
-`GetCapabilities`; `notification_status` reports the result:
+`GetCapabilities`; `notification_status` reports the result. Confirmed
+(Task 2): Plasma answers `("Plasma", "KDE", "6.7.5", "1.2")` and
+advertises `actions`, `body-markup`, `persistence`, and `icon-static`, so
+the body escaping above applies there. It also declares the
+`ActivationToken` signal in its introspection data.
 
 ```ts
 type NotifierStatus =
@@ -917,22 +937,56 @@ service retries the connection on the next `notification_status` or
 
 #### Click activation
 
-To be confirmed by Task 2 (automatable parts) and Task 17 (owner at the
-desktop). The sequence below is the design; Task 2's report and Task 17's
-pass may change steps 2–3, and the spec's Status line will record the
+Task 2 ran the automatable parts on KDE Plasma 6.7.5 Wayland (KWin
+6.7.5, GTK 3.24.52); anything that needs a click waits for Task 17 (owner
+at the desktop). Each item below is marked "confirmed (Task 2)",
+"contradicted (Task 2)", or "deferred to Task 17". Task 17's pass may
+still change steps 2–3, and the spec's Status line will record the
 confirmed sequence.
+
+**The `Notify` call** above: accepted as specified (`app_name` "farm3d",
+an absolute icon path, `["default", "Open"]`, `desktop-entry`, a byte
+`urgency`, `expire_timeout` −1); it returns an id. Confirmed (Task 2).
+Whether Plasma attributes it to farm3d with farm3d's icon: deferred to
+Task 17 (the spike host has no installed `farm3d.desktop`, so under
+`just dev` the hint cannot resolve there).
 
 1. The service keeps `outstanding: id → OutstandingNotification { target,
    eventId: Option<String>, openAttentionCenter }`, bounded at 256 (oldest
    evicted first), and a short-lived `activation_tokens: id → token`
-   (dropped after 10 s).
-2. `ActivationToken(id, token)` for a known id stores the token.
-   (Expected before `ActionInvoked` on KDE; to be confirmed.)
+   (dropped after 10 s). The bound is needed, confirmed (Task 2): Plasma
+   sent no `NotificationClosed` for a notification whose 2 s
+   `expire_timeout` had passed (3.5 s later), so an untouched id can stay
+   outstanding.
+2. `ActivationToken(id, token)` for a known id stores the token. The
+   server declares the signal: confirmed (Task 2). Whether KWin sends it,
+   and before `ActionInvoked`: deferred to Task 17.
 3. `ActionInvoked(id, "default" | "Open")` for a known id, on the main
    thread (`AppHandle::run_on_main_thread`): if a token arrived, apply it
    to the GTK window (`set_startup_id(token)`) first; then `unminimize`,
    `show`, `set_focus`. If no `Focused(true)` arrives within 500 ms,
-   `request_user_attention(Informational)`.
+   `request_user_attention(Informational)`. Receiving `ActionInvoked` at
+   all, and whether the token raises the window (minimized, or behind
+   another app): deferred to Task 17.
+
+   Contradicted (Task 2): without a valid token, `unminimize` and
+   `set_focus` do not bring back a minimized window on KWin Wayland. GTK
+   has no un-minimize request on Wayland, and `is_minimized()` stays
+   `false` throughout, so tao's `set_focus` guard never sees the window as
+   minimized (the "`set_focus` right after `unminimize` is dropped" case
+   applies to X11 only). An invalid token changed nothing. What did
+   work: a `hide` and then a `show` brought a minimized window back
+   focused in both runs; in the second run `hide`, `show`, `set_focus` in
+   one tick did so twice, with `Focused(true)` within 4 ms; and `set_focus`
+   alone activated a visible window that had opened unfocused. The named
+   fallback (Task 2's proposal, approved or not with its baseline report):
+   if no `Focused(true)` within 500 ms, run `hide`, `show`, `set_focus` in
+   one tick and wait another 500 ms (Task 17 checks that the re-mapped
+   window keeps its place and contents); only then
+   `request_user_attention(Informational)`. Tao maps that call to GTK's
+   urgency hint, which may be a no-op on Wayland (Task 17 looks); step 4
+   still navigates, and the Attention center keeps the Event, whatever
+   the raise does.
 4. Emit `farm3d-navigate-v1` with `NavigateRequest { contractVersion: 1,
    target, openAttentionCenter }`.
 5. If the notification names one Event: mark it read through
@@ -946,10 +1000,19 @@ confirmed sequence.
   otherwise `monitor/attention/<eventId>`. A summary's target is
   `{ destination: "monitor" }` with `openAttentionCenter: true`.
 - `NotificationClosed(id, reason)` removes `id` from `outstanding`.
+  Confirmed (Task 2): `CloseNotification` produced `NotificationClosed(id,
+  3)` on the long-lived listener.
 - Signals are matched on path `/org/freedesktop/Notifications`, interface
   `org.freedesktop.Notifications`, and sender = the current unique owner
   of `org.freedesktop.Notifications`. Ids not in `outstanding` are
-  ignored.
+  ignored. Confirmed (Task 2): a `NotificationClosed` forged by another
+  connection reached an unfiltered match but not the sender-filtered one;
+  Plasma broadcasts its signals (no destination), so another client's
+  `NotificationClosed` did reach the filtered listener and was dropped by
+  the id check.
+- **The summary's `replaces_id`.** Confirmed (Task 2): `Notify` with
+  `replaces_id` set to a live id returns that same id, updates in place,
+  and emits no `NotificationClosed` for it.
 - `send_test_notification` shows one notification whatever the focus and
   classes ("farm3d test notification"), with target `{ destination:
   "monitor" }`.
