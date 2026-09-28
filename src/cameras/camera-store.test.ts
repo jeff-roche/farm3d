@@ -252,6 +252,39 @@ describe("usePreview", () => {
     dispose();
   });
 
+  it("a slow poll never overlaps the next: each starts a second after the previous settles", async () => {
+    vi.useFakeTimers();
+    tauriMock.isTauri.mockReturnValue(true);
+    const started: number[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    tauriMock.invoke.mockImplementation(() => {
+      started.push(Date.now());
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // The camera takes three seconds per frame.
+      return new Promise((resolve) => setTimeout(() => {
+        inFlight -= 1;
+        resolve(encodeFrame(header({ capturedAt: `frame-${started.length}` }), new Uint8Array([1])));
+      }, 3_000));
+    });
+    const { usePreview } = await import("./camera-store");
+
+    const t0 = Date.now();
+    const dispose = createRoot((d) => {
+      usePreview(() => "prn-1", () => true);
+      return d;
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(maxInFlight).toBe(1);
+    // 0 → settles at 3 s → next at 4 s → settles at 7 s → next at 8 s.
+    expect(started.map((at) => at - t0)).toEqual([0, 4_000, 8_000]);
+    dispose();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(started).toHaveLength(3);
+  });
+
   it("reports needsDesktopError in web mode and never polls", async () => {
     tauriMock.isTauri.mockReturnValue(false);
     const { usePreview } = await import("./camera-store");

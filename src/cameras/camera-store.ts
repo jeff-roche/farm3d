@@ -190,6 +190,9 @@ export interface CameraPreview {
 
 /** `camera_preview_frame`, polled about once a second while `visible()` is
  *  true (spec "Frontend architecture": `usePreview(printerId, visible)`).
+ *  Each poll is scheduled `PREVIEW_INTERVAL_MS` after the previous one
+ *  settles (a chained timeout, not an interval), so a slow camera never
+ *  has two fetches in flight.
  *  Revokes the previous object URL on each new frame and when it stops
  *  (`visible()` goes false, `printerId()` changes, or the owner is
  *  cleaned up) -- never leaks one. Web mode reports `needsDesktopError`
@@ -201,7 +204,7 @@ export function usePreview(printerId: Accessor<string>, visible: Accessor<boolea
   const [loading, setLoading] = createSignal(false);
 
   let currentUrl: string | null = null;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
   let disposed = false;
 
@@ -214,9 +217,19 @@ export function usePreview(printerId: Accessor<string>, visible: Accessor<boolea
 
   function stopTimer(): void {
     if (timer !== undefined) {
-      clearInterval(timer);
+      clearTimeout(timer);
       timer = undefined;
     }
+  }
+
+  /** One poll, then the next one `PREVIEW_INTERVAL_MS` after it settles,
+   *  for as long as this generation is current. */
+  function pollLoop(id: string, myGeneration: number): void {
+    timer = undefined;
+    void poll(id, myGeneration).then(() => {
+      if (disposed || myGeneration !== generation) return;
+      timer = setTimeout(() => pollLoop(id, myGeneration), PREVIEW_INTERVAL_MS);
+    });
   }
 
   async function poll(id: string, myGeneration: number): Promise<void> {
@@ -258,8 +271,7 @@ export function usePreview(printerId: Accessor<string>, visible: Accessor<boolea
       return;
     }
     setError(null);
-    void poll(id, myGeneration);
-    timer = setInterval(() => void poll(id, myGeneration), PREVIEW_INTERVAL_MS);
+    pollLoop(id, myGeneration);
   });
 
   onCleanup(() => {

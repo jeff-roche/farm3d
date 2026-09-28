@@ -20,7 +20,9 @@ export function useSnapshotImage(source: Accessor<SnapshotImageSource>): { url: 
   const [error, setError] = createSignal<unknown>(null);
 
   createEffect(on(() => [source().id, source().prunedAt] as const, ([id, prunedAt]) => {
+    // A new source starts clean: neither the last image nor its error.
     setUrl(null);
+    setError(null);
     if (prunedAt !== null) return;
     let cancelled = false;
     let created: string | null = null;
