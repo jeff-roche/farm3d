@@ -632,7 +632,7 @@ fn boot_inner(
     let swept = attention
         .as_ref()
         .and_then(|boot| boot.cameras)
-        .map(|_| farm3d_lib::cameras::media::startup_sweep(&storage, SystemClock.now()).unwrap());
+        .map(|_| farm3d_lib::cameras::media::startup_sweep(&storage, SystemClock.now()));
     let factory: Arc<dyn CapabilityFactory> = Arc::new(SimFactory {
         upload_unsupported: Arc::clone(&roots.upload_unsupported),
         tier: Arc::clone(&roots.evidence_tier),
@@ -729,7 +729,7 @@ fn boot_inner(
     if let Some(changes) = &backfilled {
         services.attention.set_backfilled(changes.clone());
         if let Some(swept) = swept {
-            services.cameras.set_swept(swept);
+            services.cameras.apply_startup_sweep(swept);
             // Before the projector, so its first pass's captures are heard.
             farm3d_lib::start_camera_runtime(&services, app.handle());
         }

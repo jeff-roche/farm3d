@@ -226,11 +226,19 @@ impl CameraErrorKind {
 pub enum EvidenceSkipReason {
     CameraError,
     DiskCap,
+    /// The media store is unavailable (the startup sweep failed, or an
+    /// image couldn't be written). An addition to the spec's two reasons
+    /// (Task 8 fix round 1): the camera is optional, so a broken media root
+    /// degrades capture instead of blocking startup.
+    Storage,
 }
 
 impl EvidenceSkipReason {
-    pub const ALL: [EvidenceSkipReason; 2] =
-        [EvidenceSkipReason::CameraError, EvidenceSkipReason::DiskCap];
+    pub const ALL: [EvidenceSkipReason; 3] = [
+        EvidenceSkipReason::CameraError,
+        EvidenceSkipReason::DiskCap,
+        EvidenceSkipReason::Storage,
+    ];
 }
 
 /// D9: a Printer's camera preview health, one row per Printer with a

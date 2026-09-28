@@ -63,7 +63,7 @@ impl CaptureIntent {
 // --- the capture runtime ---------------------------------------------------------------
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use chrono::{DateTime, Utc};
@@ -77,7 +77,7 @@ use crate::RuntimeServices;
 
 use super::media::{self, CaptureLink, MediaChanges, NewSnapshot, StoreOutcome};
 use super::services::{self as camera_services, CameraFetchError};
-use super::{config, CameraErrorKind};
+use super::{config, CameraErrorKind, EvidenceSkipReason};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
@@ -96,6 +96,8 @@ pub struct CaptureRuntime {
     /// Committed changes the consumer has taken (or skipped by lagging).
     rounds: AtomicU64,
     held: watch::Sender<bool>,
+    /// False while the media store is unavailable (a failed sweep).
+    media_available: AtomicBool,
 }
 
 impl Default for CaptureRuntime {
@@ -108,6 +110,7 @@ impl Default for CaptureRuntime {
             lags: AtomicU64::new(0),
             rounds: AtomicU64::new(0),
             held: watch::channel(false).0,
+            media_available: AtomicBool::new(true),
         }
     }
 }
@@ -139,6 +142,14 @@ impl CaptureRuntime {
 
     pub(crate) fn hold(&self, held: bool) {
         self.held.send_replace(held);
+    }
+
+    pub(crate) fn media_available(&self) -> bool {
+        self.media_available.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn set_media_available(&self, available: bool) {
+        self.media_available.store(available, Ordering::SeqCst);
     }
 }
 
@@ -301,10 +312,22 @@ pub async fn capture<R: tauri::Runtime>(
         return Ok(());
     }
     let link = intent.link();
+    if !services.cameras.media_available() {
+        // The media store is down: tried, and couldn't (no fetch).
+        let changes = media::record_skip(
+            &services.storage,
+            &link,
+            EvidenceSkipReason::Storage,
+            None,
+            services.attention.now(),
+        )?;
+        publish(services, app, &changes);
+        return Ok(());
+    }
     let changes = match camera_services::fetch_saved(services, app, printer_id, false).await {
         Ok(frame) => {
             let policy = services.storage.read(media::read_policy)?;
-            let outcome = media::store_frame(
+            let stored = media::store_frame(
                 &services.storage,
                 services.cameras.janitor(),
                 policy,
@@ -315,12 +338,27 @@ pub async fn capture<R: tauri::Runtime>(
                     frame: &frame,
                 },
             )
-            .await?;
-            match outcome {
-                StoreOutcome::Stored { changes, .. } | StoreOutcome::DiskCap { changes, .. } => {
-                    changes
+            .await;
+            match stored {
+                Ok(
+                    StoreOutcome::Stored { changes, .. } | StoreOutcome::DiskCap { changes, .. },
+                ) => changes,
+                Ok(StoreOutcome::AlreadyRecorded(_)) => MediaChanges::default(),
+                // The image couldn't be written (or its row committed):
+                // record that the capture was tried, then report the error.
+                Err(error @ RepositoryError::Storage(_)) => {
+                    if let Ok(changes) = media::record_skip(
+                        &services.storage,
+                        &link,
+                        EvidenceSkipReason::Storage,
+                        None,
+                        services.attention.now(),
+                    ) {
+                        publish(services, app, &changes);
+                    }
+                    return Err(error);
                 }
-                StoreOutcome::AlreadyRecorded(_) => MediaChanges::default(),
+                Err(error) => return Err(error),
             }
         }
         Err(CameraFetchError::Camera(error)) => media::record_camera_error(
@@ -443,8 +481,13 @@ async fn janitor<R: tauri::Runtime>(
             let Some(services) = services.upgrade() else {
                 return;
             };
-            if let Err(error) = prune_now(&services, &app).await {
-                eprintln!("farm3d: media janitor: a prune pass failed: {error:?}");
+            if !services.cameras.media_available() {
+                retry_sweep(&services, &app).await;
+            }
+            if services.cameras.media_available() {
+                if let Err(error) = prune_now(&services, &app).await {
+                    eprintln!("farm3d: media janitor: a prune pass failed: {error:?}");
+                }
             }
             services.cameras.janitor().pass_done();
         }
@@ -460,6 +503,22 @@ async fn janitor<R: tauri::Runtime>(
         if stopping(&stop) {
             return;
         }
+    }
+}
+
+/// While the media store is unavailable, each janitor pass retries the
+/// startup sweep (under the janitor lock); a success makes it available
+/// again and publishes what the sweep changed.
+async fn retry_sweep<R: tauri::Runtime>(services: &RuntimeServices<R>, app: &AppHandle<R>) {
+    let swept = media::sweep_under_lock(
+        &services.storage,
+        services.cameras.janitor(),
+        services.attention.now(),
+    )
+    .await;
+    if let Ok(changes) = swept {
+        services.cameras.runtime.set_media_available(true);
+        publish(services, app, &changes);
     }
 }
 

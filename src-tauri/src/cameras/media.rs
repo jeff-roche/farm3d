@@ -42,7 +42,9 @@ use crate::spools::operations::{self, Claim, OperationKind};
 use crate::spools::{decode_enum, encode_enum};
 
 use super::fetch::Frame;
-use super::retention::{plan_prune, MediaJanitor, PruneAction, RetainedSnapshot, RetentionPolicy};
+use super::retention::{
+    plan_prune, CaptureFault, MediaJanitor, PruneAction, RetainedSnapshot, RetentionPolicy,
+};
 use super::{
     CameraContentType, CameraErrorKind, CameraSnapshot, EvidenceSkipReason, MediaUsage,
     PruneReason, SnapshotPage, SnapshotTrigger,
@@ -129,27 +131,48 @@ impl MediaStore {
         rel_path: &str,
         bytes: &[u8],
     ) -> Result<(), StorageError> {
-        let target = self.path_of(rel_path).ok_or(StorageError::PathCollision)?;
-        let relative_parent = Path::new(rel_path)
-            .parent()
-            .ok_or(StorageError::PathCollision)?;
+        let part = self.write_part(snapshot_id, bytes)?;
+        self.rename_part(&part, rel_path)
+    }
+
+    /// The capture write's first half: `tmp/<snp-id>.part`, written and
+    /// fsynced. On failure nothing is left behind.
+    fn write_part(&self, snapshot_id: &str, bytes: &[u8]) -> Result<PathBuf, StorageError> {
         let tmp = create_contained_directory(&self.root, Path::new(TMP_DIRECTORY))?;
         let part = tmp.join(format!("{snapshot_id}.part"));
         let written = (|| -> Result<(), StorageError> {
             let mut file = create_private_file(&part)?;
             file.write_all(bytes)?;
             file.sync_all()?;
-            drop(file);
+            Ok(())
+        })();
+        match written {
+            Ok(()) => Ok(part),
+            Err(error) => {
+                let _ = fs::remove_file(&part);
+                Err(error)
+            }
+        }
+    }
+
+    /// The second half: the part renamed to `rel_path`, and its directory
+    /// fsynced. On failure the part is removed.
+    fn rename_part(&self, part: &Path, rel_path: &str) -> Result<(), StorageError> {
+        let renamed = (|| -> Result<(), StorageError> {
+            let target = self.path_of(rel_path).ok_or(StorageError::PathCollision)?;
+            let relative_parent = Path::new(rel_path)
+                .parent()
+                .ok_or(StorageError::PathCollision)?;
             let directory = create_contained_directory(&self.root, relative_parent)?;
             let file_name = target.file_name().ok_or(StorageError::PathCollision)?;
-            fs::rename(&part, directory.join(file_name))?;
+            fs::rename(part, directory.join(file_name))?;
             sync_directory(&directory)?;
             Ok(())
         })();
-        if written.is_err() {
-            let _ = fs::remove_file(&part);
+        if renamed.is_err() {
+            let _ = fs::remove_file(part);
         }
-        written
+        renamed
     }
 
     /// A stored image, or `None` when its file is gone.
@@ -738,16 +761,28 @@ pub fn record_camera_error(
     error_kind: CameraErrorKind,
     now: DateTime<Utc>,
 ) -> Result<MediaChanges, RepositoryError> {
+    record_skip(
+        storage,
+        link,
+        EvidenceSkipReason::CameraError,
+        Some(error_kind),
+        now,
+    )
+}
+
+/// Records a capture that was attempted and skipped for `reason`
+/// (`evidenceSkipped` on the Incident, or the Event's `evidence`). A no-op
+/// when an outcome is already recorded, and for a manual capture.
+pub fn record_skip(
+    storage: &Storage,
+    link: &CaptureLink<'_>,
+    reason: EvidenceSkipReason,
+    error_kind: Option<CameraErrorKind>,
+    now: DateTime<Utc>,
+) -> Result<MediaChanges, RepositoryError> {
     storage.write_repo(|tx| {
         let mut touched = Touched::default();
-        record_skip_in(
-            tx,
-            link,
-            EvidenceSkipReason::CameraError,
-            Some(error_kind),
-            now,
-            &mut touched,
-        )?;
+        record_skip_in(tx, link, reason, error_kind, now, &mut touched)?;
         touched.load(tx)
     })
 }
@@ -856,7 +891,16 @@ pub async fn store_frame(
         request.frame.captured_at,
         request.frame.content_type,
     );
-    store.write_image(&snapshot_id, &rel_path, &request.frame.bytes)?;
+    let part = store.write_part(&snapshot_id, &request.frame.bytes)?;
+    if janitor.take_fault(CaptureFault::BeforeRename) {
+        // A crash here leaves the fsynced part in `tmp/`, nothing else.
+        return Err(RepositoryError::Storage(StorageError::OperationFailed));
+    }
+    store.rename_part(&part, &rel_path)?;
+    if janitor.take_fault(CaptureFault::AfterRename) {
+        // A crash here leaves the image in place with no row.
+        return Err(RepositoryError::Storage(StorageError::OperationFailed));
+    }
     let written = storage.write_repo(|tx| {
         if let Some(existing) = already_recorded(tx, &request.link)? {
             return Ok(Written::Already(existing));
@@ -1079,6 +1123,18 @@ pub fn set_pinned(
 }
 
 // --- the startup sweep ---------------------------------------------------------------
+
+/// The startup sweep again, at runtime, under the janitor lock (so no
+/// capture is between its file write and its commit): the janitor's retry
+/// while the media store is unavailable.
+pub async fn sweep_under_lock(
+    storage: &Storage,
+    janitor: &MediaJanitor,
+    now: DateTime<Utc>,
+) -> Result<MediaChanges, RepositoryError> {
+    let _serialized = janitor.lock().await;
+    startup_sweep(storage, now)
+}
 
 /// D5 "Startup sweep", before any command is served: empties `tmp/`, marks
 /// every unpruned row whose file is missing `missingFile` (pinned or not,

@@ -15,7 +15,7 @@
 //! never a filesystem walk. Pinned rows count toward it and are never
 //! planned.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -125,12 +125,15 @@ pub fn plan_prune(
 /// takes, and the janitor task's wake. The task
 /// (`cameras::capture::start`) runs a prune pass at start (after the
 /// startup sweep), every `CameraTimings::janitor_every`, and on
-/// [`poke`](Self::poke) — which `save_settings` and `import_settings` call
-/// when the retention settings change.
+/// [`poke`](Self::poke). Contract for callers: a command that changes the
+/// retention settings (`save_settings`, `import_settings`; wired by P8
+/// Task 9) must call `poke` after its commit.
 pub struct MediaJanitor {
     lock: Mutex<()>,
     wake: Arc<Notify>,
     passes: AtomicU64,
+    /// A [`CaptureFault`] the next capture write simulates (test hook).
+    fault: AtomicU8,
 }
 
 impl Default for MediaJanitor {
@@ -139,8 +142,21 @@ impl Default for MediaJanitor {
             lock: Mutex::new(()),
             wake: Arc::new(Notify::new()),
             passes: AtomicU64::new(0),
+            fault: AtomicU8::new(0),
         }
     }
+}
+
+/// Where [`MediaJanitor::inject_capture_fault_once`] makes the next
+/// capture write stop, as a crash would: nothing after that point runs and
+/// nothing is cleaned up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum CaptureFault {
+    /// After `tmp/<snp-id>.part` is written and fsynced, before its rename.
+    BeforeRename = 1,
+    /// After the rename into `snapshots/`, before the row's transaction.
+    AfterRename = 2,
 }
 
 impl MediaJanitor {
@@ -149,8 +165,10 @@ impl MediaJanitor {
         self.lock.lock().await
     }
 
-    /// Asks for a prune pass now (the retention settings changed). Pokes
-    /// coalesce; one before the task starts is kept for it.
+    /// Asks for a prune pass now. Every command that changes the retention
+    /// settings must call this after its commit (P8 Task 9 wires
+    /// `save_settings` and `import_settings`). Pokes coalesce; one before
+    /// the task starts is kept for it.
     pub fn poke(&self) {
         self.wake.notify_one();
     }
@@ -161,6 +179,20 @@ impl MediaJanitor {
 
     pub(crate) fn pass_done(&self) {
         self.passes.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Test hook (the crash-injection style of
+    /// `Storage::inject_failure_once`): the next capture write stops at
+    /// `fault` and returns an error without cleaning up.
+    #[doc(hidden)]
+    pub fn inject_capture_fault_once(&self, fault: CaptureFault) {
+        self.fault.store(fault as u8, Ordering::SeqCst);
+    }
+
+    pub(crate) fn take_fault(&self, fault: CaptureFault) -> bool {
+        self.fault
+            .compare_exchange(fault as u8, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 
     /// Test hook: how many janitor prune passes have finished.

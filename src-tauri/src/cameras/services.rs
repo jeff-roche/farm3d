@@ -202,9 +202,10 @@ impl<R: tauri::Runtime> CameraServices<R> {
         }
     }
 
-    /// D5: the lock every capture and prune takes, and the janitor's poke
-    /// (`save_settings` / `import_settings` call
-    /// [`MediaJanitor::poke`] when the retention settings change).
+    /// D5: the lock every capture and prune takes, and the janitor's poke.
+    /// Contract: a command that changes the retention settings must call
+    /// [`MediaJanitor::poke`] after its commit (P8 Task 9 wires
+    /// `save_settings` and `import_settings`; neither does yet).
     pub fn janitor(&self) -> &MediaJanitor {
         &self.janitor
     }
@@ -214,6 +215,38 @@ impl<R: tauri::Runtime> CameraServices<R> {
     /// is served).
     pub fn set_swept(&self, changes: super::media::MediaChanges) {
         self.runtime.set_swept(changes);
+    }
+
+    /// Takes the startup sweep's outcome. A failed sweep never fails
+    /// startup (global constraint 5: the camera is optional): it logs a
+    /// path-free line and marks the media store unavailable. Until a later
+    /// sweep (the janitor retries on every pass) succeeds, captures record
+    /// `evidenceSkipped { reason: storage }` and `capture_snapshot` is
+    /// `PERSISTENCE_UNAVAILABLE`.
+    pub fn apply_startup_sweep(
+        &self,
+        outcome: Result<super::media::MediaChanges, crate::persistence::RepositoryError>,
+    ) {
+        match outcome {
+            Ok(changes) => {
+                self.runtime.set_media_available(true);
+                self.set_swept(changes);
+            }
+            Err(_) => {
+                // The error is dropped unformatted: a filesystem error can
+                // name a path under the app data folder.
+                eprintln!(
+                    "farm3d: media store: the startup sweep failed; camera evidence is off \
+                     until a later sweep succeeds"
+                );
+                self.runtime.set_media_available(false);
+            }
+        }
+    }
+
+    /// Whether the media store is usable (its last sweep succeeded).
+    pub fn media_available(&self) -> bool {
+        self.runtime.media_available()
     }
 
     /// Test hook: stops the capture consumer and the janitor, as a crash

@@ -494,6 +494,11 @@ pub async fn capture_snapshot<R: tauri::Runtime>(
             .map(CommandSuccess::new)
             .ok_or_else(|| CommandError::not_found(&printer_id));
     }
+    if !services.cameras.media_available() {
+        // The media store is unavailable (a failed sweep): nothing can be
+        // stored until a later sweep succeeds.
+        return Err(storage_error(StorageError::Filesystem));
+    }
     let frame = camera_services::fetch_saved(&services, &app, &printer_id, false)
         .await
         .map_err(|error| fetch_error(&printer_id, error))?;
@@ -648,10 +653,16 @@ pub async fn snapshot_image<R: tauri::Runtime>(
                     .map_err(CommandError::from_repository)?
             };
             publish_media(&services, &app, &changes);
-            return Err(CommandError::evidence_pruned(
-                &snapshot_id,
-                super::PruneReason::MissingFile,
-            ));
+            // A prune that committed first (age or diskCap) unlinked the
+            // file for its own reason: report the row's real reason.
+            let reason = services
+                .storage
+                .read(|conn| Ok(media::load_snapshot(conn, &snapshot_id)))
+                .map_err(storage_error)?
+                .map_err(storage_error)?
+                .and_then(|snapshot| snapshot.prune_reason)
+                .unwrap_or(super::PruneReason::MissingFile);
+            return Err(CommandError::evidence_pruned(&snapshot_id, reason));
         }
     };
     let header = super::FrameHeader {

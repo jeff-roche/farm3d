@@ -407,7 +407,8 @@ pub fn start_attention_runtime<R: tauri::Runtime>(
 /// never inside a pass), and starts the `MediaJanitor`, whose first prune
 /// pass runs at once. It must start **before** `start_attention_runtime`,
 /// so the projector's first pass is heard. The startup sweep
-/// (`cameras::media::startup_sweep`) must already have run.
+/// (`cameras::media::startup_sweep`) must already have run and its outcome
+/// been handed to `CameraServices::apply_startup_sweep`.
 /// `build_runtime_services` calls it; tests call it the same way. A second
 /// call does nothing.
 pub fn start_camera_runtime<R: tauri::Runtime>(
@@ -515,13 +516,9 @@ fn build_runtime_services<R: tauri::Runtime>(
         })?;
     // P8 D5 "Startup sweep": repair whatever a crash left in the media
     // store, before any command is served. Published once the camera
-    // runtime starts.
-    let swept = cameras::media::startup_sweep(&storage, chrono::Utc::now()).map_err(|error| {
-        match error {
-            persistence::RepositoryError::Storage(error) => startup_error(error),
-            _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
-        }
-    })?;
+    // runtime starts. A failure never blocks startup (the camera is
+    // optional): evidence capture is off until a later sweep succeeds.
+    let swept = cameras::media::startup_sweep(&storage, chrono::Utc::now());
 
     let resource_path = app
         .path()
@@ -627,7 +624,7 @@ fn build_runtime_services<R: tauri::Runtime>(
     start_jobs_runtime(&services, app);
     // P8 D4/D5: the capture runtime and the janitor, subscribed before the
     // projector's first pass.
-    services.cameras.set_swept(swept);
+    services.cameras.apply_startup_sweep(swept);
     start_camera_runtime(&services, app);
     // P8 D2: then the Attention projector.
     start_attention_runtime(&services, app);

@@ -7,4 +7,4 @@
  * backfill). Shared by `AttentionEvent.evidence` (`EvidenceOutcome`) and
  * `IncidentEntryDetail::EvidenceSkipped`.
  */
-export type EvidenceSkipReason = "cameraError" | "diskCap";
+export type EvidenceSkipReason = "cameraError" | "diskCap" | "storage";

@@ -150,7 +150,7 @@ use farm3d_lib::cameras::fetch::Frame;
 use farm3d_lib::cameras::media::{
     self, CaptureLink, MediaStore, NewSnapshot, StoreOutcome,
 };
-use farm3d_lib::cameras::retention::MediaJanitor;
+use farm3d_lib::cameras::retention::{CaptureFault, MediaJanitor};
 use farm3d_lib::cameras::{CameraContentType, CameraSnapshot};
 use farm3d_lib::catalog::{BedShape, PrinterProfile};
 use farm3d_lib::incidents::{repository as incidents_repo, IncidentEntryDetail, IncidentKind};
@@ -497,7 +497,56 @@ async fn a_missing_file_becomes_pruned_missing_file_even_when_pinned() {
     assert!(media::startup_sweep(&store.storage, now()).unwrap().is_empty());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// D5 "Capture order", pinned by crashes injected inside `store_frame`
+/// itself: before the rename only a part in `tmp/` exists; after the
+/// rename the image exists with no row. Either way the startup sweep
+/// leaves no file without an unpruned row and no unpruned row without its
+/// file.
+#[tokio::test]
+async fn a_crash_on_either_side_of_the_rename_leaves_what_the_sweep_repairs() {
+    let store = Store::new();
+    let kept = store.stored("op-kept", &jpeg(50, now()), ROOMY).await;
+    let kept_path = store.rel_path(&kept.id);
+
+    store.janitor.inject_capture_fault_once(CaptureFault::BeforeRename);
+    assert!(store.manual("op-crash-before", &jpeg(60, now()), ROOMY).await.is_err());
+    let files = store.files();
+    let parts: Vec<&String> = files.iter().filter(|path| path.starts_with("tmp/")).collect();
+    assert_eq!(parts.len(), 1, "the fsynced part is left: {files:?}");
+    assert!(parts[0].ends_with(".part"));
+    assert_eq!(
+        files.iter().filter(|path| path.starts_with("snapshots/")).collect::<Vec<_>>(),
+        vec![&kept_path],
+        "nothing was renamed"
+    );
+    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 1, "no row");
+    assert_eq!(store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-before'"), 0);
+
+    store.janitor.inject_capture_fault_once(CaptureFault::AfterRename);
+    assert!(store.manual("op-crash-after", &jpeg(70, now()), ROOMY).await.is_err());
+    let files = store.files();
+    let renamed: Vec<&String> = files
+        .iter()
+        .filter(|path| path.starts_with("snapshots/") && **path != kept_path)
+        .collect();
+    assert_eq!(renamed.len(), 1, "the image is in place: {files:?}");
+    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 1, "but it has no row");
+    assert_eq!(store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-after'"), 0);
+
+    let changes = media::startup_sweep(&store.storage, now()).unwrap();
+    assert!(changes.is_empty(), "no row changed: {changes:?}");
+    assert_eq!(store.files(), BTreeSet::from([kept_path]), "the part and the orphan are gone");
+    assert_eq!(store.files(), store.unpruned_paths());
+    // The ids were never claimed: a retry stores normally.
+    store.stored("op-crash-after", &jpeg(70, now()), ROOMY).await;
+    assert_eq!(store.files(), store.unpruned_paths());
+}
+
+/// D5 "`MediaJanitor`": 20 captures and a pruning pass released together
+/// by a barrier, five rounds over. The janitor lock is what keeps usage
+/// under the cap: without it, captures plan against the same stale usage
+/// and overshoot it (checked by mutation; see the Task 8 report).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn twenty_concurrent_captures_against_a_pruning_pass_keep_usage_under_the_cap() {
     let store = Arc::new(Store::new());
     let cap = RetentionPolicy {
@@ -506,28 +555,33 @@ async fn twenty_concurrent_captures_against_a_pruning_pass_keep_usage_under_the_
     };
     // Something already over the retention age, for the pass to find.
     store.stored("op-ancient", &jpeg(100, now() - ChronoDuration::days(40)), ROOMY).await;
-    let mut tasks = Vec::new();
-    for index in 0..20 {
-        let capturing = Arc::clone(&store);
-        tasks.push(tokio::spawn(async move {
-            let frame = jpeg(100, now() - ChronoDuration::seconds(20 - index));
-            capturing.stored(&format!("op-{index}"), &frame, cap).await;
-        }));
-        if index == 10 {
-            let pruning = Arc::clone(&store);
+    for round in 0..5_i64 {
+        let barrier = Arc::new(tokio::sync::Barrier::new(21));
+        let mut tasks = Vec::new();
+        for index in 0..20_i64 {
+            let capturing = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
             tasks.push(tokio::spawn(async move {
-                media::prune_pass(&pruning.storage, &pruning.janitor, cap, now()).await.unwrap();
+                let frame = jpeg(100, now() - ChronoDuration::seconds(200 - round * 20 - index));
+                barrier.wait().await;
+                capturing.stored(&format!("op-{round}-{index}"), &frame, cap).await;
             }));
         }
+        let pruning = Arc::clone(&store);
+        let prune_barrier = Arc::clone(&barrier);
+        tasks.push(tokio::spawn(async move {
+            prune_barrier.wait().await;
+            media::prune_pass(&pruning.storage, &pruning.janitor, cap, now()).await.unwrap();
+        }));
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let used = store.scalar("SELECT COALESCE(SUM(byte_len), 0) FROM camera_snapshots WHERE pruned_at IS NULL");
+        assert!(used <= cap.cap_bytes, "round {round}: {used} > {}", cap.cap_bytes);
+        assert_eq!(used, 500, "round {round}: the cap is used, not starved");
+        assert_eq!(store.files(), store.unpruned_paths(), "round {round}: no orphan and no dangling row");
     }
-    for task in tasks {
-        task.await.unwrap();
-    }
-    let used = store.scalar("SELECT COALESCE(SUM(byte_len), 0) FROM camera_snapshots WHERE pruned_at IS NULL");
-    assert!(used <= cap.cap_bytes, "{used} > {}", cap.cap_bytes);
-    assert_eq!(used, 500, "the cap is used, not starved");
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 21, "every row stays");
-    assert_eq!(store.files(), store.unpruned_paths(), "no orphan and no dangling row");
+    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 101, "every row stays");
 }
 
 // --- Step 3: the capture triggers and the snapshot commands --------------------------
@@ -565,7 +619,14 @@ impl CaptureRig {
     }
 
     fn with_timings(answer: Answer, cameras: CameraTimings) -> Self {
+        Self::prepared(answer, cameras, |_| {})
+    }
+
+    /// [`CaptureRig::with_timings`], with `prepare` run over the roots
+    /// before the app (and its startup sweep) boots.
+    fn prepared(answer: Answer, cameras: CameraTimings, prepare: impl FnOnce(&Roots)) -> Self {
         let roots = Roots::new(StartSafety::ConfirmBedClear);
+        prepare(&roots);
         let camera = FakeCamera::start(answer);
         let (app, _) = boot_with_attention(
             &roots,
@@ -1161,4 +1222,57 @@ fn a_janitor_poke_prunes_under_the_stored_retention() {
         .iter()
         .any(|event| event["payload"]["snapshot"]["id"] == json!(id) && event["payload"]["snapshot"]["pruneReason"] == "age"));
     assert_eq!(rig.binary("snapshot_image", json!({"snapshotId": id})).unwrap_err()["details"]["reason"], "age");
+}
+
+/// Global constraint 5: a media root the startup sweep can't clean (here
+/// `tmp` is a regular file where the sweep needs a directory) never blocks
+/// startup. Until a later sweep succeeds, an Incident's capture records
+/// `evidenceSkipped { reason: storage }` without touching the camera, and
+/// `capture_snapshot` is `PERSISTENCE_UNAVAILABLE`. Once the entry is
+/// repaired, the janitor's next pass sweeps again and captures resume.
+#[test]
+fn a_failed_media_sweep_degrades_capture_instead_of_blocking_startup() {
+    let rig = CaptureRig::prepared(Answer::Jpeg, CameraTimings::default(), |roots| {
+        std::fs::write(roots.paths.media_root().join("tmp"), b"not a directory").unwrap();
+    });
+    let services = &rig.app.services;
+    assert!(!services.cameras.media_available(), "the sweep failed");
+    // The app is up and serving: the core flows work.
+    rig.app.ok("printer_statuses", json!({}));
+
+    let refused = rig.call("capture_snapshot", json!({"operationId": "op-down", "printerId": RIG_PRINTER})).unwrap_err();
+    assert_eq!(refused["code"], "PERSISTENCE_UNAVAILABLE");
+    let refused_text = refused.to_string();
+    assert!(!refused_text.contains("farm3d-media") && !refused_text.contains("tmp"), "{refused_text}");
+
+    let (_, incident_id) = rig.fail_job();
+    rig.settle();
+    assert_eq!(
+        rig.entries(&incident_id).last().unwrap(),
+        &IncidentEntryDetail::EvidenceSkipped {
+            reason: EvidenceSkipReason::Storage,
+            error_kind: None
+        }
+    );
+    assert!(rig.camera.requests().is_empty(), "nothing was fetched");
+    assert!(rig.snapshots().is_empty());
+
+    // Repaired: the janitor's next pass sweeps again and capture resumes.
+    std::fs::remove_file(rig.app.storage.paths().media_root().join("tmp")).unwrap();
+    let passes = services.cameras.janitor().passes();
+    services.cameras.janitor().poke();
+    rig.app.wait_until("the janitor retries the sweep", || services.cameras.janitor().passes() > passes);
+    assert!(services.cameras.media_available());
+    let stored = rig.call("capture_snapshot", json!({"operationId": "op-up", "printerId": RIG_PRINTER})).unwrap();
+    assert_eq!(stored["trigger"], "manual");
+    rig.assert_clean();
+}
+
+/// A startup sweep error reaches `apply_startup_sweep` as an error value,
+/// never a panic or a startup failure.
+#[test]
+fn the_startup_sweep_reports_an_unusable_media_root_as_an_error() {
+    let store = Store::new();
+    std::fs::write(store.root().join("tmp"), b"not a directory").unwrap();
+    assert!(media::startup_sweep(&store.storage, now()).is_err());
 }
