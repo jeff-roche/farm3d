@@ -63,7 +63,7 @@ export function targetForSource(event: AttentionEvent, sourceExists: boolean): N
  *  in-memory state rather than a fresh row check -- only the backend can
  *  answer that authoritatively; this is the frontend's best local guess,
  *  used only to route a click, never to decide anything persisted). */
-function sourceId(event: AttentionEvent): string | null {
+export function sourceId(event: AttentionEvent): string | null {
   return event.source.kind === "reconciliationRequirement" ? event.jobId : event.source.id;
 }
 

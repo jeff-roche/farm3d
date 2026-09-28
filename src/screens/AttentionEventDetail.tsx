@@ -9,7 +9,7 @@ import {
   resolveAttentionEvent,
 } from "../attention/attention-store";
 import { attentionSeverityLabel, conditionKindLabel } from "../attention/presentation";
-import { incidentTarget, openTargetFor } from "../attention/deep-link";
+import { incidentTarget, openTargetFor, sourceId } from "../attention/deep-link";
 import type { AttentionEvent, AttentionSourceKind } from "../attention/types";
 import { serializeNavigationTarget, type NavigationTarget } from "../navigation/navigation-store";
 import { formatDateTime } from "../slicing/revision-presentation";
@@ -44,12 +44,6 @@ function subjectName(event: AttentionEvent): string {
       return event.subject.spoolLabel
         ?? (event.subject.spoolNumber !== null ? `Spool #${event.subject.spoolNumber}` : "Unknown Spool");
   }
-}
-
-/** Mirrors `deep-link.ts`'s own (private) `sourceId`: a Reconciliation
- *  Requirement's source resolves through its Job. */
-function sourceId(event: AttentionEvent): string | null {
-  return event.source.kind === "reconciliationRequirement" ? event.jobId : event.source.id;
 }
 
 /** Every Printer/Job/Spool id this frontend currently knows about, the

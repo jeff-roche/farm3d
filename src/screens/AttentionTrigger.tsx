@@ -4,7 +4,7 @@ import { SeverityMarker } from "../design-system";
 import { attention, attentionCenterRequest } from "../attention/attention-store";
 import { attentionSeverityLabel, DEFAULT_ATTENTION_FILTER, type AttentionFilter, type AttentionSeverityFilter } from "../attention/presentation";
 import type { AttentionEvent } from "../attention/types";
-import { serializeNavigationTarget } from "../navigation/navigation-store";
+import { navigation, serializeNavigationTarget } from "../navigation/navigation-store";
 import { AttentionCenter } from "./AttentionCenter";
 import styles from "./AttentionTrigger.module.css";
 
@@ -38,6 +38,13 @@ export function AttentionTrigger() {
   // another future caller): opens the center. `defer: true` skips the
   // initial subscription so mounting never opens it.
   createEffect(on(attentionCenterRequest, () => setOpen(true), { defer: true }));
+
+  // Any navigation elsewhere (a row click here already closes first; a
+  // pasted deep link, a Printer card, or a farm3d-navigate-v1 payload
+  // don't) closes the popover -- a hash-only change never remounts this
+  // component, so without this it stayed open and rendered on top of
+  // whatever the dock now shows underneath it.
+  createEffect(on(() => navigation.target(), () => setOpen(false), { defer: true }));
 
   // One polite live region per component (spec): a newly arrived *live*
   // (never backfilled) fatal or warning Event is announced. The first run

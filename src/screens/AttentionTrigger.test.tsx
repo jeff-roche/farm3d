@@ -6,6 +6,7 @@ import {
   setAttentionStoreState,
 } from "../attention/attention-store-mock";
 import { attentionEvent } from "../attention/test-records";
+import { navigation } from "../navigation/navigation-store";
 import { AttentionTrigger } from "./AttentionTrigger";
 
 const { requestAttentionCenterOpen } = attentionStoreMock;
@@ -16,6 +17,9 @@ afterEach(() => {
   cleanup();
   resetAttentionStoreMock();
   window.location.hash = "";
+  // `navigation` is a module-level singleton; leaving it mutated would leak
+  // into later tests in this file.
+  navigation.navigate({ version: 1, destination: "monitor" });
 });
 
 describe("AttentionTrigger", () => {
@@ -76,6 +80,22 @@ describe("AttentionTrigger", () => {
     await waitFor(() => expect(screen.queryByText(attentionEvent().summary)).not.toBeInTheDocument());
     await fireEvent.click(trigger);
     await screen.findByText(attentionEvent().summary);
+  });
+
+  it("closes the popover on a navigation elsewhere (a pasted deep link, not a row click here)", async () => {
+    setAttentionStoreState({
+      events: [attentionEvent({ id: "atn-1", summary: "Bay 1 is offline.", requiresAction: true, resolvedAt: null })],
+    });
+    render(() => <AttentionTrigger />);
+    const trigger = screen.getByRole("button", { name: /Attention:/ });
+    await fireEvent.click(trigger);
+    await screen.findByText("Bay 1 is offline.");
+
+    // A hash-only change never remounts the SPA; simulated here the same
+    // way App's own hashchange listener would drive it.
+    navigation.navigate({ version: 1, destination: "monitor", selection: { kind: "attention", id: "atn-1" } });
+
+    await waitFor(() => expect(screen.queryByText("Bay 1 is offline.")).not.toBeInTheDocument());
   });
 
   it("opens the center on requestAttentionCenterOpen (the notification-click seam)", async () => {
