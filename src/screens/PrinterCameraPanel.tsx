@@ -30,10 +30,17 @@ function formatFrameTimestamp(iso: string): string {
 
 /** Printer detail dock's Camera tab (spec "Frontend architecture"): no
  *  source -> an explanation plus "Set up camera"; `unsupported` -> the
- *  reason; otherwise the live preview with its health text and last-frame
- *  time, Capture, the snapshot history, and the retention summary. Health
- *  is Rust's own (`camera.health`, read through from the `attention`
- *  stream) -- this never derives a state itself (global constraint 4). */
+ *  reason; otherwise the live preview with its status text and last-frame
+ *  time, Capture, the snapshot history, and the retention summary. The
+ *  status text is `camera.health` (Rust's own, read through from the
+ *  `attention` stream -- this never derives a state itself, global
+ *  constraint 4) *unless* the live poll itself just failed
+ *  (`usePreview().error()`), which takes over instead: in web mode that's
+ *  `needsDesktopError` (spec D4: "Camera preview and test return
+ *  needsDesktopError, and the UI says so"), on desktop it's whatever
+ *  `camera_preview_frame` rejected with. Never both at once, so the
+ *  health row's "Live" is never shown while the preview is actually
+ *  failing. */
 export function PrinterCameraPanel(props: PrinterCameraPanelProps) {
   const health = () => camera.health(props.printer.id);
   const preview = usePreview(() => props.printer.id, props.visible);
@@ -70,7 +77,23 @@ export function PrinterCameraPanel(props: PrinterCameraPanelProps) {
 
   const viewerSnapshot = () => snapshots().find((snapshot) => snapshot.id === viewerSnapshotId());
 
+  /** The live poll's own failure (`usePreview().error()`) -- distinct from
+   *  `health()`: in web mode this is `needsDesktopError` (spec: "Camera
+   *  preview and test return needsDesktopError, and the UI says so"), and
+   *  on desktop it's whatever `camera_preview_frame` itself just rejected
+   *  with, which can be more current than the health row's own async
+   *  `camera.health.changed`. Takes over the status text entirely (never
+   *  shown alongside the Rust-health label, which would otherwise read
+   *  "Live" while the preview is actually failing). */
+  const previewErrorMessage = (): string | null => {
+    const err = preview.error();
+    if (!err) return null;
+    return isCommandError(err) ? err.message : "The camera preview failed.";
+  };
+
   const statusLabel = () => {
+    const previewError = previewErrorMessage();
+    if (previewError) return previewError;
     const current = health();
     if (!current) return cameraHealthStateLabel("notConfigured");
     if (current.state === "failing" && current.lastFailureKind) {
@@ -120,7 +143,13 @@ export function PrinterCameraPanel(props: PrinterCameraPanelProps) {
                 )}
               </Show>
             </div>
-            <p class={styles.previewStatus} role="status">{statusLabel()}</p>
+            <p
+              class={styles.previewStatus}
+              classList={{ [styles.previewStatusError]: previewErrorMessage() !== null }}
+              role="status"
+            >
+              {statusLabel()}
+            </p>
             <p class={styles.previewTimestamp}>
               {preview.capturedAt() ? formatFrameTimestamp(preview.capturedAt()!) : "No frame captured yet."}
             </p>

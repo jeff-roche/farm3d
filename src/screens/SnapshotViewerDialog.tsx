@@ -1,7 +1,8 @@
-import { createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { Button, Dialog } from "../design-system";
 import { isCommandError } from "../ipc/client";
-import { setSnapshotPinned, snapshotImageUrl } from "../cameras/camera-store";
+import { setSnapshotPinned } from "../cameras/camera-store";
+import { useSnapshotImage } from "../cameras/useSnapshotImage";
 import { pruneReasonLabel, snapshotAltText, snapshotTriggerLabel } from "../attention/presentation";
 import type { CameraSnapshot } from "../attention/types";
 import { formatDateTime } from "../slicing/revision-presentation";
@@ -25,36 +26,22 @@ export interface SnapshotViewerDialogProps {
  *  extra keyboard wiring needed. */
 export function SnapshotViewerDialog(props: SnapshotViewerDialogProps) {
   const [record, setRecord] = createSignal(props.snapshot);
-  const [url, setUrl] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal(false);
-  const [error, setError] = createSignal<unknown>(null);
+  const [pinError, setPinError] = createSignal<unknown>(null);
 
   createEffect(on(() => props.snapshot, setRecord));
 
-  createEffect(on(() => [record().id, record().prunedAt] as const, ([id, prunedAt]) => {
-    setUrl(null);
-    if (prunedAt !== null) return;
-    let cancelled = false;
-    let created: string | null = null;
-    snapshotImageUrl(id).then((loaded) => {
-      if (cancelled) return;
-      created = loaded;
-      setUrl(loaded);
-    }).catch((e) => { if (!cancelled) setError(e); });
-    onCleanup(() => {
-      cancelled = true;
-      if (created?.startsWith("blob:")) URL.revokeObjectURL(created);
-    });
-  }));
+  const { url, error: imageError } = useSnapshotImage(record);
+  const error = () => pinError() ?? imageError();
 
   async function togglePin(pinned: boolean): Promise<void> {
     if (pending()) return;
     setPending(true);
-    setError(null);
+    setPinError(null);
     try {
       setRecord(await setSnapshotPinned(record().id, pinned));
     } catch (e) {
-      setError(e);
+      setPinError(e);
     } finally {
       setPending(false);
     }

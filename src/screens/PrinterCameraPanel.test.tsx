@@ -49,6 +49,10 @@ function encodeFrame(headerValue: FrameHeader, image: Uint8Array): ArrayBuffer {
   return out.buffer;
 }
 
+// Each test must give `printer()` a distinct `id`: `camera-store.ts`'s
+// snapshot cache is a module-level singleton this file never resets (see
+// the import comment above), so two tests sharing a printer id would see
+// each other's cached rows.
 function printer(overrides: Partial<ResolvedPrinter> = {}): ResolvedPrinter {
   return {
     id: "prn-1", revision: 1, name: "North Bay", notes: "", overrides: {},
@@ -163,11 +167,15 @@ describe("PrinterCameraPanel", () => {
       expect(styleBefore).toBeNull();
     });
 
-    it("shows the failing reason alongside the state text", async () => {
+    it("shows the failing reason alongside the state text, when the live poll itself isn't currently erroring", async () => {
+      // Rust's health row can lag or outlast a single poll cycle (it comes
+      // from `camera.health.changed`, a separate async stream) -- this
+      // covers that fallback path specifically, with a *successful* current
+      // frame, distinct from the "preview error takes over" tests below.
       const id = "prn-failing";
       attentionStoreMock.health.set(id, cameraHealth({ printerId: id, state: "failing", lastFailureKind: "timeout" }));
       tauriMock.invoke.mockImplementation((name: string) => {
-        if (name === "camera_preview_frame") return Promise.reject({ contractVersion: 1, code: "CAMERA_FAILED", message: "timed out", recovery: [], retryable: true });
+        if (name === "camera_preview_frame") return Promise.resolve(encodeFrame(header(), new Uint8Array([1])));
         if (name === "list_snapshots") return Promise.resolve({ contractVersion: 1, data: { snapshots: [], nextCursor: null } });
         if (name === "media_usage") return Promise.resolve({ contractVersion: 1, data: { usedBytes: 0, pinnedBytes: 0, capBytes: 1, retentionDays: 30, snapshotCount: 0, pinnedCount: 0, prunedCount: 0 } });
         return Promise.reject(new Error(`unexpected invoke ${name}`));
@@ -176,6 +184,42 @@ describe("PrinterCameraPanel", () => {
       await flush();
 
       expect(screen.getByRole("status")).toHaveTextContent("Camera not answering (timeout)");
+    });
+
+    it("web mode: the preview shows needsDesktopError's text instead of the health label", async () => {
+      // Spec D4 "Health and preview": "the frontend polls
+      // camera_preview_frame ... [but in web mode] Camera preview and test
+      // return needsDesktopError, and the UI says so" -- the Rust-health
+      // "Live" label must never paper over that.
+      const id = "prn-web-preview";
+      attentionStoreMock.health.set(id, cameraHealth({ printerId: id, state: "ok", sourceKind: "hostWebcam" }));
+      tauriMock.isTauri.mockReturnValue(false);
+      render(() => <PrinterCameraPanel printer={printer({ id })} visible={() => true} onOpenSetup={vi.fn()} />);
+      await flush();
+
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("Previewing the camera needs the desktop app.");
+      expect(status).not.toHaveTextContent("Live");
+      expect(tauriMock.invoke).not.toHaveBeenCalledWith("camera_preview_frame", expect.anything());
+    });
+
+    it("desktop mode: a camera_preview_frame failure shows its own message, not the health label", async () => {
+      const id = "prn-preview-fails";
+      attentionStoreMock.health.set(id, cameraHealth({ printerId: id, state: "ok", sourceKind: "hostWebcam" }));
+      tauriMock.invoke.mockImplementation((name: string) => {
+        if (name === "camera_preview_frame") {
+          return Promise.reject({ contractVersion: 1, code: "CAMERA_FAILED", message: "The camera did not answer in time.", recovery: ["RETRY"], retryable: true });
+        }
+        if (name === "list_snapshots") return Promise.resolve({ contractVersion: 1, data: { snapshots: [], nextCursor: null } });
+        if (name === "media_usage") return Promise.resolve({ contractVersion: 1, data: { usedBytes: 0, pinnedBytes: 0, capBytes: 1, retentionDays: 30, snapshotCount: 0, pinnedCount: 0, prunedCount: 0 } });
+        return Promise.reject(new Error(`unexpected invoke ${name}`));
+      });
+      render(() => <PrinterCameraPanel printer={printer({ id })} visible={() => true} onOpenSetup={vi.fn()} />);
+      await flush();
+
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("The camera did not answer in time.");
+      expect(status).not.toHaveTextContent("Live");
     });
 
     it("Capture adds a row to the snapshot history", async () => {

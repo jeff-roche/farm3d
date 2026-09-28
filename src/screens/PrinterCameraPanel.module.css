@@ -47,6 +47,10 @@
   font-size: var(--f3d-type-body-small-size);
 }
 
+.previewStatusError {
+  color: var(--f3d-color-danger);
+}
+
 .previewTimestamp {
   margin: 0;
   color: var(--f3d-color-text-muted);

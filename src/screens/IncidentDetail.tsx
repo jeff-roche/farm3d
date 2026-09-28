@@ -4,7 +4,7 @@ import { Button, SeverityMarker, Textarea, Timeline } from "../design-system";
 import type { TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
 import { addIncidentNote, getIncident, watchIncidentDetail } from "../incidents/incident-store";
-import { snapshotImageUrl } from "../cameras/camera-store";
+import { useSnapshotImage } from "../cameras/useSnapshotImage";
 import {
   attentionResolutionLabel,
   attentionSeverityLabel,
@@ -292,25 +292,9 @@ export function IncidentDetail(props: IncidentDetailProps) {
  *  pruned one (spec: "a pruned item renders 'Evidence pruned (age)' text
  *  and no <img>"). */
 function EvidenceThumbnail(props: { snapshot: CameraSnapshot; printerName: string; onOpen: () => void }) {
-  const [url, setUrl] = createSignal<string | null>(null);
-
-  createEffect(on(() => props.snapshot.id, (id) => {
-    setUrl(null);
-    if (props.snapshot.prunedAt !== null) return;
-    let cancelled = false;
-    let created: string | null = null;
-    snapshotImageUrl(id).then((loaded) => {
-      if (cancelled) return;
-      created = loaded;
-      setUrl(loaded);
-    }).catch(() => {
-      // No image to show; the trigger/timestamp caption still renders.
-    });
-    onCleanup(() => {
-      cancelled = true;
-      if (created?.startsWith("blob:")) URL.revokeObjectURL(created);
-    });
-  }));
+  // The fetch error is ignored here (not `error()`): if the image can't be
+  // loaded, the trigger/timestamp caption still renders on its own.
+  const { url } = useSnapshotImage(() => props.snapshot);
 
   return (
     <Show
