@@ -140,7 +140,7 @@ pub const MOONRAKER_READ_ONLY_VERSION: &str = "Moonraker 1.5.2 API 1.4.0 (read-o
 /// `camera` is the camera query only. The P6 simulator listed no webcam
 /// (Gate H); since P8 the single-extruder simulator lists `[webcam
 /// farm3d-sim]`, so the query has a non-empty `sim` answer, and the P8 run
-/// `docs/superpowers/baselines/2026-09-28-p8-sim-manifest-20260928T150610Z.json`
+/// `docs/superpowers/baselines/2026-09-28-p8-sim-manifest-20260928T152754Z.json`
 /// resolved and fetched a frame from it (`tests/sim_moonraker.rs`'s P8
 /// section and `tests/p8_tracer.rs`).
 static MOONRAKER_EVIDENCE: LazyLock<Vec<(CapabilityKey, CapabilityEvidence)>> =
