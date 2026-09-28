@@ -44,9 +44,14 @@ applies them and does not reopen them:
 > **Conditions**, each with a stable dedup key. A pure planner compares
 > that set with the open Attention Events and returns inserts,
 > amendments, acknowledgements, and resolutions. Applying the plan twice
-> changes nothing the second time. An observation farm3d can't make yet
-> (a status not known since startup) is **unknown**, and unknown never
-> opens or resolves anything.
+> changes nothing the second time. An observation farm3d can't judge
+> right now is **unknown**, and unknown never opens or resolves anything:
+> every live-status family during the startup backfill, a Printer still
+> inside its offline grace, and, for `printer.connectionError`, any
+> status that can't show whether the configuration is still wrong (the
+> host unreachable, connecting, or hydrated from the cache at startup).
+> This is planner default 5: an unknown status neither opens nor
+> resolves a `printer.*` Event.
 
 ## Goal
 
@@ -218,7 +223,9 @@ Condition (no Condition changes severity while open).
 - **The attention epoch.** `job.failed`, `job.hostCancelled`, and
   `job.completed` are present only for a Job whose `ended_at` is at or
   after the attention epoch: the `applied_at` of migration 0009 in
-  `schema_migrations`. Jobs that ended under P7 raise none of them.
+  `schema_migrations`. Both are parsed as RFC 3339 instants and compared
+  as `DateTime<Utc>`, never as text. Jobs that ended under P7 raise none
+  of them.
   Reconciliation Requirements and low Spools project whatever their age
   (the umbrella requires every durable P7 requirement to project).
 - `printer.*` Conditions are never present for an archived or Setup
@@ -298,7 +305,7 @@ incomplete.
 | Condition | `Present` when | `Absent` when | `Unknown` otherwise, including |
 |---|---|---|---|
 | `printer.offline` | applicable, grace not off, `started` set, reach `Unreachable`, and `now ≥ max(unreachable_since, started) + grace` | not applicable; grace off; reach `Reachable` or `Misconfigured` | backfill; reach `Unknown`; `Unreachable` within the grace |
-| `printer.connectionError` | applicable, `started` set, reach `Misconfigured(cause)` | not applicable; reach `Reachable` or `Unreachable` | backfill; reach `Unknown` |
+| `printer.connectionError` | applicable, `started` set, reach `Misconfigured(cause)` | not applicable (archived, or Setup incomplete, which includes having no Connection); reach `Reachable` | backfill; reach `Unknown`; reach `Unreachable` (offline, connecting, a hydrated startup status, or an unreachable/timeout error: none of them shows whether the credentials or protocol are still wrong) |
 | `printer.hostFailed` | applicable, `started` set, reach `Reachable`, `operationalState` `failed`, and not covered by a Job | not applicable; reach `Reachable` and `operationalState` neither `failed` nor `unknown`; reach `Reachable`, `failed`, and covered by a Job | backfill; reach not `Reachable`; `operationalState` `unknown` |
 | `job.startConfirmation` | the Job is `awaitingStart`, and its Printer's Start-safety rule is `confirmBedClear` or the Job has a `lastFailure` | the Job is in any other state; or `awaitingStart` on an `unattended` Printer with no `lastFailure` | the Job isn't in the view |
 | `job.failed` | the Job is `failed`, ended by the tracker (its terminal event is `failed`), `ended_at ≥` epoch | any other state or end | the Job isn't in the view |
@@ -308,11 +315,18 @@ incomplete.
 | `spool.low` | the Spool's `low` facet is true | `low` is false (including every `empty` or `archived` Spool, whose `low` is always false) | the Spool isn't in the view |
 | `job.completed` | the Job is `completed`, ended by the tracker, `ended_at ≥` epoch, it is its Printer's latest Job, the Printer is not archived, `started` set, reach `Reachable`, `operationalState` `finished`, and the reported file equals the Job's `hostPath` | the Job isn't `completed`; ended by a declaration; before the epoch; not the latest Job; the Printer is archived; reach `Reachable` with `operationalState` neither `finished` nor `unknown`, or a different reported file | backfill; the Job isn't in the view; reach not `Reachable`; `operationalState` `unknown` |
 
-- **Covered by a Job** (`printer.hostFailed`): the Printer has an active
-  Job, or the host's reported file (`telemetry.job_name`) equals the
-  `hostPath` of the Printer's latest Job. Then `job.failed` or the Job's
-  requirement covers the failure, and `printer.hostFailed` raises no
-  Event and no Incident.
+- **Covered by a Job** (`printer.hostFailed`): the host's reported file
+  (`telemetry.job_name`) is present and equals the `hostPath` of the
+  Printer's latest Job, **and** farm3d started that Job: it is
+  `starting`, `printing`, `paused`, or `outcomeUnknown`, or it ended with
+  `startedAt` set (`JobFacts.started`). One rule, by file: a Job that is
+  merely `assigned` or `awaitingStart` never covers a failure, even if
+  its staged file has the same name (the host printed it without
+  farm3d). While covered, `job.failed` (once the tracker proves it) or
+  `requirement.jobOutcomeUnknown` carries the failure, so
+  `printer.hostFailed` raises no Event **and** no Incident. This is a
+  deliberate refinement of planner default 4 ("Decisions made in this
+  spec" 7).
 - **Ended by** (`JobFacts.ended_by`) comes from the Job's terminal
   `job_events` row: `completed`, `failed`, `cancelled` → `tracker`; the
   three `declared*` → `declared`; `released`, `cancelledBeforeStart` →
@@ -336,7 +350,7 @@ Each `Condition` carries a `detail` (an `AttentionDetail`, tagged by
 | `requirement.materialReconciliation` | `{ kind: "requirementMaterialReconciliation", requirementStatus: "pending" \| "deferred", spoolId }` |
 | `requirement.jobOutcomeUnknown` | `{ kind: "requirementJobOutcomeUnknown" }` |
 | `spool.low` | `{ kind: "spoolLow", currentMg, lowThresholdMg }` |
-| `job.completed` | `{ kind: "jobCompleted", endedAt, evidence: EvidenceOutcome \| null }` |
+| `job.completed` | `{ kind: "jobCompleted", endedAt }` |
 
 - `subject` is `{ printerName, printerLocation, jobLabel, spoolNumber,
   spoolLabel }`, each nullable. `jobLabel` is the Queue Entry's
@@ -347,10 +361,18 @@ Each `Condition` carries a `detail` (an `AttentionDetail`, tagged by
   notification body) is derived from the kind and the subject, for
   example "Voron (Bay A) is offline.", "Cube — Plate 1 failed on Voron.",
   "Spool #12 is low (80 g left)."
-- `job.completed`'s `evidence` starts `null` and is amended once the
-  completion capture finishes (D4): `{ status: "captured", snapshotId }`
-  or `{ status: "skipped", reason }`. That amendment is `changed: true`
-  and emits.
+- **`detail` is planner-owned.** Every `detail` field is a pure function
+  of the `FarmView`, and nothing but `Insert` and `Amend` writes
+  `detail_json`. That is what makes the planner a fixed point for every
+  Condition.
+- **Evidence is not detail.** The completion capture's outcome is
+  written to its own column, `attention_events.evidence_json` (wire:
+  `AttentionEvent.evidence: EvidenceOutcome | null`), only for
+  `job.completed`, by `attention::repository::record_evidence(tx,
+  eventId, outcome)` (D4). `Amend` never reads or writes it, so a later
+  pass can't erase it. `record_evidence` bumps `revision` and emits
+  `attention.event.changed`; it writes once (a second call for the same
+  Event is a no-op).
 
 #### Planner rules
 
@@ -417,23 +439,31 @@ the pass's transaction. Per action:
 | Action | Writes |
 |---|---|
 | `Insert` | A new `attention_events` row (`origin`, `first_observed_at = last_observed_at = now`, `observation_count = 1`, `acknowledged_at = read_at = now` when `acknowledged`). Then the Incident rule below. |
-| `Amend` | `last_observed_at`, `observation_count + 1`; when `changed`, `detail_json`, `severity`, `revision + 1` |
+| `Amend` | `last_observed_at`, `observation_count + 1`; when `changed`, `detail_json`, `severity`, `revision + 1`. Never `evidence_json`, `incident_id`, or the lifecycle columns |
 | `Acknowledge` | `lifecycle::apply(Acknowledge { by: system })`; `revision + 1`; an `eventAcknowledged` timeline row if linked |
 | `Resolve` | `lifecycle::apply(Resolve(reason))`; `revision + 1`; an `eventResolved` timeline row if linked |
 
-**Incident rule** (in the same transaction, after every action):
+**Incident rule** (in the same transaction, after every action of the
+pass has been applied, in this order):
 
-1. On `Insert` of `printer.hostFailed`: open a new Incident (`job_id`
-   NULL) and write `opened { eventId }`.
-2. On `Insert` of `job.failed`, `job.hostCancelled`, or
-   `requirement.jobOutcomeUnknown`: if the Job has an Incident, link the
-   Event to it (`eventLinked`; `reopened` first if it was closed);
-   otherwise open one for the Job (`opened { eventId }`).
-3. On `Insert` of any other actionable Condition whose Job has an
-   Incident (in practice `requirement.materialReconciliation`): link it
-   (`eventLinked`, reopening if closed).
-4. For every Incident touched: if it is open and every linked actionable
-   Event is resolved, close it (`closed`, `closed_at = now`).
+1. **Opening rules first.** For each `Insert` in plan order:
+   - `printer.hostFailed`: open a new Incident (`job_id` NULL) and write
+     `opened { eventId }`;
+   - `job.failed`, `job.hostCancelled`, or
+     `requirement.jobOutcomeUnknown`: if the Job has an Incident, link
+     the Event to it (`eventLinked`; `reopened` first if it was closed);
+     otherwise open one for the Job (`opened { eventId }`).
+2. **Then linking rules.** For each `Insert` of any other actionable
+   Condition whose Job now has an Incident (in practice
+   `requirement.materialReconciliation`, including one inserted in the
+   same pass as the Job's `job.failed`): link it (`eventLinked`,
+   `reopened` first if it was closed).
+3. **Then the close check, once**, over every Incident touched by any
+   action of the pass (an open, a link, or an acknowledged or resolved
+   linked Event): if it is open and every linked actionable Event is
+   resolved, close it (`closed`, `closed_at = now`). A resolution and a
+   new link in the same pass therefore never close and reopen the same
+   Incident.
 
 An opened Incident with `origin: live` and the Printer's
 `snapshotOnIncident` on yields a `CaptureIntent::Incident`. An inserted
@@ -478,8 +508,9 @@ transaction, which rolls back and is retried once as a full pass.
   referenced by an open Event, or is `failed` or `cancelled{hostCancelled}`
   with `ended_at ≥` epoch and no Event (open or resolved) for its
   `job.failed` / `job.hostCancelled` key. Each with its state, cancel
-  reason, `ended_by`, `ended_at`, `host_path`, Spool id, `last_failure`
-  present, and label.
+  reason, `ended_by`, `ended_at`, `started` (state `starting`, `printing`,
+  `paused`, or `outcomeUnknown`, or `started_at` set), `host_path`, Spool
+  id, `last_failure` present, and label.
 - `requirements`: every open requirement, plus every requirement
   referenced by an open Event.
 - `spools`: every `active` Spool, plus every Spool referenced by an open
@@ -550,6 +581,17 @@ database. The Job's own timeline is merged in at read time, never copied.**
   Incident reopens it (`reopened`, `closed_at` NULL). At most one Incident
   per Job (a partial UNIQUE index on `job_id`). A `printer.hostFailed`
   recurrence opens a new Incident.
+- **Revision and publishing.** Every `incident_events` append, and every
+  change to the `incidents` row itself (open, close, reopen), bumps
+  `incidents.revision` by one in the same transaction. After commit, each
+  Incident touched by that transaction is published **once**, as one
+  `attention.incident.changed` carrying its final row (final `revision`),
+  however many entries the transaction appended. The same holds for the
+  projector's pass, every command, the capture path, the `MediaJanitor`,
+  and the startup sweep (whose changes are published once the runtime
+  starts). An `Incident`'s derived fields (`linkedEventIds`,
+  `openLinkedEventCount`, `snapshotCount`) only change through such a
+  transaction, so the published row is always current.
 - **Printer identity.** `printer_snapshot_json` is a P7 `PrinterSnapshot`
   (`name`, `location`, `catalogRef`, `adapterKind`, `profile`): the Job's
   own `printer_snapshot_json` for a Job Incident, or built from the
@@ -591,16 +633,22 @@ no camera path can fail, block, or slow any other workflow.**
 
 | `CameraSource.kind` | Stored | Resolved at each fetch |
 |---|---|---|
-| `hostWebcam` | `webcamName` (1–128 chars), `webcamService` (as reported when chosen, informational), `webPort` (1–65535, or null = 80) | Moonraker `GET /server/webcams/list` through the Printer's current Connection, the entry whose `name` equals `webcamName`, its `snapshot_url`. A relative URL resolves against `http://<Connection host>:<webPort or 80>/`. An absolute URL must be `http://` and its host must equal the Connection host (ASCII case-insensitive), or the fetch fails `hostMismatch`. The resolved URL lives in a `Zeroizing<String>` for that fetch only and is never persisted, logged, or returned |
+| `hostWebcam` | `webcamName` (1–128 chars), `webcamService` (as reported when chosen, informational), `webPort` (1–65535, or null = 80) | Moonraker `GET /server/webcams/list` through the Printer's current Connection, the entry whose `name` equals `webcamName`, its `snapshot_url`. The value is resolved as a URL reference (`Url::join`) against the base `http://<Connection host>:<webPort or 80>/`, so a path-relative, absolute, or scheme-relative (`//other-host/…`) value is handled alike. The **resolved** URL is then checked: scheme `http` (else `hostMismatch`); no userinfo (else `hostMismatch`); its host equal to the Connection host, ASCII case-insensitive (else `hostMismatch`); its fragment dropped. The resolved URL lives in a `Zeroizing<String>` for that fetch only and is never persisted, logged, or returned |
 | `snapshotUrl` | `snapshotUrl` | used as stored |
 
 - **Manual URL validation** (`cameras::config::validate_snapshot_url`,
   `VALIDATION` with the field path): scheme exactly `http`; a non-empty
   host; no userinfo (`user@` or `user:pass@`); no fragment; port absent or
   1–65535; total length 8–2048. A query string is allowed (some cameras
-  take a token there), and like the rest of the URL it never leaves
-  `printer_cameras`, `get_printer_camera`, `set_printer_camera`, and the
-  Printers export.
+  take a token there). The URL, query included, is stored only in
+  `printer_cameras.snapshot_url`. Exactly one command returns it:
+  `get_printer_camera` (Global Constraint 3's single exception, for the
+  Setup editor). `set_printer_camera` returns a redacted
+  `PrinterCameraSummary`, and no event carries it. The only other place
+  it appears is the Printers export **file** (schema 4), which Rust
+  writes to the path the operator picks, exactly as it writes the
+  Connection host; `export_printers` itself returns only the outcome
+  (path, time, record count), never the document.
 - **Host-webcam lookup.** Moonraker gains
   `files::parse_webcam_snapshot_url(body, name) ->
   Result<Option<Zeroizing<String>>, ConnectionError>` (the entry's
@@ -684,9 +732,11 @@ port, in `Display`, `Debug`, or serialization):
 - **Recorded outcome.** For an `incident` capture: `evidenceCaptured` on
   success, `evidenceSkipped { reason: "cameraError", errorKind }` on a
   fetch failure, `evidenceSkipped { reason: "diskCap" }` when the cap
-  can't be met (D5). For a `completion` capture: the `job.completed`
-  Event's `detail.evidence` is amended the same way (P8 adds no kinds to
-  P7's `job_events`).
+  can't be met (D5). For a `completion` capture:
+  `attention::repository::record_evidence` writes the same outcome to
+  the `job.completed` Event's `evidence` field (D2 "Condition detail and
+  subject"), never to its planner-owned `detail`. P8 adds no kinds to
+  P7's `job_events`.
 - **Nothing is recorded** when the toggle is off or the Printer has no
   camera source: no capture was expected. `evidenceSkipped` always means
   farm3d tried and could not.
@@ -737,6 +787,11 @@ prune, and a startup sweep repairs whatever a crash left.**
   its links, and every timeline row that names it remain. An
   Incident-linked prune writes `evidencePruned`; a pin or unpin writes
   `evidencePinned` / `evidenceUnpinned`.
+- **Pinning a pruned row.** `set_snapshot_pinned(pinned: true)` on a
+  pruned row (any reason) fails `EVIDENCE_PRUNED`. `set_snapshot_pinned
+  (pinned: false)` on a pruned row is allowed (unpinning is harmless): it
+  clears `pinned_at`, bumps `revision`, writes `evidenceUnpinned` if
+  linked, and emits. Unpinning an already-unpinned row is a no-op.
 - **`MediaJanitor`.** One tokio task and one `tokio::sync::Mutex` shared
   with every capture. Its prune pass (`plan_prune` with `incoming_bytes =
   0`, marked in one transaction, unlinked after commit) runs at startup
@@ -935,7 +990,7 @@ Every guard runs inside the mutation's own transaction.
 | Mutation | Blocked when | Result |
 |---|---|---|
 | Printer delete | any Incident references the Printer | `LIFECYCLE_BLOCKED`, blocker `INCIDENT_HISTORY_EXISTS`: "This Printer has Incident history. Archive it instead." |
-| Printer delete | a pinned `manual` snapshot of the Printer has no Incident and no Job | `LIFECYCLE_BLOCKED`, blocker `PINNED_EVIDENCE_EXISTS`: "This Printer has pinned camera evidence. Unpin it or archive the Printer instead." |
+| Printer delete | a pinned, **unpruned** `manual` snapshot of the Printer has no Incident and no Job. A pruned row (any `pruneReason`, including a pinned `missingFile` one) never counts: it has no image left to protect | `LIFECYCLE_BLOCKED`, blocker `PINNED_EVIDENCE_EXISTS`: "This Printer has pinned camera evidence. Unpin it or archive the Printer instead." |
 | Printer import (`replace_all`) | any Incident or any `camera_snapshots` row exists | `EVIDENCE_EXISTS` for the whole import, nothing written |
 | Printer archive | nothing new | archive proceeds; the next pass resolves `printer.*` and `job.completed` `conditionCleared` |
 
@@ -952,8 +1007,10 @@ Every guard runs inside the mutation's own transaction.
   1. resolve every open Event with `printer_id` = the Printer as
      `sourceRemoved` (with `eventResolved` / `closed` rows if linked — in
      practice none can be, since an Incident blocks the delete);
-  2. delete the Printer's unpinned `manual` snapshot rows with no
-     Incident and no Job, collecting their `rel_path`s;
+  2. delete the Printer's `manual` snapshot rows with no Incident and no
+     Job that are unpinned **or** pruned (pinned-and-unpruned ones have
+     already blocked the delete), collecting the `rel_path`s of the
+     unpruned ones;
   3. `DELETE FROM printers`: `attention_events.printer_id` becomes NULL
      (`ON DELETE SET NULL`), and `printer_cameras` and
   `printer_alert_defaults` rows cascade;
@@ -1069,7 +1126,7 @@ Notes that bind the fixtures:
 | s4 | `prn-1` archived, `offline`, `unreachable_since` 11:00:00 | `O` for `printer.offline` | Resolve `conditionCleared` |
 | s5 | `prn-1` Setup incomplete | `O` for `printer.connectionError` | Resolve `conditionCleared` |
 | s6 | `offlineAfterMinutes: null` (off), `prn-1` `offline`, `unreachable_since` 11:00:00 | `O` / `N` | Resolve `conditionCleared` / — |
-| s7 | `job-1` `printing` (active); `prn-1` `failed` | `N` / `O` for `printer.hostFailed` | — / Resolve `conditionCleared` |
+| s7 | `job-1` `printing` (started); `prn-1` `failed`, reported file `cube.gcode` | `N` / `O` for `printer.hostFailed` | — / Resolve `conditionCleared` (covered) |
 | s8 | `job-1` `failed` by `failed`; `prn-1` `failed`, reported file `cube.gcode` | `N` for `printer.hostFailed` | — (covered by `job-1`); `job.failed` Insert |
 | s9 | `rrq-1` material `deferred` | `N` | Insert with `acknowledged: true` |
 | s10 | `rrq-1` material `deferred` | `O` (unacknowledged, detail `pending`) | Amend `changed: true`, then Acknowledge |
@@ -1087,6 +1144,11 @@ Notes that bind the fixtures:
 | s22 | the c1-p world, planned, applied, and planned again | — | only Amend= actions |
 | s23 | `prn-1` `operationalState: unknown` (stale), `online` | `O` for `printer.hostFailed` | — |
 | s24 | `job-1` `awaitingStart`, a second resolved Event `att-older` and `att-prev` (newer) for the key | `R` | Insert with `recurrenceOf: att-prev` |
+| s25 | `prn-1` `connecting` (live, after a reconnect) | `O` for `printer.connectionError` (cause `auth`) | — (reach `Unreachable` is `Unknown` for `printer.connectionError`) |
+| s26 | `prn-1` `offline`, hydrated from the cache (the startup status before any live observation), `STARTED` 11:59:59 | `O` for `printer.connectionError` (cause `auth`) | — |
+| s27 | the c10-p world | `O` for `job.completed`, with `evidence: { status: "captured", snapshotId: "snp-1" }` recorded | Amend= (`changed: false`); the applied row still has that `evidence` |
+| s28 | `job-1` `assigned` (`host_path` none); `prn-1` `failed`, reported file `other.gcode` | `N` for `printer.hostFailed` | Insert (not covered: `job-1` never started); `apply` opens an Incident with `job_id` NULL |
+| s29 | `job-1` `awaitingStart` (`host_path` `cube.gcode`, not started); `prn-1` `failed`, reported file `cube.gcode` | `N` for `printer.hostFailed` | Insert, opens an Incident (a staged but unstarted Job never covers a failure) |
 
 `next_deadline` fixtures (Task 4, same file):
 
@@ -1194,6 +1256,8 @@ CREATE TABLE attention_events (
   resolution TEXT CHECK (resolution IN ('conditionCleared','actionCompleted','operatorResolved',
                                         'sourceRemoved')),
   notified_at TEXT,
+  evidence_json TEXT CHECK (evidence_json IS NULL
+                            OR (json_valid(evidence_json) AND condition = 'job.completed')),
   CHECK (dedup_key = condition || ':' || source_kind || ':' || source_id),
   CHECK (acknowledged_at IS NULL OR read_at IS NOT NULL),
   CHECK (resolved_at IS NULL OR read_at IS NOT NULL),
@@ -1304,9 +1368,29 @@ ALTER TABLE settings ADD COLUMN snapshot_disk_cap_mb INTEGER NOT NULL DEFAULT 20
   CHECK (snapshot_disk_cap_mb BETWEEN 100 AND 102400);
 ```
 
-Then it rebuilds `operations` exactly as 0008:140–149 does (create
-`operations_p8` with every earlier kind plus the 9 new ones, copy, drop,
-rename).
+Then it rebuilds `operations` exactly as 0008:140–149 does: every one of
+0008's 26 kinds, plus the 9 new ones (D9 "Operation kinds and digests"):
+
+```sql
+CREATE TABLE operations_p8 (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('moveSpool','archivePrinter','spoolLifecycle','startSlice',
+    'createExternalSliceRevision','stageSliceRevision','startStagedArtifact','pauseHostPrint',
+    'resumeHostPrint','cancelHostPrint','abandonHostOperation','addToQueue','updateQueueEntry',
+    'moveQueueEntry','removeQueueEntry','assignQueueEntry','stageJob','startJob','pauseJob',
+    'resumeJob','cancelJob','releaseJob','retryJob','declareJobOutcome','settleJobMaterial',
+    'correctJobMaterial',
+    'markAttentionRead','acknowledgeAttention','resolveAttention','addIncidentNote',
+    'setPrinterCamera','clearPrinterCamera','captureSnapshot','setSnapshotPinned',
+    'setPrinterAlertDefaults')),
+  request_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+INSERT INTO operations_p8(id, kind, request_digest, created_at)
+  SELECT id, kind, request_digest, created_at FROM operations;
+DROP TABLE operations;
+ALTER TABLE operations_p8 RENAME TO operations;
+```
 
 Notes:
 
@@ -1385,7 +1469,7 @@ type AttentionDetail =
   | { kind: "requirementMaterialReconciliation"; requirementStatus: "pending" | "deferred"; spoolId: string }
   | { kind: "requirementJobOutcomeUnknown" }
   | { kind: "spoolLow"; currentMg: number; lowThresholdMg: number }
-  | { kind: "jobCompleted"; endedAt: string; evidence: EvidenceOutcome | null };
+  | { kind: "jobCompleted"; endedAt: string };
 type AttentionAction = "markRead" | "acknowledge" | "resolve";
 type AttentionEvent = {
   id: string; revision: number; dedupKey: string;
@@ -1401,6 +1485,7 @@ type AttentionEvent = {
   readAt: string | null; acknowledgedAt: string | null;
   resolvedAt: string | null; resolution: AttentionResolution | null;
   notifiedAt: string | null;
+  evidence: EvidenceOutcome | null;    // job.completed only; written by record_evidence, never by Amend
   allowedActions: AttentionAction[];   // Rust-computed: markRead if unread; acknowledge if open and
                                        // unacknowledged; resolve if open and manual
 };
@@ -1459,6 +1544,13 @@ type CameraSource =
   | { kind: "snapshotUrl"; snapshotUrl: string };
 type CameraSourceInput = CameraSource;
 type PrinterCamera = { printerId: string; revision: number; source: CameraSource; updatedAt: string };
+                                       // get_printer_camera only: the one command result with a manual URL
+type PrinterCameraSummary = {          // set_printer_camera's result: the URL redacted
+  printerId: string; revision: number; sourceKind: CameraSourceKind;
+  webcamName: string | null; webcamService: string | null; webPort: number | null;  // hostWebcam only
+  hasSnapshotUrl: boolean;             // true exactly for snapshotUrl
+  updatedAt: string;
+};
 type HostWebcam = { name: string; service: string };      // never a URL
 type CameraErrorKind = "unreachable" | "timeout" | "httpStatus" | "tooLarge" | "notAnImage"
   | "noSuchWebcam" | "noSnapshotUrl" | "hostMismatch" | "unsupportedAdapter" | "webcamListFailed";
@@ -1530,7 +1622,8 @@ type NavigateRequest = { contractVersion: 1; target: NavigationTarget; openAtten
   no override gets no camera (and is Setup incomplete, as today). Nothing
   else (tests, health, snapshots) is copied between rows. CSV and paste
   intake gain no camera columns.
-- The Printers export (schema 4) gives each Printer `camera: CameraSource
+- The Printers export **file** (schema 4, written to disk by Rust; never a
+  command result or event) gives each Printer `camera: CameraSource
   | null` (a manual URL included, as the Connection host is) and
   `alertDefaults: AlertDefaults | null`. Import accepts schemas 1–4;
   schemas 1–3 import with no camera and default alert defaults.
@@ -1559,7 +1652,7 @@ the three binary commands). Count assertions become `58 + 21 + 2 + 8 + 11
 | `get_incident` | `{ incidentId }` | `IncidentDetail` |
 | `add_incident_note` | `{ operationId, incidentId, text }` | `IncidentDetail` |
 | `get_printer_camera` | `{ printerId }` | `PrinterCamera \| null` (the only command that returns a manual URL) |
-| `set_printer_camera` | `{ operationId, printerId, source: CameraSourceInput }` | `PrinterCamera` |
+| `set_printer_camera` | `{ operationId, printerId, source: CameraSourceInput }` | `PrinterCameraSummary` (the URL redacted; a replay returns the current summary) |
 | `clear_printer_camera` | `{ operationId, printerId }` | `{ printerId: string; cleared: boolean }` |
 | `list_host_webcams` | `{ printerId?: string, connection?: ConnectionSubmission }` (exactly one) | `HostWebcam[]` |
 | `test_camera` | `{ printerId?: string, connection?: ConnectionSubmission, source: CameraSourceInput }` | binary frame (below); never stored. With `printerId`, it also updates that Printer's health |
@@ -1567,7 +1660,7 @@ the three binary commands). Count assertions become `58 + 21 + 2 + 8 + 11
 | `capture_snapshot` | `{ operationId, printerId }` | `CameraSnapshot` |
 | `list_snapshots` | `{ printerId?, incidentId?, jobId?, includePruned?: boolean (default true), before?: string, limit?: 1..=200 }` | `SnapshotPage`, `capturedAt` descending, then id |
 | `snapshot_image` | `{ snapshotId }` | binary frame with `snapshotId` |
-| `set_snapshot_pinned` | `{ operationId, snapshotId, pinned: boolean }` | `CameraSnapshot`. Same state: no-op success |
+| `set_snapshot_pinned` | `{ operationId, snapshotId, pinned: boolean }` | `CameraSnapshot`. Same state: no-op success. `pinned: true` on a pruned row: `EVIDENCE_PRUNED`; `pinned: false` on a pruned row: allowed |
 | `media_usage` | `{}` | `MediaUsage` |
 | `get_printer_alert_defaults` | `{ printerId }` | `PrinterAlertDefaults` |
 | `set_printer_alert_defaults` | `{ operationId, printerId, alertDefaults: AlertDefaults }` | `PrinterAlertDefaults` |
@@ -1624,9 +1717,11 @@ tagged union. The envelope type is `AttentionStreamEvent`
 - `list_attention` reads `snapshot_sequence()` before it reads rows
   (listen before backfill).
 - The frontend replaces a record only by a higher `revision`.
-- An open Incident's detail is refetched with `get_incident` when an
-  `attention.incident.changed` with a higher revision arrives; timeline
-  rows are not streamed.
+- `attention.incident.changed` is published once per Incident per
+  committed transaction, with the final row (D3 "Revision and
+  publishing"). An open Incident's detail is refetched with `get_incident`
+  when one with a higher revision arrives; timeline rows are not
+  streamed.
 
 **`farm3d-navigate-v1`** is a separate, unsequenced event with a
 `NavigateRequest` payload. It has no backfill. The frontend routes it
@@ -1644,7 +1739,7 @@ and never carry a URL, host, port, credential, or host response body.
 | `CAMERA_NOT_CONFIGURED` | `camera_preview_frame`, `capture_snapshot` on a Printer without a source | `{ printerId }` | `[OPEN_PRINTER_SETUP]` | "This Printer has no camera." |
 | `CAMERA_FAILED` | a frame fetch failed (every `CameraErrorKind` except `hostMismatch` and `unsupportedAdapter`) | `{ printerId: string \| null, kind: CameraErrorKind, httpStatus: number \| null }` | `[RETRY]`, plus `[OPEN_PRINTER_SETUP]` for `noSuchWebcam`, `noSnapshotUrl` | per kind, for example "The camera did not answer in time." |
 | `CAMERA_HOST_MISMATCH` | a `hostWebcam` whose absolute URL is on another host | `{ printerId: string \| null }` | `[OPEN_PRINTER_SETUP]` | "The printer's webcam points at a different host. Use a manual snapshot URL." |
-| `EVIDENCE_PRUNED` | `snapshot_image`, `set_snapshot_pinned` on a pruned snapshot | `{ snapshotId, reason: PruneReason }` | `[]` | "This snapshot's image was removed (<reason label>)." |
+| `EVIDENCE_PRUNED` | `snapshot_image`, and `set_snapshot_pinned` with `pinned: true`, on a pruned snapshot (`pinned: false` is allowed, D5) | `{ snapshotId, reason: PruneReason }` | `[]` | "This snapshot's image was removed (<reason label>)." |
 | `SNAPSHOT_DISK_CAP` | `capture_snapshot` when only pinned snapshots would be left to prune | `{ usedBytes, capBytes, pinnedBytes }` | `[]` | "The snapshot disk cap is full of pinned evidence. Unpin some or raise the cap." |
 | `NOTIFICATIONS_UNAVAILABLE` | `send_test_notification` with an `unavailable` or `unsupported` notifier | `{ status: NotifierStatus }` | `[]` | "Desktop notifications aren't available here." |
 | `EVIDENCE_EXISTS` | `import_printers` (`replace_all`) | `{ printerIds, incidentIds, snapshotIds }` (each at most 20) | `[]` | "Printers with Incidents or camera evidence can't be replaced by an import." |
@@ -1695,7 +1790,9 @@ actions, retention, and notification decisions. TypeScript presents them.
   revokes the previous object URL on each frame and on stop; snapshots;
   pinning; `media_usage`). `src/cameras/frame.ts` parses binary frames.
   The camera store never holds a camera URL. The Setup camera section
-  reads `get_printer_camera` into its own form state only.
+  reads `get_printer_camera` into its own form state only; after
+  `set_printer_camera` it keeps the URL it just submitted in that form
+  state (the result, a `PrinterCameraSummary`, has none).
 - **Web mode** loads deterministic fixtures (`web-fixtures.ts`): every
   Condition kind, one recurrence chain, one open Incident with a snapshot
   (a generated PNG test pattern as a data URL), and one pruned snapshot.
@@ -1794,7 +1891,7 @@ actions, retention, and notification decisions. TypeScript presents them.
    `key`.
 2. **Lifecycle.** Every cell of D2's lifecycle table is a test.
 3. **Observer and planner.** Every fixture in "Condition fixtures" (90
-   catalogue, 24 supplementary, 5 deadline) passes verbatim, and the
+   catalogue, 29 supplementary, 5 deadline) passes verbatim, and the
    fixed-point property holds.
 4. **Projector and backfill.** Repeated passes, restarts, lagged
    receivers, and 100 concurrent wakes never create a second open Event
@@ -1872,8 +1969,17 @@ Each departs from, or sharpens, the plan's Design reference.
 6. **`job.startConfirmation`** is raised only when the operator must start
    the Job (Start-safety `confirmBedClear`, or a refused unattended
    start).
-7. **"Covered by a Job"** is defined (active Job, or the reported file is
-   the latest Job's) for `printer.hostFailed`.
+7. **"Covered by a Job" is by file, and it suppresses the Event too.** A
+   host failure is covered only when the reported file is the latest
+   Job's `hostPath` and farm3d started that Job (`starting`, `printing`,
+   `paused`, `outcomeUnknown`, or ended with `startedAt`). While covered,
+   `printer.hostFailed` raises neither an Incident nor an Event. This
+   deliberately refines planner default 4, which suppressed only the
+   Incident ("yes, only when no farm3d Job was active"): the Job's own
+   `job.failed` (or `requirement.jobOutcomeUnknown`) carries the same
+   failure as a fatal, actionable Event with its Incident, so a second
+   Event would duplicate it. A Job that is merely assigned or staged never
+   covers a failure (fixtures s28, s29).
 8. **Renames:** the table `snapshots` is `camera_snapshots` and the type
    `Snapshot` is `CameraSnapshot` (the codebase already has DB
    `snapshot_root`, `printer_status_snapshots`, and backfill "snapshot"
@@ -1884,9 +1990,10 @@ Each departs from, or sharpens, the plan's Design reference.
    `operatorAction { jobEventId }` kind and `incident_events.job_event_id`
    are dropped; `reopened` is added; `attention_event_id` and
    `snapshot_id` columns keep references checkable.
-10. **Completion evidence is recorded on the `job.completed` Event's
-    `detail.evidence`**, not in `job_events`, so P7's closed timeline gets
-    no new kinds.
+10. **Completion evidence is recorded on the `job.completed` Event's own
+    `evidence` field** (`attention_events.evidence_json`), not in its
+    planner-owned `detail` (which the next pass would overwrite) and not
+    in `job_events` (so P7's closed timeline gets no new kinds).
 11. **`evidenceSkipped` means "tried and couldn't"**: nothing is recorded
     when the toggle is off, there is no source, or the Incident came from
     the backfill.
@@ -1920,6 +2027,25 @@ Each departs from, or sharpens, the plan's Design reference.
     "Printer detail dock"), and the Camera tab is appended after Job.
 29. **`printer.hostFailed` and `job.completed` need a live status**, so the
     backfill treats them as unknown, like the other `printer.*` families.
+30. **(Fix round 1) `printer.connectionError` is `Unknown`, not `Absent`,
+    while the host is unreachable** (offline, connecting, hydrated, or an
+    unreachable/timeout error): none of those shows whether the
+    credentials are still wrong. Otherwise a restart (statuses hydrate
+    `offline`, then `connecting`) would resolve an open auth failure and
+    the next failure would insert a live recurrence that notifies. It is
+    `Absent` only when the host is reachable or the Printer is archived or
+    Setup incomplete.
+31. **(Fix round 1) Only `get_printer_camera` returns a manual URL.**
+    `set_printer_camera` returns `PrinterCameraSummary` (URL redacted);
+    the Printers export file carries the URL as it carries the Connection
+    host.
+32. **(Fix round 1) Pruned snapshots never count toward
+    `PINNED_EVIDENCE_EXISTS`**, the Printer delete removes pruned
+    unattached manual rows with the unpinned ones, and unpinning a pruned
+    row is allowed, so a pinned image that went missing can't make a
+    Printer undeletable.
+33. **(Fix round 1) One `attention.incident.changed` per Incident per
+    commit**, and every timeline append bumps the Incident's revision.
 
 ## Residual risks
 

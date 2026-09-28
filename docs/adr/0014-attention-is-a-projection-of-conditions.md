@@ -54,9 +54,13 @@ Conditions.
   key, `<condition>:<sourceKind>:<sourceId>`. It is computed, never
   stored. Rust owns every Condition, key, and severity; the frontend never
   derives one from host strings.
-- **Unknown is first-class.** A status farm3d hasn't observed since
-  startup (and the whole live-status side of the startup backfill) is
-  `Unknown`. `Unknown` never opens and never resolves an Event.
+- **Unknown is first-class.** An unknown status neither opens nor
+  resolves a `printer.*` Event (planner default 5). Unknown covers every
+  live-status family during the startup backfill, a Printer still inside
+  its offline grace, and, for `printer.connectionError`, a status that
+  can't show whether the credentials still fail: unreachable,
+  `connecting`, or hydrated from the cache. `Unknown` never opens and
+  never resolves an Event.
 - **The planner.** `attention::plan(open, latest_resolved, observed)` is
   pure. `Present` inserts (linked to the previous Event if it recurs) or
   amends. `Absent` resolves by the Condition's resolution mode: `auto`
