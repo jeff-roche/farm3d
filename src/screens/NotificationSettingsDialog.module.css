@@ -32,6 +32,15 @@
   color: var(--f3d-color-text-muted);
 }
 
+/* `.section` is a column flex container with no `align-items`, so it
+   defaults to stretch -- invisible on the label-only Switch/NumberField
+   rows above, but it visibly stretched this button (which has its own
+   border/background) to the dialog's full width. Match every other
+   Button in this file's family of screens: content-sized. */
+.sendTestButton {
+  align-self: flex-start;
+}
+
 .error {
   margin: 0;
   color: var(--f3d-color-danger);

@@ -163,7 +163,13 @@ export function NotificationSettingsDialog(props: NotificationSettingsDialogProp
         <section class={styles.section} aria-label="Desktop notifications">
           <span class={styles.sectionTitle}>Desktop notifications</span>
           <p class={styles.status} role="status">{statusLabel()}</p>
-          <Button variant="secondary" size="sm" disabled={testPending()} onClick={() => void onSendTest()}>
+          <Button
+            class={styles.sendTestButton}
+            variant="secondary"
+            size="sm"
+            disabled={testPending()}
+            onClick={() => void onSendTest()}
+          >
             {testPending() ? "Sending…" : "Send test notification"}
           </Button>
           <Show when={testSent()}>
