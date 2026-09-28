@@ -58,6 +58,7 @@ vi.mock("./screens/AppShell", () => ({
     printerRoster: { count: number };
     attentionSpoolCount?: number;
     queueAttentionCount?: number;
+    attentionActionableCount?: number;
     activeJobs?: { id: string; stateLabel: string }[];
     children: JSX.Element;
   }) => (
@@ -66,6 +67,7 @@ vi.mock("./screens/AppShell", () => ({
       <output aria-label="Printer count">{props.printerRoster.count}</output>
       <output aria-label="Attention Spools">{props.attentionSpoolCount}</output>
       <output aria-label="Queue attention">{props.queueAttentionCount}</output>
+      <output aria-label="Attention actionable">{props.attentionActionableCount}</output>
       <output aria-label="Active Jobs">{(props.activeJobs ?? []).map((j) => `${j.id}:${j.stateLabel}`).join(",")}</output>
       {props.children}
     </div>
@@ -242,13 +244,17 @@ vi.mock("./screens/PrinterDashboard", () => ({
     syncState?: string;
     onImport?: () => void;
     onExport?: () => void;
+    attentionEventId?: string | null;
+    onAttentionEventClose?: () => void;
   }) => (
     <div>
       <p>{props.store.hasPrinters() ? "Persisted Printers are visible" : props.isFirstRun ? "First run" : "Returning empty Farm"}</p>
       <p>Sync state: {props.syncState}</p>
       <output aria-label="Selected Printer">{props.store.selectedPrinterId() ?? "none"}</output>
+      <output aria-label="Selected Attention Event">{props.attentionEventId ?? "none"}</output>
       <button onClick={props.onImport}>Import Printers</button>
       <button onClick={props.onExport}>Export Printers</button>
+      <button onClick={props.onAttentionEventClose}>Close Attention Event</button>
     </div>
   ),
 }));
@@ -432,6 +438,19 @@ describe("App", () => {
     expect(screen.getByText("Monitor")).toBeInTheDocument();
   });
 
+  it("forwards the Attention store's actionable count to the shell's Monitor badge and the trigger", async () => {
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({
+      events: [attentionEvent({ id: "atn-1", requiresAction: true, resolvedAt: null })],
+    });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Attention actionable")).toHaveTextContent("1"));
+  });
+
   it("is available for a known Attention Event deep link", async () => {
     window.location.hash = "#nav=v1/monitor/attention/atn-1";
     const { attentionEvent } = await import("./attention/test-records");
@@ -443,6 +462,23 @@ describe("App", () => {
 
     await waitFor(() => expect(navigation.availability()).toBe("available"));
     expect(screen.queryAllByText("The requested item is no longer available.")).toHaveLength(0);
+  });
+
+  it("passes an Attention Event deep link to the dashboard as attentionEventId, and clearing it navigates back to plain Monitor", async () => {
+    window.location.hash = "#nav=v1/monitor/attention/atn-1";
+    const { attentionEvent } = await import("./attention/test-records");
+    const attentionMock = await attentionStore();
+    attentionMock.setAttentionStoreState({ events: [attentionEvent({ id: "atn-1" })] });
+    const { default: App } = await import("./App");
+
+    render(() => <App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Selected Attention Event")).toHaveTextContent("atn-1"));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close Attention Event" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Selected Attention Event")).toHaveTextContent("none"));
+    expect(window.location.hash).toBe("#nav=v1/monitor");
   });
 
   it("keeps Monitor open and selects nothing else for an unknown deep-linked Attention Event", async () => {

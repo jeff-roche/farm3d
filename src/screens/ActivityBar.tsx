@@ -16,19 +16,28 @@ export interface ActivityBarProps {
    *  Reconciliation Requirements (P7 spec "Frontend architecture").
    *  Omitted or 0 renders no badge. */
   queueAttentionCount?: number;
+  /** The Attention center's own actionable count (spec "Frontend
+   *  architecture": "The Monitor rail button's badge shows the same
+   *  actionable count"). Omitted or 0 renders no badge. */
+  attentionActionableCount?: number;
 }
 
 export function ActivityBar(props: ActivityBarProps) {
   return (
     <nav class={styles.bar} aria-label="Primary">
-      <IconButton
-        aria-label="Monitor"
-        aria-current={props.active === "monitor" ? "page" : undefined}
-        active={props.active === "monitor"}
-        onClick={() => props.onSelect("monitor")}
-      >
-        <IconPrinter size={18} />
-      </IconButton>
+      <div class={styles.iconWrap}>
+        <IconButton
+          aria-label={(props.attentionActionableCount ?? 0) > 0 ? `Monitor (${props.attentionActionableCount} need attention)` : "Monitor"}
+          aria-current={props.active === "monitor" ? "page" : undefined}
+          active={props.active === "monitor"}
+          onClick={() => props.onSelect("monitor")}
+        >
+          <IconPrinter size={18} />
+        </IconButton>
+        <Show when={(props.attentionActionableCount ?? 0) > 0}>
+          <span class={styles.badge} aria-hidden="true">{props.attentionActionableCount}</span>
+        </Show>
+      </div>
       <div class={styles.iconWrap}>
         <IconButton
           aria-label={(props.queueAttentionCount ?? 0) > 0 ? `Queue (${props.queueAttentionCount} need attention)` : "Queue"}

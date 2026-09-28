@@ -2,7 +2,11 @@ import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-lib
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpoolRecord } from "../generated/contracts/domain/SpoolRecord";
 import type { ResolvedPrinter } from "../printers/types";
+import { resetAttentionStoreMock, setAttentionStoreState } from "../attention/attention-store-mock";
+import { attentionEvent } from "../attention/test-records";
 import { PrinterStatusPanel } from "./PrinterStatusPanel";
+
+vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
 
 const spools = vi.hoisted(() => [] as SpoolRecord[]);
 vi.mock("../spools/spool-store", () => ({
@@ -40,6 +44,7 @@ describe("PrinterStatusPanel", () => {
     vi.useRealTimers();
     spools.length = 0;
     window.location.hash = "";
+    resetAttentionStoreMock();
   });
 
   it("lists each Material Slot with its occupant (number, material, swatch, color, remaining est., Low/Reserved) or Empty", () => {
@@ -130,5 +135,32 @@ describe("PrinterStatusPanel", () => {
     }} />);
 
     expect(screen.getByText("Last observed").nextElementSibling).toHaveTextContent("Unavailable");
+  });
+
+  it("says there are no open Events for this Printer when there are none", () => {
+    render(() => <PrinterStatusPanel printer={printer} />);
+    expect(screen.getByText("No open Events for this Printer.")).toBeInTheDocument();
+  });
+
+  it("lists the Printer's own open Events with a severity marker, and deep-links to each", () => {
+    setAttentionStoreState({
+      events: [
+        attentionEvent({
+          id: "atn-1", printerId: "prn-1", severity: "fatal", resolvedAt: null,
+          summary: "Bay 1 printer-reported failure.",
+        }),
+        // A different Printer's Event doesn't show here.
+        attentionEvent({ id: "atn-2", printerId: "prn-2", resolvedAt: null, summary: "Bay 2 is offline." }),
+      ],
+    });
+    render(() => <PrinterStatusPanel printer={printer} />);
+
+    const list = screen.getByRole("list", { name: "Open Attention Events" });
+    expect(within(list).getByText("Bay 1 printer-reported failure.")).toBeInTheDocument();
+    expect(within(list).getByRole("status", { name: "Fatal" })).toBeInTheDocument();
+    expect(within(list).queryByText("Bay 2 is offline.")).not.toBeInTheDocument();
+
+    fireEvent.click(within(list).getByText("Bay 1 printer-reported failure."));
+    expect(window.location.hash).toBe("#nav=v1/monitor/attention/atn-1");
   });
 });

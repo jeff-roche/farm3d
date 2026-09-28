@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MonitorPrinterView, MonitorRosterView } from "../monitor/monitor-store";
+import { resetAttentionStoreMock } from "../attention/attention-store-mock";
 import { AppShell } from "./AppShell";
+
+vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
 
 function printer(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {
@@ -38,6 +41,7 @@ function roster(overrides: Partial<MonitorRosterView> = {}): MonitorRosterView {
 afterEach(() => {
   document.body.innerHTML = "";
   vi.useRealTimers();
+  resetAttentionStoreMock();
 });
 
 describe("AppShell", () => {
@@ -64,7 +68,9 @@ describe("AppShell", () => {
     expect(await screen.findByText("Bay One")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "All adapters connected" })).toBeInTheDocument();
     expect(screen.getByText("Last live event 2m ago")).toBeInTheDocument();
-    expect(screen.queryByText(/job|attention/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/job/i)).not.toBeInTheDocument();
+    // The Attention trigger is always present, unlike the active-Job count.
+    expect(screen.getByRole("button", { name: "Attention: nothing needs action" })).toBeInTheDocument();
 
     const shell = container.querySelector("div");
     expect(Array.from(shell?.children ?? []).map((child) => child.nodeName)).toEqual([
@@ -145,6 +151,7 @@ describe("AppShell", () => {
         adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
         activeJobs={[{ id: "job-1", name: "Bay One", detail: "Bracket", stateLabel: "Printing" }]}
         queueAttentionCount={2}
+        attentionActionableCount={3}
       >
         <p>Workspace</p>
       </AppShell>
@@ -154,5 +161,6 @@ describe("AppShell", () => {
     expect(await screen.findByText("Printing")).toBeInTheDocument();
     expect(screen.getByText("Bay One")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue (2 need attention)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Monitor (3 need attention)" })).toBeInTheDocument();
   });
 });

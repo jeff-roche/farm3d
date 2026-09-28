@@ -383,6 +383,7 @@ function App() {
       lastLiveEventAt={shell().lastLiveEventAt}
       attentionSpoolCount={spoolState.spools.filter((spool) => spool.facets.low || spool.facets.reconciliation).length}
       queueAttentionCount={queueAttentionCount()}
+      attentionActionableCount={attention.actionableCount()}
       activeJobs={activeJobs()}
     >
       <Show when={printerStoreCommandError()?.code === "HOST_OPERATION_PENDING" ? printerStoreCommandError() : undefined}>
@@ -486,6 +487,11 @@ function App() {
                 destination: "monitor",
                 ...(id ? { selection: { kind: "printer", id } } : {}),
               })}
+              attentionEventId={(() => {
+                const selection = navigation.target().selection;
+                return selection?.kind === "attention" ? selection.id : null;
+              })()}
+              onAttentionEventClose={() => navigate({ version: 1, destination: "monitor" })}
               existingPrinters={printers()}
               onPrinterCreated={() => setIsFirstRun(false)}
               onImport={() => void importPrinters().then(() => {

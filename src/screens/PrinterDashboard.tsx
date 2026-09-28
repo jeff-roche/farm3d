@@ -2,6 +2,8 @@ import { For, Match, Show, Suspense, Switch, createSignal, lazy, onCleanup, onMo
 import { Button, PrinterRoster } from "../design-system";
 import type { MonitorStore } from "../monitor/monitor-store";
 import type { ResolvedPrinter } from "../printers/types";
+import { attention } from "../attention/attention-store";
+import { AttentionEventDetail } from "./AttentionEventDetail";
 import { MonitorToolbar } from "./MonitorToolbar";
 import { PrinterSetupWizard } from "./PrinterSetupWizard";
 import { PrinterCard } from "./PrinterCard";
@@ -29,6 +31,13 @@ export interface PrinterDashboardProps {
   /** Called once a Printer has been permanently deleted through the Setup
    *  tab's guarded Archive → Delete… flow. */
   onRemovePrinter?: (id: string) => void;
+  /** The `attention` Event selected via `monitor/attention/<id>` (App's
+   *  navigation target): shows `AttentionEventDetail` in the dock, in
+   *  place of the Printer/Queue content (spec "Frontend architecture").
+   *  An `incident` selection is Task 14's; this leaves today's behavior
+   *  (nothing) for it. */
+  attentionEventId?: string | null;
+  onAttentionEventClose?: () => void;
 }
 
 export function PrinterDashboard(props: PrinterDashboardProps) {
@@ -55,8 +64,13 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
   /** Narrow widths: the preview is an overlay, opened from the toolbar. */
   const [queueOverlayOpen, setQueueOverlayOpen] = createSignal(false);
   let queueTrigger: HTMLElement | null = null;
+  const selectedAttentionEvent = () => {
+    const id = props.attentionEventId;
+    return id ? attention.event(id) : undefined;
+  };
   const showQueueDock = () =>
-    !props.store.selectedPrinter() && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
+    !props.store.selectedPrinter() && !selectedAttentionEvent()
+    && (dockMode() === "inline" || queueOverlayOpen() || selectedJob() !== undefined);
   const closeQueueDock = () => {
     setQueueOverlayOpen(false);
     setSelectedJobId(null);
@@ -210,6 +224,15 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           focusRequest={dockFocus()}
           onFocusHandled={() => setDockFocus(undefined)}
         />
+        <Show when={selectedAttentionEvent()}>
+          {(event) => (
+            <AttentionEventDetail
+              event={event()}
+              mode={dockMode()}
+              onClose={() => props.onAttentionEventClose?.()}
+            />
+          )}
+        </Show>
         <Show when={showQueueDock()}>
           <MonitorQueueDock
             mode={dockMode()}

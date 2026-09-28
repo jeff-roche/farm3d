@@ -8,6 +8,7 @@
  *  The read side is a real Solid store, so components react when a test
  *  changes it with `setAttentionStoreState` (or `loadWebAttentionFixture`);
  *  the actions are spies. */
+import { createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { vi } from "vitest";
 import { buildWebAttentionFixture } from "./web-fixtures";
@@ -41,6 +42,12 @@ const initialState = (): MockAttentionState => ({
 const [state, setState] = createStore<MockAttentionState>(initialState());
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = { fatal: 0, warning: 1, info: 2 };
+
+// A real Solid signal, like the real store's -- `requestAttentionCenterOpen`
+// increments it, so a component's `on(attentionCenterRequest, ...)` effect
+// actually fires in a test (mirrors the real store's own pairing, not just
+// a static stand-in).
+const [attentionCenterRequestId, setAttentionCenterRequestId] = createSignal(0);
 
 function emptyChange(): AttentionChange {
   return { events: [], incidents: [] };
@@ -77,8 +84,8 @@ export const attentionStoreMock = {
   onAttentionIncidentChanged: vi.fn((_listener: (incident: Incident) => void) => () => {}),
   onAttentionSnapshotChanged: vi.fn((_listener: (snapshot: unknown) => void) => () => {}),
   onAttentionPrinterRemoved: vi.fn((_listener: (printerId: string) => void) => () => {}),
-  attentionCenterRequest: () => 0,
-  requestAttentionCenterOpen: vi.fn(),
+  attentionCenterRequest: attentionCenterRequestId,
+  requestAttentionCenterOpen: vi.fn(() => setAttentionCenterRequestId((current) => current + 1)),
 };
 
 /** Replaces (a slice of) the mock's state, as events settling into the real
@@ -108,6 +115,7 @@ export function loadWebAttentionFixture(): ReturnType<typeof buildWebAttentionFi
 
 export function resetAttentionStoreMock(): void {
   setState(initialState());
+  setAttentionCenterRequestId(0);
   for (const action of Object.values(attentionStoreMock)) {
     if (typeof action === "function" && "mockClear" in action) action.mockClear();
   }
