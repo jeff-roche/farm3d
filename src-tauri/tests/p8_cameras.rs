@@ -1182,3 +1182,66 @@ fn the_seeded_corpus_never_leaves_the_camera_module() {
         .unwrap();
     assert!(stored.contains(SEED_QUERY_TOKEN), "the manual URL lives in its own column");
 }
+
+// --- Task 8 carries: saved-source host webcams without a Connection, and the
+// host comparison -------------------------------------------------------------------
+
+/// A saved host webcam whose Printer later lost its Connection: a preview
+/// (a saved-source fetch) fails `webcamListFailed` and marks the health
+/// failing. Saving a new host webcam there, or testing a draft one, stays
+/// `VALIDATION` on `source.kind`.
+#[test]
+fn a_saved_host_webcam_whose_printer_lost_its_connection_fails_webcam_list_failed() {
+    let rig = Rig::eager();
+    rig.webcams(Some("/webcam/?action=snapshot"));
+    rig.set("op-set", MOON, rig.webcam_source()).unwrap();
+    rig.storage
+        .write(|tx| {
+            tx.execute("UPDATE printers SET connection_json = NULL WHERE id = ?1", [MOON])?;
+            Ok(())
+        })
+        .unwrap();
+    let error = rig.preview(MOON).unwrap_err();
+    assert_eq!((error["code"].as_str(), error["details"]["kind"].as_str()), (Some("CAMERA_FAILED"), Some("webcamListFailed")));
+    let health = rig.services.cameras.health(MOON).unwrap();
+    assert_eq!(health.state, farm3d_lib::cameras::CameraHealthState::Failing);
+    assert_eq!(health.last_failure_kind, Some(CameraErrorKind::WebcamListFailed));
+    assert_eq!(rig.health_events(MOON).last().unwrap()["lastFailureKind"], "webcamListFailed");
+
+    // A test of the saved source is a saved-source fetch too.
+    let tested = rig.frame("test_camera", json!({"printerId": MOON, "source": rig.webcam_source()})).unwrap_err();
+    assert_eq!(tested["details"]["kind"], "webcamListFailed");
+    // A draft host webcam on the Printer, and a new save, stay VALIDATION.
+    let draft = json!({"kind": "hostWebcam", "webcamName": "other", "webcamService": null, "webPort": null});
+    let tested = rig.frame("test_camera", json!({"printerId": MOON, "source": draft})).unwrap_err();
+    assert_eq!((tested["code"].as_str(), tested["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("source.kind")));
+    let saved = rig.set("op-set-again", MOON, draft).unwrap_err();
+    assert_eq!((saved["code"].as_str(), saved["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("source.kind")));
+}
+
+/// The resolved URL's host is compared with the parsed base URL's host, so
+/// an uncompressed or upper-case IPv6 Connection host, or an odd IPv4
+/// spelling, is still the same host.
+#[test]
+fn the_host_comparison_uses_the_parsed_connection_host() {
+    assert_eq!(
+        resolved("2001:DB8:0:0:0:0:0:1", Some(8080), "/snap").unwrap(),
+        "http://[2001:db8::1]:8080/snap",
+        "an uncompressed upper-case IPv6 host and a relative URL"
+    );
+    assert_eq!(
+        resolved("[2001:DB8::1]", None, "http://[2001:db8::1]/snap").unwrap(),
+        "http://[2001:db8::1]/snap",
+        "a bracketed Connection host and an absolute URL on it"
+    );
+    assert_eq!(
+        resolved("0xC0.0.2.10", None, "http://192.0.2.10/snap").unwrap(),
+        "http://192.0.2.10/snap",
+        "a hex IPv4 spelling"
+    );
+    assert_eq!(
+        resolved("2001:DB8:0:0:0:0:0:1", None, "http://[2001:db8::2]/snap").unwrap_err(),
+        CameraErrorKind::HostMismatch,
+        "another IPv6 host still mismatches"
+    );
+}

@@ -69,7 +69,8 @@ pub enum CameraFetchError {
     NotFound,
     /// The Printer has no camera source (`CAMERA_NOT_CONFIGURED`).
     NotConfigured,
-    /// A `hostWebcam` source on a Printer with no Connection.
+    /// A draft (or newly saved) `hostWebcam` source on a Printer with no
+    /// Connection. A saved one fails `webcamListFailed` instead.
     NoConnection,
     /// The fetch itself failed.
     Camera(CameraError),
@@ -493,6 +494,22 @@ fn webcam_host_for<R: tauri::Runtime>(
     }
 }
 
+/// The Connection a **saved** source is looked up through. A saved host
+/// webcam whose Printer has since lost its Connection gets none, and the
+/// lookup then fails `webcamListFailed` like any other failed webcam-list
+/// query (updating the health). Only a draft or a new save of a host webcam
+/// on such a Printer is `VALIDATION` on `source.kind` ([`webcam_host_for`]).
+fn saved_webcam_host<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    printer: &StoredPrinter,
+    source: &CameraSource,
+) -> Option<WebcamHost> {
+    match source {
+        CameraSource::HostWebcam { .. } => printer_webcam_host(services, printer),
+        CameraSource::SnapshotUrl { .. } => None,
+    }
+}
+
 /// `camera_preview_frame`: the Printer's saved source, coalesced (D4). A
 /// preview never stores anything.
 pub async fn preview_frame<R: tauri::Runtime>(
@@ -526,7 +543,7 @@ pub async fn fetch_saved<R: tauri::Runtime>(
     let epoch = cameras.epoch(printer_id);
     let (printer, source) = saved_target(services, printer_id)?;
     let source = source.ok_or(CameraFetchError::NotConfigured)?;
-    let host = webcam_host_for(services, &printer, &source)?;
+    let host = saved_webcam_host(services, &printer, &source);
     let result = fetch_source(services, &source, host.as_ref()).await;
     let fetch = SavedFetch {
         printer_id,
@@ -556,9 +573,14 @@ pub async fn test_printer_source<R: tauri::Runtime>(
     let _one_at_a_time = lock.lock().await;
     let epoch = cameras.epoch(printer_id);
     let (printer, saved) = saved_target(services, printer_id)?;
-    let host = webcam_host_for(services, &printer, source)?;
+    let is_saved = saved.as_ref() == Some(source);
+    let host = if is_saved {
+        saved_webcam_host(services, &printer, source)
+    } else {
+        webcam_host_for(services, &printer, source)?
+    };
     let result = fetch_source(services, source, host.as_ref()).await;
-    if saved.as_ref() == Some(source) {
+    if is_saved {
         let fetch = SavedFetch {
             printer_id,
             epoch,

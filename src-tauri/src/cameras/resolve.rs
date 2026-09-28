@@ -8,8 +8,9 @@
 //!   entry whose `name` equals `webcamName`, its `snapshot_url`, resolved
 //!   as a URL reference (`Url::join`) against
 //!   `http://<Connection host>:<webPort or 80>/`. The resolved URL must be
-//!   `http`, carry no userinfo, and name the Connection host (ASCII
-//!   case-insensitive), else `hostMismatch`; its fragment is dropped.
+//!   `http`, carry no userinfo, and name the Connection host (compared as
+//!   parsed hosts, so case and IP spelling don't matter), else
+//!   `hostMismatch`; its fragment is dropped.
 
 use std::time::Duration;
 
@@ -41,9 +42,10 @@ pub fn resolve_webcam_url(
     let mut resolved = base
         .join(snapshot_url.trim())
         .map_err(|_| CameraErrorKind::NoSnapshotUrl)?;
-    let same_host = resolved
-        .host_str()
-        .is_some_and(|host| unbracketed(host).eq_ignore_ascii_case(bare_host));
+    // Compared as parsed hosts, so an uncompressed or upper-case IPv6
+    // Connection host, an IDN, or an odd IPv4 spelling (`0xC0.0.2.10`) is
+    // the same host as its canonical form. The parser lower-cases domains.
+    let same_host = resolved.host().is_some() && resolved.host() == base.host();
     if resolved.scheme() != "http"
         || !resolved.username().is_empty()
         || resolved.password().is_some()

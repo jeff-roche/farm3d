@@ -531,7 +531,7 @@ pub fn parse_webcams_list(body: &Value) -> Result<Vec<CameraInfo>, ConnectionErr
 /// embed the host's LAN address, so it is returned zeroizing and never
 /// kept, logged, or quoted in an error. [`parse_webcams_list`] still
 /// discards every URL.
-pub fn parse_webcam_snapshot_url(
+pub(crate) fn parse_webcam_snapshot_url(
     body: &Value,
     name: &str,
 ) -> Result<Option<zeroize::Zeroizing<String>>, ConnectionError> {
