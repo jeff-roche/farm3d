@@ -318,16 +318,21 @@ incomplete.
 
 - **Covered by a Job** (`printer.hostFailed`): the host's reported file
   (`telemetry.job_name`) is present and equals the `hostPath` of the
-  Printer's latest Job, **and** farm3d started that Job: it is
-  `starting`, `printing`, `paused`, or `outcomeUnknown`, or it ended with
-  `startedAt` set (`JobFacts.started`). One rule, by file: a Job that is
-  merely `assigned` or `awaitingStart` never covers a failure, even if
-  its staged file has the same name (the host printed it without
-  farm3d). While covered, `job.failed` (once the tracker proves it) or
+  Printer's latest Job, **and** that Job can still carry the failure: it
+  is `starting`, `printing`, `paused`, or `outcomeUnknown` (its
+  `job.failed` or `requirement.jobOutcomeUnknown` is still to come), or
+  the tracker ended it `failed` (`ended_by: tracker`; its `job.failed` is
+  the carrier). One rule, by file: a Job that is merely `assigned` or
+  `awaitingStart` never covers a failure, even if its staged file has the
+  same name (the host printed it without farm3d), and neither does a
+  latest Job that ended `completed`, `cancelled`, or by a declaration
+  (for example, the operator reprints the same file from the host's own
+  UI after the Job completed: no Job Event would ever carry that
+  failure). While covered, `job.failed` (once the tracker proves it) or
   `requirement.jobOutcomeUnknown` carries the failure, so
   `printer.hostFailed` raises no Event **and** no Incident. This is a
   deliberate refinement of planner default 4 ("Decisions made in this
-  spec" 7).
+  spec" 7 and 34).
 - **Ended by** (`JobFacts.ended_by`) comes from the Job's terminal
   `job_events` row: `completed`, `failed`, `cancelled` → `tracker`; the
   three `declared*` → `declared`; `released`, `cancelledBeforeStart` →
@@ -2036,7 +2041,8 @@ Each departs from, or sharpens, the plan's Design reference.
 7. **"Covered by a Job" is by file, and it suppresses the Event too.** A
    host failure is covered only when the reported file is the latest
    Job's `hostPath` and farm3d started that Job (`starting`, `printing`,
-   `paused`, `outcomeUnknown`, or ended with `startedAt`). While covered,
+   `paused`, `outcomeUnknown`, or ended with `startedAt`; narrowed by 34
+   to a Job that can still carry the failure). While covered,
    `printer.hostFailed` raises neither an Incident nor an Event. This
    deliberately refines planner default 4, which suppressed only the
    Incident ("yes, only when no farm3d Job was active"): the Job's own
@@ -2110,6 +2116,15 @@ Each departs from, or sharpens, the plan's Design reference.
     Printer undeletable.
 33. **(Fix round 1) One `attention.incident.changed` per Incident per
     commit**, and every timeline append bumps the Incident's revision.
+34. **(Controller ruling, Task 4 review) A Job covers a host failure only
+    while it can still carry it.** Decision 7's "or ended with
+    `startedAt`" is narrowed: the latest Job covers a failure on its file
+    only while it is `starting`, `printing`, `paused`, or
+    `outcomeUnknown`, or after the tracker ended it `failed` (its
+    `job.failed` is the carrier). A latest Job that ended `completed`,
+    `cancelled`, or by a declaration never covers one, so a failed
+    reprint of the same file from the host's own UI raises
+    `printer.hostFailed` and its Incident instead of nothing.
 
 ## Residual risks
 

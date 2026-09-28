@@ -71,6 +71,11 @@ pub fn plan(
         let open_event = open_by_key.get(key.as_str()).copied();
         match (observation, open_event) {
             (Observation::Present(condition), Some(e)) => {
+                debug_assert_matching(condition);
+                debug_assert_eq!(
+                    e.condition, condition.kind,
+                    "an open Event's key names its kind"
+                );
                 let severity = condition.spec().severity;
                 let detail = condition.detail.clone();
                 let changed = detail != e.detail || severity != e.severity;
@@ -87,19 +92,19 @@ pub fn plan(
                     });
                 }
             }
-            (Observation::Present(condition), None) => match latest_resolved.get(key) {
-                Some(previous) if condition.spec().recurs => actions.push(PlannedAction::Insert {
+            (Observation::Present(condition), None) => {
+                debug_assert_matching(condition);
+                let recurrence_of = match latest_resolved.get(key) {
+                    // Once per source: never a second Event for the key.
+                    Some(_) if !condition.spec().recurs => continue,
+                    previous => previous.cloned(),
+                };
+                actions.push(PlannedAction::Insert {
                     condition: condition.clone(),
-                    recurrence_of: Some(previous.clone()),
+                    recurrence_of,
                     acknowledged: condition.acknowledge,
-                }),
-                Some(_) => {}
-                None => actions.push(PlannedAction::Insert {
-                    condition: condition.clone(),
-                    recurrence_of: None,
-                    acknowledged: condition.acknowledge,
-                }),
-            },
+                });
+            }
             (Observation::Absent, Some(e)) => {
                 let resolution = match e.resolution_mode {
                     ResolutionMode::Auto => Some(AttentionResolution::ConditionCleared),
@@ -117,6 +122,15 @@ pub fn plan(
         }
     }
     actions
+}
+
+/// Debug builds: a Condition's detail is its own kind's variant.
+fn debug_assert_matching(condition: &Condition) {
+    debug_assert_eq!(
+        condition.detail.condition_kind(),
+        condition.kind,
+        "a Condition's detail must be its own kind's variant"
+    );
 }
 
 #[cfg(test)]
@@ -201,19 +215,61 @@ mod tests {
         HashMap::from([(dedup_key(kind, "src-1"), "att-prev".to_string())])
     }
 
-    const DETAIL_FREE: [(ConditionKind, fn() -> AttentionDetail); 3] = [
-        (ConditionKind::PrinterHostFailed, || {
-            AttentionDetail::PrinterHostFailed
-        }),
-        (ConditionKind::RequirementJobOutcomeUnknown, || {
-            AttentionDetail::RequirementJobOutcomeUnknown
-        }),
-        (ConditionKind::JobCompleted, || {
-            AttentionDetail::JobCompleted {
-                ended_at: "2026-09-27T11:30:00Z".into(),
+    /// A detail of `kind`'s own variant.
+    fn detail_for(kind: ConditionKind) -> AttentionDetail {
+        let ended_at = || "2026-09-27T11:30:00Z".to_string();
+        match kind {
+            ConditionKind::PrinterOffline => AttentionDetail::PrinterOffline {
+                unreachable_since: "2026-09-27T11:50:00Z".into(),
+            },
+            ConditionKind::PrinterConnectionError => AttentionDetail::PrinterConnectionError {
+                cause: crate::attention::PrinterConnectionErrorCause::Auth,
+            },
+            ConditionKind::PrinterHostFailed => AttentionDetail::PrinterHostFailed,
+            ConditionKind::JobStartConfirmation => AttentionDetail::JobStartConfirmation {
+                awaiting_material: false,
+            },
+            ConditionKind::JobFailed => AttentionDetail::JobFailed {
+                ended_at: ended_at(),
+            },
+            ConditionKind::JobHostCancelled => AttentionDetail::JobHostCancelled {
+                ended_at: ended_at(),
+            },
+            ConditionKind::RequirementMaterialReconciliation => {
+                AttentionDetail::RequirementMaterialReconciliation {
+                    requirement_status: crate::attention::MaterialReconciliationStatus::Pending,
+                    spool_id: "spl-1".into(),
+                }
             }
-        }),
-    ];
+            ConditionKind::RequirementJobOutcomeUnknown => {
+                AttentionDetail::RequirementJobOutcomeUnknown
+            }
+            ConditionKind::SpoolLow => low(80_000),
+            ConditionKind::JobCompleted => AttentionDetail::JobCompleted {
+                ended_at: ended_at(),
+            },
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "its own kind's variant")]
+    fn a_condition_with_another_kinds_detail_is_caught_in_debug_builds() {
+        let kind = ConditionKind::JobFailed;
+        let wrong = condition(kind, low(80_000));
+        plan(
+            &[],
+            &HashMap::new(),
+            &observed(kind, Observation::Present(wrong)),
+        );
+    }
+
+    #[test]
+    fn detail_for_gives_every_kind_its_own_variant() {
+        for kind in ConditionKind::ALL {
+            assert_eq!(detail_for(kind).condition_kind(), kind);
+        }
+    }
 
     #[test]
     fn present_with_an_open_event_amends_and_reports_change() {
@@ -335,12 +391,7 @@ mod tests {
     #[test]
     fn present_inserts_with_or_without_recurrence_by_catalogue() {
         for kind in ConditionKind::ALL {
-            let detail = DETAIL_FREE
-                .iter()
-                .find(|(k, _)| *k == kind)
-                .map(|(_, d)| d())
-                .unwrap_or_else(|| low(80_000));
-            let c = condition(kind, detail);
+            let c = condition(kind, detail_for(kind));
             let fresh = plan(
                 &[],
                 &HashMap::new(),
@@ -379,7 +430,7 @@ mod tests {
     #[test]
     fn insert_carries_the_conditions_acknowledge() {
         let kind = ConditionKind::RequirementMaterialReconciliation;
-        let mut c = condition(kind, AttentionDetail::RequirementJobOutcomeUnknown);
+        let mut c = condition(kind, detail_for(kind));
         c.acknowledge = true;
         let actions = plan(
             &[],
@@ -398,7 +449,7 @@ mod tests {
     #[test]
     fn absent_resolves_by_mode_and_never_a_manual_event() {
         for kind in ConditionKind::ALL {
-            let open = [event("att-1", kind, AttentionDetail::PrinterHostFailed)];
+            let open = [event("att-1", kind, detail_for(kind))];
             let actions = plan(&open, &HashMap::new(), &observed(kind, Observation::Absent));
             let expected: Vec<PlannedAction> = match kind.spec().resolution_mode {
                 ResolutionMode::Auto => vec![PlannedAction::Resolve {
@@ -431,7 +482,7 @@ mod tests {
     #[test]
     fn unknown_and_unobserved_keys_never_act() {
         for kind in ConditionKind::ALL {
-            let open = [event("att-1", kind, AttentionDetail::PrinterHostFailed)];
+            let open = [event("att-1", kind, detail_for(kind))];
             assert_eq!(
                 plan(
                     &open,

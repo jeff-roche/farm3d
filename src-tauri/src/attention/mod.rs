@@ -559,6 +559,29 @@ impl AttentionSourceKind {
     }
 }
 
+impl AttentionDetail {
+    /// The one Condition whose `detail` this variant is (the D2 detail
+    /// table is one variant per Condition).
+    pub fn condition_kind(&self) -> ConditionKind {
+        match self {
+            AttentionDetail::PrinterOffline { .. } => ConditionKind::PrinterOffline,
+            AttentionDetail::PrinterConnectionError { .. } => ConditionKind::PrinterConnectionError,
+            AttentionDetail::PrinterHostFailed => ConditionKind::PrinterHostFailed,
+            AttentionDetail::JobStartConfirmation { .. } => ConditionKind::JobStartConfirmation,
+            AttentionDetail::JobFailed { .. } => ConditionKind::JobFailed,
+            AttentionDetail::JobHostCancelled { .. } => ConditionKind::JobHostCancelled,
+            AttentionDetail::RequirementMaterialReconciliation { .. } => {
+                ConditionKind::RequirementMaterialReconciliation
+            }
+            AttentionDetail::RequirementJobOutcomeUnknown => {
+                ConditionKind::RequirementJobOutcomeUnknown
+            }
+            AttentionDetail::SpoolLow { .. } => ConditionKind::SpoolLow,
+            AttentionDetail::JobCompleted { .. } => ConditionKind::JobCompleted,
+        }
+    }
+}
+
 /// D2 "Dedup keys": `"<ConditionKind>:<AttentionSourceKind>:<sourceId>"`.
 /// Neither the condition nor the source kind contains `:`, and the id is
 /// last, so a key is unique without escaping. Keys are compared, never
@@ -894,6 +917,45 @@ mod tests {
                 row.0
             );
         }
+    }
+
+    #[test]
+    fn every_detail_variant_names_a_distinct_condition() {
+        let details = [
+            AttentionDetail::PrinterOffline {
+                unreachable_since: "2026-09-27T11:50:00Z".into(),
+            },
+            AttentionDetail::PrinterConnectionError {
+                cause: PrinterConnectionErrorCause::Auth,
+            },
+            AttentionDetail::PrinterHostFailed,
+            AttentionDetail::JobStartConfirmation {
+                awaiting_material: false,
+            },
+            AttentionDetail::JobFailed {
+                ended_at: "2026-09-27T11:30:00Z".into(),
+            },
+            AttentionDetail::JobHostCancelled {
+                ended_at: "2026-09-27T11:30:00Z".into(),
+            },
+            AttentionDetail::RequirementMaterialReconciliation {
+                requirement_status: MaterialReconciliationStatus::Pending,
+                spool_id: "spl-1".into(),
+            },
+            AttentionDetail::RequirementJobOutcomeUnknown,
+            AttentionDetail::SpoolLow {
+                current_mg: 1,
+                low_threshold_mg: 2,
+            },
+            AttentionDetail::JobCompleted {
+                ended_at: "2026-09-27T11:30:00Z".into(),
+            },
+        ];
+        let kinds: Vec<_> = details
+            .iter()
+            .map(AttentionDetail::condition_kind)
+            .collect();
+        assert_eq!(kinds, ConditionKind::ALL);
     }
 
     #[test]

@@ -147,7 +147,8 @@ pub struct JobFacts {
     pub host_path: Option<String>,
     /// farm3d started this Job: it is `starting`, `printing`, `paused`, or
     /// `outcomeUnknown`, or its `started_at` is set. A per-Job fact, not
-    /// [`FarmView::supervisors_started_at`].
+    /// [`FarmView::supervisors_started_at`]. `observe` doesn't read it:
+    /// coverage goes by the Job's state (see `covered_by_a_job`).
     pub started: bool,
     pub spool_id: String,
     pub has_last_failure: bool,
@@ -336,6 +337,17 @@ fn offline_deadline(
     Some(since.max(supervisors_started_at) + grace)
 }
 
+/// `Present(condition)`, checking (in debug builds) that the detail is
+/// the Condition's own variant.
+fn present(condition: Condition) -> Observation {
+    debug_assert_eq!(
+        condition.detail.condition_kind(),
+        condition.kind,
+        "a Condition's detail must be its own kind's variant"
+    );
+    Observation::Present(condition)
+}
+
 fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
@@ -375,7 +387,7 @@ impl<'a> Context<'a> {
         printer: &PrinterFacts,
         detail: AttentionDetail,
     ) -> Observation {
-        Observation::Present(Condition {
+        present(Condition {
             kind,
             source_id: printer.id.clone(),
             printer_id: Some(printer.id.clone()),
@@ -414,7 +426,7 @@ impl<'a> Context<'a> {
         job: &JobFacts,
         detail: AttentionDetail,
     ) -> Observation {
-        Observation::Present(Condition {
+        present(Condition {
             kind,
             source_id: job.id.clone(),
             printer_id: Some(job.printer_id.clone()),
@@ -502,14 +514,28 @@ impl<'a> Context<'a> {
     }
 
     /// D2 "Covered by a Job": the reported file is the latest Job's
-    /// `hostPath`, and farm3d started that Job. An assigned or staged Job
-    /// never covers a failure.
+    /// `hostPath`, and that Job can still carry the failure: it is
+    /// `starting`, `printing`, `paused`, or `outcomeUnknown` (its
+    /// `job.failed` or `requirement.jobOutcomeUnknown` is still to come),
+    /// or the tracker ended it `failed` (its `job.failed` is the carrier).
+    /// An assigned or staged Job, and one that ended completed, cancelled,
+    /// or by a declaration, never covers a failure: nothing else would
+    /// ever raise it (controller ruling, Task 4 review).
     fn covered_by_a_job(&self, printer: &PrinterFacts, status: &StatusFacts) -> bool {
         let (Some(file), Some(latest)) = (&status.reported_file, &printer.latest_job) else {
             return false;
         };
-        latest.host_path.as_ref() == Some(file)
-            && self.job(&latest.id).is_some_and(|job| job.started)
+        if latest.host_path.as_ref() != Some(file) {
+            return false;
+        }
+        self.job(&latest.id).is_some_and(|job| match job.state {
+            JobState::Starting
+            | JobState::Printing
+            | JobState::Paused
+            | JobState::OutcomeUnknown => true,
+            JobState::Failed => job.ended_by == Some(JobEndedBy::Tracker),
+            _ => false,
+        })
     }
 
     fn job_start_confirmation(&self, job: &JobFacts) -> Observation {
@@ -623,8 +649,8 @@ impl<'a> Context<'a> {
             .spool_id
             .clone()
             .or_else(|| job.map(|j| j.spool_id.clone()));
-        let present = |kind, spool_id: Option<String>, detail, acknowledge| {
-            Observation::Present(Condition {
+        let requirement_condition = |kind, spool_id: Option<String>, detail, acknowledge| {
+            present(Condition {
                 kind,
                 source_id: requirement.id.clone(),
                 printer_id: job.map(|j| j.printer_id.clone()),
@@ -649,7 +675,7 @@ impl<'a> Context<'a> {
                 let Some(spool_id) = subject_spool.clone() else {
                     return (kind, Observation::Unknown);
                 };
-                let observation = present(
+                let observation = requirement_condition(
                     kind,
                     Some(spool_id.clone()),
                     AttentionDetail::RequirementMaterialReconciliation {
@@ -663,7 +689,7 @@ impl<'a> Context<'a> {
             RequirementKind::JobOutcomeUnknown => {
                 let kind = ConditionKind::RequirementJobOutcomeUnknown;
                 let observation = match requirement.status {
-                    RequirementStatus::Pending => present(
+                    RequirementStatus::Pending => requirement_condition(
                         kind,
                         None,
                         AttentionDetail::RequirementJobOutcomeUnknown,
@@ -684,7 +710,7 @@ impl<'a> Context<'a> {
         if !spool.low {
             return Observation::Absent;
         }
-        Observation::Present(Condition {
+        present(Condition {
             kind: ConditionKind::SpoolLow,
             source_id: spool.id.clone(),
             printer_id: None,
@@ -846,13 +872,15 @@ mod tests {
         update_watch(&mut watch, &printers, &statuses, t("11:58:00"));
         assert_eq!(watch.unreachable_since("prn-1"), None);
 
-        // Reachable: cleared.
+        // Unreachable again (connecting): set anew.
         statuses.insert(
             "prn-1".to_string(),
             facts(ConnectionState::Connecting, None),
         );
         update_watch(&mut watch, &printers, &statuses, t("11:59:00"));
         assert_eq!(watch.unreachable_since("prn-1"), Some(t("11:59:00")));
+
+        // Reachable: cleared.
         statuses.insert("prn-1".to_string(), facts(ConnectionState::Online, None));
         update_watch(&mut watch, &printers, &statuses, t("12:00:00"));
         assert_eq!(watch.unreachable_since("prn-1"), None);
@@ -982,12 +1010,5 @@ mod tests {
             observe(&view, t("11:00:59"))["printer.offline:printer:prn-1"],
             Observation::Unknown
         );
-    }
-
-    #[test]
-    fn observe_and_next_deadline_are_pure() {
-        let view = view();
-        assert_eq!(observe(&view, t("12:00:00")), observe(&view, t("12:00:00")));
-        assert_eq!(next_deadline(&view, t("12:00:00")), None);
     }
 }

@@ -1954,6 +1954,109 @@ fn fixture_x11_no_supervisors_started_at_is_unknown_even_with_a_status() {
     }
 }
 
+fn failed_on_cube(v: &mut FarmView) {
+    set_status(
+        v,
+        ConnectionState::Online,
+        None,
+        OperationalState::Failed,
+        Some("cube.gcode"),
+    );
+}
+
+fn x12_completed() -> FarmView {
+    let mut v = c10_p();
+    failed_on_cube(&mut v);
+    v
+}
+
+fn x12_cancelled() -> FarmView {
+    let mut v = c6_p();
+    failed_on_cube(&mut v);
+    v
+}
+
+fn x14_world() -> FarmView {
+    let mut v = s8().view;
+    job(&mut v).ended_by = Some(JobEndedBy::Declared);
+    v
+}
+
+/// Controller ruling (Task 4 review): a latest Job that ended completed
+/// or cancelled can no longer carry a host failure, so a failure on the
+/// same file (reprinted from the host's own UI) raises
+/// `printer.hostFailed` (and, on `apply`, its own Incident).
+#[test]
+fn fixture_x12_a_completed_or_cancelled_latest_job_never_covers_a_host_failure() {
+    for (id, v) in [
+        ("x12-completed", x12_completed()),
+        ("x12-cancelled", x12_cancelled()),
+    ] {
+        assert_actions(
+            id,
+            &v,
+            &prior(K::PrinterHostFailed, Prior::N),
+            K::PrinterHostFailed,
+            vec![insert(
+                K::PrinterHostFailed,
+                AttentionDetail::PrinterHostFailed,
+            )],
+        );
+        assert_actions(
+            id,
+            &v,
+            &prior(K::PrinterHostFailed, Prior::O),
+            K::PrinterHostFailed,
+            vec![amend_eq(K::PrinterHostFailed)],
+        );
+    }
+}
+
+/// A latest Job the tracker ended `failed` on the same file covers the
+/// failure: its `job.failed` is the carrier.
+#[test]
+fn fixture_x13_a_tracker_failed_latest_job_covers_a_host_failure() {
+    let v = s8().view;
+    assert_actions(
+        "x13-n",
+        &v,
+        &prior(K::PrinterHostFailed, Prior::N),
+        K::PrinterHostFailed,
+        vec![],
+    );
+    assert_actions(
+        "x13-o",
+        &v,
+        &prior(K::PrinterHostFailed, Prior::O),
+        K::PrinterHostFailed,
+        vec![resolve(ConditionCleared)],
+    );
+}
+
+/// A declared failure raises no `job.failed` (the operator's own act), so
+/// it can't carry a host failure either: not covered.
+#[test]
+fn fixture_x14_a_declared_failed_latest_job_does_not_cover_a_host_failure() {
+    let v = x14_world();
+    assert_actions(
+        "x14",
+        &v,
+        &prior(K::PrinterHostFailed, Prior::N),
+        K::PrinterHostFailed,
+        vec![insert(
+            K::PrinterHostFailed,
+            AttentionDetail::PrinterHostFailed,
+        )],
+    );
+    assert_actions(
+        "x14-job-failed",
+        &v,
+        &Store::default(),
+        K::JobFailed,
+        vec![],
+    );
+}
+
 // ---------------------------------------------------------------------
 // The Insert's subject and ids
 // ---------------------------------------------------------------------
@@ -2061,7 +2164,19 @@ fn plan_is_a_fixed_point_for_every_fixture() {
         assert_fixed_point(c.id, &c.view, c.store);
         count += 1;
     }
-    assert_eq!(count, 90 + 34);
+    let coverage: [(&str, fn() -> FarmView); 4] = [
+        ("x12-completed", x12_completed),
+        ("x12-cancelled", x12_cancelled),
+        ("x13", || s8().view),
+        ("x14", x14_world),
+    ];
+    for (id, world_of) in coverage {
+        for which in [Prior::N, Prior::O] {
+            assert_fixed_point(id, &world_of(), prior(K::PrinterHostFailed, which));
+            count += 1;
+        }
+    }
+    assert_eq!(count, 90 + 34 + 8);
 }
 
 // ---------------------------------------------------------------------
