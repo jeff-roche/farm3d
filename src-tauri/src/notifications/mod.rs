@@ -5,8 +5,9 @@
 //! Notifications` client on Linux, [`dbus::DbusNotificationSink`]; the
 //! [`null::NullNotificationSink`] elsewhere), and on a click raises the
 //! window, emits [`NAVIGATE_EVENT`], and marks the Event read
-//! ([`services::NotificationService`], [`activation`]). Focus comes from
-//! `WindowEvent::Focused` only ([`focus::Focus`]).
+//! ([`services::NotificationService`], [`activation`]). Focus is seeded
+//! once from the shown window's `is_focused()`, then follows
+//! `WindowEvent::Focused` ([`focus::Focus`]).
 //!
 //! This file holds the wire types (the notifier's status, the navigation
 //! payload, the class settings) and the Rust-internal sink contract: a

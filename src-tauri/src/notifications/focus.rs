@@ -1,11 +1,13 @@
 //! P8 D6 "Focus": whether farm3d's main window has focus.
 //!
-//! Fed only by the main window's `WindowEvent::Focused(f)` (`lib.rs`),
-//! never by `is_focused()` (tauri#11323). It starts `true` (controller
-//! ruling): nothing notifies until the first focus change after launch,
-//! even when the compositor opened the window unfocused and sent no
-//! `Focused(false)` (Task 2). That errs on the quiet side; the Attention
-//! center still has every Event.
+//! Seeded once from the main window's `is_focused()` right after the
+//! window is shown during setup ([`Focus::seed`], decision 41), then fed
+//! only by its `WindowEvent::Focused(f)` (`lib.rs`). The seed covers a
+//! window the compositor opened unfocused without sending
+//! `Focused(false)` (Task 2), which the old fixed `true` start kept silent
+//! until the operator focused and left it once. If `is_focused()` errors
+//! (tauri#11323 territory), the seed is `false`: notify rather than stay
+//! silent. The events stay the source after that.
 //!
 //! It also counts every `Focused(true)`, so a click's raise can tell
 //! whether the window came forward after it asked (D6 "Click
@@ -44,6 +46,15 @@ impl Default for Focus {
 }
 
 impl Focus {
+    /// Decision 41: the one seed at launch, from the shown main window's
+    /// `is_focused()` (`observed`). An error, or no window to ask, seeds
+    /// `false`. Not a `Focused(true)` event, so [`Focus::gained`] is
+    /// unchanged; any event after it wins.
+    pub fn seed<E>(&self, observed: Result<bool, E>) {
+        let focused = observed.unwrap_or(false);
+        self.state.send_modify(|state| state.focused = focused);
+    }
+
     /// One `WindowEvent::Focused(focused)`.
     pub fn set(&self, focused: bool) {
         self.state.send_modify(|state| {
@@ -93,6 +104,25 @@ mod tests {
         focus.set(true);
         focus.set(true);
         assert_eq!(focus.gained(), 2);
+    }
+
+    #[test]
+    fn the_seed_takes_is_focused_and_an_error_seeds_unfocused() {
+        let focus = Focus::default();
+        focus.seed(Ok::<_, ()>(false));
+        assert!(!focus.is_focused(), "a window shown unfocused notifies at once");
+        focus.seed(Ok::<_, ()>(true));
+        assert!(focus.is_focused());
+        assert_eq!(focus.gained(), 0, "a seed is not a Focused(true) event");
+
+        let errored = Focus::default();
+        errored.seed(Err::<bool, _>("is_focused failed"));
+        assert!(!errored.is_focused(), "an error seeds false: notify, not silence");
+
+        // The events stay the source after the seed.
+        errored.set(true);
+        assert!(errored.is_focused());
+        assert_eq!(errored.gained(), 1);
     }
 
     #[tokio::test]

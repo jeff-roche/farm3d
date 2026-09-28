@@ -783,7 +783,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // P8 D6 "Focus": the main window's focus, from its
-        // `WindowEvent::Focused` only (never `is_focused()`).
+        // `WindowEvent::Focused` after the one seed in `setup`.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(focused) = event {
                 if window.label() == notifications::activation::MAIN_WINDOW {
@@ -801,9 +801,16 @@ pub fn run() {
         })
         .setup(|app| {
             // Before the services, so a bootstrap retry keeps the same
-            // focus (it seeds `true`: nothing notifies before the first
-            // focus change).
-            app.manage(notifications::focus::Focus::default());
+            // focus. Tauri builds (and shows) the config's main window
+            // before `setup`, so seed from its `is_focused()` now, once
+            // (decision 41); `false` if it errors or there is no window.
+            let focus = notifications::focus::Focus::default();
+            focus.seed(
+                app.get_webview_window(notifications::activation::MAIN_WINDOW)
+                    .ok_or(())
+                    .and_then(|window| window.is_focused().map_err(|_| ())),
+            );
+            app.manage(focus);
             let handle = app.handle().clone();
             let retained_lease = Arc::new(std::sync::Mutex::new(None));
             match build_runtime_services(&handle, &retained_lease) {
