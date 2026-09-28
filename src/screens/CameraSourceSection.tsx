@@ -238,6 +238,7 @@ export function CameraSourceSection(props: CameraSourceSectionProps) {
     const source = draftToCameraSource(value());
     if (!source) return null;
     if (source.kind === "hostWebcam") {
+      if (!hasConnection()) return null;
       if (props.mode === "printer") return { printerId: props.printerId, source };
       return props.connection ? { connection: props.connection, source } : null;
     }
@@ -338,7 +339,7 @@ export function CameraSourceSection(props: CameraSourceSectionProps) {
         <NumberField
           label="Port (optional)"
           value={value().webPort === "" ? undefined : (parsePort(value().webPort) ?? undefined)}
-          onChange={(n) => setValue({ ...value(), webPort: String(n) })}
+          onChange={(n) => setValue({ ...value(), webPort: Number.isNaN(n) ? "" : String(n) })}
           minValue={1}
           maxValue={65535}
           placeholder="80"

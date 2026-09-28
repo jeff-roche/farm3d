@@ -46,7 +46,7 @@ import type {
   ResolvedPrinter,
   StartSafety,
 } from "../printers/types";
-import { AlertDefaultsSection, DEFAULT_ALERT_DEFAULTS } from "./AlertDefaultsSection";
+import { AlertDefaultsSection, alertDefaultsSummary, DEFAULT_ALERT_DEFAULTS } from "./AlertDefaultsSection";
 import type { BatchCameraTestResult } from "./BatchRowsTable";
 import { BatchRowsTable } from "./BatchRowsTable";
 import { CatalogPickerFields, createCatalogPicker } from "./CatalogPicker";
@@ -206,6 +206,27 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
       return { kind: "snapshotUrl", path, port: cameraPort() };
     }
     return undefined;
+  }
+
+  /** A kind was picked but `cameraTemplate()` can't build one from it yet
+   *  (e.g. "Host webcam" with a blank name) -- every row would otherwise
+   *  be created with no camera and no sign anything was dropped. Blocks
+   *  leaving the Shared step (spec ruling: an incomplete template never
+   *  silently becomes "no camera"). */
+  function cameraTemplateIncomplete(): boolean {
+    return cameraTemplateKind() !== "none" && cameraTemplate() === undefined;
+  }
+
+  /** Review's one-line summary, mirroring the wizard's `cameraDraftSummary`
+   *  wording -- this dialog's template has its own shape (`path`/`port`
+   *  instead of a full URL), so it isn't the same draft type. */
+  function cameraTemplateSummary(): string {
+    if (cameraTemplateKind() === "none") return "No camera";
+    if (cameraTemplateKind() === "hostWebcam") {
+      const name = cameraWebcamName().trim();
+      return name ? `Host webcam: ${name}` : "Host webcam (not chosen yet)";
+    }
+    return cameraPath().trim() ? "Manual snapshot URL" : "Manual snapshot URL (not entered yet)";
   }
 
   // Rows
@@ -607,7 +628,7 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
   // ---- Navigation ------------------------------------------------------
 
   const canLeave = (id: StepId) => {
-    if (id === "shared") return !!picker.catalogRef() && slotDraftsValid(slots());
+    if (id === "shared") return !!picker.catalogRef() && slotDraftsValid(slots()) && !cameraTemplateIncomplete();
     if (id === "rows") return rowsValid();
     return true;
   };
@@ -705,11 +726,30 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                   onChange={(v) => setCameraTemplateKind(v as CameraTemplateKindOption)}
                 />
                 <Show when={cameraTemplateKind() === "hostWebcam"}>
-                  <TextField label="Webcam name" value={cameraWebcamName()} onChange={setCameraWebcamName} placeholder="front" />
-                  <NumberField label="Port (optional)" value={cameraWebPort() === "" ? undefined : Number(cameraWebPort())} onChange={(n) => setCameraWebPort(String(n))} minValue={1} maxValue={65535} placeholder="80" />
+                  <TextField
+                    label="Webcam name"
+                    value={cameraWebcamName()}
+                    onChange={setCameraWebcamName}
+                    placeholder="front"
+                    error={cameraWebcamName().trim() === "" ? "Required, or choose None" : undefined}
+                  />
+                  <NumberField
+                    label="Port (optional)"
+                    value={cameraWebPort() === "" ? undefined : Number(cameraWebPort())}
+                    onChange={(n) => setCameraWebPort(Number.isNaN(n) ? "" : String(n))}
+                    minValue={1}
+                    maxValue={65535}
+                    placeholder="80"
+                  />
                 </Show>
                 <Show when={cameraTemplateKind() === "snapshotUrl"}>
-                  <TextField label="Path" value={cameraPath()} onChange={setCameraPath} placeholder="/webcam/?action=snapshot" />
+                  <TextField
+                    label="Path"
+                    value={cameraPath()}
+                    onChange={setCameraPath}
+                    placeholder="/webcam/?action=snapshot"
+                    error={cameraPath().trim() === "" ? "Required, or choose None" : undefined}
+                  />
                   <NumberField label="Port" value={cameraPort()} onChange={setCameraPort} minValue={1} maxValue={65535} />
                 </Show>
               </section>
@@ -924,6 +964,8 @@ export function PrinterBatchDialog(props: PrinterBatchDialogProps) {
                 </Show>
                 <p>Bed type: {bedTypeLabel(bedType())}</p>
                 <p>Start safety: {startSafetyLabel()}</p>
+                <p>Camera: {cameraTemplateSummary()}</p>
+                <p>Alerts: {alertDefaultsSummary(alertDefaults())}</p>
               </div>
               <Show when={store()}>
                 {(info) => (

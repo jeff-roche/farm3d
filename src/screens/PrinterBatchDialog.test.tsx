@@ -206,6 +206,62 @@ describe("PrinterBatchDialog — Shared camera template", () => {
     expect(screen.getByLabelText("Port")).toBeInTheDocument();
   });
 
+  it("blocks Next on a Host webcam template with a blank Webcam name, with inline text explaining why", async () => {
+    renderDialog();
+    await pickModel();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("Required, or choose None")).toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    expect(nextButton().disabled).toBe(false);
+    expect(screen.queryByText("Required, or choose None")).not.toBeInTheDocument();
+
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "" } });
+    expect(nextButton().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "None" }));
+    expect(nextButton().disabled).toBe(false);
+  });
+
+  it("never stores the literal string \"NaN\" in the webcam port when the field is cleared", async () => {
+    createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.input(screen.getByLabelText("Port (optional)"), { target: { value: "8080" } });
+    fireEvent.input(screen.getByLabelText("Port (optional)"), { target: { value: "" } });
+    fireEvent.click(nextButton()); // rows
+    generate("1", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createPrintersBatch).toHaveBeenCalledTimes(1));
+    const input = createPrintersBatch.mock.calls[0][0] as CreatePrintersBatchInput;
+    // A cleared optional port is `null`, never a "NaN" string that
+    // survived Kobalte's onChange(NaN) uncleaned.
+    expect(input.shared.cameraTemplate).toEqual({ kind: "hostWebcam", webcamName: "front", webPort: null });
+  });
+
+  it("Review shows a one-line camera-template and alert-defaults summary", async () => {
+    renderDialog();
+    await pickModel();
+    fireEvent.click(screen.getByRole("radio", { name: "Host webcam" }));
+    fireEvent.input(screen.getByLabelText("Webcam name"), { target: { value: "front" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Off" })); // offline alert
+    fireEvent.click(nextButton()); // rows
+    generate("1", "Voron {nn}", "Bay A");
+    fireEvent.click(nextButton()); // connect
+    fireEvent.click(nextButton()); // review
+
+    expect(screen.getByText("Camera: Host webcam: front")).toBeInTheDocument();
+    expect(screen.getByText(/^Alerts: /)).toHaveTextContent("Alerts: offline alert off, notifications follow settings");
+  });
+
   it("sends the hostWebcam template as shared.cameraTemplate, never a host", async () => {
     createPrintersBatch.mockImplementation(async (input: CreatePrintersBatchInput) => mixedOutcome(input));
     renderDialog();

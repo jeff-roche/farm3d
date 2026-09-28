@@ -100,6 +100,22 @@ describe("CameraSourceSection — draft mode", () => {
     expect(tauriMock.invoke).not.toHaveBeenCalled();
   });
 
+  it("clears the webcam port to an empty string, never the literal \"NaN\", when the field is emptied", () => {
+    const onChange = vi.fn();
+    render(() => (
+      <CameraSourceSection
+        mode="draft"
+        value={{ ...EMPTY_CAMERA_DRAFT, kind: "hostWebcam", webcamName: "front", webPort: "8080" }}
+        onChange={onChange}
+      />
+    ));
+
+    fireEvent.input(screen.getByLabelText("Port (optional)"), { target: { value: "" } });
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ webPort: "" }));
+    expect(onChange.mock.calls.some(([draft]) => draft.webPort === "NaN")).toBe(false);
+  });
+
   it("Test snapshot shows a typed non-validation error in the general test area", async () => {
     testCamera.mockRejectedValueOnce({
       contractVersion: 1,
@@ -165,6 +181,33 @@ describe("CameraSourceSection — printer mode", () => {
     // The result (PrinterCameraSummary) carries no URL; the form keeps the
     // one it just submitted rather than being cleared by the response.
     expect(screen.getByDisplayValue("http://192.0.2.10/snap")).toBeInTheDocument();
+  });
+
+  it("keeps Test snapshot disabled for a saved host webcam pick without a Connection", async () => {
+    tauriMock.isTauri.mockReturnValue(true);
+    tauriMock.invoke.mockImplementation((command: string) => {
+      if (command === "get_printer_camera") {
+        return Promise.resolve({
+          contractVersion: 1,
+          data: {
+            printerId: "prn-1",
+            revision: 1,
+            source: { kind: "hostWebcam", webcamName: "front", webcamService: "webrtc", webPort: null },
+            updatedAt: "2026-09-27T00:00:00Z",
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+
+    render(() => <CameraSourceSection mode="printer" printerId="prn-1" hasConnection={false} />);
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Host webcam" })).toBeChecked());
+    expect(screen.getByText("Connect a Connection first to list this printer's webcams.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Test snapshot" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test snapshot" }));
+    expect(testCamera).not.toHaveBeenCalled();
   });
 
   it("clears the source through clear_printer_camera when None is saved", async () => {
