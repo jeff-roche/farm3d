@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cameraSnapshot, incident, incidentDetail, incidentEntry } from "../attention/test-records";
 import type { IncidentEntryDetail, IncidentEntryKind, IncidentTimelineItem } from "../attention/types";
@@ -191,6 +192,45 @@ describe("IncidentDetail", () => {
     onChange(incidentDetail({ incident: incident({ id: "inc-1", state: "closed", closedAt: "2026-09-26T00:00:00Z" }) }));
     await flush();
     expect(await screen.findByText("Closed", { selector: "p" })).toBeInTheDocument();
+  });
+
+  it("ignores a refetch older than the detail it holds", async () => {
+    getIncidentMock.mockResolvedValueOnce(incidentDetail({
+      incident: incident({ id: "inc-1", revision: 3, state: "closed", closedAt: "2026-09-26T00:00:00Z" }),
+    }));
+    render(() => <IncidentDetail incidentId="inc-1" mode="inline" onClose={vi.fn()} />);
+    await screen.findByText("Closed", { selector: "p" });
+
+    const { watchIncidentDetail } = await import("../incidents/incident-store");
+    const calls = (watchIncidentDetail as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const onChange = calls[calls.length - 1][1] as (d: ReturnType<typeof incidentDetail>) => void;
+    onChange(incidentDetail({ incident: incident({ id: "inc-1", revision: 2, state: "open" }) }));
+    await flush();
+    expect(screen.getByText("Closed", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("Open", { selector: "p" })).not.toBeInTheDocument();
+  });
+
+  it("drops a previous Incident's late load and live refetch after the id changes", async () => {
+    let settleFirst!: (detail: ReturnType<typeof incidentDetail>) => void;
+    getIncidentMock
+      .mockImplementationOnce(() => new Promise((resolve) => { settleFirst = resolve; }))
+      .mockResolvedValueOnce(incidentDetail({
+        incident: incident({ id: "inc-2", state: "closed", closedAt: "2026-09-26T00:00:00Z" }),
+      }));
+    const [incidentId, setIncidentId] = createSignal("inc-1");
+    render(() => <IncidentDetail incidentId={incidentId()} mode="inline" onClose={vi.fn()} />);
+    const { watchIncidentDetail } = await import("../incidents/incident-store");
+    const calls = (watchIncidentDetail as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const firstOnChange = calls[calls.length - 1][1] as (d: ReturnType<typeof incidentDetail>) => void;
+
+    setIncidentId("inc-2");
+    await screen.findByText("Closed", { selector: "p" });
+
+    settleFirst(incidentDetail({ incident: incident({ id: "inc-1", revision: 9, state: "open" }) }));
+    firstOnChange(incidentDetail({ incident: incident({ id: "inc-1", revision: 9, state: "open" }) }));
+    await flush();
+    expect(screen.getByText("Closed", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("Open", { selector: "p" })).not.toBeInTheDocument();
   });
 
   it("uses a modal dialog in overlay mode", async () => {

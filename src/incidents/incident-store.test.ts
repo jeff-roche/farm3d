@@ -105,6 +105,46 @@ describe("incident-store (desktop)", () => {
     expect(attentionStoreMock.stop).toHaveBeenCalled();
   });
 
+  it("watchIncidentDetail drops a refetch that settles after a newer one", async () => {
+    let settleOlder!: (value: unknown) => void;
+    tauriMock.invoke
+      .mockImplementationOnce(() => new Promise((resolve) => { settleOlder = resolve; }))
+      .mockResolvedValueOnce({ contractVersion: 1, data: { ...detailFor("inc-1"), incident: incident({ id: "inc-1", revision: 4 }) } });
+    const { watchIncidentDetail } = await import("./incident-store");
+
+    const seen: number[] = [];
+    watchIncidentDetail("inc-1", (detail) => seen.push(detail.incident.revision));
+    attentionStoreMock.handler!(incident({ id: "inc-1", revision: 3 }));
+    attentionStoreMock.handler!(incident({ id: "inc-1", revision: 4 }));
+    await flush();
+    expect(seen).toEqual([4]);
+
+    settleOlder({ contractVersion: 1, data: { ...detailFor("inc-1"), incident: incident({ id: "inc-1", revision: 3 }) } });
+    await flush();
+    expect(seen).toEqual([4]);
+  });
+
+  it("watchIncidentDetail delivers nothing, neither a result nor an error, once stopped", async () => {
+    let settle!: (value: unknown) => void;
+    let fail!: (error: unknown) => void;
+    tauriMock.invoke
+      .mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const { watchIncidentDetail } = await import("./incident-store");
+
+    const changes: IncidentDetail[] = [];
+    const errors: unknown[] = [];
+    const stop = watchIncidentDetail("inc-1", (detail) => changes.push(detail), (err) => errors.push(err));
+    attentionStoreMock.handler!(incident({ id: "inc-1" }));
+    attentionStoreMock.handler!(incident({ id: "inc-1" }));
+    stop();
+    settle({ contractVersion: 1, data: detailFor("inc-1") });
+    fail(commandError("NOT_FOUND", "gone"));
+    await flush();
+    expect(changes).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   it("watchIncidentDetail reports a refetch failure to onError, not onChange", async () => {
     const error = commandError("NOT_FOUND", "gone");
     tauriMock.invoke.mockRejectedValue(error);

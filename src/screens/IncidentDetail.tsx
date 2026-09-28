@@ -85,14 +85,24 @@ export function IncidentDetail(props: IncidentDetailProps) {
   const [noteError, setNoteError] = createSignal<unknown>(null);
   const [viewerSnapshotId, setViewerSnapshotId] = createSignal<string | null>(null);
 
+  /** Holds `loaded` unless it is for another Incident than the one shown
+   *  now, or older than the detail already held for this one (the initial
+   *  fetch, a live refetch, and a note's reply can settle in any order). */
+  function acceptDetail(loaded: IncidentDetailRecord): void {
+    if (loaded.incident.id !== props.incidentId) return;
+    const held = detail();
+    if (held && held.incident.id === loaded.incident.id && loaded.incident.revision < held.incident.revision) return;
+    setDetail(loaded);
+  }
+
   createEffect(on(() => props.incidentId, (id) => {
     setLoading(true);
     setLoadError(null);
     let cancelled = false;
     getIncident(id)
-      .then((loaded) => { if (!cancelled) { setDetail(loaded); setLoading(false); } })
+      .then((loaded) => { if (!cancelled) { acceptDetail(loaded); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setLoadError(e); setLoading(false); } });
-    const stop = watchIncidentDetail(id, (loaded) => setDetail(loaded));
+    const stop = watchIncidentDetail(id, (loaded) => { if (!cancelled) acceptDetail(loaded); });
     onCleanup(() => { cancelled = true; stop(); });
   }));
 
@@ -103,7 +113,7 @@ export function IncidentDetail(props: IncidentDetailProps) {
     setNoteError(null);
     try {
       const updated = await addIncidentNote(props.incidentId, text);
-      setDetail(updated);
+      acceptDetail(updated);
       setNoteText("");
     } catch (e) {
       setNoteError(e);

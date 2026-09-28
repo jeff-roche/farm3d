@@ -56,14 +56,31 @@ export async function addIncidentNote(incidentId: string, text: string): Promise
  *  fires with the freshly fetched detail; a fetch failure goes to
  *  `onError` instead (default: dropped -- the caller decides whether a
  *  stale detail is worse than none). The caller owns the subscription's
- *  lifetime (a detail dock mounting/unmounting, Task 13/14). */
+ *  lifetime (a detail dock mounting/unmounting, Task 13/14). Refetches can
+ *  settle out of order, so one older than a detail already delivered is
+ *  dropped, and nothing is delivered once the returned stop runs. */
 export function watchIncidentDetail(
   incidentId: string,
   onChange: (detail: IncidentDetail) => void,
   onError: (error: unknown) => void = () => {},
 ): () => void {
-  return onAttentionIncidentChanged((incident) => {
+  let stopped = false;
+  let newestRevision = -Infinity;
+  const stop = onAttentionIncidentChanged((incident) => {
     if (incident.id !== incidentId) return;
-    getIncident(incidentId).then(onChange).catch(onError);
+    getIncident(incidentId).then(
+      (detail) => {
+        if (stopped || detail.incident.revision < newestRevision) return;
+        newestRevision = detail.incident.revision;
+        onChange(detail);
+      },
+      (error: unknown) => {
+        if (!stopped) onError(error);
+      },
+    );
   });
+  return () => {
+    stopped = true;
+    stop();
+  };
 }
