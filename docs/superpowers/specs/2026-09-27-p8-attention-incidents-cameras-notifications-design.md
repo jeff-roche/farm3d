@@ -404,12 +404,14 @@ any) and `r` the latest resolved Event for the key (if any):
   `job.completed`) never gets a second Event for the same key: a
   terminal Job stays failed after the operator resolves `job.failed`, and
   must not raise it again.
-- **Amendment.** Every `Present` observation of an open Event amends
-  `last_observed_at` and `observation_count` (+1). `detail` and `severity`
-  are rewritten only when they changed. An amendment with `changed: false`
-  does not bump `revision` and emits nothing; with `changed: true` it
-  bumps `revision` and emits `attention.event.changed`. No amendment ever
-  notifies.
+- **Amendment.** Every `Present` observation of an open Event plans an
+  amendment of `last_observed_at` and `observation_count` (+1). `detail`
+  and `severity` are rewritten only when they changed. An amendment with
+  `changed: false` does not bump `revision` and emits nothing; with
+  `changed: true` it bumps `revision` and emits `attention.event.changed`.
+  No amendment ever notifies. `plan` plans every one; the pass persists an
+  unchanged one only once a minute per Event ("Apply", decision 40), so
+  `observation_count` counts persisted observations, not passes.
 - **Fixed point.** For any input, applying `plan`'s actions and planning
   again over the result yields only `Amend { changed: false }` actions.
 
@@ -444,12 +446,13 @@ bool`. The Event's state is one of five:
 #### Apply
 
 `projector::apply(tx, actions, origin, now) -> AppliedChanges` runs inside
-the pass's transaction. Per action:
+the pass's transaction, over `plan`'s actions less the unchanged
+amendments `persisted_actions` holds back (see `Amend` below). Per action:
 
 | Action | Writes |
 |---|---|
 | `Insert` | A new `attention_events` row (`origin`, `first_observed_at = last_observed_at = now`, `observation_count = 1`, `acknowledged_at = read_at = now` when `acknowledged`). Then the Incident rule below. |
-| `Amend` | `last_observed_at`, `observation_count + 1`; when `changed`, `detail_json`, `severity`, `revision + 1`. Never `evidence_json`, `incident_id`, or the lifecycle columns |
+| `Amend` | `last_observed_at`, `observation_count + 1`; when `changed`, `detail_json`, `severity`, `revision + 1`. Never `evidence_json`, `incident_id`, or the lifecycle columns. An `Amend { changed: false }` is written only when the Event's stored `last_observed_at` (as read in the pass's transaction) is at least 60 s before `now`; otherwise the pass skips it (`projector::persisted_actions`, decision 40). An `Amend { changed: true }` is always written |
 | `Acknowledge` | `lifecycle::apply(Acknowledge { by: system })`; `revision + 1`; an `eventAcknowledged` timeline row if linked |
 | `Resolve` | `lifecycle::apply(Resolve(reason))`; `revision + 1`; an `eventResolved` timeline row if linked |
 
@@ -498,16 +501,22 @@ IMMEDIATE`):
 
 1. Outside the transaction: take `ConnectionManager::status_facts()` and
    run `update_watch`.
-2. Inside: read the `FarmView`'s durable part (below), the open Events,
-   and `latest_resolved` (the newest resolved Event id per key).
-3. `observe` → `plan` → `apply`.
+2. Inside: read the open Events and the `FarmView`'s durable part
+   (below).
+3. `observe`; then read `latest_resolved` (the newest resolved Event id)
+   for only the keys `plan` can consult: each `Present` observation with
+   no open Event (none, no query); then `plan` → `persisted_actions` →
+   `apply`.
 4. Commit, then publish on the `attention` stream, hand `capture` to
    `CameraServices` (never awaited by the projector), and hand `notify` to
    the `NotificationService`.
 
 Reading the open Events inside the write transaction means a command that
 resolved or acknowledged an Event a moment earlier is always seen, so a
-pass can't undo it. The partial UNIQUE index on the open dedup key is the
+pass can't undo it. A pass with nothing to write still runs in its
+`BEGIN IMMEDIATE` transaction (that is what makes the read consistent),
+but it dirties no page, so SQLite's commit writes no WAL frame and syncs
+nothing (decision 40). The partial UNIQUE index on the open dedup key is the
 backstop: a second concurrent insert of the same key fails the
 transaction, which rolls back and is retried once as a full pass.
 
@@ -520,7 +529,8 @@ transaction, which rolls back and is retried once as a full pass.
 - `jobs`: every Job that is active, or is some Printer's latest Job, or is
   referenced by an open Event, or is `failed` or `cancelled{hostCancelled}`
   with `ended_at ≥` epoch and no Event (open or resolved) for its
-  `job.failed` / `job.hostCancelled` key. Each with its state, cancel
+  `job.failed` / `job.hostCancelled` key (both filters in the SQL, so the
+  read doesn't grow with projected history). Each with its state, cancel
   reason, `ended_by`, `ended_at`, `started` (state `starting`, `printing`,
   `paused`, or `outcomeUnknown`, or `started_at` set), `host_path`, Spool
   id, `last_failure` present, and label.
@@ -553,8 +563,9 @@ published once the attention runtime starts (as `jobs` publishes its
 recovered Jobs).
 
 Running the backfill any number of times, or rebuilding `RuntimeServices`
-over the same database, yields the same rows: the second run plans only
-`Amend { changed: false }`.
+over the same database, yields the same Events: the second run plans only
+`Amend { changed: false }`, which it persists at most once a minute per
+Event (decision 40), and never emits.
 
 #### Runtime and wakes
 
@@ -897,10 +908,13 @@ URL, camera text, or credential. When the server advertises
 
 #### Focus
 
-`Focus` is an `AtomicBool` fed by the main window's
-`on_window_event(WindowEvent::Focused(f))`, never by `is_focused()`
-(tauri#11323). It starts `true`, so nothing notifies before the first
-focus-out.
+`Focus` is seeded once from the main window's `is_focused()` right after
+the window is shown during setup (Tauri builds and shows the config's
+window before the `setup` hook), then fed only by the main window's
+`on_window_event(WindowEvent::Focused(f))` (decision 41). If
+`is_focused()` errors, or there is no main window, the seed is `false`:
+notify rather than stay silent. The seed is not a `Focused(true)` event,
+so the raise's regained-focus count ignores it.
 
 Task 2 observations (KDE Plasma 6.7.5 Wayland; baseline
 `docs/superpowers/baselines/2026-09-27-p8-notification-spike.md`):
@@ -916,7 +930,8 @@ Task 2 observations (KDE Plasma 6.7.5 Wayland; baseline
   notifications off until the operator focuses and leaves the window once.
   That errs on the quiet side, and the Attention center still has every
   Event. Seeding from `is_focused()` once the window is shown would close
-  the gap; the controller decides before Task 9.
+  the gap; the controller decides before Task 9. (A controller ruling kept
+  the `true` start; the final review reversed it: decision 41.)
 
 #### Sinks
 
@@ -1906,13 +1921,16 @@ actions, retention, and notification decisions. TypeScript presents them.
   Actionable / Unread / All open / Resolved, and a `Select` for severity),
   kept across open and close; the list; distinct empty ("Nothing needs
   your attention.") and filtered-empty ("No Events match this filter.")
-  states. Selecting a row navigates to `monitor/attention/<id>` and closes
-  the popover. The Monitor rail button's badge shows the same actionable
-  count ("Monitor (N need attention)").
+  states. A row is dated by its `resolvedAt` when resolved and its
+  `firstObservedAt` while open (decision 42). Selecting a row navigates to
+  `monitor/attention/<id>` and closes the popover. The Monitor rail
+  button's badge shows the same actionable count ("Monitor (N need
+  attention)").
 - **Monitor dock.** `PrinterDashboard` shows `AttentionEventDetail` for an
   `attention` selection and `IncidentDetail` for an `incident` selection,
   in the reusable dock. Event detail: `SeverityMarker` (shape, label,
-  color), the summary and subject, source, timestamps, observation count,
+  color), the summary and subject, source, first-observed and lifecycle
+  timestamps (never last-observed or the observation count, decision 42),
   origin, the recurrence link, the Incident link, Acknowledge (when
   allowed), Resolve (manual only), and "Open source" via `deep-link.ts`.
   Opening the detail marks the Event read. A deleted source shows the
@@ -2195,6 +2213,52 @@ Each departs from, or sharpens, the plan's Design reference.
     Event late; a lagging capture consumer re-derives the captures it
     missed from storage
     (`a_lagged_capture_consumer_rederives_the_captures_it_missed`).
+40. **(Final review, controller ruling I1) An unchanged amendment is
+    persisted at most once a minute per Event.** Most passes used to write
+    and fsync an amendment for every open Event, and read every resolved
+    Event and every failed Job ever. Now `plan` stays pure and still plans
+    `Amend { changed: false }` for every `Present` observation of an open
+    Event, and `projector::persisted_actions` drops each one whose Event's
+    stored `last_observed_at` is less than 60 s before `now` (an
+    unparseable one counts as due). A changed amendment is always written
+    and published. So `observation_count` counts persisted observations
+    (+1 per persisted amendment) and `last_observed_at` can trail the
+    newest observation by up to a minute; neither is published for an
+    unchanged amendment (decision 13), which is why the UI no longer shows
+    them (decision 42). A pass with nothing to write keeps its `BEGIN
+    IMMEDIATE` transaction, which is what makes its read of the open
+    Events consistent, but dirties no page, so the commit writes no WAL
+    frame and syncs nothing; we chose that over skipping the transaction,
+    which would give up the read consistency "The pass" relies on. The
+    same pass reads `latest_resolved` only for `Present` keys with no open
+    Event (the only case `plan` consults it), and filters the failed and
+    host-cancelled Jobs by the epoch and "no Event yet" in SQL. The startup
+    backfill takes the same path (`p8_backfill.rs`); the fixtures in
+    `p8_observe_plan.rs` test `plan` and are unchanged; the tracer's step 3
+    now checks that twenty passes inside the minute persist nothing and
+    one a minute later persists exactly one observation
+    (`a_pass_persists_an_unchanged_amend_once_a_minute_and_a_changed_one_at_once`).
+41. **(Final review, controller ruling I3, reversing the earlier ruling
+    that Focus starts `true`) Focus is seeded from `is_focused()` once.**
+    Tauri builds and shows the
+    config's main window before the `setup` hook, and `setup` seeds
+    `Focus` from its `is_focused()` before anything can notify; after that
+    `WindowEvent::Focused` is the only source. If `is_focused()` errors,
+    or there is no main window, the seed is `false`, so farm3d notifies
+    rather than stays silent. The Task 2 spike found `is_focused()` agreed
+    with the events at every step, and a window KWin opened unfocused
+    without a `Focused(false)` used to stay silent until the operator
+    focused and left it once (`Focus::seed`,
+    `the_seed_takes_is_focused_and_an_error_seeds_unfocused`). ADR-0015 is
+    amended to match.
+42. **(Final review, controller ruling I2) The UI shows no observation
+    field that doesn't update live.** Since an unchanged amendment is
+    never published (decisions 13 and 40), `lastObservedAt` and
+    `observationCount` looked live but weren't. The Event detail drops
+    "Last observed" and "Observations" and keeps "First observed" and the
+    lifecycle times; the Attention center dates an open row by
+    `firstObservedAt` (a resolved row keeps its resolution time). The wire
+    types keep both fields.
 
 ## Residual risks
 

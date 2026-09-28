@@ -65,8 +65,11 @@ and does not add `tauri-plugin-notification`.
   show, and focus the window on the main thread (falling back to
   `request_user_attention`), emit `farm3d-navigate-v1` with the target,
   and mark the Event read.
-- Focus comes from `WindowEvent::Focused` only, and starts as focused, so
-  nothing notifies before the first focus-out.
+- Focus is seeded once from the main window's `is_focused()` right after
+  the window is shown during setup (`false` if that errors), then follows
+  `WindowEvent::Focused` only. A window the compositor opens unfocused
+  therefore notifies without first being focused and left (P8 spec
+  decision 41, amending this ADR's original "starts as focused").
 - Other platforms get a `NullNotificationSink` that reports
   `unsupported`. The in-app Attention center works everywhere and always
   keeps every Event.

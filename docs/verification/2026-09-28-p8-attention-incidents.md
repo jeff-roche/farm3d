@@ -36,6 +36,42 @@ decision 18; the count assertions in `f1_contract_path.rs`,
 `p3_contract_path.rs`, and `f1_residual_acceptance.rs` read
 `58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4`).
 
+## Final-review fix wave
+
+After the final whole-branch review, one fix wave (on top of `b64fb57`)
+changed behavior the rest of this record describes:
+
+- **Focus is seeded at launch** (spec decision 41, ADR-0015 amended).
+  `setup` seeds `Focus` once from the shown main window's `is_focused()`
+  (`false` if that errors); `WindowEvent::Focused` is the source after
+  that. Before, Focus started `true`, so a window the compositor opened
+  unfocused stayed silent until the operator focused and left it once.
+  The installed pass below gains a check for this.
+- **Unchanged amendments persist at most once a minute per Event** (spec
+  decision 40). `observationCount` now counts persisted observations and
+  `lastObservedAt` can trail by up to a minute. The pass also reads the
+  latest resolved Events only for keys it may insert, and filters failed
+  Jobs by the epoch and "no Event yet" in SQL. The tracer's step 3 now
+  checks that twenty passes inside the minute persist nothing and one a
+  minute later persists exactly one observation. **The simulator run
+  above predates this change to `p8_tracer.rs`**; the fakes run passes
+  in `just test-rust` below.
+- **The UI no longer shows `lastObservedAt` or `observationCount`**
+  (spec decision 42): the Event detail keeps "First observed", and an open
+  Attention center row is dated by `firstObservedAt`.
+- Also: a rate-limited projector failure log, a chained (non-overlapping)
+  camera preview poll, a cleared stale snapshot-image error, stale and
+  out-of-order Incident detail fetches dropped, the P7 rig's no-adapter
+  factory restored as the default (the P8 tracer opts into the real
+  adapters), and `p8_setup.rs`'s unused `Rig::err` removed.
+
+Gates on the fix wave (before this record's update): `just build` 0 (the
+603 kB chunk warning remains), `just test` 0 (135 files, 1,760 tests),
+`just test-rust` 0 (1,962 passed, 0 failed, 61 ignored, over 73 test
+binaries; no warning beyond ts-rs's serde-attribute notes), and `just
+gen-contracts` with no diff under `src/generated`. The simulators were
+not re-run.
+
 ## Automated evidence
 
 Each command ran with `source "$HOME/.cargo/env"` where it needs cargo.
@@ -154,6 +190,10 @@ Checks (tracer steps 2–7, by hand):
       application, cut the host again, and wait past the grace: exactly
       one notification. Leaving it cut for several more minutes shows no
       second one.
+- [ ] **Unfocused from launch** (decision 41's seed). Quit farm3d. Launch
+      it and switch away before it takes focus (or launch it in the
+      background), without ever focusing it. Trigger a failure (cut the
+      host and wait past the grace): confirm a notification arrives.
 - [ ] **Attribution.** The notification shows as farm3d, with farm3d's
       icon.
 - [ ] **Click raises and opens the Printer.** Clicking the notification
@@ -184,7 +224,7 @@ Checks (tracer steps 2–7, by hand):
 | 2 | Retention/pinning, deep-link, and archive/delete reference tests pass. | **Met.** Retention and pinning: `p8_media.rs` (21), including the `plan_prune` tables `rows_older_than_the_retention_period_are_pruned_for_age`, `over_the_cap_the_oldest_unpinned_rows_go_for_the_disk_cap_until_usage_fits`, `age_goes_first_and_counts_toward_the_cap`, `pinned_rows_are_never_pruned`, and `when_only_pinned_rows_remain_the_disk_cap_actions_are_dropped_and_age_stays`; crash repair `a_crash_on_either_side_of_the_rename_leaves_what_the_sweep_repairs`, `the_sweep_deletes_an_orphan_from_a_crash_after_the_rename`, `the_sweep_deletes_a_pruned_file_whose_unlink_never_ran_and_the_row_stays_pruned`, and `a_missing_file_becomes_pruned_missing_file_even_when_pinned`; concurrency `twenty_concurrent_captures_against_a_pruning_pass_keep_usage_under_the_cap`; and `a_full_cap_of_pinned_evidence_refuses_a_capture`, `the_snapshot_commands_capture_pin_serve_and_count`, and `a_janitor_poke_prunes_under_the_stored_retention`. Deep links: `src/attention/deep-link.test.ts` (`sourceTarget`, `eventTarget`, `incidentTarget`, `targetForSource`, `openTargetFor`, including "an archived Printer -- still present, just archived -- is still a valid target" and "falls back to the Event when the source no longer exists"); `src/App.test.tsx` "routes a farm3d-navigate-v1 payload through navigate, changing the hash", "passes an Attention Event deep link to the dashboard as attentionEventId, …", and "is available for a closed Incident referenced only by a resolved Event's incidentId …"; backend `p8_notifications.rs` `a_click_raises_the_window_navigates_to_the_target_and_marks_the_event_read` and `a_click_on_a_deleted_source_opens_the_event_itself`. Archive/delete: `p8_guards.rs` (7) `a_printer_with_an_incident_can_be_archived_but_not_deleted` (the archived Printer's target still resolves), `deleting_a_printer_with_only_attention_events_resolves_them_source_removed` (the deleted source's Event deep-links to itself), `pinned_unattached_evidence_blocks_delete_and_the_rest_goes_with_the_printer`, `an_import_over_an_incident_fails_evidence_exists_and_writes_nothing`, `an_import_over_camera_evidence_fails_evidence_exists_and_writes_nothing`, `an_import_resolves_the_replaced_printers_open_events_source_removed`, and `a_repository_delete_removes_unattached_rows_and_resolves_open_events`. The tracer's step 12 does it live: delete refused `INCIDENT_HISTORY_EXISTS`, archive resolves the open Event, and the Printer and Incident targets still resolve. |
 | 3 | Single/batch camera and alert setup preserves per-instance endpoints and evidence. | **Met.** Backend `p8_setup.rs` (11): `a_single_create_persists_its_camera_and_alert_defaults`, `a_snapshot_url_template_builds_each_rows_url_from_its_own_host` (every Printer gets its own copy of the alert defaults, and no health beyond a fresh `unknown`, no test result, and no `camera_snapshots` row), `a_host_webcam_template_resolves_against_each_rows_own_connection` (each Printer's health moves on its own fetch, never copied), `a_bad_camera_template_fails_the_batch_and_a_bad_override_rejects_its_row`, `an_invalid_camera_or_alert_default_rejects_the_whole_create_with_a_field_path`, `export_schema_4_round_trips_cameras_and_alert_defaults`, `schemas_2_and_3_still_import_with_no_camera_and_the_default_alerts`, and `the_seeded_corpus_stays_in_the_camera_column_and_the_export_file`. Batch dialog: `src/screens/PrinterBatchDialog.test.tsx` "never asks for a host, for either template kind", "shows a per-row Camera host override column only for a snapshotUrl template, never copying one row's value to another", "sends each row's own camera host override, never another row's", and "Test camera shows each row's own result, never crossing rows"; `src/screens/BatchRowsTable.test.tsx` "editing one row's camera host override never touches another row's" and "offers a per-row Test camera button, and shows that row's own result"; `src/printers/batch-intake.test.ts` "applying the same shared template to two rows never copies one row's own host override to the other" and "ignores a cameraHostOverride column: no row gets a silent host mapping". |
 | 4 | The failure-to-notification-to-resolution tracer completes without duplicate Events. | **Met.** `p8_tracer.rs` `attention_tracer_runs_against_the_fakes` (CI, in `just test-rust`) and `p8_attention_tracer_runs_against_the_simulator` (in `just test-sim`; passed in this task's gate run `20260928T154804Z` and in Task 16's two runs). One core function runs both: cut the Printer, one `printer.offline` Event and one notification after the grace (twenty more observations add neither), the click navigates and marks it read, a restart backfills with no new Event or notification, acknowledge keeps it open, restore resolves it `conditionCleared` with its history intact, a second cut recurs with `recurrenceOf`, a failed print opens one `job.failed` Event, one Incident with one camera snapshot, and one linked material Event, deferral acknowledges, a restart adds nothing, settling and resolving close the Incident, pinning survives retention, and the archive/delete guard holds. After every step it asserts no dedup key has two open Events and that none of the seeded-secret corpus or the camera endpoint appears in any emitted event, navigation, notification, log line, or command response. |
-| 5 | Packaging and installed-bundle notification/capability verification pass on every F0-supported platform. | **Open (pending owner).** `just package` passes (above). F0 supports Linux x86_64 only. The installed-deb notification, focus, and click-to-source checks have **not** been run; see "Steps 2 and 4". The automated parts are covered: `p8_notifications.rs` `decide_notifies_only_a_live_insert_of_an_enabled_unmuted_class_while_unfocused`, `nothing_is_shown_while_farm3d_has_focus_and_it_starts_focused`, `unfocused_a_live_insert_is_shown_once_with_its_target_and_marked_notified`, `a_click_raises_the_window_navigates_to_the_target_and_marks_the_event_read`, `without_focus_after_the_raise_the_window_is_remapped_then_flagged`, `a_focus_gained_after_the_raise_stops_the_fallbacks`, `an_unavailable_notifier_never_panics_and_the_commands_say_so`, and `the_null_sink_reports_unsupported`, plus the D-Bus spike on KDE Plasma 6.7.5 ([`2026-09-27-p8-notification-spike.md`](../superpowers/baselines/2026-09-27-p8-notification-spike.md)). Windows and macOS are unverified. |
+| 5 | Packaging and installed-bundle notification/capability verification pass on every F0-supported platform. | **Open (pending owner).** `just package` passes (above). F0 supports Linux x86_64 only. The installed-deb notification, focus, and click-to-source checks have **not** been run; see "Steps 2 and 4". The automated parts are covered: `p8_notifications.rs` `decide_notifies_only_a_live_insert_of_an_enabled_unmuted_class_while_unfocused`, `nothing_is_shown_while_farm3d_has_focus_and_it_starts_focused`, the launch seed `the_seed_takes_is_focused_and_an_error_seeds_unfocused` (decision 41), `unfocused_a_live_insert_is_shown_once_with_its_target_and_marked_notified`, `a_click_raises_the_window_navigates_to_the_target_and_marks_the_event_read`, `without_focus_after_the_raise_the_window_is_remapped_then_flagged`, `a_focus_gained_after_the_raise_stops_the_fallbacks`, `an_unavailable_notifier_never_panics_and_the_commands_say_so`, and `the_null_sink_reports_unsupported`, plus the D-Bus spike on KDE Plasma 6.7.5 ([`2026-09-27-p8-notification-spike.md`](../superpowers/baselines/2026-09-27-p8-notification-spike.md)). Windows and macOS are unverified. |
 
 ### The plan's exit gate
 
@@ -306,9 +346,9 @@ owner).
 - **The installed-bundle pass** (owner): run the checklist above, save
   `docs/screenshots/p8-installed-*`, record the results here, and then
   tick the exit gate's packaging item and issue #18's last criterion.
-- **Test-rig scope.** Task 16 changed the P7 dispatch rig's connection
-  factory to use `build_connection` (real connections to the fake) for
-  every rig user, not only the P8 tracer.
+- ~~**Test-rig scope.**~~ Resolved in the final-review fix wave: the P7
+  dispatch rig keeps its no-adapter factory by default, and only the P8
+  tracer opts into `build_connection` (`AttentionBoot::real_adapters`).
 - **Deferred minors from the task reviews:**
   - the frontend `DEFAULT_SETTINGS` duplicates the Rust notification
     defaults;
@@ -320,8 +360,8 @@ owner).
   - the `aria-live` region keeps only the last of several announcements
     made in the same tick.
 - **New in this gate run:** the main JS chunk (603 kB) now trips Vite's
-  600 kB warning, and `p8_setup.rs` has an unused helper `Rig::err` that
-  the compiler warns about.
+  600 kB warning. (`p8_setup.rs`'s unused `Rig::err` was removed in the
+  final-review fix wave.)
 
 ## Documentation updated in this task
 
