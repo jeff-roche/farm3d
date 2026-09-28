@@ -566,7 +566,9 @@ fn decode_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobEvent> {
     })
 }
 
-fn list_events(conn: &Connection, job_id: &str) -> Result<Vec<JobEvent>, StorageError> {
+/// The Job's own timeline, in sequence order (P8: `get_incident` merges it
+/// into an Incident's timeline at read time, never copying it).
+pub fn list_events(conn: &Connection, job_id: &str) -> Result<Vec<JobEvent>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {JOB_EVENT_COLUMNS} FROM job_events WHERE job_id = ?1 ORDER BY sequence"
     ))?;

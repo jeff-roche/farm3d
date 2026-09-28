@@ -427,6 +427,32 @@ fn decode_cursor(cursor: &AttentionCursor) -> Result<(String, String), StorageEr
         })
 }
 
+/// Whether `cursor` has the shape [`list_resolved`] mints (`resolvedAt|id`),
+/// so a command can reject a hand-made one as `VALIDATION` rather than
+/// reading it as corrupt data.
+pub fn is_well_formed_cursor(cursor: &AttentionCursor) -> bool {
+    cursor
+        .0
+        .split_once('|')
+        .is_some_and(|(resolved_at, id)| !resolved_at.is_empty() && !id.is_empty())
+}
+
+/// Every Event linked to `incident_id`, `first_observed_at` then id
+/// (`get_incident`'s `events`).
+pub fn events_for_incident(
+    conn: &Connection,
+    incident_id: &str,
+) -> Result<Vec<AttentionEvent>, StorageError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {ATTENTION_COLUMNS} FROM attention_events WHERE incident_id = ?1
+         ORDER BY first_observed_at, id"
+    ))?;
+    let rows = statement
+        .query_map([incident_id], decode_event_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// `list_attention`/`AttentionBackfill.resolved`: up to `limit`,
 /// `resolvedAt` descending then id descending, strictly before `before`
 /// (exclusive) when given. Returns the page and the cursor for the next

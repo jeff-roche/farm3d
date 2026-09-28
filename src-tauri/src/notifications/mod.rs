@@ -3,12 +3,16 @@
 //! P8 design spec's D6 ("Notifications") and "Backend model" module
 //! layout table.
 //!
-//! This module (Task 3) is wire types only. The `NotificationSink` trait,
-//! `Notification` (a sink call's content), `NotificationHandle`, and
-//! `NotifyError` are Rust-internal (never serialized to the frontend) and,
-//! along with the policy (`policy.rs`), focus (`focus.rs`), the D-Bus and
-//! null sinks, activation, services, and commands, are later tasks (see
-//! the module layout table in the design spec).
+//! So far this module is wire types plus `policy.rs`'s `NotifyCandidate`,
+//! which the attention projector emits (Task 6) and nothing consumes yet.
+//! The `NotificationSink` trait, `Notification` (a sink call's content),
+//! `NotificationHandle`, and `NotifyError` are Rust-internal (never
+//! serialized to the frontend) and, along with the policy's rules, focus
+//! (`focus.rs`), the D-Bus and null sinks, activation, services, and
+//! commands, are later tasks (see the module layout table in the design
+//! spec).
+
+pub mod policy;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

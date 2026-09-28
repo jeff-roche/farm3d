@@ -299,8 +299,9 @@ fn cleanup_failure_is_counted_and_a_later_startup_retry_removes_the_orphan() {
 fn every_registered_command_has_generated_request_and_result_contracts() {
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
-    // P7 Task 6's 11, plus P7 Task 8a's 4, plus P7 Task 8b's 1, plus P7 Task 9's 2.
-    assert_eq!(manifest.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2);
+    // P7 Task 6's 11, plus P7 Task 8a's 4, plus P7 Task 8b's 1, plus P7 Task 9's 2,
+    // plus P8 Task 6's 7.
+    assert_eq!(manifest.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7);
     assert_eq!(
         manifest
             .iter()

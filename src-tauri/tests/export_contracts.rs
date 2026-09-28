@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use farm3d_lib::attention::events::{
+    AttentionStreamEvent, AttentionStreamEventType, AttentionStreamPayload,
+};
 use farm3d_lib::attention::lifecycle::AckBy;
 use farm3d_lib::attention::{
     AttentionAction, AttentionBackfill, AttentionChange, AttentionCursor, AttentionDetail,
@@ -657,6 +660,9 @@ fn export_registry() -> Vec<Export> {
         export::<NavigateRequest>(),
         export::<NotificationMode>(),
         export::<AlertDefaults>(),
+        export::<AttentionStreamEventType>(),
+        export::<AttentionStreamPayload>(),
+        export::<AttentionStreamEvent>(),
     ]
 }
 
@@ -909,6 +915,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::JobAlreadySettled,
         ErrorCode::JobAlreadyRetried,
         ErrorCode::JobsExist,
+        ErrorCode::AttentionNotManual,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -951,7 +958,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "START_PRECONDITION_CHANGED", "CONTROL_NOT_ALLOWED", "STAGED_ARTIFACT_INVALID",
                 "JOB_ACTIVE", "JOB_ACTION_NOT_ALLOWED", "QUEUE_ENTRY_ACTION_NOT_ALLOWED",
                 "ASSIGNMENT_BLOCKED", "JOB_START_BLOCKED", "JOB_NOT_ON_PRINTER",
-                "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST"
+                "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
+                "ATTENTION_NOT_MANUAL"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

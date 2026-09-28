@@ -29,7 +29,8 @@ use crate::persistence::{RepositoryError, StorageError};
 use crate::spools::{decode_enum, encode_enum};
 
 use super::{
-    Incident, IncidentEntry, IncidentEntryDetail, IncidentKind, IncidentPage, IncidentState,
+    Incident, IncidentDetail, IncidentEntry, IncidentEntryDetail, IncidentKind, IncidentPage,
+    IncidentState, IncidentTimelineItem,
 };
 
 const INCIDENT_ID_PREFIX: &str = "inc";
@@ -458,6 +459,130 @@ pub fn list(
         incidents,
         next_cursor,
     })
+}
+
+/// Whether `cursor` has the shape [`list`] mints (`openedAt|id`), so a
+/// command can reject a hand-made one as `VALIDATION`.
+pub fn is_well_formed_cursor(cursor: &str) -> bool {
+    cursor
+        .split_once('|')
+        .is_some_and(|(opened_at, id)| !opened_at.is_empty() && !id.is_empty())
+}
+
+/// Every open Incident, `openedAt` descending then id descending
+/// (`AttentionBackfill.openIncidents`).
+pub fn list_open(conn: &Connection) -> Result<Vec<Incident>, StorageError> {
+    let mut statement = conn.prepare(
+        "SELECT id FROM incidents WHERE closed_at IS NULL ORDER BY opened_at DESC, id DESC",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter()
+        .map(|id| load_incident(conn, id)?.ok_or(StorageError::OperationFailed))
+        .collect()
+}
+
+/// The Incident's own timeline, in sequence order.
+pub fn entries(conn: &Connection, incident_id: &str) -> Result<Vec<IncidentEntry>, StorageError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM incident_events WHERE incident_id = ?1 ORDER BY sequence"
+    ))?;
+    let rows = statement
+        .query_map([incident_id], decode_entry_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The Incident's camera evidence, `capturedAt` then id. Never `rel_path`.
+pub fn snapshots_for_incident(
+    conn: &Connection,
+    incident_id: &str,
+) -> Result<Vec<crate::cameras::CameraSnapshot>, StorageError> {
+    let mut statement = conn.prepare(
+        "SELECT id, revision, printer_id, incident_id, job_id, trigger, captured_at, content_type,
+                byte_len, sha256, pinned_at, pruned_at, prune_reason
+         FROM camera_snapshots WHERE incident_id = ?1 ORDER BY captured_at, id",
+    )?;
+    let rows = statement
+        .query_map([incident_id], |row| {
+            let trigger: String = row.get(5)?;
+            let content_type: String = row.get(7)?;
+            let prune_reason: Option<String> = row.get(12)?;
+            Ok(crate::cameras::CameraSnapshot {
+                id: row.get(0)?,
+                revision: row.get(1)?,
+                printer_id: row.get(2)?,
+                incident_id: row.get(3)?,
+                job_id: row.get(4)?,
+                trigger: decode_text_enum(5, &trigger)?,
+                captured_at: row.get(6)?,
+                content_type: decode_text_enum(7, &content_type)?,
+                byte_len: row.get(8)?,
+                sha256: row.get(9)?,
+                pinned_at: row.get(10)?,
+                pruned_at: row.get(11)?,
+                prune_reason: prune_reason
+                    .map(|text| decode_text_enum(12, &text))
+                    .transpose()?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn instant(text: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
+}
+
+/// D3: `get_incident`'s assembly. The timeline merges the Incident's own
+/// entries with its Job's `job_events` at read time (never copied),
+/// ordered by `at`, then Incident entries before Job events at the same
+/// instant, then sequence. `None` when there is no such Incident.
+pub fn detail(conn: &Connection, incident_id: &str) -> Result<Option<IncidentDetail>, StorageError> {
+    let Some(incident) = load_incident(conn, incident_id)? else {
+        return Ok(None);
+    };
+    let mut timeline: Vec<(Option<DateTime<Utc>>, String, u8, i64, IncidentTimelineItem)> = Vec::new();
+    for entry in entries(conn, incident_id)? {
+        timeline.push((
+            instant(&entry.at),
+            entry.at.clone(),
+            0,
+            entry.sequence,
+            IncidentTimelineItem::Incident { entry },
+        ));
+    }
+    if let Some(job_id) = &incident.job_id {
+        for event in crate::jobs::repository::list_events(conn, job_id)? {
+            timeline.push((
+                instant(&event.at),
+                event.at.clone(),
+                1,
+                event.sequence,
+                IncidentTimelineItem::Job { event },
+            ));
+        }
+    }
+    timeline.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            // The text only orders what couldn't be parsed.
+            .then_with(|| match left.0 {
+                None => left.1.cmp(&right.1),
+                Some(_) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    Ok(Some(IncidentDetail {
+        events: crate::attention::repository::events_for_incident(conn, incident_id)?,
+        snapshots: snapshots_for_incident(conn, incident_id)?,
+        timeline: timeline.into_iter().map(|(.., item)| item).collect(),
+        incident,
+    }))
 }
 
 #[cfg(test)]

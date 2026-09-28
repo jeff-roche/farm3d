@@ -455,6 +455,8 @@ pub async fn set_printer_connection<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: resolve_printer(&services.catalog, &updated),
         warnings,
@@ -551,6 +553,8 @@ pub async fn clear_printer_connection<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: resolve_printer(&services.catalog, &updated),
         warnings,

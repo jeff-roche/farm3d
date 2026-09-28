@@ -160,6 +160,16 @@ type CommandMap = {
   declare_job_outcome: [Contracts.DeclareJobOutcomeRequest, Contracts.DeclareJobOutcomeResult];
   settle_job_material: [Contracts.SettleJobMaterialRequest, Contracts.SettleJobMaterialResult];
   correct_job_material: [Contracts.CorrectJobMaterialRequest, Contracts.CorrectJobMaterialResult];
+  list_attention: [Contracts.ListAttentionRequest, Contracts.ListAttentionResult];
+  mark_attention_read: [Contracts.MarkAttentionReadRequest, Contracts.MarkAttentionReadResult];
+  acknowledge_attention_event: [
+    Contracts.AcknowledgeAttentionEventRequest,
+    Contracts.AcknowledgeAttentionEventResult,
+  ];
+  resolve_attention_event: [Contracts.ResolveAttentionEventRequest, Contracts.ResolveAttentionEventResult];
+  list_incidents: [Contracts.ListIncidentsRequest, Contracts.ListIncidentsResult];
+  get_incident: [Contracts.GetIncidentRequest, Contracts.GetIncidentResult];
+  add_incident_note: [Contracts.AddIncidentNoteRequest, Contracts.AddIncidentNoteResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

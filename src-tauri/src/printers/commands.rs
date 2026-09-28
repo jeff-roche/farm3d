@@ -184,6 +184,8 @@ pub async fn create_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &outcome.printer),
         warnings: outcome.warnings,
@@ -216,6 +218,8 @@ pub fn set_material_slot_layout<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -268,6 +272,8 @@ pub fn update_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -366,6 +372,8 @@ pub async fn archive_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &archived),
         warnings,
@@ -403,6 +411,8 @@ pub async fn unarchive_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrinterMutationResult {
         printer: crate::catalog::resolve::resolve_printer(&services.catalog, &unarchived),
         warnings,
@@ -448,6 +458,8 @@ pub async fn delete_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(DeletePrinterResult {
         deleted_id: id,
         deleted_revision: expected_revision,
@@ -487,6 +499,8 @@ pub fn set_printer_override<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         &services.catalog,
         &updated,
@@ -523,6 +537,8 @@ pub fn rebind_printer<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -594,6 +610,8 @@ pub fn resolve_profile_drift<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(mutation(crate::catalog::resolve::resolve_printer(
         catalog, &updated,
     )))
@@ -878,6 +896,8 @@ pub async fn import_printers<R: tauri::Runtime>(
     services
         .evaluator
         .poke(crate::queue::evaluator::Trigger::PrinterChanged);
+    // P8 D2 "Wakes": the Attention projector re-reads Printers too.
+    services.attention.poke();
     Ok(CommandSuccess::new(PrintersImportResult::Applied {
         printers: resolved,
         created_count: imported_ids.difference(&old).count(),

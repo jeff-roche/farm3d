@@ -2,11 +2,14 @@
 //! camera source, its health, and the `camera_snapshots` evidence record.
 //! See the P8 design spec's "Backend model" module layout table.
 //!
-//! This module (Task 3) is wire types only: source resolution
-//! (`resolve.rs`), the frame fetcher (`fetch.rs`), the media store
-//! (`media.rs`), retention (`retention.rs`), capture (`capture.rs`),
+//! So far this module is wire types plus `capture.rs`'s `CaptureIntent`,
+//! which the attention projector emits (Task 6) and nothing consumes yet.
+//! Source resolution (`resolve.rs`), the frame fetcher (`fetch.rs`), the
+//! media store (`media.rs`), retention (`retention.rs`), capture behavior,
 //! services (`services.rs`), and commands (`commands.rs`) are later tasks
 //! (see the module layout table in the design spec).
+
+pub mod capture;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

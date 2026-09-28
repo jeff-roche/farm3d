@@ -379,6 +379,9 @@ pub enum ErrorCode {
     JobAlreadyRetried,
     /// P7 D8: a Printers import while Job history exists.
     JobsExist,
+    /// P8 D2 "Lifecycle rules": `resolve_attention_event` on an Event whose
+    /// Condition resolves by itself (`auto` or `action`).
+    AttentionNotManual,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -784,6 +787,33 @@ impl CommandError {
             ("printerIds".to_string(), strings(printer_ids)),
             ("jobIds".to_string(), strings(job_ids)),
             ("queueEntryIds".to_string(), strings(queue_entry_ids)),
+        ]));
+        error
+    }
+
+    /// P8 `ATTENTION_NOT_MANUAL`: only a `manual` Event is the operator's
+    /// to resolve; this one resolves by itself when its cause clears.
+    pub fn attention_not_manual(
+        event_id: &str,
+        condition: crate::attention::ConditionKind,
+        resolution_mode: crate::attention::ResolutionMode,
+    ) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::AttentionNotManual,
+            "This Attention Event resolves by itself when its cause clears.",
+            vec![RecoveryCode::Reload],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("eventId".to_string(), JsonValue::String(event_id.to_string())),
+            (
+                "condition".to_string(),
+                JsonValue::String(condition.as_str().to_string()),
+            ),
+            (
+                "resolutionMode".to_string(),
+                JsonValue::String(crate::spools::encode_enum(resolution_mode)),
+            ),
         ]));
         error
     }
@@ -1671,10 +1701,11 @@ impl CommandError {
                 job_ids,
                 queue_entry_ids,
             } => Self::jobs_exist(&printer_ids, &job_ids, &queue_entry_ids),
-            // P8 Task 6 wires the real `ATTENTION_NOT_MANUAL` code, message,
-            // and `[RELOAD]` recovery on `resolve_attention_event`; this
-            // placeholder only keeps the match exhaustive until then.
-            RepositoryError::AttentionNotManual { .. } => Self::internal(),
+            RepositoryError::AttentionNotManual {
+                event_id,
+                condition,
+                resolution_mode,
+            } => Self::attention_not_manual(&event_id, condition, resolution_mode),
             RepositoryError::Storage(StorageError::DuplicateHost(conflicting_printer_id)) => {
                 Self::duplicate_host(&conflicting_printer_id)
             }

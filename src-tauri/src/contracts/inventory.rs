@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 107] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 114] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -463,9 +463,44 @@ contracts![
         "CorrectJobMaterialRequest",
         "CorrectJobMaterialResult"
     ),
+    (
+        "list_attention",
+        "ListAttentionRequest",
+        "ListAttentionResult"
+    ),
+    (
+        "mark_attention_read",
+        "MarkAttentionReadRequest",
+        "MarkAttentionReadResult"
+    ),
+    (
+        "acknowledge_attention_event",
+        "AcknowledgeAttentionEventRequest",
+        "AcknowledgeAttentionEventResult"
+    ),
+    (
+        "resolve_attention_event",
+        "ResolveAttentionEventRequest",
+        "ResolveAttentionEventResult"
+    ),
+    (
+        "list_incidents",
+        "ListIncidentsRequest",
+        "ListIncidentsResult"
+    ),
+    (
+        "get_incident",
+        "GetIncidentRequest",
+        "GetIncidentResult"
+    ),
+    (
+        "add_incident_note",
+        "AddIncidentNoteRequest",
+        "AddIncidentNoteResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 107] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 114] {
     &COMMAND_CONTRACTS
 }
 
@@ -701,7 +736,21 @@ export type DeclareJobOutcomeResult = CommandSuccess<QueueChange>;
 export type SettleJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; choice: SettleChoice };
 export type SettleJobMaterialResult = CommandSuccess<QueueChange>;
 export type CorrectJobMaterialRequest = ContractRequest & { operationId: string; jobId: string; entry: AmountEntry };
-export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string()
+export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;
+export type ListAttentionRequest = ContractRequest & { resolvedBefore?: AttentionCursor; limit?: number };
+export type ListAttentionResult = CommandSuccess<AttentionBackfill>;
+export type MarkAttentionReadRequest = ContractRequest & { operationId: string; eventIds: string[] };
+export type MarkAttentionReadResult = CommandSuccess<AttentionChange>;
+export type AcknowledgeAttentionEventRequest = ContractRequest & { operationId: string; eventId: string };
+export type AcknowledgeAttentionEventResult = CommandSuccess<AttentionChange>;
+export type ResolveAttentionEventRequest = ContractRequest & { operationId: string; eventId: string };
+export type ResolveAttentionEventResult = CommandSuccess<AttentionChange>;
+export type ListIncidentsRequest = ContractRequest & { state?: "open" | "closed" | "all"; printerId?: string; before?: string; limit?: number };
+export type ListIncidentsResult = CommandSuccess<IncidentPage>;
+export type GetIncidentRequest = ContractRequest & { incidentId: string };
+export type GetIncidentResult = CommandSuccess<IncidentDetail>;
+export type AddIncidentNoteRequest = ContractRequest & { operationId: string; incidentId: string; text: string };
+export type AddIncidentNoteResult = CommandSuccess<IncidentDetail>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -803,6 +852,11 @@ export type CorrectJobMaterialResult = CommandSuccess<QueueChange>;"#.to_string(
         visitor.visit::<crate::queue::MaterialEstimate>();
         visitor.visit::<crate::queue::QueueEntryEligibility>();
         visitor.visit::<crate::jobs::JobHistory>();
+        visitor.visit::<crate::attention::AttentionCursor>();
+        visitor.visit::<crate::attention::AttentionBackfill>();
+        visitor.visit::<crate::attention::AttentionChange>();
+        visitor.visit::<crate::incidents::IncidentPage>();
+        visitor.visit::<crate::incidents::IncidentDetail>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

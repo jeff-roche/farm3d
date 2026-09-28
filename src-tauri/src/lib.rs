@@ -18,6 +18,9 @@ pub mod settings;
 pub mod slicing;
 pub mod spools;
 
+use attention::commands::{
+    acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
+};
 use catalog::commands::{
     catalog_info, list_catalog_models, list_catalog_variants, preview_profile,
 };
@@ -30,6 +33,7 @@ use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
 };
+use incidents::commands::{add_incident_note, get_incident, list_incidents};
 use jobs::commands::{
     assign_queue_entry, cancel_job, correct_job_material, declare_job_outcome, get_job_history,
     pause_job, release_job, resume_job, retry_job, settle_job_material, stage_job, start_job,
@@ -91,6 +95,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     pub jobs: Arc<jobs::JobServices<R>>,
     /// P7 D6: the automatic evaluator's trigger channel and last run.
     pub evaluator: Arc<queue::evaluator::Evaluator>,
+    /// P8 D2: the Attention projector's runtime and the `attention` stream.
+    pub attention: Arc<attention::services::AttentionServices<R>>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -155,12 +161,13 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             queue_stream: queue::events::QueueStream::default(),
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             evaluator: Arc::default(),
+            attention: Arc::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 107] = [
+pub const COMMAND_NAMES: [&str; 114] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -268,6 +275,13 @@ pub const COMMAND_NAMES: [&str; 107] = [
     "declare_job_outcome",
     "settle_job_material",
     "correct_job_material",
+    "list_attention",
+    "mark_attention_read",
+    "acknowledge_attention_event",
+    "resolve_attention_event",
+    "list_incidents",
+    "get_incident",
+    "add_incident_note",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -350,6 +364,21 @@ pub fn start_jobs_runtime<R: tauri::Runtime>(
 ) {
     jobs::services::start(services, app);
     queue::evaluator::start(services);
+}
+
+/// P8 D2 "Runtime and wakes": starts the Attention projector for
+/// `services`. It records when the supervisors started, subscribes to the
+/// status, queue, and inventory broadcasts, then spawns the projector,
+/// whose first action is a full pass; it publishes the startup backfill's
+/// changes first. The startup backfill (`attention::projector::backfill`)
+/// must already have run. `build_runtime_services` calls it after
+/// `start_jobs_runtime`; tests call it the same way. A second call does
+/// nothing.
+pub fn start_attention_runtime<R: tauri::Runtime>(
+    services: &Arc<RuntimeServices<R>>,
+    app: &tauri::AppHandle<R>,
+) {
+    attention::services::start(services, app);
 }
 
 enum StartupFailure {
@@ -440,6 +469,14 @@ fn build_runtime_services<R: tauri::Runtime>(
     // closed catches up with it, before any command is served.
     let recovered_jobs =
         jobs::recover_after_restart(&storage, chrono::Utc::now()).map_err(startup_error)?;
+    // P8 D2 "Startup backfill": project every durable Condition with live
+    // status unknown, before any command is served. Published once the
+    // attention runtime starts.
+    let backfilled =
+        attention::projector::backfill(&storage, chrono::Utc::now()).map_err(|error| match error {
+            persistence::RepositoryError::Storage(error) => startup_error(error),
+            _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
+        })?;
 
     let resource_path = app
         .path()
@@ -510,6 +547,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     ));
     let jobs = Arc::new(jobs::JobServices::new(jobs::JobTimings::default()));
     jobs.set_recovered(recovered_jobs);
+    let attention = Arc::new(attention::services::AttentionServices::new(
+        attention::services::AttentionTimings::default(),
+    ));
+    attention.set_backfilled(backfilled);
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -527,6 +568,7 @@ fn build_runtime_services<R: tauri::Runtime>(
         queue_stream: queue::events::QueueStream::default(),
         jobs,
         evaluator: Arc::default(),
+        attention,
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -535,6 +577,8 @@ fn build_runtime_services<R: tauri::Runtime>(
     start_host_ops_runtime(&services, app);
     // P7 D4: then the dispatch driver.
     start_jobs_runtime(&services, app);
+    // P8 D2: then the Attention projector.
+    start_attention_runtime(&services, app);
     // D2: the startup probe runs in the background; `get_slicer_runtime`
     // meanwhile waits on the same probe rather than starting another.
     services.slicing.probe_in_background();
@@ -776,6 +820,13 @@ pub fn run() {
             declare_job_outcome,
             settle_job_material,
             correct_job_material,
+            list_attention,
+            mark_attention_read,
+            acknowledge_attention_event,
+            resolve_attention_event,
+            list_incidents,
+            get_incident,
+            add_incident_note,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

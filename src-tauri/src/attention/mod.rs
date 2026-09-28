@@ -6,14 +6,20 @@
 //! It holds the wire types, the Rust-only [`Condition`] and the D2
 //! catalogue ([`ConditionKind::spec`]), plus the Attention lifecycle
 //! rules ([`lifecycle`]), the pure observer ([`observe`]), and the pure
-//! planner ([`plan`]). The repository, the projector, deep links,
-//! services, the event stream, and commands are later tasks (see the
+//! planner ([`plan`]), the repository ([`repository`]), the projector and
+//! its startup backfill ([`projector`]), the runtime that wakes it
+//! ([`services`]), the `attention` event stream ([`events`]), and the four
+//! Attention commands ([`commands`]). Deep links are a later task (see the
 //! module layout table in the design spec).
 
+pub mod commands;
+pub mod events;
 pub mod lifecycle;
 pub mod observe;
 pub mod plan;
+pub mod projector;
 pub mod repository;
+pub mod services;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

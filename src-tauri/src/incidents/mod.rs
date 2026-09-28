@@ -3,11 +3,12 @@
 //! and evidence under one timeline. See the P8 design spec's D1
 //! ("Vocabulary and ownership") and "Backend model" module layout table.
 //!
-//! This module (Task 3) is wire types only: the repository (open, link,
-//! reopen, `append_entry`, `close_if_settled`), the lifecycle-blocker and
-//! import guards, and commands are later tasks (see the module layout
-//! table in the design spec).
+//! It holds the wire types, the repository ([`repository`]: open, link,
+//! reopen, `append_entry`, `close_if_settled`), and the three Incident
+//! commands ([`commands`]). The lifecycle-blocker and import guards are a
+//! later task (see the module layout table in the design spec).
 
+pub mod commands;
 pub mod repository;
 
 use serde::{Deserialize, Serialize};
