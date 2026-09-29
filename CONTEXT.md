@@ -395,3 +395,46 @@ before it counts as offline (off, 1, 5, or 15 minutes), whether its
 notifications follow the global classes or are muted, and whether farm3d
 captures a Snapshot when an Incident opens or a Job completes.
 _Avoid_: Notification settings (those are the global classes)
+
+**Backup**:
+One `.farm3d-backup` file holding a point-in-time copy of the whole Farm
+(every domain, its content, and optionally its camera media), with a
+manifest that checksums every entry. Credentials, machine paths (the
+Slicer runtime), and caches are never in it. Restoring one replaces the
+whole Farm; nothing is merged (ADR-0016).
+_Avoid_: Snapshot (a camera frame, or F1's pre-import database copy),
+export (the Settings and Printers JSON files, which stay for partial
+portability), archive (retiring a Printer)
+
+**Safety backup**:
+A Backup farm3d writes by itself, with all camera media, before a restore
+or an entire-Farm reset, so the operator can undo either. The newest
+three are kept, and an older one is deleted only after a new one
+verifies. Resets keep them unless the operator asks otherwise.
+_Avoid_: Pre-import snapshot (F1's database-only copy before a Settings or
+Printers import), undo point
+
+**Restore preview**:
+What restoring a Backup would do, computed from a staged, verified copy
+of it: row counts side by side, conflicts (rows only this machine has,
+rows that differ, and different records that share a Printer host, Spool
+number, Project name, or tare name), notices such as credentials to
+re-enter, and the active work that blocks a restore. It changes nothing
+in the live Farm.
+_Avoid_: Dry run, diff, merge preview (restore never merges)
+
+**Diagnostics bundle**:
+A zip of selectable sections (about, health, storage, configuration,
+logs, recent problems) for a support thread. Records appear only as
+pseudonyms such as `printer-3`, and farm3d refuses to write the bundle if
+it finds any credential, host, URL, path, or user-authored name in it
+(ADR-0017).
+_Avoid_: Log export, crash report, support dump
+
+**Reset**:
+A deliberate, typed-confirmed return to an empty state, in three tiers:
+settings to their defaults; camera media (images removed, records kept);
+or the entire Farm (database, content, media, logs, and farm3d's own
+credentials), which finishes at the next start even after a crash.
+_Avoid_: Wipe, clear, factory reset, delete (a single record's delete is
+separate and guarded)

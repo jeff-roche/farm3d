@@ -576,9 +576,21 @@ there is no shared helper. Examples:
 
 ## Design reference
 
-The spec (Task 1) turns this into final names and payloads.
+The spec (Task 1) turns this into final names and payloads. **Task 1
+note:** the spec
+(`docs/superpowers/specs/2026-09-29-p9-history-settings-backup-diagnostics-design.md`)
+is now authoritative for everything in this section. The main changes
+are: 18 commands (the restore-status pair is two); three more error codes
+(`RESTORE_FAILED`, `BACKUP_SOURCE_DAMAGED`, `STORAGE_IN_USE`) and the
+`OPEN_QUEUE` recovery code; migration 0010 also rebuilds
+`incident_events` and widens the pinned-and-pruned CHECK; the history
+indexes use `COALESCE(ended_at, updated_at)`; the journal schema and
+installer step names are the spec's D8; and the integrity catalogue drops
+`operationLedger` and adds `completionEvidence`, `hostOperationGcode`,
+and `preparationTargetPrinter` (spec D17). The spec's "Decisions made in
+this spec" lists every change and why.
 
-### Commands (17; the spec fixes the final list)
+### Commands (18 in the spec; its D18 and "Commands" fix the final list)
 
 | Domain | Command | Kind |
 |---|---|---|
@@ -620,28 +632,37 @@ The spec (Task 1) turns this into final names and payloads.
 - `BACKUP_IN_PROGRESS`
 - `DIAGNOSTICS_REDACTION_FAILED`
 - `CONFIRMATION_MISMATCH`
+- Added by the spec: `RESTORE_FAILED`, `BACKUP_SOURCE_DAMAGED`,
+  `STORAGE_IN_USE`, and the recovery code `OPEN_QUEUE`
 
 ### Migration 0010 (`0010_p9_portability.sql`)
 
-- `CREATE INDEX jobs_history ON jobs(ended_at DESC, id DESC) WHERE ended_at IS NOT NULL;`
-  plus the indexes the spec's query plans need (check with `EXPLAIN
-  QUERY PLAN` in Task 4).
+- `jobs_history` and `jobs_history_printer` on
+  `COALESCE(ended_at, updated_at) DESC, id DESC`, partial on the four
+  history states (an `outcomeUnknown` Job has no `ended_at`), plus the
+  indexes the spec's query plans need (check with `EXPLAIN QUERY PLAN` in
+  Task 4, which may amend 0010 in place).
 - Rebuild `camera_snapshots` to widen the `prune_reason` CHECK with
-  `reset` and `notInBackup`, following the `operations` rebuild pattern
-  (`0006`–`0009`). Keep every index, trigger, and FK.
+  `reset` and `notInBackup`, and the pinned-and-pruned CHECK with both.
+  `incident_events` holds a RESTRICT foreign key to it, so the plain
+  `operations` pattern fails: rebuild `incident_events` in the same
+  migration, in the spec's order. Keep every index, trigger, and FK.
 - Rebuild `pending_credential_cleanup` to widen `reason` with `reset`.
-- Widen the `operations.kind` CHECK for the new mutating commands.
+- Widen the `operations.kind` CHECK with `resetSettings` and
+  `resetCameraMedia` only (spec D18).
 - No new product tables. Backups and journals live on disk, because
   they must survive a database swap.
 
 ### Restore journal (`<metadata_root>/restore/journal.json`)
 
 ```text
-{ journalVersion: 1, id, kind: "restore"|"reset",
+{ journalVersion: 1, id, kind: "restore"|"reset", createdAt,
   phase: "pending"|"installing"|"installed"|"done"|"failed",
-  step?: <installer step name>, attempts, stagingId?, safetyBackupId?,
-  expectedCounts?, orphanCredentialRefs[], resetTier?, outcome?, failure? }
+  step, attempts, stagingId, safetyBackupId, expectedCounts, carry,
+  orphanCredentialRefs[], reset, outcome, failure }
 ```
+
+(The exact schema and the `InstallerStep` names are the spec's D8.)
 
 - Written with the atomic-replace rule (temp file, fsync, rename, fsync
   the directory).
@@ -659,7 +680,8 @@ The spec (Task 1) turns this into final names and payloads.
 | `amountEventReservation` | `spool_amount_events.reservation_id` → `spool_reservations` | violation |
 | `reservationHolder` | `spool_reservations(holder_kind, holder_id)` → Jobs | violation |
 | `attentionSource` | `attention_events(source_kind, source_id)` → its table. A Printer source may be gone only when the Event is resolved `sourceRemoved` | violation |
-| `operationLedger` | every `*.operation_id` → `operations` | violation |
+| ~~`operationLedger`~~ | dropped by the spec: operation ids are idempotency keys, and P3's Printer-create loads are never in `operations` | — |
+| `completionEvidence`, `hostOperationGcode`, `preparationTargetPrinter` | added by the spec (D17) | see the spec |
 | `blobFile` | every `content_blobs` row has its file | violation |
 | `mediaFile` | every unpruned `camera_snapshots` row has its file | violation |
 | `sliceTargetPrinter` | `slice_revisions.target_json` `printerId` | **tolerated** (label fallback) |
@@ -739,12 +761,20 @@ implementer.
 
     Count assertions append P9's term to `main`'s expression
     (`58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + <P9>`). A task
-    that registers only some commands adds its own term.
+    that registers only some commands adds its own term. P9's term is 18:
+    Task 4 adds 2, Task 5 4, Task 6 2, Task 7 3, Task 8 2, Task 9 3, and
+    Task 10 2.
 11. **Idempotency.** Every mutating command takes a client
-    `operationId`, claimed through `spools::operations::claim`. File
-    writes (`create_backup`, `export_diagnostics`) are idempotent per
-    `operationId` within the process only. A replay after a restart
-    writes a fresh file, and the spec says so.
+    `operationId`, except `discard_restore_preview` and
+    `acknowledge_restore_status`, which are idempotent by nature. Only
+    `reset_farm` tiers `settings` and `cameraMedia` claim it through
+    `spools::operations::claim` (kinds `resetSettings`,
+    `resetCameraMedia`). The rest (`create_backup`, `delete_backup`,
+    `apply_restore`, `clear_storage`, `export_diagnostics`, and
+    `reset_farm` tier `farm`) use the process-local
+    `backup::process_ops::ProcessOperations` (spec D18), because their
+    effect is a file or a swapped database, not a transaction. A replay
+    after a restart runs again (a fresh file), and the spec says so.
 12. **Simulators never run in CI.** P9's CI tests use in-process fakes.
     The tracer's simulator leg is `#[ignore]` behind `require_sim!`.
 13. **Scope.** P9 leaves these out:
@@ -795,7 +825,10 @@ implementer.
   - `journal.rs`
   - `installer.rs`: the startup install, rollback, reset roll-forward,
     and fault points
-  - `safety.rs`: safety-backup location and retention
+  - `safety.rs`: safety-backup location, verification, and retention
+  - `process_ops.rs`: the process-local operation ledger (spec D18)
+  - `dialogs.rs`: `PortabilityDialogs` (the injected native dialogs)
+  - `restart.rs`: `Restarter` and the production `AppRestarter`
   - `commands.rs`
 - `src-tauri/src/diagnostics/`: `log.rs` (`f3d_log!`, `LogSafe`,
   rotation), `pseudonym.rs`, `collect.rs`, `egress.rs`, `bundle.rs`,
@@ -822,7 +855,8 @@ implementer.
   `assert_no_corpus(bytes, label)`, which also handles zip entries.
   Earlier phase tests are not migrated.
 - `tests/p9_farm/mod.rs`: `Farm::with_every_domain()` builds one entity
-  per domain, with every link, on the fakes.
+  per domain, with every link, on the fakes. Task 5 lands it first, with
+  fixed ids and timestamps; Task 11 extends it without renaming.
 - `tests/p9_migration.rs`, `tests/p9_integrity.rs`,
   `tests/p9_history.rs`, `tests/p9_log.rs`
 - `tests/p9_backup.rs`, `tests/p9_restore_preview.rs`,
@@ -947,15 +981,29 @@ to a name the spec renamed.
 
 - Create `0010_p9_portability.sql`, `persistence/integrity.rs`, and
   `tests/common/secrets.rs`
-- Modify `persistence/migrations.rs` (version 10) and the exact-schema
-  tests in `persistence/mod.rs`
+- Modify `persistence/migrations.rs` (version 10), the exact-schema
+  tests in `persistence/mod.rs`, and `printers/repository.rs`
+  (`cleanup_precedence` gains `reset` between `import_orphan` and
+  `provisional`)
 - Test: `tests/p9_migration.rs`, `tests/p9_integrity.rs`
+
+The migration SQL is the spec's "Schema" section verbatim: it rebuilds
+`camera_snapshots` **and** `incident_events` (the latter holds a RESTRICT
+foreign key to the former), `pending_credential_cleanup`, and
+`operations`. The catalogue is the spec's D17 (no `operationLedger`;
+`completionEvidence`, `hostOperationGcode`, and
+`preparationTargetPrinter` added).
 
 - [ ] **Step 1:** Write the failing migration tests:
   - v9 → v10 on a populated fixture keeps every row;
-  - each rebuilt table keeps its indexes, triggers, and FKs (compare
-    `sqlite_master` before and after, excluding the CHECK text);
-  - the new CHECK values are accepted;
+  - each rebuilt table (`camera_snapshots`, `incident_events`,
+    `pending_credential_cleanup`, `operations`) keeps its columns,
+    indexes, triggers, and FKs (compare `sqlite_master` before and after,
+    excluding the CHECK text and name quoting);
+  - the rebuild succeeds on a v9 database with an `evidenceCaptured`
+    `incident_events` row;
+  - the new CHECK values are accepted, including a pinned snapshot pruned
+    `reset` or `notInBackup`;
   - a v11 database is refused.
 - [ ] **Step 2:** Implement the migration.
 - [ ] **Step 3:** Write a failing test per integrity rule. Seed exactly
@@ -967,7 +1015,9 @@ to a name the spec renamed.
 - [ ] **Step 5:** Write the shared corpus:
   - a credential value;
   - `http://operator:s3cr3t-P9@192.0.2.19:8080/webcam?token=tok-P9-19`
-    and its parts;
+    and its parts (used only on error and log paths: P8 rejects userinfo
+    at save, so a *stored* camera URL seed is
+    `http://192.0.2.19:8080/webcam?token=tok-P9-19`);
   - a header value (`X-Api-Key: …`);
   - a host;
   - a home-directory path;
@@ -988,9 +1038,13 @@ negative test. The migration preserves data and schema objects.
 **Files:**
 
 - Create `diagnostics/log.rs` and `diagnostics/pseudonym.rs`
-- Modify `persistence/database.rs` (`log_root` in `StoragePaths` and
-  its collision tests) and `lib.rs` (log init after path validation;
-  stderr mirroring in debug builds)
+- Modify `persistence/database.rs` (`log_root` in `StoragePaths`,
+  defaulting to `<app_data_root>/logs` so `StoragePaths::new` keeps its
+  signature, plus `with_log_root`; `backup_root` =
+  `<app_data_root>/farm3d-backups/v1`; both in the collision tests) and
+  `lib.rs` (`.with_log_root(app_log_dir())`; log init after the
+  installer, which Task 7 adds, and before `Storage::open`; stderr
+  mirroring in debug builds)
 - Modify every `eprintln!` site listed in the Evidence section
 - Test: `tests/p9_log.rs`
 
@@ -999,11 +1053,12 @@ negative test. The migration preserves data and schema objects.
     shows that a `String` can't be logged. If adding `trybuild` isn't
     worth it, assert the trait's implementors in a unit test instead
     and document the choice.
-  - Rotation at 2 MiB keeps 5 files.
+  - Rotation at 2 MiB keeps 5 files: `farm3d.log` and
+    `farm3d.1.log`–`farm3d.4.log`.
   - A write failure never panics and never blocks the caller: it drops
     the line and counts the drop.
-  - Each line is one JSON object: `ts`, `level`, `code`, and the
-    fields.
+  - Each line is one JSON object: `ts`, `level`, `code`, `ids` (every
+    `LogId` value), and `fields` (the rest), as in the spec's D12.
 - [ ] **Step 2:** Implement the log. Use a bounded channel and a writer
   thread, so logging never holds a lock across I/O on a hot path.
 - [ ] **Step 3:** Migrate every `eprintln!`. Add a test that walks
@@ -1038,11 +1093,13 @@ No `eprintln!` remains. The corpus scan passes.
     input;
   - keyset paging is stable while new Jobs finish between pages;
   - the limit bounds;
-  - `outcomeUnknown` is excluded by default.
+  - `outcomeUnknown` is excluded by default, and, when asked for, pages
+    by `COALESCE(ended_at, updated_at)` (it has no `ended_at`).
 - [ ] **Step 2:** Assert index use with `EXPLAIN QUERY PLAN` for the
-  default query and for the text and Printer filters. Add indexes to
-  0010 only if the plan needs them (amend Task 2's migration before
-  merge).
+  default query (`jobs_history`, with the spec's seekable keyset
+  predicate) and for the text and Printer filters
+  (`jobs_history_printer`). Add indexes to 0010 only if the plan needs
+  them (amend Task 2's migration in place before merge).
 - [ ] **Step 3:** Write the failing timeline tests:
   - The order is deterministic: by time, then source, then sequence.
   - Every item kind appears for a settled Job with a correction,
@@ -1066,7 +1123,9 @@ doesn't change it.
 
 **Files:**
 
-- Create `backup/{mod.rs,manifest.rs,archive.rs,inventory.rs,lease.rs,writer.rs,safety.rs}`
+- Create `backup/{mod.rs,manifest.rs,archive.rs,inventory.rs,lease.rs,writer.rs,safety.rs,process_ops.rs,dialogs.rs}`
+- Create `tests/p9_farm/mod.rs`: the first cut of the every-domain Farm,
+  with fixed ids and timestamps (Task 11 extends it without renaming)
 - Modify:
   - `persistence/snapshot.rs`: a generalized `create_snapshot_to(path)`
     that returns the validated copy;
@@ -1082,26 +1141,32 @@ doesn't change it.
   - streaming SHA-256 matches;
   - a content entry whose hash doesn't match its name is rejected.
 - [ ] **Step 2:** Write the failing writer tests over
-  `Farm::with_every_domain()` (Task 11's builder; land its first cut
-  here if Task 11 hasn't started):
+  `Farm::with_every_domain()`:
   - For each media choice, the archive holds exactly the expected
     entries.
   - The database copy is sanitized (decision 11) and passes
     `integrity::check`.
   - The counts equal the source's.
-  - `assert_no_corpus` (excluding the camera URL, per decision 14)
-    passes over the archive and over the free pages of the database
+  - `assert_no_corpus` (excluding the stored camera URL, per decision
+    14) passes over the archive and over the free pages of the database
     copy.
+  - A blob whose file is missing or doesn't hash to its name fails with
+    `BACKUP_SOURCE_DAMAGED`, and no destination file is left.
 - [ ] **Step 3:** Write the failing consistency tests:
   - A blob deleted (by `delete_model`) *during* a backup is still in the
     archive, and its cleanup runs after the lease drops.
   - Media pruning waits for the lease.
-  - A second concurrent backup gives `BACKUP_IN_PROGRESS`.
-  - A missing media file is recorded as `missingFile`.
+  - A second concurrent backup (or any other lease holder, spec D5)
+    gives `BACKUP_IN_PROGRESS`.
+  - A missing or altered media file, found by the pre-pass, is marked
+    `missingFile` in the copy and counted in `manifest.media`.
+  - An `operationId` replay in the same process returns the cached
+    result (`ProcessOperations`).
 - [ ] **Step 4:** Implement the writer. Stream into a same-directory
   temp file, fsync it, then atomically replace (`document_io.rs`).
-  Implement safety-backup retention (keep 3, delete only after the new
-  one validates), and the free-space check.
+  Implement safety-backup verification (read back and hash every entry)
+  and retention (keep 3, delete only after the new one verifies), and the
+  free-space check.
 - [ ] **Step 5:** Commit:
   `feat(backup): write versioned, checksummed whole-Farm backups`.
 
@@ -1119,22 +1184,27 @@ secret-free, and they never race blob or media cleanup.
 - Test: `tests/p9_restore_preview.rs`
 
 - [ ] **Step 1:** Write the failing staging tests:
-  - The candidate is extracted to `snapshots/.restore-staging/<id>/`
-    with checksums verified.
+  - The candidate is extracted to `snapshots/.restore-staging/<id>/`,
+    content to `<content_root>/staging/restore-<id>/`, and media to
+    `<media_root>/restore-<id>/snapshots/` (spec D8 "Staging"), with
+    checksums verified.
   - An older-schema candidate is migrated on the staged copy, and the
     live database is untouched (compare its checksum).
   - Every rejection case from decisions 6 and 7 fails.
-  - Staging older than 24 h, or left from a previous run, is removed
-    at startup (extends F1's cleanup), except the one the journal
-    names.
+  - Staging older than 24 h gives `RESTORE_STAGING_EXPIRED` at apply;
+    staging left from a previous run is removed at startup (F1's
+    `cleanup_restore_staging` changes to remove every candidate), except
+    the one a `pending` or `installing` journal names.
 - [ ] **Step 2:** Write the failing preview tests from the spec's
-  conflict fixture table:
+  "Conflict fixtures" table (c1–c36, one test per row):
   - per-table counts, local versus backup;
   - `onlyLocal`, `changed`, and `uniqueClash`, grouped by domain and
     capped at 200 items per class, with totals;
-  - notices: credentials to re-enter, linked paths missing on this
-    machine, Jobs active at backup time, media left out, and the Slicer
-    runtime kept local;
+  - notices (`RestoreNotice`): credentials to re-enter (through the new
+    `CredentialStore::contains`, which drops the value in `Zeroizing`),
+    credentials orphaned, linked paths missing on this machine, Jobs
+    active at backup time, media left out, the Slicer runtime kept local,
+    and a migrated schema;
   - blockers from decision 10.
 - [ ] **Step 3:** Implement. The preview reads the live Farm in one read
   transaction and the candidate through a read-only connection.
@@ -1150,13 +1220,15 @@ live Farm. Every refusal is typed and carries a safe field path.
 
 **Files:**
 
-- Create `backup/{journal.rs,installer.rs}`
+- Create `backup/{journal.rs,installer.rs,restart.rs}`
 - Modify:
-  - `lib.rs`: run `installer::run(paths, lease)` after the ownership
-    lease and before `Storage::open`; failures enter a
-    `Failed(RESTORE_FAILED)` bootstrap state with a retry that re-runs
-    the installer;
-  - the restart path.
+  - `lib.rs`: run `installer::run(&paths, &lease, &credential_store)`
+    after the ownership lease and before the log init and
+    `Storage::open`; failures enter a `Failed(RESTORE_FAILED)` bootstrap
+    state with a retry that re-runs the installer; retry a busy lease for
+    up to 10 s when `restore/journal.json` exists (spec D8 "Startup
+    order");
+  - the restart path (`backup/restart.rs`, `Restarter`).
 - Register `apply_restore`, `restore_status`, and
   `acknowledge_restore_status`
 - Test: `tests/p9_installer.rs`
@@ -1166,12 +1238,15 @@ live Farm. Every refusal is typed and carries a safe field path.
   `Failed(RESTORE_FAILED)` without touching data, and an unknown
   `journalVersion` is refused.
 - [ ] **Step 2:** Write the failing fault-injection matrix from the
-  spec's table. For each named step, crash (inject an error and drop
-  everything), then run the installer again. The outcome is either:
+  spec's "Installer fault points" restore rows (f1–f24), one test per
+  row, with the spec's D8 step names. For each, crash (inject an error
+  and drop everything), then run the installer again. The outcome is
+  either:
   - installed: counts equal the manifest, `integrity::check` is clean,
     and credential orphans are queued; or
-  - rolled back: the database, WAL set, content, and media equal the
-    pre-restore Farm byte for byte, and the journal is `failed`.
+  - rolled back: byte-exact as the spec's D8 defines it (the database
+    and its `-wal`; `-shm` by presence; existing blobs unchanged; media
+    tree identical), and the journal is `failed`.
 
   It is never mixed. Include these cases:
   - a live `-wal` with uncheckpointed frames at `pending` (the WAL must
@@ -1206,7 +1281,9 @@ its database.
 
 - Create `diagnostics/reset.rs`
 - Modify `settings/commands.rs`, `cameras/retention.rs` (reason
-  `reset`), and `backup/installer.rs` (the `reset` journal kind)
+  `reset`), and `backup/installer.rs` (the `reset` journal kind: roots
+  move to sibling `.aside-<journalId>` directories, not into
+  `restore/<id>/previous/`, spec D15)
 - Register `reset_preview` and `reset_farm`
 - Test: `tests/p9_reset.rs`
 
@@ -1221,12 +1298,19 @@ its database.
   - the files are gone;
   - `integrity::check` is clean.
 - [ ] **Step 3:** Write the failing tests for tier (c):
-  - the preview lists every data class with counts and bytes;
+  - `reset_farm` takes `request: ResetRequest` and the exact phrase
+    (`reset settings`, `reset media`, `reset farm`);
+  - the preview lists every data class with counts and bytes, and the
+    `activeWork` warning (tier c is not refused for it);
   - the optional safety backup is written first;
-  - roll-forward after a crash at every step;
+  - roll-forward after a crash at every step: the spec's reset rows
+    r1–r10;
+  - pre-import snapshots, restore staging, and F0 legacy archives are
+    cleared;
   - every journaled credential ref is deleted from a fake credential
     store, and failures are queued with reason `reset`;
-  - safety backups are kept unless the option is ticked;
+  - safety backups are kept unless the option is ticked, and this
+    reset's own safety backup is kept even then;
   - the fresh Farm opens at schema 10, empty, and clean.
 - [ ] **Step 4:** Implement the reset.
 - [ ] **Step 5:** Commit:
@@ -1250,7 +1334,7 @@ crash in tier (c) always finishes the reset.
   over the every-domain Farm with the full corpus seeded into:
   - the credential store;
   - Connection hosts and endpoints;
-  - the camera URL;
+  - the stored camera URL (the query-token form);
   - Printer, Model, Spool, and Project names;
   - Printer notes;
   - host telemetry job names;
@@ -1258,7 +1342,10 @@ crash in tier (c) always finishes the reset.
   - log lines produced by driving error paths.
 
   Each section holds the expected facts and `assert_no_corpus` passes.
-  Pseudonyms are stable within one bundle and differ between bundles.
+  Pseudonyms (per-bundle ordinals over a salted hash, spec D13) are
+  stable within one bundle and differ between bundles, and every log
+  line's `ids` are rewritten to them. A Printer named after a state word
+  (for example "printing") doesn't block the export.
 - [ ] **Step 2:** Write the failing egress tests. A collector
   deliberately broken to leak (a test-only hook) is caught, gives
   `DIAGNOSTICS_REDACTION_FAILED` naming the section, and writes no file.
@@ -1295,14 +1382,15 @@ caught before the file is written.
   - `unreferencedContent` runs the existing content sweep now.
   - `preImportSnapshots` keeps the newest 1.
   - `rotatedLogs` never removes the active file.
-  - `orcaCache` is refused while a slice operation runs.
+  - `orcaCache` is refused with `STORAGE_IN_USE` while a slice
+    operation runs.
   - Each target leaves `integrity::check` clean.
 - [ ] **Step 3:** Implement. Commit:
   `feat(diagnostics): report storage use and clear reclaimable data`.
 
-**Acceptance criteria:** usage matches the bytes on disk (within the
-tolerance the spec sets for filesystem block rounding), and no cleanup
-touches referenced data.
+**Acceptance criteria:** usage matches the bytes on disk exactly for a
+quiescent Farm (the spec's D14 counts apparent file length, so the
+tolerance is zero), and no cleanup touches referenced data.
 
 ### Task 11: The every-domain Farm and the final reference matrix
 
@@ -1310,11 +1398,12 @@ touches referenced data.
 
 **Files:**
 
-- Create `tests/p9_farm/mod.rs` and `tests/p9_reference_matrix.rs`
+- Extend `tests/p9_farm/mod.rs` (landed by Task 5; keep its names, ids,
+  and timestamps) and create `tests/p9_reference_matrix.rs`
 - Modify production code only for a defect the matrix finds. Each fix
   is its own commit with a regression test.
 
-- [ ] **Step 1:** Build `Farm::with_every_domain()`. It holds:
+- [ ] **Step 1:** Extend `Farm::with_every_domain()` until it holds:
   - an active and an archived Printer, each with a camera, alert
     defaults, and slots;
   - a loaded and an archived Spool, and a tare;
@@ -1379,8 +1468,10 @@ v1 is a row, and every row passes.
     branches.
   - The `restore_status` banner appears once and is acknowledged.
   - Reset and export results are presented without their paths.
-  - Web mode returns fixtures for reads and `needsDesktopError` for
-    writes.
+  - Web mode returns fixtures for reads; the dialog-owning wrappers
+    (`create_backup`, `export_diagnostics`, `preview_restore` with a file
+    source) return `{ status: "unsupported", reason: "desktopRequired" }`
+    without IPC; other writes throw `needsDesktopError` (spec D18).
 - [ ] **Step 2:** Implement. Commit:
   `feat(ui): add history, backup, and diagnostics stores`.
 
@@ -1550,8 +1641,9 @@ manual pass).
   1. Build the every-domain Farm and seed the corpus into credentials,
      URLs, headers, errors (driven failures), and logs.
   2. Back up with `media: all`, then run `assert_no_corpus` over the
-     archive. The only exception is the camera URL, which is allowed
-     (decision 14) and asserted present in the database copy only.
+     archive. The only exception is the stored camera URL (the
+     query-token form), which is allowed (decision 14) and asserted
+     present in the database copy only.
   3. Mutate the local Farm to conflict: rename a Printer, add a Spool
      with a clashing number, delete a Project, and finish a new Job.
   4. Preview, and assert every conflict class and the notices.
