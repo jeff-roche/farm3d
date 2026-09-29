@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft, pending controller review.
+Approved by the controller, 2026-09-29, after two review rounds (issue #19 decision gate satisfied).
 
 This is the focused design for GitHub issue #19 (P9). It is Task 1 of
 `docs/superpowers/plans/2026-09-29-p9-history-settings-backup-diagnostics.md`.

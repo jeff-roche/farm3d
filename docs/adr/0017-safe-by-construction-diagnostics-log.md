@@ -1,6 +1,6 @@
 # A safe-by-construction diagnostics log and egress-scanned bundles
 
-**Status:** Draft, pending controller review, 2026-09-29, with the P9
+**Status:** Accepted, 2026-09-29, by the controller after two review rounds, with the P9
 spec.
 
 ## Context
