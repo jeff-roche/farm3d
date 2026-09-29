@@ -584,7 +584,7 @@ are: 18 commands (the restore-status pair is two); three more error codes
 (`RESTORE_FAILED`, `BACKUP_SOURCE_DAMAGED`, `STORAGE_IN_USE`) and the
 `OPEN_QUEUE` recovery code; migration 0010 also rebuilds
 `incident_events` and widens the pinned-and-pruned CHECK; the history
-indexes use `COALESCE(ended_at, updated_at)`; the journal schema and
+indexes use `COALESCE(ended_at, created_at)`; the journal schema and
 installer step names are the spec's D8; and the integrity catalogue drops
 `operationLedger` and adds `completionEvidence`, `hostOperationGcode`,
 and `preparationTargetPrinter` (spec D17). The spec's "Decisions made in
@@ -638,7 +638,7 @@ this spec" lists every change and why.
 ### Migration 0010 (`0010_p9_portability.sql`)
 
 - `jobs_history` and `jobs_history_printer` on
-  `COALESCE(ended_at, updated_at) DESC, id DESC`, partial on the four
+  `COALESCE(ended_at, created_at) DESC, id DESC`, partial on the four
   history states (an `outcomeUnknown` Job has no `ended_at`), plus the
   indexes the spec's query plans need (check with `EXPLAIN QUERY PLAN` in
   Task 4, which may amend 0010 in place).
@@ -1024,7 +1024,11 @@ foreign key to the former), `pending_credential_cleanup`, and
   - a Printer name.
 
   `assert_no_corpus` scans raw bytes and every zip entry, both
-  compressed and decompressed.
+  compressed and decompressed. Export two sets: the full corpus (for
+  diagnostics and logs) and `BACKUP_FORBIDDEN` (every credential value,
+  the header value, the userinfo URL, its `user:password@` part, and its
+  password), which is all a whole-Farm backup must not contain (spec
+  acceptance criteria 5 and 13).
 - [ ] **Step 6:** Commit:
   `feat(persistence): add migration 0010 and the reference-integrity checker`.
 
@@ -1094,11 +1098,12 @@ No `eprintln!` remains. The corpus scan passes.
   - keyset paging is stable while new Jobs finish between pages;
   - the limit bounds;
   - `outcomeUnknown` is excluded by default, and, when asked for, pages
-    by `COALESCE(ended_at, updated_at)` (it has no `ended_at`).
+    by `COALESCE(ended_at, created_at)` (it has no `ended_at`).
 - [ ] **Step 2:** Assert index use with `EXPLAIN QUERY PLAN` for the
   default query (`jobs_history`, with the spec's seekable keyset
   predicate) and for the text and Printer filters
-  (`jobs_history_printer`). Add indexes to 0010 only if the plan needs
+  (`jobs_history_printer`). The queries name the index with `INDEXED BY`
+  (spec D11), since no `sqlite_stat1` exists. Add indexes to 0010 only if the plan needs
   them (amend Task 2's migration in place before merge).
 - [ ] **Step 3:** Write the failing timeline tests:
   - The order is deterministic: by time, then source, then sequence.
@@ -1147,9 +1152,10 @@ doesn't change it.
   - The database copy is sanitized (decision 11) and passes
     `integrity::check`.
   - The counts equal the source's.
-  - `assert_no_corpus` (excluding the stored camera URL, per decision
-    14) passes over the archive and over the free pages of the database
-    copy.
+  - `assert_no_corpus` with `BACKUP_FORBIDDEN` passes over the archive,
+    every decompressed entry, and the free pages of the database copy.
+    Hosts, names, paths, and the stored camera URL are Farm data the
+    backup legitimately holds (spec D10, decision 14).
   - A blob whose file is missing or doesn't hash to its name fails with
     `BACKUP_SOURCE_DAMAGED`, and no destination file is left.
 - [ ] **Step 3:** Write the failing consistency tests:
@@ -1222,7 +1228,8 @@ live Farm. Every refusal is typed and carries a safe field path.
 
 - Create `backup/{journal.rs,installer.rs,restart.rs}`
 - Modify:
-  - `lib.rs`: run `installer::run(&paths, &lease, &credential_store)`
+  - `lib.rs`: run `installer::run(&paths, &lease, open_credentials)`
+    (a closure the installer calls only for a reset)
     after the ownership lease and before the log init and
     `Storage::open`; failures enter a `Failed(RESTORE_FAILED)` bootstrap
     state with a retry that re-runs the installer; retry a busy lease for
@@ -1238,15 +1245,19 @@ live Farm. Every refusal is typed and carries a safe field path.
   `Failed(RESTORE_FAILED)` without touching data, and an unknown
   `journalVersion` is refused.
 - [ ] **Step 2:** Write the failing fault-injection matrix from the
-  spec's "Installer fault points" restore rows (f1–f24), one test per
-  row, with the spec's D8 step names. For each, crash (inject an error
+  spec's "Installer fault points" restore rows (f1–f25, including f12a–c
+  and f21a–g for the lazily created media directory and crashes inside a
+  rollback), one test per row, with the spec's D8 step names and its
+  two-phase rollback marker (`journal.rollback`). For each, crash (inject an error
   and drop everything), then run the installer again. The outcome is
   either:
   - installed: counts equal the manifest, `integrity::check` is clean,
     and credential orphans are queued; or
-  - rolled back: byte-exact as the spec's D8 defines it (the database
-    and its `-wal`; `-shm` by presence; existing blobs unchanged; media
-    tree identical), and the journal is `failed`.
+  - rolled back: byte-exact as the spec's D8 defines it (baseline
+    before `recheckBlockers`: the main file identical; a non-empty
+    `-wal` identical, else absent or empty; `-shm` ignored; existing
+    blobs unchanged; the media tree identical, or still absent), and the
+    journal is `failed`.
 
   It is never mixed. Include these cases:
   - a live `-wal` with uncheckpointed frames at `pending` (the WAL must
@@ -1256,6 +1267,9 @@ live Farm. Every refusal is typed and carries a safe field path.
   - two consecutive crashes.
 - [ ] **Step 3:** Write the failing `apply_restore` tests:
   - the blocker re-check;
+  - `RESTART_PENDING` while a journal is `pending` (fault row f25);
+  - carried credential-cleanup rows whose ref the candidate uses are
+    dropped;
   - `CONFIRMATION_MISMATCH`;
   - an expired staging id;
   - the safety backup is written before the journal;
@@ -1298,6 +1312,9 @@ its database.
   - the files are gone;
   - `integrity::check` is clean.
 - [ ] **Step 3:** Write the failing tests for tier (c):
+  - `reset_farm` refuses with `RESTART_PENDING` while an unfinished
+    journal exists, and every tier holds `BackupLease` (activity
+    `reset`);
   - `reset_farm` takes `request: ResetRequest` and the exact phrase
     (`reset settings`, `reset media`, `reset farm`);
   - the preview lists every data class with counts and bytes, and the
@@ -1640,10 +1657,10 @@ manual pass).
   #19:
   1. Build the every-domain Farm and seed the corpus into credentials,
      URLs, headers, errors (driven failures), and logs.
-  2. Back up with `media: all`, then run `assert_no_corpus` over the
-     archive. The only exception is the stored camera URL (the
-     query-token form), which is allowed (decision 14) and asserted
-     present in the database copy only.
+  2. Back up with `media: all`, then run `assert_no_corpus` with
+     `BACKUP_FORBIDDEN` over the archive. The stored camera URL (the
+     query-token form) is allowed (decision 14) and asserted present in
+     the database copy only; hosts, names, and paths are Farm data.
   3. Mutate the local Farm to conflict: rename a Printer, add a Spool
      with a clashing number, delete a Project, and finish a new Job.
   4. Preview, and assert every conflict class and the notices.

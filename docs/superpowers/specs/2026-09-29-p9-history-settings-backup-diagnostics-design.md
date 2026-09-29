@@ -106,7 +106,7 @@ prune, restore, or reset path leaves a dangling reference.
 - The `diagnostics` module: the typed log with rotation, pseudonyms, the
   bundle collectors, the egress scan, storage usage and cleanup, tiered
   reset, and About.
-- 18 new commands, 11 new error codes, one new recovery code, and one new
+- 18 new commands, 12 new error codes, one new recovery code, and one new
   navigation selection kind.
 - Frontend: the Settings workspace and its eight categories, the history
   view and Job timeline, the restore preview, storage, diagnostics, and
@@ -358,10 +358,13 @@ exists when it is read.**
 
 **The lease.** `BackupLease` is one process-wide, exclusive, in-memory
 lease (`backup::lease`). It is held by `create_backup`, `preview_restore`,
-`apply_restore`, `reset_farm`, `clear_storage`, and `delete_backup` for
-their whole run. A second holder gets `BACKUP_IN_PROGRESS` with
-`details.activity` naming the current holder (`backup`, `restorePreview`,
-`restoreApply`, `reset`, `storageCleanup`). While it is held:
+`apply_restore`, `reset_farm` (every tier), `clear_storage`, and
+`delete_backup` for their whole run; `apply_restore` and tier (c) keep it
+until the process exits for the restart. A second holder gets
+`BACKUP_IN_PROGRESS` with `details.activity` naming the current holder
+(`backup` for `create_backup`, `restorePreview`, `restoreApply`, `reset`,
+`storageCleanup` for `clear_storage`, `backupDelete` for
+`delete_backup`). While it is held:
 
 - `ContentStore::release_unreferenced` returns without unlinking. Its
   `pending_blob_cleanup` rows stay and are retried.
@@ -446,7 +449,7 @@ the staged, migrated candidate (a read-only connection). It covers these
 
 | Domain (wire) | Table | Id | Natural key |
 |---|---|---|---|
-| `settings` | `settings` | the singleton (`"settings"`) | — |
+| `settings` | `settings` | the singleton: `localId` and `backupId` are both the string `"settings"` | — |
 | `printer` | `printers` | `id` | `host_identity`, only where `archived_at IS NULL AND host_identity IS NOT NULL` (the `printers_active_host_identity` index) |
 | `spool` | `spools` | `id` | `spool_number` |
 | `tare` | `spool_tares` | `id` | `lower(name)`, SQLite's ASCII-only `lower()` (the `spool_tares_name` index) |
@@ -585,8 +588,10 @@ hash matches. It then validates and migrates the candidate (D4), writes
 3. The staging must exist and not be expired (`RESTORE_STAGING_EXPIRED`).
 4. Take the lease (`BACKUP_IN_PROGRESS`).
 5. Re-check the blockers (`RESTORE_BLOCKED`).
-6. If a finished journal (`done` or `failed`) is present, acknowledge it
-   (delete it and its directory).
+6. If a journal in phase `pending`, `installing`, or `installed` exists
+   (another restore or reset is waiting for the restart), refuse with
+   `RESTART_PENDING`. If a finished journal (`done` or `failed`) is
+   present, acknowledge it (delete it and its directory).
 7. Write a safety backup with `origin: beforeRestore` (D9). Any failure
    stops here; nothing else has changed.
 8. Read, in one live read transaction, what the installer must carry
@@ -594,11 +599,17 @@ hash matches. It then validates and migrates the candidate (D4), writes
    `pending_credential_cleanup` row, and every local credential ref
    (from `printers.connection_json` and `pending_credential_cleanup`).
    The **orphan refs** are the local refs the candidate's Printers don't
-   reference.
+   reference. A local `pending_credential_cleanup` row whose ref the
+   candidate's Printers **do** reference is **dropped** from the carry:
+   the restored Farm uses that credential again, and carrying an
+   automatic reason (`printer_deleted`, `cleared`, …) would let F1's
+   startup retry delete it. Only rows for refs the candidate doesn't
+   reference are carried, verbatim.
 9. Compute `expectedCounts`: the candidate's per-table counts.
 10. Write the journal with phase `pending` (atomically: temp file,
     `fsync`, rename, `fsync` the directory).
-11. Record the result in the ledger, drop the lease, return
+11. Record the result in the ledger, keep the lease (so no other P9
+    operation starts before the restart), return
     `{ status: "restarting", safetyBackupId }`, and request the restart
     through the injected `Restarter` 500 ms later, so the response reaches
     the frontend first. Production's `Restarter` calls
@@ -631,6 +642,12 @@ type RestoreJournal = {
     }[];
   } | null;
   orphanCredentialRefs: string[];      // restore: queued as import_orphan; reset: deleted from the store
+  swapMedia: { liveExisted: boolean } | null;   // restore: written at the start of swapMedia, before any rename
+  rollback: {                          // restore: written before a rollback touches anything
+    from: InstallerStep;               // the step that crashed or failed
+    mediaRestored: boolean;            // set once rollback phase (a) is durable
+    candidateCleared: boolean;         // set once rollback phase (b) is durable
+  } | null;
   reset: { deleteSafetyBackups: boolean } | null;         // reset only
   outcome: { finishedAt: string } | null;                 // set with phase "done"
   failure: { code: ErrorCode; step: InstallerStep | null; finishedAt: string } | null;
@@ -639,7 +656,7 @@ type InstallerStep =
   | "recheckBlockers" | "markInstalling" | "moveDatabaseAside" | "placeCandidate"
   | "carryLocalState" | "extractContent" | "swapMedia" | "validate" | "markInstalled"
   | "moveRootsAside" | "createFreshDatabase" | "deleteCredentials" | "deleteSafetyBackups"
-  | "removePrevious" | "markDone" | "rollback";
+  | "removePrevious" | "markDone";
 ```
 
 - Legal transitions: `pending → installing` (restore), `pending →
@@ -664,9 +681,12 @@ F1's startup order gains the installer and the log:
    it counts as contention, because the process that requested the
    restart may still be exiting. Without a journal, F1's immediate
    failure is unchanged.
-3. `backup::installer::run(&paths, &lease, &credential_store)`. It
-   constructs the credential store itself (after the lease, as F1
-   requires) only for a reset. It returns an `InstallReport`, or a
+3. `backup::installer::run(&paths, &lease, open_credentials)`, where
+   `open_credentials: impl FnOnce() -> CredentialStore` (production:
+   `|| CredentialStore::detect(metadata_root)`; tests: a fake). The
+   installer calls it only for a reset's `deleteCredentials` step, so the
+   store is opened after the lease, as F1 requires, and never for a
+   restore. It returns an `InstallReport`, or a
    `RESTORE_FAILED` error that becomes the bootstrap `Failed` state; the
    recovery UI's retry re-runs the installer, then continues.
 4. Initialize the log (`diagnostics::log::init(paths.log_root())`), then
@@ -683,8 +703,10 @@ knows what the files on disk are.
 
 1. `recheckBlockers` (phase `pending`). Open the live database read-write
    with `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` and `query_only = ON`, run the
-   D7 blocker query in one read transaction, and close, so the main file
-   and `-wal` bytes stay exactly as they were. Blocked → phase `failed`
+   D7 blocker query in one read transaction, and close. The main file
+   isn't written and no checkpoint runs; opening can still create an
+   empty `-wal` and a new `-shm` beside a cleanly closed database, which
+   the byte-exact rule below allows for. Blocked → phase `failed`
    (`RESTORE_BLOCKED`). The staging is gone → `failed`
    (`RESTORE_STAGING_EXPIRED`). Either way nothing is moved.
 2. `markInstalling`: phase `installing`, `attempts += 1`.
@@ -710,11 +732,15 @@ knows what the files on disk are.
    keep it; else re-hash the staged file (D3's second verification) and
    rename it into place, then `fsync` the prefix directory. This step
    only adds files.
-7. `swapMedia`: re-hash every staged media file, then rename
-   `<media_root>/snapshots` to `restore-<stagingId>/previous-snapshots`,
-   then `restore-<stagingId>/snapshots` to `<media_root>/snapshots`, and
-   `fsync` the media root. With `media: none` an empty directory is
-   swapped in.
+7. `swapMedia`: re-hash every staged media file. Then record
+   `swapMedia.liveExisted` in the journal (atomically): whether
+   `<media_root>/snapshots` exists. P8 creates it lazily at the first
+   capture (`cameras/media.rs`) and its sweep tolerates its absence, so a
+   Farm that never captured has none. If it exists, rename it to
+   `restore-<stagingId>/previous-snapshots`. Then rename
+   `restore-<stagingId>/snapshots` to `<media_root>/snapshots`, and `fsync`
+   the media root. Staging always creates `restore-<stagingId>/snapshots`,
+   empty for `media: none`.
 8. `validate`: open the placed database as `Storage::open` would (WAL,
    `synchronous = FULL`, foreign keys on), run `migrations::apply`,
    `integrity_check` (exactly `ok`), `foreign_key_check` (no rows), and
@@ -731,21 +757,42 @@ knows what the files on disk are.
 
 #### Rollback and retry (restore)
 
-- **Rollback** is idempotent and works from any partial state, driven by
-  `journal.step`:
-  1. Media: if `restore-<stagingId>/previous-snapshots` exists, move any
-     `<media_root>/snapshots` present back to
-     `restore-<stagingId>/snapshots` (only when `previous-snapshots` also
-     exists, which proves it is the staged tree), then rename
-     `previous-snapshots` to `<media_root>/snapshots`.
-  2. Database: if the recorded step is `placeCandidate` or later, delete
-     `farm3d.sqlite3`, its `-wal` and `-shm`, and
-     `.farm3d-restore-candidate.partial` from `metadata_root` (they are
-     the candidate). Then move every file in `restore/<id>/previous/`
-     back. If the step is `moveDatabaseAside`, only move the files back
-     (whatever is still in `metadata_root` is original).
-  3. Content: nothing. Blobs added by a rolled-back install have no row
-     and are removed by P4's startup sweep.
+- **Rollback** is two-phase and idempotent. Each phase's completion is
+  made durable in `journal.rollback` before the next starts, so a crash
+  or an I/O error inside a rollback resumes it without redoing a
+  destructive step:
+  0. If `journal.rollback` is null, write `rollback: { from: <the failed
+     step>, mediaRestored: false, candidateCleared: false }` first.
+     `journal.step` is never changed by a rollback.
+  1. **(a) Media**, unless `mediaRestored`. If `journal.swapMedia` is null,
+     `swapMedia` never renamed anything: skip. If `liveExisted` is true:
+     when `restore-<stagingId>/previous-snapshots` exists, move any
+     `<media_root>/snapshots` present back to `restore-<stagingId>/snapshots`
+     (with `previous-snapshots` still present, it can only be the staged
+     tree), then rename `previous-snapshots` to `<media_root>/snapshots`;
+     when it doesn't exist, the first rename never happened: nothing to
+     do. If `liveExisted` is false: move any `<media_root>/snapshots`
+     present (it can only be the staged tree) back to
+     `restore-<stagingId>/snapshots`, leaving no `snapshots` directory, as
+     before. Then write `mediaRestored: true` and `swapMedia: null`.
+  2. **(b) Clear the candidate**, unless `candidateCleared`. If `from` is
+     `placeCandidate` or later, every original database file is already in
+     `previous/` (the step after `moveDatabaseAside` is recorded only once
+     it completed), so delete `farm3d.sqlite3`, `-wal`, `-shm`, and
+     `.farm3d-restore-candidate.partial` from `metadata_root`: they are
+     the candidate. If `from` is `moveDatabaseAside` or earlier, delete
+     nothing: whatever is in `metadata_root` is original. Then write
+     `candidateCleared: true`. After this, the rollback never deletes a
+     database file again.
+  3. **(c) Move back.** For `farm3d.sqlite3`, `-wal`, and `-shm`, in that
+     order: if `restore/<id>/previous/<name>` exists, rename it into
+     `metadata_root`. A rename is atomic, so each file is in exactly one
+     of the two places; a file already moved back is simply not in
+     `previous/` any more. Then `fsync` both directories.
+  4. **Content**: nothing. Blobs added by a rolled-back install have no
+     row and are removed by P4's startup sweep.
+  5. One journal write then clears `rollback` and sets the phase:
+     `pending` for a retry, or `failed`.
 - **When to roll back.** A crash (the next start finds phase
   `installing`) and an I/O error at any step both roll back. Then, if
   `attempts < 2`, the phase returns to `pending` and the install runs
@@ -760,14 +807,21 @@ knows what the files on disk are.
 - A crash after `installed` rolls **forward**: the next start runs
   `removePrevious` and `markDone`.
 - If a rollback itself fails, startup stops with `RESTORE_FAILED`
-  (`details.reason: "rollbackFailed"`) and the journal is left as it was,
-  so the retry resumes the rollback.
-- **Byte-exact** means: `farm3d.sqlite3` and, when one existed,
-  `farm3d.sqlite3-wal` are byte-identical to their bytes before the
-  install; `farm3d.sqlite3-shm` exists exactly when it did (its bytes are
-  a rebuildable index and aren't compared); every pre-existing blob file
-  is unchanged (extra blob files are allowed until the sweep); and
-  `<media_root>/snapshots` is byte-identical, tree and files.
+  (`details.reason: "rollbackFailed"`) with `journal.rollback` recording
+  how far it got, so the retry resumes the rollback at the first phase
+  not yet marked done.
+- **Byte-exact** is measured against the files as they were before the
+  installer ran (before `recheckBlockers`), and means:
+  - `farm3d.sqlite3` is byte-identical;
+  - `farm3d.sqlite3-wal`: if it existed and was non-empty, it is
+    byte-identical; otherwise it is absent or empty (`recheckBlockers` may
+    leave an empty one);
+  - `farm3d.sqlite3-shm` is ignored (presence and bytes): it is a
+    rebuildable index, and `recheckBlockers` may create one;
+  - every pre-existing blob file is unchanged (extra blob files are
+    allowed until the sweep);
+  - `<media_root>/snapshots` is byte-identical, tree and files, or still
+    absent if it was absent.
 
 The "Installer fault points" table below is the contract.
 
@@ -824,7 +878,8 @@ never enter or leave.**
 - **Orphaned local refs.** Local refs the new Farm doesn't reference are
   queued in the new database's `pending_credential_cleanup` with reason
   `import_orphan`, which F1 never deletes automatically; local pending
-  rows are carried as they are. A rollback, or restoring the safety
+  rows are carried as they are, except a row whose ref the restored
+  Printers use, which is dropped (D8 `apply_restore` step 8). A rollback, or restoring the safety
   backup, therefore still finds every credential. The preview's
   `credentialsOrphaned` notice counts them.
 
@@ -834,9 +889,14 @@ never enter or leave.**
 paged on a history time that exists for every Job it can show.**
 
 - **History time.** `historyAt = COALESCE(jobs.ended_at,
-  jobs.updated_at)`. A terminal Job has `ended_at`; an `outcomeUnknown`
-  Job has none (0008's CHECK), and its `updated_at` changes only when the
-  operator declares its outcome, which also sets `ended_at`.
+  jobs.created_at)`. A terminal Job has `ended_at`, which never changes; an
+  `outcomeUnknown` Job has none (0008's CHECK), so it sorts by
+  `created_at`, which never changes either. `updated_at` is not usable:
+  every `jobs_repository::write_row` bumps it, including
+  `update_columns` from `dispatch::apply_host_outcome`
+  (`jobs/dispatch.rs:209`) when a pause or cancel Host Operation resolves
+  after the Job went `outcomeUnknown`. The key changes exactly once, when
+  the operator declares the outcome and `ended_at` is set.
 - **`list_job_history(query)`**, one read transaction:
   - `states`: 1–4 distinct `JobHistoryState` values; default
     `["completed", "failed", "cancelled"]`, so `outcomeUnknown` is shown
@@ -865,14 +925,22 @@ paged on a history time that exists for every Job it can show.**
   predicate is written in the seekable form:
 
   ```sql
-  COALESCE(j.ended_at, j.updated_at) <= :at
-    AND (COALESCE(j.ended_at, j.updated_at) < :at OR j.id < :id)
+  COALESCE(j.ended_at, j.created_at) <= :at
+    AND (COALESCE(j.ended_at, j.created_at) < :at OR j.id < :id)
   ```
 
   It reads `limit + 1` rows; `nextCursor` is the last returned row's key
   when the extra row exists. A Job that finishes between pages sorts
   above the first page, so paging never repeats or skips a row that
-  didn't change.
+  didn't change; an `outcomeUnknown` Job declared between pages moves
+  above the first page too (so a paging session can miss it once, never
+  repeat it).
+- **Index choice is forced.** farm3d never runs `ANALYZE`, so without
+  `sqlite_stat1` the planner may pick `jobs_state` and a temporary B-tree
+  for the first page. The query names its index: `FROM jobs j INDEXED BY
+  jobs_history_printer` when `printerId` is given, else `INDEXED BY
+  jobs_history`. `INDEXED BY` fails the statement if the index can't be
+  used, so a regression is an error, not a slow scan.
 - **Indexes** (migration 0010): `jobs_history` for the default query and
   `jobs_history_printer` for the Printer filter. Task 4 asserts both with
   `EXPLAIN QUERY PLAN` and may add indexes to 0010 in place (it is
@@ -1007,7 +1075,13 @@ strings (job and file names); raw ids.
   - every Connection host (`printers.connection_json` `$.host`) and
     Host Operation endpoint host (`host_operations.endpoint_json`);
   - every camera `snapshot_url`, and each of its query values;
-  - the home directory path;
+  - every credential ref (both forms), from `printers.connection_json`
+    and `pending_credential_cleanup`;
+  - the home directory path, and every absolute path farm3d knows:
+    `library_models.linked_path`, `model_source_revisions.source_path`,
+    the Slicer runtime's two paths, and the storage roots
+    (`metadata_root`, the app data root, `log_root`, `backup_root`, the
+    cache directory);
   - every Printer, Spool (manufacturer, product, color name, storage
     label), tare, Model, and Project name, Printer Location and notes,
     and Incident note text, longer than 3 characters.
@@ -1089,11 +1163,14 @@ naming every affected data class in `reset_preview` first.**
   `pruned_at = now`, `prune_reason = 'reset'`, `revision + 1`, appends
   `evidencePruned { reason: "reset" }` for each Incident-linked row, and
   claims the `operationId` (`resetCameraMedia`); after commit the files
-  are unlinked (queued if the lease is held). It publishes what a P8
+  are queued, because `reset_farm` holds the lease, and unlinked when it
+  drops the lease at the end of the command. It publishes what a P8
   prune pass publishes. `scope: "all"` includes pinned rows, which keep
   `pinned_at` (0010's widened CHECK allows it). A crash between commit and
   unlink leaves orphan files that P8's startup sweep deletes.
-- **Tier (c), entire Farm.** `reset_farm` takes the lease, optionally
+- **Tier (c), entire Farm.** `reset_farm` refuses with `RESTART_PENDING`
+  when an unfinished journal exists and acknowledges a finished one, as
+  `apply_restore` does (D8 step 6). Then it takes the lease, optionally
   writes a safety backup (`safetyBackup: true` by default, `origin:
   beforeReset`), reads every credential ref (from
   `printers.connection_json` and `pending_credential_cleanup`), writes a
@@ -1295,8 +1372,12 @@ verbatim into `p9_restore_preview.rs`.
 ## Installer fault points
 
 Each row injects a fault at the named point (`installer::Fault { step,
-point }`, test-only), drops every handle as a crash would, then runs the
-installer again with no fault. "Installed" means: counts equal
+point }`, test-only, where a point can also be a rollback phase or a
+single move-back), drops every handle as a crash would, then runs the
+installer again with no fault. "Byte-exact" in an outcome is D8's
+definition (baseline before `recheckBlockers`; `-shm` ignored; an empty
+`-wal` allowed where none or an empty one existed). Rollback markers are
+written `rollback { from, mediaRestored, candidateCleared }`. "Installed" means: counts equal
 `expectedCounts` (with D8's two carried exceptions), `integrity::check`
 has no violation, orphan refs are queued, and the journal is `done`.
 "Rolled back" means byte-exact as D8 defines it, and the journal is
@@ -1318,7 +1399,10 @@ has no violation, orphan refs are queued, and the journal is `done`.
 | f9 | `carryLocalState` before its commit | `installing`/`carryLocalState`, 1 | candidate plus `-wal` in root | rollback deletes the candidate set, retry | installed |
 | f10 | `extractContent` after the first blob is renamed | `installing`/`extractContent`, 1 | one blob added | rollback, retry (keeps the added blob) | installed |
 | f11 | `extractContent` fails with no space (twice) | — (in-run errors) | some blobs added | rollback, retry, same error | `failed` `INSUFFICIENT_SPACE`; rolled back; the added blobs are removed by P4's sweep at that same start |
-| f12 | `swapMedia` between its two renames | `installing`/`swapMedia`, 1 | no `<media_root>/snapshots` | rollback renames `previous-snapshots` back, retry | installed |
+| f12 | `swapMedia` between its two renames | `installing`/`swapMedia`, 1, `liveExisted` true | no `<media_root>/snapshots` | rollback renames `previous-snapshots` back, retry | installed |
+| f12a | `swapMedia` on a Farm with no `<media_root>/snapshots` (never captured), after the staged tree is renamed in | `installing`/`swapMedia`, 1, `liveExisted` false | staged tree at `<media_root>/snapshots` | rollback moves it back to staging, leaving no `snapshots`, retry | installed |
+| f12b | as f12a, but both attempts crash there | `installing`/`swapMedia`, 2, `liveExisted` false | staged tree in place | rollback, no retry | `failed` `RESTORE_FAILED`; rolled back, `<media_root>/snapshots` still absent |
+| f12c | after `swapMedia` records `liveExisted`, before its first rename | `installing`/`swapMedia`, 1 | untouched | rollback (media: nothing to undo), retry | installed |
 | f13 | after `swapMedia` completes | `installing`/`swapMedia`, 1 | staged media in place | rollback swaps both back, retry | installed |
 | f14 | a staged blob altered after preview | — (in-run, at `extractContent`) | — | rollback, no retry | `failed` `BACKUP_INVALID` (`checksumMismatch`); rolled back |
 | f15 | `validate` fails (candidate corrupted after staging) | — (in-run) | candidate in place | rollback, no retry | `failed` `BACKUP_INVALID` (`databaseInvalid`); rolled back |
@@ -1327,10 +1411,18 @@ has no violation, orphan refs are queued, and the journal is `done`.
 | f18 | after `markInstalled` | `installed` | `previous/` present | `removePrevious`, `markDone` | installed |
 | f19 | `removePrevious` half done | `installed`/`removePrevious` | `previous/` partly deleted | `removePrevious`, `markDone` | installed |
 | f20 | after `markDone` | `done` | clean | nothing | installed; `restore_status` is `done` until acknowledged |
-| f21 | rollback fails once (an injected I/O error during f8's rollback) | `installing`/`placeCandidate`, 1 | candidate in root | startup `RESTORE_FAILED` (`rollbackFailed`), journal unchanged; the retry rolls back and retries | installed |
+| f21 | rollback fails once (an injected I/O error during f8's rollback, phase b) | `installing`/`placeCandidate`, 1, `rollback` written | candidate in root | startup `RESTORE_FAILED` (`rollbackFailed`); the retry resumes the rollback, then retries the install | installed |
+| f21a | crash in f13's rollback after `rollback` is written, before phase (a) | `rollback { from: swapMedia, false, false }` | staged media in place, candidate in root | rollback resumes at phase (a) | installed |
+| f21b | crash in f13's rollback after `mediaRestored` is written | `rollback { …, true, false }` | original media back, candidate in root | rollback resumes at phase (b) | installed |
+| f21c | crash in f8's rollback after `candidateCleared` is written, before any move-back | `rollback { from: placeCandidate, true, true }` | no database in root; the original set in `previous/` | phase (c) moves all three back | installed |
+| f21d | crash in f8's rollback after `farm3d.sqlite3` is moved back, before `-wal` (with a live `-wal` holding uncheckpointed frames) | `rollback { …, true, true }` | original main in root, original `-wal` and `-shm` in `previous/` | phase (c) moves `-wal` and `-shm` back; it never deletes the main file | installed; and, read before the retry, the pre-restore database shows the WAL's rows |
+| f21e | crash in f8's rollback after `-wal` is moved back, before `-shm` | `rollback { …, true, true }` | main and `-wal` in root, `-shm` in `previous/` | phase (c) moves `-shm` back | installed |
+| f21f | f21d, with `attempts` 2 | `rollback { …, true, true }`, attempts 2 | as f21d | phase (c), then no retry | `failed` `RESTORE_FAILED`; rolled back byte-exact, the WAL's rows readable |
+| f21g | crash in f5's rollback (`from: moveDatabaseAside`) after `candidateCleared` is written | `rollback { from: moveDatabaseAside, true, true }` | main in `previous/`, `-wal` and `-shm` in root | phase (c) moves main back; nothing is deleted | installed |
 | f22 | the journal file is corrupt | — | untouched | startup `RESTORE_FAILED` (`journalUnreadable`) | nothing touched |
 | f23 | `journalVersion` is 2 | — | untouched | startup `RESTORE_FAILED` (`journalVersion`) | nothing touched |
 | f24 | the restarting process still holds the lease for 2 s | `pending` | — | lease retried for up to 10 s | installed |
+| f25 | a second `apply_restore` (or any `reset_farm`) while the journal is `pending`, before the restart | `pending` | — | — | refused `RESTART_PENDING`; the journal is unchanged; the next start installs the first restore |
 
 **Reset (tier c, roll forward only)**
 
@@ -1397,9 +1489,9 @@ Arc<DiagnosticsServices>`.
 
 ```sql
 -- P9 D11: Job history paging, keyset on the history time, then id.
-CREATE INDEX jobs_history ON jobs(COALESCE(ended_at, updated_at) DESC, id DESC)
+CREATE INDEX jobs_history ON jobs(COALESCE(ended_at, created_at) DESC, id DESC)
   WHERE state IN ('completed','failed','cancelled','outcomeUnknown');
-CREATE INDEX jobs_history_printer ON jobs(printer_id, COALESCE(ended_at, updated_at) DESC, id DESC)
+CREATE INDEX jobs_history_printer ON jobs(printer_id, COALESCE(ended_at, created_at) DESC, id DESC)
   WHERE state IN ('completed','failed','cancelled','outcomeUnknown');
 
 -- P9 D5/D15: camera_snapshots gains the prune reasons 'reset' and
@@ -1788,18 +1880,19 @@ D3's rules), host, URL, credential, name, or matched term.
 | `RESTORE_STAGING_EXPIRED` | `apply_restore`, the installer | `{ stagingId: string }` | `[]` | "This restore preview expired. Preview the backup again." |
 | `RESTORE_FAILED` | startup (bootstrap `Failed`), the installer (as a journal failure code, after the second attempt) | `{ reason: "journalUnreadable" \| "journalVersion" \| "installFailed" \| "rollbackFailed", step: InstallerStep \| null }` | `[RETRY]` for `installFailed` and `rollbackFailed` (retryable); `[]` otherwise | "farm3d couldn't finish restoring or resetting the Farm." |
 | `INSUFFICIENT_SPACE` | `create_backup`, `preview_restore`, `apply_restore`, `reset_farm`, the installer | `{ requiredBytes: number, availableBytes: number, target: "backupDestination" \| "safetyBackup" \| "restoreStaging" \| "install" }` | `[RETRY]` | "There isn't enough free disk space." |
-| `BACKUP_IN_PROGRESS` | every lease holder (D5) | `{ activity: "backup" \| "restorePreview" \| "restoreApply" \| "reset" \| "storageCleanup" }` | `[RETRY]` (retryable) | "Another backup, restore, reset, or cleanup is running." |
+| `BACKUP_IN_PROGRESS` | every lease holder (D5) | `{ activity: "backup" \| "restorePreview" \| "restoreApply" \| "reset" \| "storageCleanup" \| "backupDelete" }` | `[RETRY]` (retryable) | "Another backup, restore, reset, or cleanup is running." |
 | `BACKUP_SOURCE_DAMAGED` | `create_backup`, safety backups | `{ entry: string }` (`database` or an archive entry name) | `[]` | "A file this Farm uses is missing or damaged, so it can't be backed up." |
 | `DIAGNOSTICS_REDACTION_FAILED` | `export_diagnostics` | `{ section: DiagnosticsSection }` | `[]` | "farm3d stopped the export: the <section> section wasn't fully redacted. Nothing was written." |
 | `CONFIRMATION_MISMATCH` | `apply_restore`, `reset_farm` | `{ expected: string }` (the phrase) | `[EDIT_FIELDS]` | "Type the confirmation phrase exactly." |
+| `RESTART_PENDING` | `apply_restore`, `reset_farm` (every tier) while a journal is `pending`, `installing`, or `installed` | `{ journalId: string, kind: "restore" \| "reset" }` | `[RESTART_APPLICATION]` | "farm3d is about to restart to finish a restore or reset." |
 | `STORAGE_IN_USE` | `clear_storage` (`orcaCache`) | `{ target: StorageCleanupTarget, reason: "sliceRunning" }` | `[RETRY]` | "The slicer is using this data right now." |
 | `UNSUPPORTED_SCHEMA_VERSION` | `preview_restore` (existing code) | `{ supportedVersion: CURRENT_SCHEMA_VERSION, receivedVersion: number }` | `[UPGRADE_FARM3D]` | "This backup was made by a newer version of farm3d." |
 
-- The eleven new codes are `BACKUP_INVALID`, `UNSUPPORTED_BACKUP_FORMAT`,
+- The twelve new codes are `BACKUP_INVALID`, `UNSUPPORTED_BACKUP_FORMAT`,
   `RESTORE_BLOCKED`, `RESTORE_STAGING_EXPIRED`, `RESTORE_FAILED`,
   `INSUFFICIENT_SPACE`, `BACKUP_IN_PROGRESS`, `BACKUP_SOURCE_DAMAGED`,
-  `DIAGNOSTICS_REDACTION_FAILED`, `CONFIRMATION_MISMATCH`, and
-  `STORAGE_IN_USE`. `UNSUPPORTED_SCHEMA_VERSION` gains a backup
+  `DIAGNOSTICS_REDACTION_FAILED`, `CONFIRMATION_MISMATCH`,
+  `RESTART_PENDING`, and `STORAGE_IN_USE`. `UNSUPPORTED_SCHEMA_VERSION` gains a backup
   constructor with the details above.
 - As a journal failure code, `RESTORE_FAILED` carries only the failed
   step (`RestoreStatus.failedStep`); the `reason` details belong to the
@@ -1924,9 +2017,14 @@ and cleanup eligibility. TypeScript presents them.
 5. **Backup.** For each media choice the archive holds exactly the
    expected entries; the copy is sanitized and `VACUUM`ed; counts equal
    the source's; the lease holds back blob and media deletion; a second
-   lease holder gets `BACKUP_IN_PROGRESS`; `assert_no_corpus` passes over
-   the archive and the copy's free pages, except the stored camera URL
-   (decision 14).
+   lease holder gets `BACKUP_IN_PROGRESS`; the backup subset of the
+   corpus (`secrets::BACKUP_FORBIDDEN`: every credential value, the
+   header value, the userinfo URL form, its `user:password@` part, and
+   its password) is absent from the archive, every decompressed entry,
+   and the copy's free pages. The rest of the corpus (hosts, Printer
+   names, the home path, the stored camera URL with its query token) is
+   Farm data a whole-Farm backup legitimately holds (D10, decision 14),
+   so it is not asserted absent.
 6. **Restore preview.** Every "Conflict fixtures" row; every D3 and D4
    rejection; notices and blockers; the live database's bytes are
    unchanged by a preview.
@@ -1946,9 +2044,10 @@ and cleanup eligibility. TypeScript presents them.
     cascade as a named allowed loss.
 12. **Fixture compatibility.** The committed `formatVersion` 1 fixture
     restores; each tampered variant is refused with its code.
-13. **Secrets.** The shared corpus (Task 2) never appears in a backup
-    (except the stored camera URL), a bundle, a log line, a journal, an
-    error, an event, or frontend state.
+13. **Secrets.** The full shared corpus (Task 2) never appears in a
+    diagnostics bundle or a log line. `secrets::BACKUP_FORBIDDEN` (credential
+    values, the header value, the userinfo URL and its parts) never
+    appears in a backup, a journal, an error, an event, or frontend state.
 14. **Frontend.** The Task 12–16 tests pass; theme preview behaves as
     before; the main chunk doesn't grow; screenshots exist at both
     viewports.
@@ -1995,12 +2094,16 @@ evidence. Where the code disagreed with the plan, the code won.
    'missingFile')` would reject both a pinned snapshot left out of a
    `media: none` backup (`notInBackup`) and tier (b)'s `all` scope
    (`reset`). The plan only widened the reason list.
-4. **History pages on `COALESCE(ended_at, updated_at)`.** The plan's
+4. **History pages on `COALESCE(ended_at, created_at)`.** The plan's
    index was on `ended_at` alone, but an `outcomeUnknown` Job has no
    `ended_at` (0008's CHECK), and decision 18 allows it in the results.
-   There are two partial indexes, `jobs_history` and
-   `jobs_history_printer`, and the keyset predicate is written so SQLite
-   seeks (checked with `EXPLAIN QUERY PLAN`).
+   `created_at` is the fallback because it never changes, and
+   `updated_at` does (fix round 1: `write_row` always bumps it, including
+   from `dispatch::apply_host_outcome` on an `outcomeUnknown` Job). There
+   are two partial indexes, `jobs_history` and `jobs_history_printer`,
+   the query names one with `INDEXED BY` (no `sqlite_stat1` exists), and
+   the keyset predicate is written so SQLite seeks (checked with
+   `EXPLAIN QUERY PLAN`).
 5. **`operationLedger` is not an integrity rule.** The plan listed "the
    `operation_id` columns → `operations`" as unenforced references. They
    are idempotency keys, not references: 0004's comment and P3's code
@@ -2091,6 +2194,26 @@ evidence. Where the code disagreed with the plan, the code won.
     indexes; the shared corpus's camera URL with userinfo is used only on
     error and log paths, and a *stored* camera URL seed carries only a
     query token (P8 rejects userinfo at save).
+28. **(Fix round 1) Rollback is two-phase with a durable marker**
+    (`journal.rollback`), so a crash inside a rollback never deletes an
+    original database file or separates the WAL from its database; there
+    is no `rollback` `InstallerStep`.
+29. **(Fix round 1) `swapMedia` records whether `<media_root>/snapshots`
+    existed**, because P8 creates it lazily; rollback restores its absence.
+30. **(Fix round 1) Byte-exact is measured before `recheckBlockers`**, with
+    `-shm` ignored and an empty `-wal` allowed, since opening a cleanly
+    closed WAL database creates both.
+31. **(Fix round 1) The backup corpus check is scoped** to
+    `BACKUP_FORBIDDEN`; hosts, names, paths, and the stored camera URL are
+    Farm data a whole-Farm backup carries.
+32. **(Fix round 1) Carried credential-cleanup rows whose ref the restored
+    Printers use are dropped**, not downgraded, so F1's startup retry can't
+    delete a restored Printer's credential.
+33. **(Fix round 1) `RESTART_PENDING`** refuses a second restore or any
+    reset while an unfinished journal exists, and `apply_restore` keeps
+    the lease until the process exits.
+34. **(Fix round 1) History queries name their index** (`INDEXED BY`), and
+    the egress corpus adds credential refs and every known absolute path.
 
 ## Residual risks
 
@@ -2113,6 +2236,13 @@ evidence. Where the code disagreed with the plan, the code won.
   defect.
 - **Printers import stays blocked once any Job exists** (decision 3).
   Whole-Farm restore replaces that workflow.
+- **Writes between the safety backup and the restart are lost.** A Job
+  command or capture committed after `apply_restore`'s safety backup and
+  before the process exits (the journal write plus 500 ms) is in neither
+  the safety backup nor the restored Farm. The lease stops every other
+  P9 operation in that window, and the blocker re-check at install
+  refuses the restore if the write started new work; a non-blocking write
+  (a note, a setting) is accepted as lost.
 - **A restore on another platform** (paths, keyring) is unverified:
   Linux x86_64 only (decision 21).
 - **Notes are verbatim operator text** in a backup, as in the Printers
