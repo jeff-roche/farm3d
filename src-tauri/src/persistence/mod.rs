@@ -1,5 +1,6 @@
 mod database;
 mod error;
+pub mod integrity;
 mod legacy;
 mod migrations;
 pub mod snapshot;
@@ -1203,6 +1204,8 @@ mod tests {
                     ("index", "incidents_one_per_job"),
                     ("index", "incidents_open"),
                     ("index", "incidents_printer"),
+                    ("index", "jobs_history"),
+                    ("index", "jobs_history_printer"),
                     ("index", "jobs_one_active_per_printer"),
                     ("index", "jobs_printer_ended"),
                     ("index", "jobs_slice_revision"),

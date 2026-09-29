@@ -1012,10 +1012,11 @@ fn map_write_error(
 fn cleanup_precedence(reason: &str) -> Option<u8> {
     match reason {
         "import_orphan" => Some(0),
-        "provisional" => Some(1),
-        "replaced" => Some(2),
-        "cleared" => Some(3),
-        "printer_deleted" => Some(4),
+        "reset" => Some(1),
+        "provisional" => Some(2),
+        "replaced" => Some(3),
+        "cleared" => Some(4),
+        "printer_deleted" => Some(5),
         _ => None,
     }
 }
@@ -1262,4 +1263,28 @@ fn replace(
             &printer.id,
         )
     })
+}
+
+#[cfg(test)]
+mod cleanup_precedence_tests {
+    use super::cleanup_precedence;
+
+    /// P9 D15: `reset` ranks between `import_orphan` and `provisional`.
+    #[test]
+    fn precedence_orders_reset_between_import_orphan_and_provisional() {
+        let order = [
+            "import_orphan",
+            "reset",
+            "provisional",
+            "replaced",
+            "cleared",
+            "printer_deleted",
+        ];
+        let ranks: Vec<u8> = order
+            .iter()
+            .map(|reason| cleanup_precedence(reason).expect("known reason"))
+            .collect();
+        assert!(ranks.windows(2).all(|pair| pair[0] < pair[1]), "{ranks:?}");
+        assert_eq!(cleanup_precedence("bogus"), None);
+    }
 }

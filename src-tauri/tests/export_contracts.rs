@@ -647,6 +647,8 @@ fn export_registry() -> Vec<Export> {
         export::<PruneReason>(),
         export::<EvidenceSkipReason>(),
         export::<EvidenceOutcome>(),
+        export::<farm3d_lib::persistence::integrity::IntegrityRule>(),
+        export::<farm3d_lib::persistence::integrity::IntegrityOutcome>(),
         export::<CameraContentType>(),
         export::<CameraSnapshot>(),
         export::<MediaUsage>(),

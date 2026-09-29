@@ -8,7 +8,7 @@
 //! rejects an unknown kind, the partial unique index (at most one open
 //! Attention Event per dedup key), the read-implication CHECKs
 //! (acknowledged/resolved implies read), the `incident_events`
-//! append-only triggers, `CURRENT_SCHEMA_VERSION == 9`, the migration's
+//! append-only triggers, `CURRENT_SCHEMA_VERSION == 10` since P9, the migration's
 //! crash-boundary behaviour, and that no new column can hold a
 //! credential. See the P8 design spec's "Schema" section.
 
@@ -283,7 +283,7 @@ fn seed_manual_snapshot(connection: &rusqlite::Connection, id: &str, printer_id:
     );
 }
 
-/// 1. A fresh database reaches `CURRENT_SCHEMA_VERSION` (9), with a
+/// 1. A fresh database reaches `CURRENT_SCHEMA_VERSION` (10 since P9), with a
 ///    ledger row for `0009_p8_attention` whose checksum matches the
 ///    migration SQL.
 #[test]
@@ -303,7 +303,7 @@ fn fresh_database_records_the_v9_ledger_row_with_a_matching_checksum() {
         .expect("schema state");
 
     assert_eq!(version, CURRENT_SCHEMA_VERSION);
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     assert_eq!(name, "0009_p8_attention");
     let expected_checksum = format!(
         "{:x}",
