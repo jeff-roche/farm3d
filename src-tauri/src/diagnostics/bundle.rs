@@ -174,7 +174,7 @@ struct BundleManifest<'a> {
 }
 
 /// `bundle.json`'s closed paths.
-const MANIFEST_CLOSED: &[&str] = &["format", "createdAt", "sections[]"];
+const MANIFEST_CLOSED: &[&str] = &["format", "createdAt@time", "sections[]"];
 
 /// The collected sections and the corpus, read in one read transaction.
 fn read(
@@ -269,10 +269,26 @@ pub fn build(
 
     // The corpus: the database's terms, every credential value behind every
     // ref (read into `Zeroizing`, compared, dropped), and the paths.
+    //
+    // Deliberately fail-open (D13 residual risk): a ref whose value can't be
+    // read (a locked keychain, an unreadable fallback file) contributes no
+    // term, and the export goes on. No collector reads a credential, and
+    // diagnostics matter most when something is failing. The count is
+    // logged so a support reader knows the scan ran without those values.
+    let mut unreadable = 0u64;
     for reference in &refs {
-        if let Ok(Some(value)) = inputs.credentials.get(reference) {
-            corpus.add_credential(Zeroizing::new(value));
+        match inputs.credentials.get(reference) {
+            Ok(Some(value)) => corpus.add_credential(Zeroizing::new(value)),
+            Ok(None) => {}
+            Err(_) => unreadable += 1,
         }
+    }
+    if unreadable > 0 {
+        crate::f3d_log!(
+            warn,
+            "diagnostics.credentialCorpusUnavailable",
+            unreadable_refs = unreadable,
+        );
     }
     let paths = inputs.storage.paths();
     for root in [

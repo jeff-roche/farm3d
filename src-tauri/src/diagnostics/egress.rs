@@ -44,6 +44,19 @@ const MAX_IGNORED_NAME_CHARS: usize = 3;
 /// vocabulary word (`action=snapshot`), matched as a name, not as a secret.
 const MAX_WORD_QUERY_VALUE: usize = 12;
 
+/// Query keys whose values are always secret-class, however word-like the
+/// value (`?pass=hunter`, `?token=abcdEFGHijkl`).
+const SECRET_KEY_PARTS: &[&str] = &[
+    "token", "key", "pass", "pwd", "auth", "sig", "secret", "cred", "session", "user",
+];
+
+/// Whether a query key names a secret: it contains any of
+/// [`SECRET_KEY_PARTS`], ignoring case.
+fn is_secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    SECRET_KEY_PARTS.iter().any(|part| key.contains(part))
+}
+
 /// The protected values of one Farm, read for one export.
 #[derive(Default)]
 pub struct Corpus {
@@ -90,10 +103,10 @@ impl Corpus {
         if let Some(password) = parsed.password() {
             self.add_secret(password);
         }
-        for (_, value) in parsed.query_pairs() {
+        for (key, value) in parsed.query_pairs() {
             let is_word = value.len() <= MAX_WORD_QUERY_VALUE
                 && value.bytes().all(|byte| byte.is_ascii_alphabetic());
-            if is_word {
+            if is_word && !is_secret_key(&key) {
                 self.add_name(&value);
             } else {
                 self.add_secret(&value);
@@ -115,19 +128,17 @@ impl Corpus {
         let mut short_secrets = Vec::new();
         for term in &self.secrets {
             if term.len() < MIN_BYTE_TERM {
-                short_secrets.push(term.to_ascii_lowercase());
+                short_secrets.push(lowercased(term));
             } else {
-                long_secrets.extend(secret_forms(term));
+                long_secrets.extend(secret_forms(term).iter().map(|form| form.to_string()));
             }
         }
         let mut credentials = Vec::new();
         for value in &self.credentials {
             if value.len() < MIN_BYTE_TERM {
-                short_secrets.push(value.to_ascii_lowercase());
+                short_secrets.push(lowercased(value));
             } else {
-                for form in secret_forms(value) {
-                    credentials.push(Zeroizing::new(form));
-                }
+                credentials.extend(secret_forms(value));
             }
         }
         long_secrets.sort();
@@ -212,37 +223,59 @@ fn percent_encode_uri(text: &str) -> String {
     out
 }
 
-/// Form encoding: `encodeURIComponent` with spaces as `+`.
+/// Form encoding: `encodeURIComponent` with spaces as `+`. Built in one
+/// pass, so no intermediate copy of a secret is left behind.
 fn form_encode(text: &str) -> String {
-    percent_encode_all(text).replace("%20", "+")
+    let mut out = String::with_capacity(text.len() * 3);
+    for byte in text.bytes() {
+        if byte == b' ' {
+            out.push('+');
+        } else if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
-/// The JSON string body of `text` (escapes, no quotes).
-fn json_escaped(text: &str) -> String {
-    let quoted = serde_json::to_string(text).unwrap_or_default();
-    quoted
+/// The JSON string body of `text` (escapes, no quotes), every buffer
+/// wiped on drop.
+fn json_escaped(text: &str) -> Zeroizing<String> {
+    let quoted = Zeroizing::new(serde_json::to_string(text).unwrap_or_default());
+    let body = quoted
         .strip_prefix('"')
         .and_then(|rest| rest.strip_suffix('"'))
-        .unwrap_or_default()
-        .to_string()
+        .unwrap_or_default();
+    let mut out = Zeroizing::new(String::with_capacity(body.len()));
+    out.push_str(body);
+    out
+}
+
+/// An ASCII-lowercased copy, wiped on drop.
+fn lowercased(text: &str) -> Zeroizing<String> {
+    let mut copy = Zeroizing::new(text.to_string());
+    copy.make_ascii_lowercase();
+    copy
 }
 
 /// A secret term's forms, ASCII-lowercased (the haystack is lowercased
 /// too, so exact, lowercase, uppercase, and mixed case all match, as do
-/// both hex cases of a percent-encoding).
-fn secret_forms(term: &str) -> Vec<String> {
+/// both hex cases of a percent-encoding). Every form, and every
+/// intermediate, is `Zeroizing` (credential values pass through here).
+fn secret_forms(term: &str) -> Vec<Zeroizing<String>> {
     let mut forms = vec![
-        term.to_string(),
-        percent_encode_all(term),
-        percent_encode_uri(term),
-        form_encode(term),
+        Zeroizing::new(term.to_string()),
+        Zeroizing::new(percent_encode_all(term)),
+        Zeroizing::new(percent_encode_uri(term)),
+        Zeroizing::new(form_encode(term)),
         json_escaped(term),
     ];
     for form in &mut forms {
         form.make_ascii_lowercase();
     }
-    forms.sort();
-    forms.dedup();
+    forms.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    forms.dedup_by(|left, right| left.as_str() == right.as_str());
     forms.retain(|form| form.len() >= MIN_BYTE_TERM);
     forms
 }
@@ -397,7 +430,7 @@ pub struct CompiledCorpus {
     unusable: bool,
     secrets: Option<AhoCorasick>,
     credentials: Vec<Zeroizing<String>>,
-    short_secrets: Vec<String>,
+    short_secrets: Vec<Zeroizing<String>>,
     names: Option<AhoCorasick>,
 }
 
@@ -417,7 +450,9 @@ pub struct ScanEntry<'a> {
     pub format: EntryFormat,
     /// Paths whose string values are closed vocabulary (skipped by the
     /// name and short-secret checks). `a.b`, `a[].b`; a trailing `.*`
-    /// matches every child.
+    /// matches every child. A value is skipped only if it also has the
+    /// path's shape, `@<shape>` (see [`has_shape`]); without one, the
+    /// shape is `word` (an enum value).
     pub closed_paths: &'a [&'a str],
 }
 
@@ -469,7 +504,7 @@ fn entry_is_clean(corpus: &CompiledCorpus, entry: &ScanEntry<'_>) -> bool {
     }
     values.iter().all(|value| {
         let lowered = value.to_ascii_lowercase();
-        if corpus.short_secrets.iter().any(|term| *term == lowered) {
+        if corpus.short_secrets.iter().any(|term| **term == lowered) {
             return false;
         }
         corpus
@@ -479,15 +514,74 @@ fn entry_is_clean(corpus: &CompiledCorpus, entry: &ScanEntry<'_>) -> bool {
     })
 }
 
-fn is_closed(path: &str, closed_paths: &[&str]) -> bool {
-    closed_paths
-        .iter()
-        .any(|closed| match closed.strip_suffix(".*") {
+/// An enum value: `[A-Za-z0-9_.:+-]`, 1–64 characters.
+pub fn is_word(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'+' | b'-')
+        })
+}
+
+/// An identifier or serde name: a letter, then `[A-Za-z0-9_]`, at most 64.
+pub fn is_identifier(text: &str) -> bool {
+    (1..=64).contains(&text.len())
+        && text.as_bytes()[0].is_ascii_alphabetic()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// `<kind>-<n>`: a bundle pseudonym.
+pub fn is_bundle_pseudonym(text: &str) -> bool {
+    text.split_once('-').is_some_and(|(kind, number)| {
+        is_identifier(kind) && !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// `<kind>-<8 hex>`: a process pseudonym (`Pseudonym::of`).
+pub fn is_process_pseudonym(text: &str) -> bool {
+    text.split_once('-').is_some_and(|(kind, hex)| {
+        is_identifier(kind)
+            && hex.len() == 8
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+/// An RFC 3339 time.
+pub fn is_time(text: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(text).is_ok()
+}
+
+/// A string as `LogSafe` renders one: an enum or variant name (an
+/// identifier, no `.` or `-`), an RFC 3339 time, or a process pseudonym.
+pub fn is_log_safe_string(text: &str) -> bool {
+    is_identifier(text) || is_time(text) || is_process_pseudonym(text)
+}
+
+/// Whether `value` has the closed path's `shape`.
+fn has_shape(shape: &str, value: &str) -> bool {
+    match shape {
+        "pseudonym" => is_bundle_pseudonym(value),
+        "time" => is_time(value),
+        "logsafe" => is_log_safe_string(value),
+        _ => is_word(value),
+    }
+}
+
+/// Whether the string `value` at `path` is closed vocabulary.
+fn is_closed(path: &str, value: &str, closed_paths: &[&str]) -> bool {
+    closed_paths.iter().any(|closed| {
+        let (pattern, shape) = closed.split_once('@').unwrap_or((closed, "word"));
+        let matches = match pattern.strip_suffix(".*") {
             Some(prefix) => path
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with('.')),
-            None => path == *closed,
-        })
+            None => path == pattern,
+        };
+        matches && has_shape(shape, value)
+    })
 }
 
 /// Every string value outside the closed paths.
@@ -499,7 +593,7 @@ fn collect_strings(
 ) {
     match value {
         serde_json::Value::String(text) => {
-            if !is_closed(&path, closed_paths) {
+            if !is_closed(&path, text, closed_paths) {
                 out.push(text.clone());
             }
         }
@@ -527,7 +621,11 @@ fn collect_strings(
 mod tests {
     use super::*;
 
-    const CLOSED: &[&str] = &["printers[].adapterKind", "fields.*"];
+    const CLOSED: &[&str] = &[
+        "printers[].adapterKind",
+        "fields.*@logsafe",
+        "ids.*@pseudonym",
+    ];
 
     fn corpus(build: impl FnOnce(&mut Corpus)) -> CompiledCorpus {
         let mut corpus = Corpus::default();
@@ -621,6 +719,20 @@ mod tests {
     }
 
     #[test]
+    fn a_word_like_value_under_a_secret_key_stays_a_secret() {
+        let compiled = corpus(|corpus| {
+            corpus.add_url("http://192.0.2.19/webcam?pass=hunter&token=abcdEFGHijkl&Api_Key=zebra");
+        });
+        // Secret-class: any byte, any case, even a key or a closed value.
+        assert!(!json(&compiled, r#"{"hunter":1}"#));
+        assert!(!json(&compiled, r#"{"a":"ABCDefghIJKL"}"#));
+        assert!(!json(
+            &compiled,
+            r#"{"printers":[{"adapterKind":"zebra"}]}"#
+        ));
+    }
+
+    #[test]
     fn unparseable_entries_fail_closed_and_log_lines_are_checked_one_by_one() {
         let compiled = corpus(|corpus| corpus.add_name("P9 Secret Printer"));
         assert!(!json(&compiled, "{not json"));
@@ -635,11 +747,45 @@ mod tests {
                 },
             )
         };
-        assert!(lines(
+        // A field value that isn't a `LogSafe` shape is name-scanned.
+        assert!(!lines(
             "{\"fields\":{\"e\":\"P9 Secret Printer\"}}\n{\"a\":1}\n"
         ));
         assert!(!lines("{\"a\":1}\n{\"leak\":\"P9 Secret Printer\"}\n"));
         assert!(!lines("{\"a\":1}\nnot json\n"));
+    }
+
+    #[test]
+    fn closed_paths_skip_only_values_of_their_shape() {
+        let compiled = corpus(|corpus| {
+            corpus.add_name("printing");
+            corpus.add_name("p9-secret-job-name.gcode");
+            corpus.add_name("printer-3 x");
+        });
+        let lines = |text: &str| {
+            entry_is_clean(
+                &compiled,
+                &ScanEntry {
+                    section: DiagnosticsSection::Logs,
+                    bytes: text.as_bytes(),
+                    format: EntryFormat::JsonLines,
+                    closed_paths: CLOSED,
+                },
+            )
+        };
+        // An enum-shaped field equal to a name is closed.
+        assert!(lines(r#"{"fields":{"kind":"printing"}}"#));
+        // A file name isn't a `LogSafe` shape: scanned, caught.
+        assert!(!lines(r#"{"fields":{"file":"p9-secret-job-name.gcode"}}"#));
+        // An id that isn't a bundle pseudonym is scanned.
+        assert!(!lines(r#"{"ids":{"printerId":"printer-3 x"}}"#));
+        assert!(lines(r#"{"ids":{"printerId":"printer-3"}}"#));
+        assert!(is_log_safe_string("PRINTER_UNREACHABLE"));
+        assert!(is_log_safe_string("2026-01-01T00:00:00.000Z"));
+        assert!(is_log_safe_string("printer-0a1b2c3d"));
+        for rejected in ["p9-secret-job-name.gcode", "a.b", "free text", "printer-12"] {
+            assert!(!is_log_safe_string(rejected), "{rejected}");
+        }
     }
 
     #[test]

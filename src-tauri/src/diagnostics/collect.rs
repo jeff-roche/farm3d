@@ -65,11 +65,7 @@ pub struct Collected {
 /// A closed-vocabulary word from the database (a CHECK-constrained enum or
 /// a farm3d code): `[A-Za-z0-9_.:+-]`, 1–64 characters, else `other`.
 fn word(text: &str) -> String {
-    let valid = (1..=64).contains(&text.len())
-        && text.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'+' | b'-')
-        });
-    if valid {
+    if super::egress::is_word(text) {
         text.to_string()
     } else {
         "other".to_string()
@@ -453,15 +449,16 @@ fn id_kind(key: &str) -> String {
     }
 }
 
-/// A field value as `LogSafe` renders one: a number, a boolean, null, or a
-/// closed-vocabulary word (an enum or variant name, a time, a process
-/// pseudonym). Anything else is `redacted`.
+/// A field value as `LogSafe` renders one: a number, a boolean, null, or
+/// a string of a shape `LogSafe` produces (an enum or variant name, an RFC
+/// 3339 time, a process pseudonym). Anything else, such as a file name, is
+/// `redacted`.
 fn log_field(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
             value.clone()
         }
-        serde_json::Value::String(text) if word(text) == *text => value.clone(),
+        serde_json::Value::String(text) if super::egress::is_log_safe_string(text) => value.clone(),
         _ => serde_json::Value::String("redacted".into()),
     }
 }
@@ -652,7 +649,7 @@ pub fn collect(
 /// Closed paths of each entry (see `egress::ScanEntry::closed_paths`).
 pub const ABOUT_CLOSED: &[&str] = &["platform.os", "platform.arch", "credentialStore.kind"];
 pub const HEALTH_CLOSED: &[&str] = &[
-    "printers[].printer",
+    "printers[].printer@pseudonym",
     "printers[].adapterKind",
     "printers[].connectionState",
     "printers[].errorCode",
@@ -663,6 +660,7 @@ pub const HEALTH_CLOSED: &[&str] = &[
 pub const STORAGE_CLOSED: &[&str] = &[
     "integrity[].rule",
     "integrity[].outcome",
+    "migrationWarnings[].code",
     "pendingCredentialCleanup[].reason",
 ];
 pub const CONFIGURATION_CLOSED: &[&str] = &[
@@ -670,14 +668,20 @@ pub const CONFIGURATION_CLOSED: &[&str] = &[
     "settings.monitorSection",
     "settings.monitorDensity",
 ];
-pub const LOGS_CLOSED: &[&str] = &["ts", "level", "code", "ids.*", "fields.*"];
+pub const LOGS_CLOSED: &[&str] = &[
+    "ts@time",
+    "level",
+    "code",
+    "ids.*@pseudonym",
+    "fields.*@logsafe",
+];
 pub const PROBLEMS_CLOSED: &[&str] = &[
     "events[].condition",
     "events[].severity",
     "events[].sourceKind",
-    "events[].source",
-    "events[].firstObservedAt",
-    "events[].resolvedAt",
+    "events[].source@pseudonym",
+    "events[].firstObservedAt@time",
+    "events[].resolvedAt@time",
     "events[].resolution",
 ];
 

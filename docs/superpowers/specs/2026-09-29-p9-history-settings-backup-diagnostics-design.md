@@ -1096,6 +1096,12 @@ strings (job and file names); raw ids.
   whole string value. A hit aborts with `DIAGNOSTICS_REDACTION_FAILED`
   (`details.section`), nothing is written, and the matched term is never
   reported or logged.
+- **Query-value demotion.** A camera URL query value that is only ASCII
+  letters and at most 12 long (`action=snapshot`) is a name term, not an
+  all-bytes term, unless its key contains `token`, `key`, `pass`, `pwd`,
+  `auth`, `sig`, `secret`, `cred`, `session`, or `user` (any case); then
+  it stays an all-bytes term. Otherwise the common MJPEG-streamer URL
+  would block every export.
 - **Limits.** The scan catches known values, not a transformed leak it
   has no variant for. The typed log and the typed collectors are the
   primary control; the scan is defense in depth (a residual risk).
@@ -2229,6 +2235,11 @@ evidence. Where the code disagreed with the plan, the code won.
 - **The egress scan uses exact matching** plus a few variants. It
   catches known values, not every transformation. The typed log and the
   typed collectors are the primary control.
+- **The egress scan fails open on an unreadable credential store.** A
+  ref whose value can't be read (a locked keychain, a damaged fallback
+  file) contributes no term, and the export goes on; the count is logged
+  as `diagnostics.credentialCorpusUnavailable`. No collector reads a
+  credential, so the scan is only the second control for those values.
 - **Linked-path portability is only surfaced.** Restoring onto another
   machine leaves linked Models `missing` until **Locate source**.
 - **Printer delete still drops unlinked Spool movement history**

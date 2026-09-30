@@ -972,8 +972,38 @@ fn percent_encoded(text: &str) -> String {
         .collect()
 }
 
+/// A hook that leaks `term` into a log line's `fields`, where only the
+/// shapes `LogSafe` produces are closed.
+fn leak_log_field(term: String) -> EntryHook {
+    Arc::new(
+        move |section: DiagnosticsSection, _name: &str, bytes: &mut Vec<u8>| {
+            if section != DiagnosticsSection::Logs {
+                return;
+            }
+            bytes.extend_from_slice(
+                json!({
+                    "ts": "2026-01-01T00:00:00.000Z", "level": "info", "code": "x.leak",
+                    "ids": {}, "fields": { "file": term },
+                })
+                .to_string()
+                .as_bytes(),
+            );
+            bytes.push(b'\n');
+        },
+    )
+}
+
 fn assert_redaction_failed(farm: &Farm, section: DiagnosticsSection, term: String) {
-    let rig = Rig::with_hook(farm, Some(leak(section, term.clone())));
+    assert_redaction_failed_with(farm, section, term.clone(), leak(section, term));
+}
+
+fn assert_redaction_failed_with(
+    farm: &Farm,
+    section: DiagnosticsSection,
+    term: String,
+    hook: EntryHook,
+) {
+    let rig = Rig::with_hook(farm, Some(hook));
     let destination = rig.exports.join("leak.zip");
     rig.dialogs.set(Some(destination.clone()));
     let before: Vec<_> = fs::read_dir(&rig.exports).unwrap().collect();
@@ -1042,6 +1072,73 @@ fn a_leak_of_any_corpus_class_is_caught_before_the_file_is_written() {
     for (section, term) in cases {
         assert_redaction_failed(&farm, section, term);
     }
+    // A host job file name in a log line's `fields` isn't a `LogSafe`
+    // shape, so the name scan sees it.
+    assert_redaction_failed_with(
+        &farm,
+        DiagnosticsSection::Logs,
+        JOB_NAME.to_string(),
+        leak_log_field(JOB_NAME.to_string()),
+    );
+}
+
+#[test]
+fn a_log_field_that_isnt_a_log_safe_shape_is_redacted_in_the_bundle() {
+    let _serial = serial();
+    let farm = diagnostics_farm();
+    fs::write(
+        farm.paths().log_root().join("farm3d.log"),
+        format!(
+            "{}\n",
+            json!({
+                "ts": "2026-01-01T00:00:00.000Z", "level": "warn", "code": "jobs.dispatchFailed",
+                "ids": {}, "fields": { "file": JOB_NAME, "vendor": "Polymaker Blue",
+                                       "kind": "printing", "error": "PRINTER_UNREACHABLE" },
+            })
+        ),
+    )
+    .unwrap();
+    let rig = Rig::new(&farm);
+    let bytes = rig.export_all("fields.zip");
+    secrets::assert_none_of(&every_needle(), &bytes, "fields");
+    let line = &log_lines(&bytes, "logs/farm3d.log")[0];
+    assert_eq!(
+        line["fields"],
+        json!({
+            "file": "redacted", "vendor": "redacted",
+            "kind": "printing", "error": "PRINTER_UNREACHABLE",
+        })
+    );
+}
+
+#[test]
+fn an_unreadable_credential_store_is_logged_and_the_export_goes_on() {
+    let _serial = serial();
+    let farm = diagnostics_farm();
+    // The fallback file no longer parses: every value read fails.
+    fs::write(
+        farm3d_lib::connections::credentials::credentials_file_path(&farm.credentials_dir),
+        b"not json",
+    )
+    .unwrap();
+    let log_dir = farm.temp.path().join("process-log");
+    farm3d_lib::diagnostics::log::init(&log_dir);
+    let rig = Rig::new(&farm);
+    let bytes = rig.export_all("no-credentials.zip");
+    farm3d_lib::diagnostics::log::flush();
+    farm3d_lib::diagnostics::log::shutdown();
+    secrets::assert_none_of(&every_needle(), &bytes, "no credentials");
+    let text = fs::read_to_string(log_dir.join("farm3d.log")).unwrap();
+    let line: Value = text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["code"] == "diagnostics.credentialCorpusUnavailable")
+        .unwrap_or_else(|| panic!("no credentialCorpusUnavailable line in {text}"));
+    assert_eq!(line["level"], "warn");
+    // Every ref: the two stored, the orphan, `cred-a`, and the derived
+    // ref of each of the three Printers without a stored one.
+    assert_eq!(line["fields"]["unreadableRefs"], 7, "{line}");
+    assert_eq!(line["ids"], json!({}));
 }
 
 #[test]
