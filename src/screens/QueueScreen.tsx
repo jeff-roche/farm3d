@@ -237,11 +237,23 @@ export function QueueScreen() {
       const id = selectedId();
       return id !== undefined && id.startsWith("job-") && storedEntry() === undefined ? id : undefined;
     },
-    async (jobId) => (await getJobTimeline(jobId)).entry,
+    // Caught here: a resource wraps a thrown non-Error, losing its message.
+    async (jobId): Promise<{ entry: QueueEntry } | { error: string }> => {
+      try {
+        return { entry: (await getJobTimeline(jobId)).entry };
+      } catch (error) {
+        return { error: isCommandError(error) ? error.message : "This Job couldn't be opened." };
+      }
+    },
   );
-  const selectedEntry = createMemo<QueueEntry | undefined>(
-    () => storedEntry() ?? (olderEntry.error ? undefined : olderEntry()),
-  );
+  const olderError = () => {
+    const held = olderEntry();
+    return held && "error" in held ? held.error : undefined;
+  };
+  const selectedEntry = createMemo<QueueEntry | undefined>(() => {
+    const held = olderEntry();
+    return storedEntry() ?? (held && "entry" in held ? held.entry : undefined);
+  });
 
   function select(id: string | null) {
     const target: NavigationTarget = id
@@ -435,6 +447,13 @@ export function QueueScreen() {
           <p class={styles.staleMessage}>The Queue may be out of date</p>
           <Button variant="ghost" onClick={refreshQueue}>Refresh</Button>
         </div>
+      </Show>
+      <Show when={olderError() !== undefined && storedEntry() === undefined ? olderError() : undefined}>
+        {(message) => (
+          <div class={styles.errorBanner} role="alert">
+            <p class={styles.errorMessage}>{message()}</p>
+          </div>
+        )}
       </Show>
       <div ref={workspace} class={styles.workspace}>
         <div class={styles.main}>

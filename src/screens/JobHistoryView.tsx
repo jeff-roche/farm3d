@@ -3,7 +3,7 @@ import { Button, Chip, DataTable, Select, TextField } from "../design-system";
 import type { DataTableColumn } from "../design-system";
 import { history, loadMoreHistory, refreshHistory, setHistoryFilters, type HistoryFilters } from "../history/history-store";
 import { jobHistoryStateLabel } from "../history/presentation";
-import { setHistoryKnownIds } from "../history/known-ids";
+import { addHistoryKnownIds } from "../history/known-ids-actions";
 import type { JobHistoryRow, JobHistoryState } from "../history/types";
 import type { Severity } from "../host-ops/presentation";
 import { navigation } from "../navigation/navigation-store";
@@ -53,7 +53,7 @@ export function JobHistoryView() {
   const [afterDay, setAfterDay] = createSignal("");
   const [beforeDay, setBeforeDay] = createSignal("");
   onMount(() => void refreshHistory());
-  createEffect(() => setHistoryKnownIds(history.rows().flatMap((row) => (row.incidentId ? [row.jobId, row.incidentId] : [row.jobId]))));
+  createEffect(() => addHistoryKnownIds(history.rows().flatMap((row) => (row.incidentId ? [row.jobId, row.incidentId] : [row.jobId]))));
 
   const filters = () => history.filters();
   const selectedStates = () => filters().states ?? DEFAULT_STATES;

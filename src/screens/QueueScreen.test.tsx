@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandError } from "../ipc/local-errors";
 import { navigation } from "../navigation/navigation-store";
 import {
   loadWebQueueFixture,
@@ -124,6 +125,17 @@ describe("QueueScreen", () => {
     render(() => <QueueScreen />);
     expect(await screen.findByRole("heading", { name: /Older Lid/ })).toBeInTheDocument();
     expect(historyStoreMock.getJobTimeline).toHaveBeenCalledWith("job-older");
+  });
+
+  it("says so when an older Job's timeline can't load", async () => {
+    loadWebQueueFixture();
+    historyStoreMock.getJobTimeline.mockRejectedValueOnce(commandError("NOT_FOUND", "That Job is gone."));
+    navigation.navigate(
+      { version: 1, destination: "queue", selection: { kind: "job", id: "job-gone" } },
+      { availableDestinations: ["queue"], availableIds: ["job-gone"] },
+    );
+    render(() => <QueueScreen />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("That Job is gone.");
   });
 
   it("lists an assigned entry whose Job isn't printing under Assigned", async () => {

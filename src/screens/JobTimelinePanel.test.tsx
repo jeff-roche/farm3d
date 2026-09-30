@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { historyStoreMock, resetHistoryStoreMock } from "../history/history-store-mock";
 import { webJobTimeline } from "../history/web-fixtures";
 import { WEB_QUEUE_JOB_COMPLETED, WEB_QUEUE_JOB_DEFERRED } from "../queue/web-fixtures";
+import { historyKnownIds } from "../history/known-ids";
+import { clearHistoryKnownIds } from "../history/known-ids-actions";
 import { JobTimelinePanel } from "./JobTimelinePanel";
 
 vi.mock("../history/history-store", async () => (await import("../history/history-store-mock")).historyStoreMock);
@@ -14,6 +16,7 @@ vi.mock("../cameras/camera-store", () => ({
 beforeEach(() => {
   window.location.hash = "";
   resetHistoryStoreMock();
+  clearHistoryKnownIds();
 });
 afterEach(cleanup);
 
@@ -49,6 +52,13 @@ describe("JobTimelinePanel", () => {
     renderPanel(WEB_QUEUE_JOB_COMPLETED);
     fireEvent.click((await screen.findAllByRole("button", { name: "Open Incident" }))[0]);
     expect(window.location.hash).toBe("#nav=v1/monitor/incident/inc-w-host-failed");
+  });
+
+  it("registers the Job and its Incident as deep-link targets so the shell doesn't gate the link", async () => {
+    renderPanel(WEB_QUEUE_JOB_COMPLETED);
+    await screen.findByRole("list", { name: /^Job timeline/ });
+    await waitFor(() => expect(historyKnownIds()).toEqual(expect.arrayContaining([WEB_QUEUE_JOB_COMPLETED, "inc-w-host-failed"])));
+    expect(new Set(historyKnownIds()).size).toBe(historyKnownIds().length);
   });
 
   it("opens a snapshot in the viewer and shows pruned evidence as text", async () => {

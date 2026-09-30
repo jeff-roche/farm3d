@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { Button, Timeline } from "../design-system";
 import type { TimelineItem } from "../design-system";
 import { incidentTarget } from "../attention/deep-link";
@@ -10,7 +10,7 @@ import {
   timelineSourceLabel,
 } from "../history/presentation";
 import type { JobTimeline, JobTimelineItem } from "../history/types";
-import { isCommandError } from "../ipc/client";
+import { addHistoryKnownIds } from "../history/known-ids-actions";
 import { formatDateTime } from "../slicing/revision-presentation";
 import { goTo } from "./QueueRecoveryButton";
 import { SnapshotViewerDialog } from "./SnapshotViewerDialog";
@@ -35,15 +35,19 @@ export function JobTimelinePanel(props: JobTimelinePanelProps) {
   const [timeline, { refetch }] = createResource(() => [props.jobId, props.revision] as const, ([jobId]) => getJobTimeline(jobId));
   const [viewing, setViewing] = createSignal<string | null>(null);
   const loaded = (): JobTimeline | undefined => (timeline.error ? undefined : timeline());
+  // The Job and its Incident are valid deep-link targets even when neither
+  // the Queue nor the Attention store holds them (the app shell's check).
+  createEffect(() => {
+    const held = loaded();
+    if (held) addHistoryKnownIds(held.incident ? [held.job.id, held.incident.id] : [held.job.id]);
+  });
 
   return (
     <div class={styles.panel}>
       <Show when={timeline.error}>
         <div role="alert" class={styles.error}>
           <p class={styles.errorText}>
-            {isCommandError(timeline.error) && timeline.error.code === "NOT_FOUND"
-              ? "This Job has no timeline yet."
-              : "The Job's timeline couldn't be loaded."}
+            The Job's timeline couldn't be loaded.
           </p>
           <Button variant="ghost" size="sm" onClick={() => void refetch()}>Try again</Button>
         </div>

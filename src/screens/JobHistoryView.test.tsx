@@ -163,4 +163,11 @@ describe("JobHistoryView", () => {
     for (const row of rows) expect(ids).toContain(row.jobId);
     expect(ids).toContain("inc-w-host-failed");
   });
+
+  it("keeps a listed Job's id known after a filter drops its row", () => {
+    const firstId = loadWebHistoryFixture()[0].jobId;
+    render(() => <JobHistoryView />);
+    setHistoryStoreState({ rows: [] });
+    expect(historyKnownIds()).toContain(firstId);
+  });
 });
