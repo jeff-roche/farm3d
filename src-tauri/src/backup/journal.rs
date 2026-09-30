@@ -409,10 +409,13 @@ fn write_reporting(paths: &StoragePaths, journal: &RestoreJournal) -> io::Result
     let bytes = serde_json::to_vec_pretty(journal).map_err(io::Error::other)?;
     let temporary = directory.join(JOURNAL_TEMP_FILE);
     let _ = fs::remove_file(&temporary);
-    let mut file = File::options()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
+    let mut options = File::options();
+    options.write(true).create_new(true);
+    // Readable by this user only, as the database is: the journal holds
+    // credential refs and local paths.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&temporary)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);

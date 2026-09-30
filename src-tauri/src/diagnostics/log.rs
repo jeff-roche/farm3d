@@ -553,10 +553,12 @@ impl Writer {
 
     fn open(&mut self) -> std::io::Result<()> {
         fs::create_dir_all(&self.dir)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.path(0))?;
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        // Readable by this user only, as the database is.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(self.path(0))?;
         self.size = file.metadata()?.len();
         self.file = Some(file);
         Ok(())

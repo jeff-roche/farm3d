@@ -719,6 +719,16 @@ fn the_journal_is_written_atomically_and_holds_no_credential_value() {
     journal.set_phase(JournalPhase::Installing).unwrap();
     journal::write(&site.paths, &journal).unwrap();
     assert_eq!(site.journal(), journal);
+    // Readable by this user only, as the database is.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(journal::journal_path(&site.paths))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     let names: Vec<String> = fs::read_dir(journal::restore_root(&site.paths))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())

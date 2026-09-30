@@ -237,6 +237,16 @@ fn rotation_keeps_the_active_file_and_four_rotated_ones() {
     for name in &names {
         assert!(std::fs::metadata(temp.path().join(name)).unwrap().len() <= 2048);
     }
+    // Readable by this user only, as the database is.
+    #[cfg(unix)]
+    for name in &names {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(temp.path().join(name))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
 }
 
 // ---- failure and pressure ----
