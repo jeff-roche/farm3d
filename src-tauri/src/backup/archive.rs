@@ -359,7 +359,7 @@ fn central_directory(file: &mut File) -> Result<Vec<DirectoryEntry>, ArchiveErro
         .map_err(|_| not_a_zip())?;
     let mut reader = io::BufReader::new(Read::take(&mut *file, size));
     let mut entries = Vec::new();
-    for _ in 0..count {
+    for index in 0..count {
         let mut fixed = [0_u8; 46];
         reader.read_exact(&mut fixed).map_err(|_| not_a_zip())?;
         if u32_at(&fixed, 0) != CENTRAL_SIGNATURE {
@@ -368,6 +368,13 @@ fn central_directory(file: &mut File) -> Result<Vec<DirectoryEntry>, ArchiveErro
         let name_length = usize::from(u16_at(&fixed, 28));
         let extra_length = u64::from(u16_at(&fixed, 30));
         let comment_length = u64::from(u16_at(&fixed, 32));
+        // Rule 3's length cap, before a buffer is sized from the record.
+        if name_length > MAX_NAME_BYTES {
+            return Err(ArchiveError::invalid(
+                BackupInvalidReason::UnsafePath,
+                format!("entries[{index}]"),
+            ));
+        }
         let mut name = vec![0_u8; name_length];
         reader.read_exact(&mut name).map_err(|_| not_a_zip())?;
         let skip = extra_length + comment_length;
@@ -833,6 +840,35 @@ pub(crate) mod tests {
         assert_eq!(
             verify_err(&path),
             invalid(BackupInvalidReason::UnsafePath, "entries[2]")
+        );
+    }
+
+    /// A name over rule 3's cap is refused as its record is read, before a
+    /// buffer is sized from it or a later record is parsed.
+    #[test]
+    fn an_overlong_name_is_refused_before_the_rest_of_the_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let name_length = MAX_NAME_BYTES + 88;
+        let mut bytes = Vec::new();
+        let mut record = [0_u8; 46];
+        record[0..4].copy_from_slice(&CENTRAL_SIGNATURE.to_le_bytes());
+        record[28..30].copy_from_slice(&(name_length as u16).to_le_bytes());
+        bytes.extend_from_slice(&record);
+        bytes.extend(std::iter::repeat_n(b'a', name_length));
+        // A second record that isn't one.
+        bytes.extend_from_slice(&[0_u8; 46]);
+        let size = bytes.len() as u32;
+        let mut eocd = [0_u8; 22];
+        eocd[0..4].copy_from_slice(&EOCD_SIGNATURE.to_le_bytes());
+        eocd[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        eocd[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        eocd[12..16].copy_from_slice(&size.to_le_bytes());
+        bytes.extend_from_slice(&eocd);
+        let path = temp.path().join("overlong.zip");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            verify_err(&path),
+            invalid(BackupInvalidReason::UnsafePath, "entries[0]")
         );
     }
 
