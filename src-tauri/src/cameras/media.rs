@@ -612,7 +612,8 @@ impl Touched {
 }
 
 /// Marks `actions` pruned (skipping a row already pruned, or pinned since
-/// it was planned — except for `missingFile`, which a pinned row can get),
+/// it was planned — except for `missingFile` and P9's `reset`, which a
+/// pinned row can get; it keeps `pinned_at`),
 /// writes `evidencePruned` for each Incident-linked one, and returns the
 /// files to unlink after commit.
 fn mark_pruned(
@@ -628,7 +629,7 @@ fn mark_pruned(
             "UPDATE camera_snapshots
                 SET pruned_at = ?2, prune_reason = ?3, revision = revision + 1
               WHERE id = ?1 AND pruned_at IS NULL
-                AND (pinned_at IS NULL OR ?3 = 'missingFile')",
+                AND (pinned_at IS NULL OR ?3 IN ('missingFile', 'reset'))",
             params![action.id, timestamp(now), reason],
         )?;
         if changed == 0 {
@@ -1067,6 +1068,69 @@ pub async fn prune_pass(
     MediaStore::for_storage(storage).unlink_all(&commit.rel_paths);
     drop(permit);
     Ok(commit.changes)
+}
+
+/// P9 D15 tier (b): what a camera-media reset pruned.
+#[derive(Debug, Default)]
+pub struct MediaReset {
+    /// The rows it changed, to publish as a prune pass does.
+    pub changes: MediaChanges,
+    /// The image files to unlink (queued until the lease drops).
+    pub rel_paths: Vec<String>,
+    pub pruned_count: i64,
+    /// The pruned rows' stored `byte_len`.
+    pub freed_bytes: i64,
+}
+
+/// P9 D15 tier (b)'s transaction, in P8's prune order: claims
+/// `operation_id` (`resetCameraMedia`), marks every unpruned row (pinned
+/// ones only when `include_pinned`) `pruned: reset`, and appends
+/// `evidencePruned` for each Incident-linked one. Rows and earlier
+/// timeline entries stay; the files are **not** unlinked (the caller
+/// queues them with [`queue_unlinks`]). A replay prunes nothing.
+pub fn mark_reset(
+    storage: &Storage,
+    operation_id: &str,
+    digest: &str,
+    include_pinned: bool,
+    now: DateTime<Utc>,
+) -> Result<MediaReset, RepositoryError> {
+    storage.write_repo(|tx| {
+        if operations::claim(tx, operation_id, OperationKind::ResetCameraMedia, digest)?
+            == Claim::Replay
+        {
+            return Ok(MediaReset::default());
+        }
+        let selected: Vec<(String, i64)> = tx
+            .prepare(
+                "SELECT id, byte_len FROM camera_snapshots
+                  WHERE pruned_at IS NULL AND (?1 OR pinned_at IS NULL)
+                  ORDER BY captured_at, id",
+            )?
+            .query_map([include_pinned], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let actions: Vec<PruneAction> = selected
+            .iter()
+            .map(|(id, _)| PruneAction {
+                id: id.clone(),
+                reason: PruneReason::Reset,
+            })
+            .collect();
+        let mut touched = Touched::default();
+        let rel_paths = mark_pruned(tx, &actions, now, &mut touched)?;
+        Ok(MediaReset {
+            changes: touched.load(tx)?,
+            pruned_count: i64::try_from(rel_paths.len()).unwrap_or(i64::MAX),
+            rel_paths,
+            freed_bytes: selected.iter().map(|(_, bytes)| bytes).sum(),
+        })
+    })
+}
+
+/// Unlinks the image files of committed pruned rows now, or, while the
+/// backup lease is held (a reset holds it), queues them until it drops.
+pub fn queue_unlinks(storage: &Storage, janitor: &MediaJanitor, rel_paths: &[String]) {
+    MediaStore::for_storage(storage).unlink_after_commit(janitor, rel_paths);
 }
 
 /// A missing image found outside the sweep (`snapshot_image`): the row

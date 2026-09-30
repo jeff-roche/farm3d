@@ -58,6 +58,10 @@ use farm3d_lib::backup::{
     ApplyRestoreOutcome, InstallerStep, RestartingStatus, RestoreJournalKind, RestoreStatus,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::diagnostics::reset::{
+    ResetClass, ResetDataClass, ResetEffect, ResetMediaScope, ResetPreview, ResetRequest,
+    ResetResult, ResetTier, ResetWarning,
+};
 use farm3d_lib::history::{
     JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
     JobTimelineSliceRevision, PrinterLifecycleFilter,
@@ -717,6 +721,15 @@ fn export_registry() -> Vec<Export> {
         export::<RestartingStatus>(),
         export::<ApplyRestoreOutcome>(),
         export::<RestoreStatus>(),
+        export::<ResetTier>(),
+        export::<ResetMediaScope>(),
+        export::<ResetRequest>(),
+        export::<ResetClass>(),
+        export::<ResetEffect>(),
+        export::<ResetDataClass>(),
+        export::<ResetWarning>(),
+        export::<ResetPreview>(),
+        export::<ResetResult>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),

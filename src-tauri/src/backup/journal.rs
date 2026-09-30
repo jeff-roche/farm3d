@@ -261,6 +261,39 @@ impl RestoreJournal {
         }
     }
 
+    /// A new `pending` reset journal (D15 tier c): the credential refs to
+    /// delete (never a value), the safety backup to keep (`None` when the
+    /// operator turned it off), and the operator's option.
+    pub fn new_reset(
+        id: String,
+        created_at: String,
+        safety_backup_id: Option<String>,
+        credential_refs: Vec<String>,
+        delete_safety_backups: bool,
+    ) -> Self {
+        Self {
+            journal_version: JOURNAL_VERSION,
+            id,
+            kind: RestoreJournalKind::Reset,
+            created_at,
+            phase: JournalPhase::Pending,
+            step: None,
+            attempts: 0,
+            staging_id: None,
+            safety_backup_id,
+            expected_counts: None,
+            carry: None,
+            orphan_credential_refs: credential_refs,
+            swap_media: None,
+            rollback: None,
+            reset: Some(ResetOptions {
+                delete_safety_backups,
+            }),
+            outcome: None,
+            failure: None,
+        }
+    }
+
     /// Whether D8 allows `from → to` for this journal's kind.
     pub fn is_legal(kind: RestoreJournalKind, from: JournalPhase, to: JournalPhase) -> bool {
         use JournalPhase::*;

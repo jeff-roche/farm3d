@@ -28,6 +28,7 @@ use backup::commands::{
     acknowledge_restore_status, apply_restore, backup_inventory, create_backup, delete_backup,
     discard_restore_preview, list_backups, preview_restore, restore_status,
 };
+use diagnostics::commands::{reset_farm, reset_preview};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -205,7 +206,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 140] = [
+pub const COMMAND_NAMES: [&str; 142] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -346,6 +347,8 @@ pub const COMMAND_NAMES: [&str; 140] = [
     "apply_restore",
     "restore_status",
     "acknowledge_restore_status",
+    "reset_preview",
+    "reset_farm",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -1075,6 +1078,8 @@ pub fn run() {
             apply_restore,
             restore_status,
             acknowledge_restore_status,
+            reset_preview,
+            reset_farm,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

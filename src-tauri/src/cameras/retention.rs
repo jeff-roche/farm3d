@@ -14,6 +14,12 @@
 //! Usage is the stored `byte_len` of every unpruned row, pinned or not;
 //! never a filesystem walk. Pinned rows count toward it and are never
 //! planned.
+//!
+//! P9 D15: the planner never plans [`PruneReason::Reset`]. A camera-media
+//! reset (`media::mark_reset`) prunes the rows the operator chose, pinned
+//! ones too for scope `all`, under the same janitor lock and in the same
+//! prune order (rows first, then the files, queued while the backup lease
+//! is held).
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;

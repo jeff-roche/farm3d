@@ -1104,6 +1104,7 @@ impl CommandError {
             PruneReason::DiskCap => "to stay under the disk cap",
             PruneReason::MissingFile => "its file was missing",
             PruneReason::NotInBackup => "it wasn't in the restored backup",
+            PruneReason::Reset => "camera media was reset",
         };
         Self::typed(
             ErrorCode::EvidencePruned,

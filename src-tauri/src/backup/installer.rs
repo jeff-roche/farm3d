@@ -20,7 +20,10 @@
 //!   only ever deletes files that can only be the candidate.
 //! - After `markInstalled`, a crash rolls forward.
 //!
-//! A reset journal (Task 8) is refused here until the reset steps exist.
+//! A `reset` journal (D15 tier c, [`reset`]) only rolls forward: its steps
+//! are idempotent, a crash resumes at the recorded step, and an I/O error
+//! stops startup with `RESTORE_FAILED` (`installFailed`) until a retry
+//! finishes it.
 //!
 //! [`Fault`] injects a crash (the run returns at once, dropping every
 //! handle, as a process death would) or an I/O error at a named point; it
@@ -50,6 +53,7 @@ use crate::persistence::{
 };
 
 mod fault;
+mod reset;
 mod rollback;
 
 #[doc(hidden)]
@@ -159,6 +163,9 @@ impl InstallerError {
 pub fn log_report(report: &InstallReport) {
     match &report.outcome {
         InstallOutcome::NoJournal | InstallOutcome::AlreadyFinished => {}
+        InstallOutcome::Installed if report.kind == Some(RestoreJournalKind::Reset) => {
+            crate::f3d_log!(info, "reset.done", attempts = report.attempts)
+        }
         InstallOutcome::Installed => crate::f3d_log!(
             info,
             "restore.installed",
@@ -248,8 +255,9 @@ pub fn run_with_faults(
             drop(open_credentials);
             Restore::new(paths, faults, current)?.run()
         }
-        // Task 8 adds the reset steps.
-        RestoreJournalKind::Reset => Err(InstallerError::InstallFailed { step: current.step }),
+        RestoreJournalKind::Reset => {
+            reset::Reset::new(paths, faults, current, open_credentials).run()
+        }
     }
 }
 
@@ -370,6 +378,34 @@ fn remove_dir_if_present(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// `moveDatabaseAside` (restore step 3, reset step 2): moves
+/// `farm3d.sqlite3`, `-wal`, and `-shm` (each only if still present) into
+/// `restore/<id>/previous/`, in that order, then syncs both directories.
+/// `Within(0)` fires after the main file.
+fn move_database_aside(
+    paths: &StoragePaths,
+    journal_id: &str,
+    faults: &Faults,
+) -> Result<(), StepError> {
+    // Each directory created here is made durable (its parent synced).
+    let (previous, _) = journal::create_synced_dir(
+        paths.metadata_root(),
+        &Path::new("restore").join(journal_id).join("previous"),
+    )?;
+    for (index, name) in DATABASE_FILES.iter().enumerate() {
+        let live = paths.metadata_root().join(name);
+        if exists(&live) {
+            fs::rename(&live, previous.join(name))?;
+        }
+        if index == 0 {
+            faults.hit(InstallerStep::MoveDatabaseAside, FaultPoint::Within(0))?;
+        }
+    }
+    sync_directory(paths.metadata_root())?;
+    sync_directory(&previous)?;
+    Ok(())
 }
 
 /// A restore journal's install, rollback, and roll-forward.
@@ -637,26 +673,9 @@ impl<'a> Restore<'a> {
         Ok(total > 0)
     }
 
-    /// Step 3: Moves `farm3d.sqlite3`, `-wal`, and `-shm` (each only if present)
-    /// into `restore/<id>/previous/`, in that order.
+    /// Step 3 (see [`move_database_aside`]).
     fn move_database_aside(&mut self) -> Result<(), StepError> {
-        // Each directory created here is made durable (its parent synced).
-        let (previous, _) = journal::create_synced_dir(
-            self.paths.metadata_root(),
-            &Path::new("restore").join(&self.journal.id).join("previous"),
-        )?;
-        for (index, name) in DATABASE_FILES.iter().enumerate() {
-            let live = self.root(name);
-            if exists(&live) {
-                fs::rename(&live, previous.join(name))?;
-            }
-            if index == 0 {
-                self.fault(InstallerStep::MoveDatabaseAside, FaultPoint::Within(0))?;
-            }
-        }
-        sync_directory(self.paths.metadata_root())?;
-        sync_directory(&previous)?;
-        Ok(())
+        move_database_aside(self.paths, &self.journal.id, self.faults)
     }
 
     /// Step 4: Copies the candidate through a same-directory `.partial` file

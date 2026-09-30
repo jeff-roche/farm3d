@@ -307,14 +307,17 @@ pub enum PruneReason {
     /// out. Written only into a backup's database copy, never the live
     /// Farm; a restored Farm carries it.
     NotInBackup,
+    /// P9 D15: a camera-media reset (tier b) pruned it, pinned or not.
+    Reset,
 }
 
 impl PruneReason {
-    pub const ALL: [PruneReason; 4] = [
+    pub const ALL: [PruneReason; 5] = [
         PruneReason::Age,
         PruneReason::DiskCap,
         PruneReason::MissingFile,
         PruneReason::NotInBackup,
+        PruneReason::Reset,
     ];
 }
 

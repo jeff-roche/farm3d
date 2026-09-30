@@ -330,6 +330,20 @@ fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, Com
     Ok(document)
 }
 
+/// P9 D15 tier (a): every setting at the default `ensure_default` and the
+/// column defaults define: `theme_mode 'system'`, `monitor_section
+/// 'printerModel'`, `monitor_density 'comfortable'`, notify classes
+/// `1,1,1,0,0,0`, 30 days, 2048 MiB. Written through the save path.
+pub(crate) fn default_update() -> SettingsUpdate<'static> {
+    SettingsUpdate {
+        theme_mode: "system",
+        monitor_section: MonitorSection::default(),
+        monitor_density: MonitorDensity::default(),
+        notifications: Some(NotificationClassSettings::default()),
+        snapshot_retention: Some(SnapshotRetention::default()),
+    }
+}
+
 fn repository(storage: &Arc<Storage>) -> SettingsRepository {
     SettingsRepository::new(Arc::clone(storage))
 }

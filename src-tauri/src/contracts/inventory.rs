@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 140] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 142] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -616,9 +616,11 @@ contracts![
         "AcknowledgeRestoreStatusRequest",
         "AcknowledgeRestoreStatusResult"
     ),
+    ("reset_preview", "ResetPreviewRequest", "ResetPreviewResult"),
+    ("reset_farm", "ResetFarmRequest", "ResetFarmResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 140] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 142] {
     &COMMAND_CONTRACTS
 }
 
@@ -920,7 +922,11 @@ export type ApplyRestoreResult = CommandSuccess<ApplyRestoreOutcome>;
 export type RestoreStatusRequest = NoArgsRequest;
 export type RestoreStatusResult = CommandSuccess<RestoreStatus>;
 export type AcknowledgeRestoreStatusRequest = ContractRequest & { journalId: string };
-export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;"#.to_string()
+export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;
+export type ResetPreviewRequest = ContractRequest & { tier: ResetTier };
+export type ResetPreviewResult = CommandSuccess<ResetPreview>;
+export type ResetFarmRequest = ContractRequest & { operationId: string; request: ResetRequest; confirmation: string };
+export type ResetFarmResult = CommandSuccess<ResetResult>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -1054,6 +1060,10 @@ export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;"#.to
         visitor.visit::<crate::backup::DiscardRestorePreviewOutcome>();
         visitor.visit::<crate::backup::ApplyRestoreOutcome>();
         visitor.visit::<crate::backup::RestoreStatus>();
+        visitor.visit::<crate::diagnostics::reset::ResetTier>();
+        visitor.visit::<crate::diagnostics::reset::ResetPreview>();
+        visitor.visit::<crate::diagnostics::reset::ResetRequest>();
+        visitor.visit::<crate::diagnostics::reset::ResetResult>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

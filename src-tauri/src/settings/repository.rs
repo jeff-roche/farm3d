@@ -103,52 +103,68 @@ impl SettingsRepository {
         if let Some(retention) = &update.snapshot_retention {
             retention.validate()?;
         }
-        self.storage.write(|transaction| {
-            let current = load(transaction)?;
-            if current.revision != expected_revision {
-                return Err(StorageError::OperationFailed);
-            }
-            let notifications = update.notifications.unwrap_or(current.notifications);
-            let retention = update.snapshot_retention.unwrap_or(current.snapshot_retention);
-            let changed = transaction.execute(
-                "UPDATE settings SET revision = revision + 1, theme_mode = ?1, monitor_section = ?2,
-                   monitor_density = ?3, notify_fatal = ?4, notify_confirmation = ?5,
-                   notify_completion = ?6, notify_reconciliation = ?7, notify_connectivity = ?8,
-                   notify_inventory = ?9, snapshot_retention_days = ?10, snapshot_disk_cap_mb = ?11,
-                   updated_at = ?12
-                 WHERE singleton_id = 1 AND revision = ?13",
-                params![
-                    update.theme_mode,
-                    update.monitor_section.as_str(),
-                    update.monitor_density.as_str(),
-                    notifications.fatal,
-                    notifications.confirmation,
-                    notifications.completion,
-                    notifications.reconciliation,
-                    notifications.connectivity,
-                    notifications.inventory,
-                    retention.retention_days,
-                    retention.disk_cap_mb,
-                    crate::printers::now_rfc3339(),
-                    expected_revision
-                ],
-            )?;
-            if changed != 1 {
-                return Err(StorageError::OperationFailed);
-            }
-            Ok(SavedSettings {
-                record: load(transaction)?,
-                retention_changed: retention != current.snapshot_retention,
-            })
-        }).map_err(|error| match error {
-            StorageError::OperationFailed => RepositoryError::Conflict {
-                entity_id: "settings".to_string(),
-                expected_revision,
-                current_revision: self.load().map(|value| value.revision).unwrap_or(expected_revision),
-            },
-            other => RepositoryError::Storage(other),
-        })
+        self.storage
+            .write_repo(|transaction| save_update_in(transaction, expected_revision, update))
     }
+}
+
+/// [`SettingsRepository::save_update`]'s write, inside the caller's
+/// transaction (P9 D15's settings reset claims its `operationId` in the
+/// same one). `CONFLICT` when the stored revision isn't
+/// `expected_revision`. The caller has validated `update`.
+pub(crate) fn save_update_in(
+    transaction: &rusqlite::Transaction<'_>,
+    expected_revision: i64,
+    update: &SettingsUpdate<'_>,
+) -> Result<SavedSettings, RepositoryError> {
+    let conflict = |current_revision: i64| RepositoryError::Conflict {
+        entity_id: "settings".to_string(),
+        expected_revision,
+        current_revision,
+    };
+    let current = load(transaction)?;
+    if current.revision != expected_revision {
+        return Err(conflict(current.revision));
+    }
+    let notifications = update.notifications.unwrap_or(current.notifications);
+    let retention = update
+        .snapshot_retention
+        .unwrap_or(current.snapshot_retention);
+    let changed = transaction.execute(
+        "UPDATE settings SET revision = revision + 1, theme_mode = ?1, monitor_section = ?2,
+           monitor_density = ?3, notify_fatal = ?4, notify_confirmation = ?5,
+           notify_completion = ?6, notify_reconciliation = ?7, notify_connectivity = ?8,
+           notify_inventory = ?9, snapshot_retention_days = ?10, snapshot_disk_cap_mb = ?11,
+           updated_at = ?12
+         WHERE singleton_id = 1 AND revision = ?13",
+        params![
+            update.theme_mode,
+            update.monitor_section.as_str(),
+            update.monitor_density.as_str(),
+            notifications.fatal,
+            notifications.confirmation,
+            notifications.completion,
+            notifications.reconciliation,
+            notifications.connectivity,
+            notifications.inventory,
+            retention.retention_days,
+            retention.disk_cap_mb,
+            crate::printers::now_rfc3339(),
+            expected_revision
+        ],
+    )?;
+    if changed != 1 {
+        return Err(conflict(load(transaction)?.revision));
+    }
+    Ok(SavedSettings {
+        record: load(transaction)?,
+        retention_changed: retention != current.snapshot_retention,
+    })
+}
+
+/// The settings row (P9 D15's reset reads it in its own transaction).
+pub(crate) fn load_record(connection: &rusqlite::Connection) -> rusqlite::Result<SettingsRecord> {
+    load_sql(connection)
 }
 
 /// P8 D6: the stored notification classes (decision 7's defaults when
