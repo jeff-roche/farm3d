@@ -205,6 +205,90 @@ fn restart_before_upload_send_returns_the_job_to_assigned() {
     assert_eq!(roots.uploads(), 0);
 }
 
+/// P9 Task 7 (spec acceptance 7): the row above with a restored database.
+/// The crashed Farm is backed up, the live Farm is replaced by an empty
+/// one (a restore refuses over active work), and the backup is restored
+/// through the journal and the startup installer. The restored active Job
+/// then goes through P7 startup recovery exactly as after a restart.
+#[test]
+fn restored_database_before_upload_send_returns_the_job_to_assigned() {
+    use farm3d_lib::backup::installer::{self, InstallOutcome};
+    use farm3d_lib::backup::lease::{BackupLease, LeaseActivity};
+    use farm3d_lib::backup::staging::{self, StagingOptions};
+    use farm3d_lib::backup::writer::{write_backup, BackupRequest, WriterHooks};
+    use farm3d_lib::backup::{apply, BackupMediaChoice, BackupOrigin};
+    use farm3d_lib::persistence::Storage;
+
+    let roots = roots();
+    let app = boot(&roots, Driver::Started);
+    let fired = app
+        .services
+        .host_ops
+        .inject_fault(FaultPoint::BeforeMarkSent, FaultAction::Crash);
+    let spool = app.spool();
+    let job_id = app.assign(&spool);
+    wait_fired(fired);
+    assert_eq!(app.job(&job_id)["state"], "staging");
+    let upload = app.first_op(&job_id);
+    assert_eq!(upload.state, HostOperationState::Dispatching);
+    crash(app);
+
+    // A backup of the crashed Farm.
+    let exports = tempfile::tempdir().unwrap();
+    let archive = exports.path().join("crashed.farm3d-backup");
+    {
+        let storage = Storage::open(roots.paths.clone(), &roots.lease).unwrap();
+        let lease = BackupLease::new();
+        let guard = lease.try_acquire(LeaseActivity::Backup).unwrap();
+        write_backup(
+            &storage,
+            &guard,
+            &archive,
+            &BackupRequest {
+                media: BackupMediaChoice::None,
+                origin: BackupOrigin::Operator,
+                created_at: None,
+                app_version: "0.1.0".to_string(),
+            },
+            &WriterHooks::default(),
+        )
+        .unwrap();
+    }
+    // An empty live Farm, then the restore: staged, journaled, installed.
+    for name in ["farm3d.sqlite3", "farm3d.sqlite3-wal", "farm3d.sqlite3-shm"] {
+        let _ = std::fs::remove_file(roots.paths.metadata_root().join(name));
+    }
+    {
+        let storage = Storage::open(roots.paths.clone(), &roots.lease).unwrap();
+        let lease = BackupLease::new();
+        let guard = lease.try_acquire(LeaseActivity::RestorePreview).unwrap();
+        let candidate =
+            staging::stage(&roots.paths, &guard, &archive, &StagingOptions::default()).unwrap();
+        drop(guard);
+        apply::write_pending_journal(&storage, &candidate, "sfb-p7", chrono::Utc::now()).unwrap();
+    }
+    let report = installer::run(&roots.paths, &roots.lease, || {
+        panic!("a restore never opens the credential store")
+    })
+    .unwrap();
+    assert_eq!(report.outcome, InstallOutcome::Installed);
+
+    // The same outcome as `restart_before_upload_send_returns_the_job_to_assigned`.
+    let app = boot(&roots, Driver::Started);
+    let upload = app.row(&upload.id);
+    assert_eq!(upload.state, HostOperationState::Failed, "P6: failed{{neverSent}}");
+    let job = app.job(&job_id);
+    assert_eq!(job["state"], "assigned", "Job recovery: StageFailed");
+    assert_eq!(job["lastFailure"]["kind"], "hostOperationFailed");
+    assert_eq!(job["lastFailure"]["failure"]["code"], "neverSent");
+    assert_eq!(job["activeHostOperationId"], Value::Null);
+    assert_eq!(entry_of(&app, &job_id)["state"], "assigned");
+    assert_eq!(reservation_state(&app, &job_id), "active");
+    app.quiesce();
+    assert_eq!(app.ops(&job_id).len(), 1, "nothing re-staged by itself");
+    assert_eq!(roots.uploads(), 0);
+}
+
 #[test]
 fn restart_during_upload_reconciles_then_awaits_start() {
     let roots = roots();

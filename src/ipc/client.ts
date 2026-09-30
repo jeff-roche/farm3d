@@ -190,6 +190,9 @@ type CommandMap = {
   delete_backup: [Contracts.DeleteBackupRequest, Contracts.DeleteBackupResult];
   preview_restore: [Contracts.PreviewRestoreRequest, Contracts.PreviewRestoreResult];
   discard_restore_preview: [Contracts.DiscardRestorePreviewRequest, Contracts.DiscardRestorePreviewResult];
+  apply_restore: [Contracts.ApplyRestoreRequest, Contracts.ApplyRestoreResult];
+  restore_status: [Contracts.RestoreStatusRequest, Contracts.RestoreStatusResult];
+  acknowledge_restore_status: [Contracts.AcknowledgeRestoreStatusRequest, Contracts.AcknowledgeRestoreStatusResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

@@ -55,6 +55,7 @@ use farm3d_lib::backup::{
     PreviewRestoreOutcome, RestoreBackupInfo, RestoreBlocker, RestoreBlockerKind,
     RestoreConflict, RestoreConflictClass, RestoreConflictGroup, RestoreCount, RestoreDomain,
     RestoreNotice, RestorePreview, RestorePreviewSource, RestoreSource, TableCount,
+    ApplyRestoreOutcome, InstallerStep, RestartingStatus, RestoreJournalKind, RestoreStatus,
 };
 use farm3d_lib::contracts::ContractVersion;
 use farm3d_lib::history::{
@@ -711,6 +712,11 @@ fn export_registry() -> Vec<Export> {
         export::<RestorePreview>(),
         export::<PreviewRestoreOutcome>(),
         export::<DiscardRestorePreviewOutcome>(),
+        export::<InstallerStep>(),
+        export::<RestoreJournalKind>(),
+        export::<RestartingStatus>(),
+        export::<ApplyRestoreOutcome>(),
+        export::<RestoreStatus>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -989,6 +995,10 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::BackupInvalid,
         ErrorCode::UnsupportedBackupFormat,
         ErrorCode::RestoreStagingExpired,
+        ErrorCode::RestoreBlocked,
+        ErrorCode::RestoreFailed,
+        ErrorCode::ConfirmationMismatch,
+        ErrorCode::RestartPending,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -1010,6 +1020,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::LoadSpool,
         RecoveryCode::AssignManually,
         RecoveryCode::SettleMaterial,
+        RecoveryCode::OpenQueue,
     ];
 
     assert_eq!(
@@ -1036,7 +1047,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
                 "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS", "BACKUP_IN_PROGRESS",
                 "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE", "BACKUP_INVALID",
-                "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED"
+                "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED", "RESTORE_BLOCKED",
+                "RESTORE_FAILED", "CONFIRMATION_MISMATCH", "RESTART_PENDING"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
@@ -1044,7 +1056,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
                 "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB",
                 "OPEN_JOB", "OPEN_PRINTER_SETUP", "UNARCHIVE_PRINTER", "LOAD_SPOOL",
-                "ASSIGN_MANUALLY", "SETTLE_MATERIAL"
+                "ASSIGN_MANUALLY", "SETTLE_MATERIAL", "OPEN_QUEUE"
             ]
         })
     );

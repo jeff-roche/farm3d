@@ -25,8 +25,8 @@ use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
 use backup::commands::{
-    backup_inventory, create_backup, delete_backup, discard_restore_preview, list_backups,
-    preview_restore,
+    acknowledge_restore_status, apply_restore, backup_inventory, create_backup, delete_backup,
+    discard_restore_preview, list_backups, preview_restore, restore_status,
 };
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
@@ -205,7 +205,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 137] = [
+pub const COMMAND_NAMES: [&str; 140] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -343,6 +343,9 @@ pub const COMMAND_NAMES: [&str; 137] = [
     "delete_backup",
     "preview_restore",
     "discard_restore_preview",
+    "apply_restore",
+    "restore_status",
+    "acknowledge_restore_status",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -490,7 +493,9 @@ fn notification_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     }
 }
 
-enum StartupFailure {
+/// Why startup stopped: unsupported locking is fatal; anything else enters
+/// the bootstrap `Failed` state with a retry.
+pub enum StartupFailure {
     Fatal,
     Recoverable(contracts::command::CommandError),
 }
@@ -530,6 +535,50 @@ fn startup_error(error: persistence::StorageError) -> StartupFailure {
     }
 }
 
+/// P9 D8 "Startup order", steps 2–5 up to `Storage::open`: the
+/// metadata-root lease (a busy lock retried for up to 10 s while
+/// `restore/journal.json` exists), the restore installer, the log, and
+/// `Storage::open`. The lease stays in `retained_lease` for the bootstrap
+/// retry, which re-runs the installer. Later steps (P4's content sweep and
+/// the rest) run after this returns, so the installer has consumed the
+/// staged content before the sweep empties `content_root/staging/`.
+pub fn open_storage(
+    paths: persistence::StoragePaths,
+    retained_lease: &std::sync::Mutex<Option<persistence::MetadataRootLease>>,
+    open_credentials: impl FnOnce() -> connections::credentials::CredentialStore,
+) -> Result<(Arc<persistence::Storage>, backup::installer::InstallReport), StartupFailure> {
+    let mut lease = retained_lease
+        .lock()
+        .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    if lease.is_none() {
+        match backup::installer::acquire_lease(&paths) {
+            Ok(acquired) => *lease = Some(acquired),
+            Err(error) => {
+                // The log isn't open yet; open it so the failure is on record.
+                diagnostics::log::init(paths.log_root());
+                return Err(startup_error(error));
+            }
+        }
+    }
+    let held = lease.as_ref().expect("lease was initialized");
+    let installed = backup::installer::run(&paths, held, open_credentials);
+    // P9 D12: the log starts after the installer (a reset moves
+    // `log_root`) and before `Storage::open`, so a failed open is on record.
+    diagnostics::log::init(paths.log_root());
+    let report = match installed {
+        Ok(report) => {
+            backup::installer::log_report(&report);
+            report
+        }
+        Err(error) => {
+            backup::installer::log_error(&error);
+            return Err(StartupFailure::Recoverable(error.to_command_error()));
+        }
+    };
+    let storage = Arc::new(persistence::Storage::open(paths, held).map_err(startup_error)?);
+    Ok((storage, report))
+}
+
 fn build_runtime_services<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     retained_lease: &Arc<std::sync::Mutex<Option<persistence::MetadataRootLease>>>,
@@ -549,21 +598,10 @@ fn build_runtime_services<R: tauri::Runtime>(
     let paths = persistence::StoragePaths::new(metadata_root, data_root)
         .and_then(|paths| paths.with_log_root(log_root))
         .map_err(startup_error)?;
-    // P9 D12: the log opens before `Storage::open`, so a failed open is on
-    // record. (Task 7's installer runs before this line.)
-    diagnostics::log::init(paths.log_root());
-    let storage = {
-        let mut lease = retained_lease.lock().map_err(|_| {
-            StartupFailure::Recoverable(contracts::command::CommandError::internal())
-        })?;
-        if lease.is_none() {
-            *lease = Some(persistence::MetadataRootLease::acquire(&paths).map_err(startup_error)?);
-        }
-        Arc::new(
-            persistence::Storage::open(paths, lease.as_ref().expect("lease was initialized"))
-                .map_err(startup_error)?,
-        )
-    };
+    let credentials_root = paths.metadata_root().to_path_buf();
+    let (storage, _report) = open_storage(paths, retained_lease, move || {
+        connections::credentials::CredentialStore::detect(credentials_root)
+    })?;
     persistence::migrate_legacy(&storage).map_err(startup_error)?;
     // P9 D9: what a crashed backup left in farm3d's own directories.
     backup::writer::clear_working_files(storage.paths());
@@ -687,7 +725,8 @@ fn build_runtime_services<R: tauri::Runtime>(
         &storage,
         &content,
         Arc::new(backup::dialogs::NativePortabilityDialogs::new(app.clone())),
-    ));
+    )
+    .with_restarter(Arc::new(backup::restart::AppRestarter::new(app.clone()))));
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -1032,6 +1071,9 @@ pub fn run() {
             delete_backup,
             preview_restore,
             discard_restore_preview,
+            apply_restore,
+            restore_status,
+            acknowledge_restore_status,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

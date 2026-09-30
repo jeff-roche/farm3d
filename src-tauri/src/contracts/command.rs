@@ -415,6 +415,16 @@ pub enum ErrorCode {
     UnsupportedBackupFormat,
     /// P9 D8: the restore staging is unknown or older than 24 hours.
     RestoreStagingExpired,
+    /// P9 D7/D8: local work in flight refuses a restore.
+    RestoreBlocked,
+    /// P9 D8/D15: startup couldn't finish a restore or a reset (the
+    /// bootstrap `Failed` state), or a restore failed after its second
+    /// attempt (a journal failure code).
+    RestoreFailed,
+    /// P9 D18: the typed confirmation phrase doesn't match exactly.
+    ConfirmationMismatch,
+    /// P9 D8: a restore or reset is waiting for the restart.
+    RestartPending,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -457,6 +467,8 @@ pub enum RecoveryCode {
     AssignManually,
     /// P7: open the settle dialog for a `reconciliation` Spool's Job.
     SettleMaterial,
+    /// P9 D7: open Queue on its Jobs view (`RESTORE_BLOCKED`).
+    OpenQueue,
 }
 
 /// The versioned success envelope returned by every command.
@@ -819,6 +831,74 @@ impl CommandError {
             false,
         )
         .with_string_details(&[("stagingId", staging_id)])
+    }
+
+    /// P9 D7/D8 `RESTORE_BLOCKED`: at most 50 blockers and the total.
+    pub fn restore_blocked(blockers: &[crate::backup::RestoreBlocker], blocker_total: i64) -> Self {
+        let blockers = JsonValue::from_serde_value(
+            serde_json::to_value(blockers).expect("blockers serialize"),
+        )
+        .expect("blockers are JSON");
+        let mut error = Self::typed(
+            ErrorCode::RestoreBlocked,
+            "Finish or resolve the Farm's active work before restoring.",
+            vec![RecoveryCode::OpenQueue],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("blockers".to_string(), blockers),
+            ("blockerTotal".to_string(), safe_number(blocker_total)),
+        ]));
+        error
+    }
+
+    /// P9 D8 `RESTORE_FAILED` (the startup error): `reason` is
+    /// `journalUnreadable`, `journalVersion`, `installFailed`, or
+    /// `rollbackFailed`; the last two are retryable.
+    pub fn restore_failed(reason: &str, step: Option<crate::backup::InstallerStep>) -> Self {
+        let retryable = matches!(reason, "installFailed" | "rollbackFailed");
+        let step = match step {
+            Some(step) => JsonValue::String(step.as_str().to_string()),
+            None => JsonValue::Null(()),
+        };
+        let mut error = Self::typed(
+            ErrorCode::RestoreFailed,
+            "farm3d couldn't finish restoring or resetting the Farm.",
+            if retryable {
+                vec![RecoveryCode::Retry]
+            } else {
+                vec![]
+            },
+            retryable,
+        );
+        error.details = Some(BTreeMap::from([
+            ("reason".to_string(), JsonValue::String(reason.to_string())),
+            ("step".to_string(), step),
+        ]));
+        error
+    }
+
+    /// P9 D18 `CONFIRMATION_MISMATCH`: `expected` is the exact phrase.
+    pub fn confirmation_mismatch(expected: &str) -> Self {
+        Self::typed(
+            ErrorCode::ConfirmationMismatch,
+            "Type the confirmation phrase exactly.",
+            vec![RecoveryCode::EditFields],
+            false,
+        )
+        .with_string_details(&[("expected", expected)])
+    }
+
+    /// P9 D8 `RESTART_PENDING`: a `pending`, `installing`, or `installed`
+    /// journal is waiting for the restart.
+    pub fn restart_pending(journal_id: &str, kind: &str) -> Self {
+        Self::typed(
+            ErrorCode::RestartPending,
+            "farm3d is about to restart to finish a restore or reset.",
+            vec![RecoveryCode::RestartApplication],
+            false,
+        )
+        .with_string_details(&[("journalId", journal_id), ("kind", kind)])
     }
 
     pub fn persistence_unavailable() -> Self {

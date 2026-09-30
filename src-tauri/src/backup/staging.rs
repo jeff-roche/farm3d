@@ -613,6 +613,37 @@ impl Stagings {
         Ok(candidate.clone())
     }
 
+    /// Takes the staging `staging_id` out (its directories stay), when it
+    /// exists and hasn't expired at `now`: once a journal names it, it can
+    /// no longer be discarded or replaced (`apply_restore`).
+    pub fn take(
+        &self,
+        staging_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<StagedCandidate, RestoreError> {
+        let mut current = self.lock();
+        let valid = current.as_ref().is_some_and(|candidate| {
+            candidate.staging_id == staging_id
+                && !candidate.is_expired(now)
+                && candidate.layout.candidate_path().is_file()
+        });
+        if !valid {
+            return Err(RestoreError::Expired {
+                staging_id: staging_id.to_string(),
+            });
+        }
+        Ok(current.take().expect("checked above"))
+    }
+
+    /// Puts back a staging [`take`](Self::take) took out, when nothing
+    /// replaced it meanwhile (`apply_restore` failed before its journal).
+    pub fn put_back(&self, candidate: StagedCandidate) {
+        let mut current = self.lock();
+        if current.is_none() {
+            *current = Some(candidate);
+        }
+    }
+
     /// The current staging's id.
     pub fn current_id(&self) -> Option<String> {
         self.lock()

@@ -287,7 +287,7 @@ pub fn blockers(connection: &Connection) -> rusqlite::Result<(Vec<RestoreBlocker
 }
 
 /// `(printer id, credentialRef)` of every Printer with a text ref.
-fn printer_refs(connection: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+pub(crate) fn printer_refs(connection: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
     connection
         .prepare(
             "SELECT id, json_extract(connection_json, '$.credentialRef') FROM printers
@@ -301,7 +301,7 @@ fn printer_refs(connection: &Connection) -> rusqlite::Result<Vec<(String, String
 
 /// Every credential ref the live Farm names: its Printers' and its pending
 /// cleanup rows'.
-fn local_refs(connection: &Connection) -> rusqlite::Result<BTreeSet<String>> {
+pub(crate) fn local_refs(connection: &Connection) -> rusqlite::Result<BTreeSet<String>> {
     let mut refs: BTreeSet<String> = printer_refs(connection)?
         .into_iter()
         .map(|(_, reference)| reference)
@@ -342,7 +342,7 @@ fn candidate_facts(candidate: &Connection) -> rusqlite::Result<CandidateFacts> {
 }
 
 /// Opens the staged candidate read-only.
-fn open_candidate(candidate: &StagedCandidate) -> Result<Connection, RestoreError> {
+pub(crate) fn open_candidate(candidate: &StagedCandidate) -> Result<Connection, RestoreError> {
     let connection = Connection::open_with_flags(
         candidate.layout.candidate_path(),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

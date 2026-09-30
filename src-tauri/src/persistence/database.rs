@@ -145,6 +145,33 @@ pub struct MetadataRootLease {
 }
 
 impl MetadataRootLease {
+    /// The metadata root this lease owns.
+    pub fn metadata_root(&self) -> &Path {
+        &self.metadata_root
+    }
+
+    /// [`acquire`](Self::acquire), retrying a busy lock every 100 ms for
+    /// up to `wait` before it counts as contention (P9 D8 "Startup order":
+    /// the process that requested a restart may still be exiting).
+    pub fn acquire_retrying(paths: &StoragePaths, wait: Duration) -> Result<Self, StorageError> {
+        let started = std::time::Instant::now();
+        let file = open_private_lock_file(&paths.ownership_lock)?;
+        loop {
+            match file.try_lock() {
+                Ok(()) => {
+                    return Ok(Self {
+                        metadata_root: paths.metadata_root.clone(),
+                        _file: file,
+                    })
+                }
+                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < wait => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(classify_lock_error(error)),
+            }
+        }
+    }
+
     pub fn acquire(paths: &StoragePaths) -> Result<Self, StorageError> {
         let file = open_private_lock_file(&paths.ownership_lock)?;
         match file.try_lock() {

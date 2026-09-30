@@ -52,8 +52,10 @@ const P8_COMMAND_COUNT: usize = 7 + 6 + 5 + 4;
 /// `get_job_timeline` (`tests/p9_history.rs`), plus Task 5's
 /// `backup_inventory`, `create_backup`, `list_backups`, and
 /// `delete_backup` (`tests/p9_backup.rs`), plus Task 6's `preview_restore`
-/// and `discard_restore_preview` (`tests/p9_restore_preview.rs`).
-const P9_COMMAND_COUNT: usize = 2 + 4 + 2;
+/// and `discard_restore_preview` (`tests/p9_restore_preview.rs`), plus Task
+/// 7's `apply_restore`, `restore_status`, and `acknowledge_restore_status`
+/// (`tests/p9_installer.rs`).
+const P9_COMMAND_COUNT: usize = 2 + 4 + 2 + 3;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

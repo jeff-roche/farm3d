@@ -189,7 +189,10 @@ macro_rules! log_safe_enum {
     };
 }
 
-log_safe_enum!(crate::connections::StatusCacheWarningOperation);
+log_safe_enum!(
+    crate::connections::StatusCacheWarningOperation,
+    crate::backup::InstallerStep,
+);
 
 /// The leading identifier of a `Debug` rendering: an error's variant name,
 /// never its fields.
@@ -260,6 +263,7 @@ pub const LOG_SAFE_IMPLEMENTORS: &[&str] = &[
     "Pseudonym",
     "ErrorCode",
     "StatusCacheWarningOperation",
+    "InstallerStep",
     "StorageError",
     "RepositoryError",
     "StatusCacheError",

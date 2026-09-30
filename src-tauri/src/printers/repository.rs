@@ -1021,7 +1021,7 @@ fn cleanup_precedence(reason: &str) -> Option<u8> {
     }
 }
 
-fn enqueue_credential_cleanup(
+pub(crate) fn enqueue_credential_cleanup(
     transaction: &rusqlite::Transaction<'_>,
     reference: &str,
     printer_id: Option<&str>,

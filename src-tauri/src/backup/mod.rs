@@ -24,14 +24,18 @@
 //!
 //! This file holds the wire types (ts-rs, camelCase).
 
+pub mod apply;
 pub mod archive;
 pub mod commands;
 pub mod dialogs;
+pub mod installer;
 pub mod inventory;
+pub mod journal;
 pub mod lease;
 pub mod manifest;
 pub mod preview;
 pub mod process_ops;
+pub mod restart;
 pub mod safety;
 pub mod staging;
 pub mod writer;
@@ -502,6 +506,119 @@ pub struct DiscardRestorePreviewOutcome {
     pub discarded: bool,
 }
 
+/// A restore or reset installer step (D8, D15), in the order the steps
+/// run. `journal.step` names the step being run.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/InstallerStep.ts")]
+pub enum InstallerStep {
+    RecheckBlockers,
+    MarkInstalling,
+    MoveDatabaseAside,
+    PlaceCandidate,
+    CarryLocalState,
+    ExtractContent,
+    SwapMedia,
+    Validate,
+    MarkInstalled,
+    MoveRootsAside,
+    CreateFreshDatabase,
+    DeleteCredentials,
+    DeleteSafetyBackups,
+    RemovePrevious,
+    MarkDone,
+}
+
+impl InstallerStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstallerStep::RecheckBlockers => "recheckBlockers",
+            InstallerStep::MarkInstalling => "markInstalling",
+            InstallerStep::MoveDatabaseAside => "moveDatabaseAside",
+            InstallerStep::PlaceCandidate => "placeCandidate",
+            InstallerStep::CarryLocalState => "carryLocalState",
+            InstallerStep::ExtractContent => "extractContent",
+            InstallerStep::SwapMedia => "swapMedia",
+            InstallerStep::Validate => "validate",
+            InstallerStep::MarkInstalled => "markInstalled",
+            InstallerStep::MoveRootsAside => "moveRootsAside",
+            InstallerStep::CreateFreshDatabase => "createFreshDatabase",
+            InstallerStep::DeleteCredentials => "deleteCredentials",
+            InstallerStep::DeleteSafetyBackups => "deleteSafetyBackups",
+            InstallerStep::RemovePrevious => "removePrevious",
+            InstallerStep::MarkDone => "markDone",
+        }
+    }
+}
+
+/// What a journal installs: a restore or a tier (c) reset.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/RestoreJournalKind.ts")]
+pub enum RestoreJournalKind {
+    Restore,
+    Reset,
+}
+
+impl RestoreJournalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RestoreJournalKind::Restore => "restore",
+            RestoreJournalKind::Reset => "reset",
+        }
+    }
+}
+
+/// The only `apply_restore` status: farm3d restarts to install.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/RestartingStatus.ts")]
+pub enum RestartingStatus {
+    Restarting,
+}
+
+/// `apply_restore`'s result: the safety backup is written and the journal
+/// is `pending`; farm3d restarts to install it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "domain/ApplyRestoreOutcome.ts")]
+pub struct ApplyRestoreOutcome {
+    pub status: RestartingStatus,
+    pub safety_backup_id: String,
+}
+
+/// `restore_status`: the finished journal of the last restore or reset,
+/// until it is acknowledged.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    export_to = "domain/RestoreStatus.ts"
+)]
+pub enum RestoreStatus {
+    None,
+    Done {
+        journal_id: String,
+        kind: RestoreJournalKind,
+        finished_at: String,
+        safety_backup_id: Option<String>,
+    },
+    Failed {
+        journal_id: String,
+        kind: RestoreJournalKind,
+        finished_at: String,
+        code: crate::contracts::command::ErrorCode,
+        failed_step: Option<InstallerStep>,
+        safety_backup_id: Option<String>,
+    },
+}
+
 /// Everything the backup commands share (spec "Module layout":
 /// `RuntimeServices.backup`): the lease, the process-local operation
 /// ledger, and the dialogs.
@@ -517,6 +634,12 @@ pub struct BackupServices {
     /// Staging's free-space and compatibility-window settings. Production
     /// uses the defaults.
     pub staging_options: staging::StagingOptions,
+    /// Restarts farm3d once a journal is `pending` (production:
+    /// `AppHandle::restart()`; tests record the request).
+    pub restarter: Arc<dyn restart::Restarter>,
+    /// The lease `apply_restore` (or a tier (c) reset) keeps until the
+    /// restart, so no other P9 operation starts before it.
+    pub held_until_restart: std::sync::Mutex<Option<lease::LeaseGuard>>,
 }
 
 impl BackupServices {
@@ -545,6 +668,8 @@ impl BackupServices {
             writer_hooks: writer::WriterHooks::default(),
             stagings: staging::Stagings::default(),
             staging_options: staging::StagingOptions::default(),
+            restarter: Arc::new(restart::RecordingRestarter::default()),
+            held_until_restart: std::sync::Mutex::new(None),
         }
     }
 
@@ -557,6 +682,15 @@ impl BackupServices {
             writer_hooks: writer::WriterHooks::default(),
             stagings: staging::Stagings::default(),
             staging_options: staging::StagingOptions::default(),
+            restarter: Arc::clone(&self.restarter),
+            held_until_restart: std::sync::Mutex::new(None),
         }
+    }
+
+    /// These services with `restarter` (production: [`restart::AppRestarter`];
+    /// tests: a [`restart::RecordingRestarter`]).
+    pub fn with_restarter(mut self, restarter: Arc<dyn restart::Restarter>) -> Self {
+        self.restarter = restarter;
+        self
     }
 }

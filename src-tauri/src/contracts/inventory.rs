@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 137] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 140] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -601,9 +601,24 @@ contracts![
         "DiscardRestorePreviewRequest",
         "DiscardRestorePreviewResult"
     ),
+    (
+        "apply_restore",
+        "ApplyRestoreRequest",
+        "ApplyRestoreResult"
+    ),
+    (
+        "restore_status",
+        "RestoreStatusRequest",
+        "RestoreStatusResult"
+    ),
+    (
+        "acknowledge_restore_status",
+        "AcknowledgeRestoreStatusRequest",
+        "AcknowledgeRestoreStatusResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 137] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 140] {
     &COMMAND_CONTRACTS
 }
 
@@ -899,7 +914,13 @@ export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;
 export type PreviewRestoreRequest = ContractRequest & { source: RestoreSource };
 export type PreviewRestoreResult = CommandSuccess<PreviewRestoreOutcome>;
 export type DiscardRestorePreviewRequest = ContractRequest & { stagingId: string };
-export type DiscardRestorePreviewResult = CommandSuccess<DiscardRestorePreviewOutcome>;"#.to_string()
+export type DiscardRestorePreviewResult = CommandSuccess<DiscardRestorePreviewOutcome>;
+export type ApplyRestoreRequest = ContractRequest & { operationId: string; stagingId: string; confirmation: string };
+export type ApplyRestoreResult = CommandSuccess<ApplyRestoreOutcome>;
+export type RestoreStatusRequest = NoArgsRequest;
+export type RestoreStatusResult = CommandSuccess<RestoreStatus>;
+export type AcknowledgeRestoreStatusRequest = ContractRequest & { journalId: string };
+export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -1031,6 +1052,8 @@ export type DiscardRestorePreviewResult = CommandSuccess<DiscardRestorePreviewOu
         visitor.visit::<crate::backup::RestoreSource>();
         visitor.visit::<crate::backup::PreviewRestoreOutcome>();
         visitor.visit::<crate::backup::DiscardRestorePreviewOutcome>();
+        visitor.visit::<crate::backup::ApplyRestoreOutcome>();
+        visitor.visit::<crate::backup::RestoreStatus>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {
