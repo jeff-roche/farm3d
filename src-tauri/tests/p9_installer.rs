@@ -737,7 +737,6 @@ fn the_journal_is_written_atomically_and_holds_no_credential_value() {
     assert_eq!(names, vec!["journal.json".to_string()]);
 }
 
-/// f22: the journal file is corrupt.
 /// A journal write that fails after its rename (on the directory `fsync`)
 /// has still left the `pending` journal the next start installs, so
 /// `apply_restore` must not report a failure: the on-disk journal with the
@@ -779,6 +778,7 @@ fn a_journal_write_that_fails_after_its_rename_counts_as_written() {
     assert!(!path.exists());
 }
 
+/// f22: the journal file is corrupt.
 #[test]
 fn f22_a_corrupt_journal_stops_startup_and_touches_nothing() {
     let site = site();

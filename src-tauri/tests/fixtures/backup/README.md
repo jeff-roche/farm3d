@@ -19,4 +19,4 @@ nothing.
 `just gen-backup-fixtures` exists to create the v1 file byte for byte (fixed
 timestamps, ids, and content: two runs give the same SHA-256). It is not a
 way to refresh it: it refuses to overwrite an existing fixture, so checking
-determinism means writing to a moved-aside copy's place and comparing.
+determinism means moving the file aside, running it, and comparing the two.

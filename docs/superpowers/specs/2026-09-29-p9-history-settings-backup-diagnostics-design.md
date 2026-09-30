@@ -586,7 +586,9 @@ hash matches. It then validates and migrates the candidate (D4), writes
    otherwise `CONFIRMATION_MISMATCH`.
 2. Look up `operationId` in the process-local ledger (D18).
 3. The staging must exist and not be expired (`RESTORE_STAGING_EXPIRED`).
-4. Take the lease (`BACKUP_IN_PROGRESS`).
+4. Take the lease (`BACKUP_IN_PROGRESS`). Step 6's `RESTART_PENDING`
+   refusal runs before this step, so a second apply while the first
+   still holds the lease is refused `RESTART_PENDING` (fault row f25).
 5. Re-check the blockers (`RESTORE_BLOCKED`).
 6. If a journal in phase `pending`, `installing`, or `installed` exists
    (another restore or reset is waiting for the restart), refuse with

@@ -48,6 +48,34 @@ generator), `p9_history` 17, `p9_installer` 47, `p9_integrity` 33,
 `p9_restore_preview` 53, `p9_secrets_corpus` 9, `p9_storage` 11, and
 `p9_tracer` 1.
 
+## Final fix wave (after the whole-branch review)
+
+The final review returned "With fixes" (three Important, seven Minor).
+The fix wave, `02079da`..`709b663` plus this record's update:
+
+- **Candidate hardening (I1, I2, `02079da`).** Restore staging refuses a
+  candidate table that farm3d's migrations don't create at the manifest's
+  schema version before any count query reads its name, both count
+  helpers quote identifiers, and the post-migration schema comparison
+  includes each object's whitespace-normalized DDL (a same-named index
+  over other columns, or a dropped `CHECK`, is `databaseInvalid`).
+- **Reset asides (I3, `e1e32f4`).** Each moved root's aside is
+  `<parent>/.aside-<journalId>-<root name>`, so two roots under one
+  parent both move (`p9_reset` r3b). The spec's step 3 and step 7 follow.
+- **Minors:** `journal.json` and `farm3d.log` are created `0600`; the
+  archive reader checks a name's length before allocating it; the P9 test
+  farm's telemetry-cache seed is well-formed; the web fixtures report
+  schema 10; an older Job's timeline error offers Retry; a list
+  description renders in a `<div>`.
+
+Gates re-run on `709b663` (Linux x86_64; the simulators were not started):
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `just build` | 0 | Main chunk `index-_c-aMcRC.js` at 582.86 kB (177.57 kB gzip). |
+| `just test` | 0 | 146 files, 1904 tests passed. |
+| `just test-rust` | 0 | 87 test-result lines: 2284 passed, 0 failed, 63 ignored. Only the pre-existing ts-rs "failed to parse serde attribute" warnings; the `held_back_note` dead-code and `function_casts_as_integer` warnings are gone. `p9_reset` now has 22 tests. |
+
 ## Exit gate (issue #19)
 
 | Criterion | Evidence | Status |
@@ -55,7 +83,7 @@ generator), `p9_history` 17, `p9_installer` 47, `p9_integrity` 33,
 | Versioned fixture backups and compatibility tests | `p9_fixture_compat.rs` (Task 17): 13 tests over `farm-v1-schema10.farm3d-backup` (31,696 bytes, deterministic generator). See "Fixture compatibility". | Pass |
 | Restore failure injection and interrupted-restore recovery | `p9_installer.rs` (Task 7, 47 tests) and the tier (c) roll-forward in `p9_reset.rs` (Task 8, 21 tests). See "Fault injection". Also `kill -9` on the real bundle. | Pass |
 | Post-restore reference counts and integrity checks | `p9_installer.rs`, `p9_fixture_compat.rs`, and `p9_tracer.rs` compare counts to the manifest and run `integrity::check`. On the bundle, counts matched and `PRAGMA integrity_check` returned `ok`. | Pass |
-| Diagnostics contain none of the seeded credential corpus | `p9_diagnostics.rs`, `p9_secrets_corpus.rs`, and the tracer's step 6 (full corpus, no exceptions). A manual `grep` of a bundle-side export found none of the seeded values. | Pass |
+| Diagnostics contain none of the seeded credential corpus | `p9_diagnostics.rs`, `p9_secrets_corpus.rs`, and the tracer's step 6 (full corpus, no exceptions). A manual `grep` of a bundle-side export found none of the seeded values. | Pass (command path; the native dialog is pending owner) |
 | Settings and history UI tests | `just test`: 146 files, 1902 tests, including the Settings workspace, storage, diagnostics, restore preview, and history screens (Tasks 13-16). | Pass |
 | Final archive/delete reference matrix | `p9_reference_matrix.rs` (Task 11) drives real commands over an every-domain Farm, and `p9_integrity.rs` audits every loose `*_json` and `_id` column. See "Reference matrix". | Pass |
 | The tracer completes with secrets excluded, on the fakes and the simulator, with the manifest committed | `p9_tracer.rs` on the fakes (`just test-rust`), the simulator leg in `sim_moonraker.rs` (25 passed), and the committed manifest above. | Pass |
@@ -355,9 +383,10 @@ This run covered Linux x86_64 only.
   normal launch after the restore. It did not happen on the other
   launches. This is P5 code (`sweep_stale_profile_caches`), and the run
   did not investigate it.
-- `farm3d.log` and `restore/journal.json` are created with mode `0644`,
+- `farm3d.log` and `restore/journal.json` were created with mode `0644`,
   while the database files are `0600`. The directories that hold them are
-  `0700`, so no other user can read them.
+  `0700`, so no other user could read them. The final fix wave creates
+  both with mode `0600` (`23bef4a`).
 - The banner's state lives in its own small `restore-status-store`, so
   the shell doesn't pull the backup store into the main chunk.
   `index-*.js` is 582.76 kB with the banner, against 581.49 kB before it.
@@ -402,8 +431,7 @@ Looking at the PNGs turned up two things, neither fixed here:
   `apply_restore` should ask the operator to quit and reopen; the journal
   makes that equally safe.
 - **Uncapped backup size.** Not changed. The free-space check prevents a
-  half-written file, not a slow one. This task did not check for progress events; it is
-  a follow-up if the owner finds a large Farm slow.
+  half-written file, not a slow one.
 - **The egress scan uses exact matching.** It catches known values, not a
   transformed or partial leak. The typed log and pseudonymized collectors
   are the primary control, and the corpus includes URL-encoded and
@@ -432,19 +460,24 @@ Looking at the PNGs turned up two things, neither fixed here:
 
 ## Known follow-ups
 
-- `connections.cacheHydrateFailed` with `MalformedSnapshot` was logged
-  during the P9 simulator leg. It is **uninvestigated**: it may be a
-  legitimately malformed restored connection-cache snapshot, or a bug.
+- ~~`connections.cacheHydrateFailed` with `MalformedSnapshot` was logged
+  during the P9 simulator leg.~~ Resolved in the final review: both
+  warnings came before the backup was written, from the P9 test farm's
+  deliberately undecodable telemetry-cache seed row, not from a restored
+  snapshot. The final fix wave seeds a well-formed row (`107da4f`).
+- Backups report no progress events. A follow-up if the owner finds a
+  large Farm slow to back up.
 - `slicing.presetCacheSweepFailed` (warn) fires on a normal bundle launch.
   It is P5 code (`sweep_stale_profile_caches`).
-- `farm3d.log` and `restore/journal.json` are created with mode `0644`,
-  while the database is `0600`. Their directories are `0700`, so no other
-  user can read them, but the modes should match.
+- ~~`farm3d.log` and `restore/journal.json` are created with mode
+  `0644`.~~ Fixed in the final fix wave: both are created `0600`.
 - A single-word name in the log's `fields.*` is exempt from the name scan
   (see the D13 residual-risk line above).
 - The Diagnostics section list needs a gap between each section name and
   its description (screenshots section).
-- `web-fixtures.ts` reports schema 11 against the real 10.
+- ~~`web-fixtures.ts` reports schema 11 against the real 10.~~ Fixed in
+  the final fix wave; the screenshots were captured before the fix and
+  still show 11 where a fixture schema appears.
 - Deferred review minors are in
   `.superpowers/sdd/2026-09-29-p9-history-settings-backup-diagnostics/progress.md`
   (not committed).

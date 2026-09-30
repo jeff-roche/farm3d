@@ -90,7 +90,7 @@ identifier `farm3d` (Tauri's `app_config_dir`, `app_data_dir`, and
 
 | What | Where |
 | --- | --- |
-| Database, credential fallback file, restore journal | `~/.config/farm3d/` |
+| Database, credential fallback file (used only when no Secret Service is running), restore journal | `~/.config/farm3d/` |
 | Managed Model content, camera images, backups | `~/.local/share/farm3d/` |
 | Safety backups | `~/.local/share/farm3d/farm3d-backups/v1/safety/` |
 | Log files (`farm3d.log`, rotated at 2 MiB, five files kept) | `~/.local/share/farm3d/logs/` |
