@@ -31,6 +31,25 @@ describe("ActivityBar", () => {
     expect(onSelect).toHaveBeenCalledWith("spools");
   });
 
+  it("marks Settings current when active, and selects it as a destination", async () => {
+    const onSelect = vi.fn();
+    render(() => <ActivityBar active="settings" onSelect={onSelect} />);
+
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(settings).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Monitor" })).not.toHaveAttribute("aria-current");
+    // A plain button, not a menu trigger.
+    expect(settings).not.toHaveAttribute("aria-haspopup");
+
+    await fireEvent.click(settings);
+    expect(onSelect).toHaveBeenCalledWith("settings");
+  });
+
+  it("does not mark Settings current on another destination", () => {
+    render(() => <ActivityBar active="monitor" onSelect={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current");
+  });
+
   it("marks Spools current when active, and shows no badge with a zero attention count", () => {
     render(() => <ActivityBar active="spools" onSelect={vi.fn()} attentionSpoolCount={0} />);
     expect(screen.getByRole("button", { name: "Spools" })).toHaveAttribute("aria-current", "page");

@@ -28,8 +28,6 @@ export interface PrinterDashboardProps {
    *  suggestion and duplicate-name warning. */
   existingPrinters?: ResolvedPrinter[];
   onPrinterCreated?: (printer: ResolvedPrinter) => void;
-  onImport?: () => void;
-  onExport?: () => void;
   /** Called once a Printer has been permanently deleted through the Setup
    *  tab's guarded Archive → Delete… flow. */
   onRemovePrinter?: (id: string) => void;
@@ -134,8 +132,6 @@ export function PrinterDashboard(props: PrinterDashboardProps) {
           : undefined}
         onAddPrinter={() => setWizardOpen(true)}
         onAddPrinters={openBatchDialog}
-        onImport={props.onImport}
-        onExport={props.onExport}
       />
       <Show when={props.loading && props.store.hasPrinters()}>
         <p class={styles.loadingNotice} role="status">Loading persisted Printer updates…</p>

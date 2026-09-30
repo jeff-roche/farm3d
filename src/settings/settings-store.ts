@@ -5,7 +5,7 @@ import type { MonitorDensity } from "../generated/contracts/domain/MonitorDensit
 import type { MonitorSection } from "../generated/contracts/domain/MonitorSection";
 import type { SettingsExportOutcome } from "../generated/contracts/command/SettingsExportOutcome";
 import type { SettingsImportOutcome } from "../generated/contracts/command/SettingsImportOutcome";
-import type { ThemeMode } from "../design-system/theme-engine";
+import { adoptThemeMode, type ThemeMode } from "../design-system/theme-engine";
 
 export type Settings = Omit<SettingsRecord, "themeMode" | "monitorSection" | "monitorDensity"> & {
   themeMode: ThemeMode;
@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS: Settings = {
 
 let cached: Settings | null = null;
 
-/** A reactive mirror of `cached` (Task 15's `NotificationSettingsDialog`
+/** A reactive mirror of `cached` (the `NotificationSettingsForm`
  *  needs Solid to re-render on `updateSettings`/`importSettings`; every
  *  other, older caller keeps using the synchronous `getSettings()`). Every
  *  place that reassigns `cached` calls `setCached` instead, so the two
@@ -105,6 +105,10 @@ export async function importSettings(): Promise<SettingsImportOutcome> {
   const result = await command("import_settings", {
     expectedRevision: (cached ?? DEFAULT_SETTINGS).revision,
   });
-  if (result.status === "applied") setCached(result.settings as Settings);
+  if (result.status === "applied") {
+    setCached(result.settings as Settings);
+    // The file's theme is now the committed one; the import already saved it.
+    adoptThemeMode(result.settings.themeMode);
+  }
   return result;
 }

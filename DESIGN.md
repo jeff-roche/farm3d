@@ -73,7 +73,7 @@ colors/sizes — that's what makes a theme swap actually repaint everything.
   OS-standard settings file in the background (see
   `src/settings/settings-store.ts`), not `localStorage`.
 - `previewTheme(mode)` / `cancelPreview()` — for live-preview UIs (e.g.
-  `src/screens/ThemePopover.tsx`). `previewTheme` applies a theme's CSS
+  `src/screens/settings/AppearanceSettings.tsx`). `previewTheme` applies a theme's CSS
   variables visually without changing the committed mode or persisting
   anything; `cancelPreview` reapplies whatever theme is actually
   committed, reverting the preview. Neither notifies `onThemeChange`
@@ -140,18 +140,18 @@ Their `trigger` prop is rendered **as the children of Kobalte's own
 `Popover`'s `trigger` is optional — omit it when the popover is opened
 externally instead (its `open`/`onOpenChange` are controlled, and
 `anchorRef` points it at an element outside the component, e.g.
-`ThemePopover` anchoring to the gear icon that opened it via a
-`DropdownMenu` item rather than its own trigger button).
+a popover anchoring to a button that opened it from outside, rather
+than its own trigger).
 
 **Opening a `Popover` from inside another overlay's item selection** (e.g. a
-`DropdownMenu` item, like `SettingsMenu`'s "Theme..." → `ThemePopover`) hits
+`DropdownMenu` item) hits
 two Kobalte races that don't show up in jsdom tests, only in a real browser:
 the closing menu's own click can read as an outside-click on the
 freshly-opened popover, and — for a popover with no `trigger` of its own to
 anchor focus-restoration around — Kobalte's non-modal focus-outside handling
 can self-dismiss it immediately since nothing ever moved focus into the
-content. `SettingsMenu` defers the open a tick (`setTimeout(..., 0)`) and
-passes `modal` on that specific `Popover` (no visual backdrop exists on
+content. Defer the open a tick (`setTimeout(..., 0)`) and
+pass `modal` on that specific `Popover` (no visual backdrop exists on
 `Popover`, so nothing dims — `modal` only firms up focus/dismiss handling).
 A `Popover` with its own `trigger` (the Showcase example) doesn't need
 either workaround.

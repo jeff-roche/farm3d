@@ -216,6 +216,20 @@ vi.mock("./screens/SlicerSettingsDialog", () => ({
   ),
 }));
 
+vi.mock("./screens/settings/SettingsWorkspace", () => ({
+  SettingsWorkspace: (props: {
+    category?: string;
+    onCategoryChange: (slug: string) => void;
+    onPrintersImported?: () => void;
+  }) => (
+    <div>
+      <output aria-label="Settings category">{props.category ?? "none"}</output>
+      <button onClick={() => props.onCategoryChange("appearance")}>Go to Appearance</button>
+      <button onClick={() => props.onPrintersImported?.()}>Printers imported</button>
+    </div>
+  ),
+}));
+
 vi.mock("./screens/SpoolInventory", () => ({
   SpoolInventory: () => <div>Spools</div>,
 }));
@@ -242,8 +256,6 @@ vi.mock("./screens/PrinterDashboard", () => ({
     store: { hasPrinters: () => boolean; selectedPrinterId: () => string | null };
     isFirstRun?: boolean;
     syncState?: string;
-    onImport?: () => void;
-    onExport?: () => void;
     attentionEventId?: string | null;
     onAttentionEventClose?: () => void;
   }) => (
@@ -252,8 +264,6 @@ vi.mock("./screens/PrinterDashboard", () => ({
       <p>Sync state: {props.syncState}</p>
       <output aria-label="Selected Printer">{props.store.selectedPrinterId() ?? "none"}</output>
       <output aria-label="Selected Attention Event">{props.attentionEventId ?? "none"}</output>
-      <button onClick={props.onImport}>Import Printers</button>
-      <button onClick={props.onExport}>Export Printers</button>
       <button onClick={props.onAttentionEventClose}>Close Attention Event</button>
     </div>
   ),
@@ -812,22 +822,71 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Sync state: uncertain")).toBeInTheDocument());
   });
 
-  it("passes import/export callbacks and clears an imported-away deep-link selection", async () => {
-    window.location.hash = "#nav=v1/monitor/printer/prn-1";
-    appState.importPrinters.mockImplementation(async () => {
-      appState.printers = [];
-      return { status: "applied" };
-    });
+  it("no longer passes Printers import/export to the Monitor: they live in Settings > Connections", async () => {
+    window.location.hash = "#nav=v1/monitor";
     const { default: App } = await import("./App");
 
     render(() => <App />);
 
-    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("prn-1"));
-    await screen.getByRole("button", { name: "Import Printers" }).click();
-    await waitFor(() => expect(appState.importPrinters).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.getByLabelText("Selected Printer")).toHaveTextContent("none"));
-    await screen.getByRole("button", { name: "Export Printers" }).click();
-    expect(appState.exportPrinters).toHaveBeenCalledOnce();
+    await screen.findByLabelText("Selected Printer");
+    expect(screen.queryByRole("button", { name: "Import Printers" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export Printers" })).toBeNull();
+  });
+
+  describe("the Settings destination", () => {
+    it("is available and shows the workspace, with no unavailable banner", async () => {
+      window.location.hash = "#nav=v1/settings";
+      const { default: App } = await import("./App");
+
+      render(() => <App />);
+
+      expect(await screen.findByLabelText("Settings category")).toHaveTextContent("none");
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+      expect(screen.queryByText(/is not available in this version/)).toBeNull();
+      expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
+    });
+
+    it("selects the category a settingsCategory deep link names", async () => {
+      window.location.hash = "#nav=v1/settings/settingsCategory/appearance";
+      const { default: App } = await import("./App");
+
+      render(() => <App />);
+
+      expect(await screen.findByLabelText("Settings category")).toHaveTextContent("appearance");
+      expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
+    });
+
+    it("shows the standard availability notice for an unknown slug, and the workspace falls back to General", async () => {
+      window.location.hash = "#nav=v1/settings/settingsCategory/nonsense";
+      const { default: App } = await import("./App");
+
+      render(() => <App />);
+
+      expect(await screen.findByText("The requested item is no longer available.")).toBeInTheDocument();
+      // The workspace resolves an unknown slug to General itself.
+      expect(await screen.findByLabelText("Settings category")).toHaveTextContent("nonsense");
+    });
+
+    it("writes the chosen category into the hash", async () => {
+      window.location.hash = "#nav=v1/settings";
+      const { default: App } = await import("./App");
+      render(() => <App />);
+
+      await fireEvent.click(await screen.findByRole("button", { name: "Go to Appearance" }));
+
+      await waitFor(() => expect(window.location.hash).toBe("#nav=v1/settings/settingsCategory/appearance"));
+    });
+
+    it("re-checks navigation after a Printers import", async () => {
+      window.location.hash = "#nav=v1/settings/settingsCategory/connections";
+      const { default: App } = await import("./App");
+      render(() => <App />);
+
+      await fireEvent.click(await screen.findByRole("button", { name: "Printers imported" }));
+
+      expect(screen.getByLabelText("Settings category")).toHaveTextContent("connections");
+      expect(screen.queryByText("The requested item is no longer available.")).toBeNull();
+    });
   });
 
   it("retries the full startup sequence after a settings failure", async () => {

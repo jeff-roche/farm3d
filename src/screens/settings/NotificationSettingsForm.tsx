@@ -1,10 +1,10 @@
-import { createEffect, createSignal, For, on, Show } from "solid-js";
-import { Button, Dialog, NumberField, Switch } from "../design-system";
-import { command, desktopAvailable, isCommandError, needsDesktopError } from "../ipc/client";
-import { notificationClassLabel, NOTIFICATION_CLASS_ORDER } from "../attention/presentation";
-import type { NotificationClassSettings, NotifierStatus } from "../attention/types";
-import { loadSettings, settings, updateSettings } from "../settings/settings-store";
-import styles from "./NotificationSettingsDialog.module.css";
+import { createSignal, For, onMount, Show } from "solid-js";
+import { Button, NumberField, Switch } from "../../design-system";
+import { command, desktopAvailable, isCommandError, needsDesktopError } from "../../ipc/client";
+import { notificationClassLabel, NOTIFICATION_CLASS_ORDER } from "../../attention/presentation";
+import type { NotificationClassSettings, NotifierStatus } from "../../attention/types";
+import { loadSettings, settings, updateSettings } from "../../settings/settings-store";
+import styles from "./NotificationSettingsForm.module.css";
 
 const DEFAULT_CLASSES: NotificationClassSettings = {
   fatal: true,
@@ -15,18 +15,12 @@ const DEFAULT_CLASSES: NotificationClassSettings = {
   inventory: false,
 };
 
-export interface NotificationSettingsDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-/** `SettingsMenu`'s "Notifications and retention…" (spec "Frontend
- *  architecture" → "Settings"): the six class switches, the retention days
- *  and disk cap, the notifier status text, and "Send test notification".
- *  A revision conflict on Save reloads and explains rather than clobbering
- *  whatever changed elsewhere (P8 leaves a Settings workspace/destination
- *  to P9, so this dialog is the only surface for these fields). */
-export function NotificationSettingsDialog(props: NotificationSettingsDialogProps) {
+/** The Settings workspace's "Notifications and retention" category (spec
+ *  "Frontend architecture" → "Settings"): the six class switches, the
+ *  retention days and disk cap, the notifier status text, and "Send test
+ *  notification". A revision conflict on Save reloads and explains rather
+ *  than clobbering whatever changed elsewhere. */
+export function NotificationSettingsForm() {
   // Seeded synchronously at construction, not only from the `open` effect
   // below: `NumberField`'s Kobalte root also runs its own mount-time
   // effect, and a same-tick external update racing it can lose (the
@@ -73,20 +67,12 @@ export function NotificationSettingsDialog(props: NotificationSettingsDialogProp
     }
   }
 
-  createEffect(
-    on(
-      () => props.open,
-      (open) => {
-        if (!open) return;
-        setSaveError(null);
-        setTestError(null);
-        setTestSent(false);
-        if (settings()) seedFromSettings();
-        else void loadSettings().then(seedFromSettings).catch(() => {});
-        void loadStatus();
-      },
-    ),
-  );
+  // Mounted when the category is selected, so this is "on open".
+  onMount(() => {
+    if (settings()) seedFromSettings();
+    else void loadSettings().then(seedFromSettings).catch(() => {});
+    void loadStatus();
+  });
 
   function toggleClass(key: keyof NotificationClassSettings, checked: boolean): void {
     setClasses((prev) => ({ ...prev, [key]: checked }));
@@ -105,7 +91,7 @@ export function NotificationSettingsDialog(props: NotificationSettingsDialogProp
         await loadSettings().catch(() => {});
         seedFromSettings();
         setSaveError(
-          "These settings changed elsewhere since this dialog opened. They've been reloaded with the current values — check them and try again.",
+          "These settings changed elsewhere since this page opened. They've been reloaded with the current values — check them and try again.",
         );
       } else {
         setSaveError(isCommandError(e) ? e.message : "These settings could not be saved.");
@@ -141,8 +127,8 @@ export function NotificationSettingsDialog(props: NotificationSettingsDialogProp
   }
 
   return (
-    <Dialog title="Notifications and retention" open={props.open} onOpenChange={props.onOpenChange}>
-      <div class={styles.body}>
+    <div class={styles.body}>
+        <h3 class={styles.heading}>Notifications and retention</h3>
         <section class={styles.section} aria-label="Notification classes">
           <span class={styles.sectionTitle}>Notify for</span>
           <For each={NOTIFICATION_CLASS_ORDER}>
@@ -196,14 +182,10 @@ export function NotificationSettingsDialog(props: NotificationSettingsDialogProp
         </Show>
 
         <div class={styles.actions}>
-          <Button variant="secondary" onClick={() => props.onOpenChange(false)}>
-            Close
-          </Button>
           <Button variant="primary" disabled={saving()} onClick={() => void onSave()}>
             {saving() ? "Saving…" : "Save"}
           </Button>
         </div>
-      </div>
-    </Dialog>
+    </div>
   );
 }

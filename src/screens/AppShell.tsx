@@ -1,6 +1,7 @@
-import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
+import { diagnostics, loadAbout } from "../diagnostics/diagnostics-store";
 import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
@@ -37,7 +38,6 @@ export interface AdapterHealth {
   label: string;
 }
 
-const VERSION = "farm3d 0.1.0";
 const AGE_REFRESH_MS = 60_000;
 
 function rosterEntries(roster: PrinterRosterModel): PrinterRosterEntry[] {
@@ -68,6 +68,15 @@ export function AppShell(props: AppShellProps) {
   const [now, setNow] = createSignal(Date.now());
   const ageRefresh = window.setInterval(() => setNow(Date.now()), AGE_REFRESH_MS);
   onCleanup(() => window.clearInterval(ageRefresh));
+
+  // The status bar's version comes from `about_farm3d`.
+  onMount(() => {
+    void loadAbout().catch(() => {});
+  });
+  const version = () => {
+    const appVersion = diagnostics.about()?.appVersion;
+    return appVersion ? `farm3d ${appVersion}` : "farm3d";
+  };
 
   const viewAll = () => props.onSelect("monitor");
 
@@ -125,7 +134,7 @@ export function AppShell(props: AppShellProps) {
       <footer class={styles.statusBar}>
         <SeverityMarker severity={props.adapterHealth.severity} label={props.adapterHealth.label} />
         <span>{formatLastLiveEventAge(props.lastLiveEventAt, now())}</span>
-        <span class={styles.statusBarVersion}>{VERSION}</span>
+        <span class={styles.statusBarVersion}>{version()}</span>
       </footer>
     </div>
   );

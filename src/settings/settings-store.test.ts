@@ -92,6 +92,35 @@ describe("settings-store", () => {
 
       expect(tauriMock.invoke).toHaveBeenCalledWith("export_settings", { contractVersion: 1 });
     });
+
+    it("re-applies the imported theme without writing it back", async () => {
+      const { initTheme, getThemeMode } = await import("../design-system/theme-engine");
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "farm3d-light", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "now" } });
+      await initTheme();
+      expect(document.documentElement.dataset.themeName).toBe("farm3d-light");
+      const imported = { revision: 2, themeMode: "farm3d-dark", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "later" };
+      tauriMock.invoke.mockClear();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { status: "applied", settings: imported, warnings: [] } });
+      const { importSettings } = await import("./settings-store");
+
+      await importSettings();
+
+      expect(getThemeMode()).toBe("farm3d-dark");
+      expect(document.documentElement.dataset.themeName).toBe("farm3d-dark");
+      expect(tauriMock.invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the theme alone when the import is cancelled", async () => {
+      const { initTheme, getThemeMode } = await import("../design-system/theme-engine");
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { revision: 1, themeMode: "farm3d-light", monitorSection: "printerModel", monitorDensity: "comfortable", updatedAt: "now" } });
+      await initTheme();
+      tauriMock.invoke.mockResolvedValue({ contractVersion: 1, data: { status: "cancelled" } });
+      const { importSettings } = await import("./settings-store");
+
+      await importSettings();
+
+      expect(getThemeMode()).toBe("farm3d-light");
+    });
   });
 
   describe("under just web (no Tauri backend)", () => {

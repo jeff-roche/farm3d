@@ -94,6 +94,13 @@ export function setThemeMode(mode: ThemeMode): void {
   });
 }
 
+/** Adopts a mode that was committed elsewhere (a settings import already
+ *  saved it): applies it and notifies, without persisting it again. */
+export function adoptThemeMode(mode: ThemeMode): void {
+  currentMode = mode || "system";
+  applyCurrentMode();
+}
+
 export function getThemeMode(): ThemeMode {
   return currentMode;
 }

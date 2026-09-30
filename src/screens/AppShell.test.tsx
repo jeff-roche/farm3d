@@ -2,9 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MonitorPrinterView, MonitorRosterView } from "../monitor/monitor-store";
 import { resetAttentionStoreMock } from "../attention/attention-store-mock";
+import { resetDiagnosticsStoreMock, setDiagnosticsStoreState } from "../diagnostics/diagnostics-store-mock";
+import { webAboutInfo } from "../diagnostics/web-fixtures";
 import { AppShell } from "./AppShell";
 
 vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
+vi.mock("../diagnostics/diagnostics-store", async () =>
+  (await import("../diagnostics/diagnostics-store-mock")).diagnosticsStoreMock);
 
 function printer(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {
@@ -42,6 +46,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   vi.useRealTimers();
   resetAttentionStoreMock();
+  resetDiagnosticsStoreMock();
 });
 
 describe("AppShell", () => {
@@ -162,5 +167,24 @@ describe("AppShell", () => {
     expect(screen.getByText("Bay One")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue (2 need attention)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Monitor (3 need attention)" })).toBeInTheDocument();
+  });
+
+  it("shows the version from About in the status bar, not a hard-coded one", async () => {
+    setDiagnosticsStoreState({ about: { ...webAboutInfo(), appVersion: "7.8.9" } });
+    render(() => (
+      <AppShell
+        active="monitor"
+        onSelect={vi.fn()}
+        title="Monitor"
+        printerRoster={roster()}
+        operationalRosters={[]}
+        adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
+      >
+        <p>Workspace</p>
+      </AppShell>
+    ));
+
+    expect(await screen.findByText("farm3d 7.8.9")).toBeInTheDocument();
+    expect(screen.queryByText("farm3d 0.1.0")).not.toBeInTheDocument();
   });
 });

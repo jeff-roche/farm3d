@@ -33,6 +33,7 @@ pub enum NavigationSelectionKind {
     Spool,
     Incident,
     Attention,
+    SettingsCategory,
 }
 
 /// A selected object's kind and opaque stable ID.

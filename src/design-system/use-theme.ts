@@ -15,7 +15,12 @@ export function useTheme() {
   const [resolvedThemeName, setResolvedThemeName] = createSignal(getResolvedThemeName());
   const [mode, setMode] = createSignal<ThemeMode>(getThemeMode());
 
-  const unsubscribe = onThemeChange(setResolvedThemeName);
+  // Any committed change (including one adopted from a settings import)
+  // notifies, so the mode follows it; a preview never notifies.
+  const unsubscribe = onThemeChange((name) => {
+    setResolvedThemeName(name);
+    setMode(getThemeMode());
+  });
   onCleanup(unsubscribe);
 
   function setThemeMode(next: ThemeMode) {

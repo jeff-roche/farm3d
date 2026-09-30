@@ -3,4 +3,4 @@
 /**
  * The stable object categories supported by navigation identity.
  */
-export type NavigationSelectionKind = "printer" | "job" | "model" | "project" | "spool" | "incident" | "attention";
+export type NavigationSelectionKind = "printer" | "job" | "model" | "project" | "spool" | "incident" | "attention" | "settingsCategory";

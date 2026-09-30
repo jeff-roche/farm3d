@@ -1,0 +1,91 @@
+.category {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 44rem;
+  color: var(--f3d-color-text);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}
+
+.heading {
+  margin: 0;
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  color: var(--f3d-color-text);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--f3d-color-border);
+}
+
+.sectionTitle {
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-label-font);
+  font-size: var(--f3d-type-label-size);
+  font-weight: var(--f3d-type-label-weight);
+  letter-spacing: var(--f3d-type-label-tracking);
+  text-transform: uppercase;
+}
+
+.hint,
+.note,
+.status {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+}
+
+.error {
+  margin: 0;
+  color: var(--f3d-color-danger);
+}
+
+.radioList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.radioItem {
+  composes: item from "../../design-system/components/RadioGroup.module.css";
+}
+
+.radioControl {
+  composes: control from "../../design-system/components/RadioGroup.module.css";
+}
+
+.radioLabel {
+  composes: itemLabel from "../../design-system/components/RadioGroup.module.css";
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.definitions {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.definitions dt {
+  color: var(--f3d-color-text-muted);
+}
+
+.definitions dd {
+  margin: 0;
+}
+
+.preferences {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}

@@ -52,3 +52,11 @@
   justify-content: flex-end;
   gap: 0.5rem;
 }
+
+.heading {
+  margin: 0;
+  font-family: var(--f3d-type-heading-font);
+  font-size: var(--f3d-type-heading-size);
+  font-weight: var(--f3d-type-heading-weight);
+  color: var(--f3d-color-text);
+}

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NotificationSettingsDialog } from "./NotificationSettingsDialog";
-import type { Settings } from "../settings/settings-store";
+import { NotificationSettingsForm } from "./NotificationSettingsForm";
+import type { Settings } from "../../settings/settings-store";
 
 const tauriMock = vi.hoisted(() => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => tauriMock);
@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/core", () => tauriMock);
 const settingsSignal = vi.hoisted(() => vi.fn());
 const loadSettings = vi.hoisted(() => vi.fn());
 const updateSettings = vi.hoisted(() => vi.fn());
-vi.mock("../settings/settings-store", () => ({
+vi.mock("../../settings/settings-store", () => ({
   settings: settingsSignal,
   loadSettings,
   updateSettings,
@@ -35,14 +35,14 @@ afterEach(() => {
   settingsSignal.mockReturnValue(null);
 });
 
-describe("NotificationSettingsDialog", () => {
+describe("NotificationSettingsForm", () => {
   it("seeds the six class switches and retention fields from settings", async () => {
     settingsSignal.mockReturnValue(settingsFixture({
       notifications: { fatal: true, confirmation: false, completion: true, reconciliation: true, connectivity: false, inventory: true },
       snapshotRetention: { retentionDays: 7, diskCapMb: 512 },
     }));
 
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
 
     expect(await screen.findByRole("switch", { name: "Fatal failures" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Material reconciliation" })).toBeChecked();
@@ -53,7 +53,7 @@ describe("NotificationSettingsDialog", () => {
 
   it("switches the class toggles independently", async () => {
     settingsSignal.mockReturnValue(settingsFixture());
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
     await screen.findByRole("switch", { name: "Fatal failures" });
 
     fireEvent.click(screen.getByRole("switch", { name: "Connectivity (offline, connection errors, host-cancelled)" }));
@@ -70,7 +70,7 @@ describe("NotificationSettingsDialog", () => {
       data: { state: "unavailable", reason: "noSessionBus" },
     });
 
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
 
     expect(await screen.findByText("Unavailable: no notification service")).toBeInTheDocument();
   });
@@ -83,7 +83,7 @@ describe("NotificationSettingsDialog", () => {
       data: { state: "available", serverName: "Plasma", serverVendor: "KDE", serverVersion: "6.7.5", specVersion: "1.2", actions: true, bodyMarkup: true },
     });
 
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
 
     expect(await screen.findByText("Available: Plasma")).toBeInTheDocument();
   });
@@ -97,7 +97,7 @@ describe("NotificationSettingsDialog", () => {
       return Promise.reject(new Error(`unexpected command ${command}`));
     });
 
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
     await screen.findByText("Not supported on this platform");
 
     fireEvent.click(screen.getByRole("button", { name: "Send test notification" }));
@@ -109,7 +109,7 @@ describe("NotificationSettingsDialog", () => {
   it("Save calls updateSettings with the six classes and retention values", async () => {
     settingsSignal.mockReturnValue(settingsFixture());
     updateSettings.mockResolvedValueOnce(undefined);
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
     await screen.findByRole("switch", { name: "Fatal failures" });
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -135,12 +135,12 @@ describe("NotificationSettingsDialog", () => {
       return reloaded;
     });
 
-    render(() => <NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    render(() => <NotificationSettingsForm />);
     await screen.findByRole("switch", { name: "Fatal failures" });
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText(/changed elsewhere since this dialog opened/)).toBeInTheDocument();
+    expect(await screen.findByText(/changed elsewhere since this page opened/)).toBeInTheDocument();
     expect(loadSettings).toHaveBeenCalled();
     await waitFor(() => expect(screen.getByLabelText("Retention (days)")).toHaveValue("60"));
   });

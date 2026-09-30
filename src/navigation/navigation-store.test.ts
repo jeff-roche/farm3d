@@ -17,6 +17,7 @@ describe("navigation identity", () => {
     { version: 1, destination: "library", selection: { kind: "project", id: "p-1" } },
     { version: 1, destination: "spools", selection: { kind: "spool", id: "s-1" } },
     { version: 1, destination: "settings" },
+    { version: 1, destination: "settings", selection: { kind: "settingsCategory", id: "storage" } },
   ];
 
   it.each(valid)("round trips $destination/$selection.kind", (target) => {
@@ -37,6 +38,7 @@ describe("navigation identity", () => {
     "#nav=v2/monitor",
     "#nav=v1/settings/printer/x",
     "#nav=v1/queue/model/x",
+    "#nav=v1/monitor/settingsCategory/general",
     "#nav=v1/monitor/printer/%GG",
     "#nav=v1/library/model/",
     "#nav=v1/library/model/x/extra",
