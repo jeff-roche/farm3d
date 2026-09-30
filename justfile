@@ -79,6 +79,10 @@ gen-contracts:
 gen-library-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test library_fixtures regenerate_library_fixtures -- --ignored --exact
 
+# Regenerate the v1 backup fixture. Only for a NEW fixture directory; never change a released version's (tests/fixtures/backup/README.md)
+gen-backup-fixtures:
+    cargo test --manifest-path src-tauri/Cargo.toml --test p9_fixture_compat regenerate_backup_fixtures -- --ignored --exact
+
 # Regenerate the deterministic slicing fixtures (transform vectors, plate 3MF, argument vectors, flat presets)
 gen-slicing-fixtures:
     cargo test --manifest-path src-tauri/Cargo.toml --test p5_geometry regenerate_slicing_fixtures -- --ignored --exact
