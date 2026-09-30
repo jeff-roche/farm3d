@@ -412,7 +412,7 @@ pub(crate) async fn attempt<R: tauri::Runtime>(
         .map_err(|error| {
             // The row stays `reconciling`; startup recovery returns it to
             // `uncertain` without counting the attempt.
-            log_commit_failure(id, "its reconcile outcome", &error);
+            log_commit_failure(id, "hostOps.commitReconcileOutcomeFailed", &error);
             repository_error(error)
         })?;
     services.publish(std::slice::from_ref(&committed));

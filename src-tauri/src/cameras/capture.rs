@@ -257,7 +257,12 @@ async fn consume<R: tauri::Runtime>(
                         }
                     }
                     Err(error) => {
-                        eprintln!("farm3d: camera capture: could not re-derive missed captures: {error:?}");
+                        crate::f3d_log!(
+                            warn,
+                            "cameras.rederiveFailed",
+                            error = error,
+                            skipped = skipped
+                        );
                     }
                 }
                 strong
@@ -286,8 +291,7 @@ fn dispatch<R: tauri::Runtime>(
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = capture(&services, &app, &intent).await {
-            // Repository errors carry no URL or credential.
-            eprintln!("farm3d: camera capture failed: {error:?}");
+            crate::f3d_log!(warn, "cameras.captureFailed", error = error);
         }
         lock(&services.cameras.runtime.capturing).remove(&key);
     });
@@ -486,7 +490,7 @@ async fn janitor<R: tauri::Runtime>(
             }
             if services.cameras.media_available() {
                 if let Err(error) = prune_now(&services, &app).await {
-                    eprintln!("farm3d: media janitor: a prune pass failed: {error:?}");
+                    crate::f3d_log!(warn, "cameras.prunePassFailed", error = error);
                 }
             }
             services.cameras.janitor().pass_done();

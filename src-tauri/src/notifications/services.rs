@@ -235,10 +235,13 @@ impl<R: tauri::Runtime> NotificationService<R> {
     pub async fn send_test(&self) -> Result<NotificationHandle, NotifierStatus> {
         let status = self.status().await;
         if !matches!(status, NotifierStatus::Available { .. }) {
-            self.log_line(format!(
-                "farm3d: notifications: the test notification was not shown ({})",
-                status_kind(&status)
-            ));
+            self.log_line(
+                "notifications.testNotShown",
+                format!(
+                    "farm3d: notifications: the test notification was not shown ({})",
+                    status_kind(&status)
+                ),
+            );
             return Err(status);
         }
         let notification = Notification::test();
@@ -248,10 +251,13 @@ impl<R: tauri::Runtime> NotificationService<R> {
                 Ok(handle)
             }
             Err(error) => {
-                self.log_line(format!(
-                    "farm3d: notifications: the test notification was not shown ({})",
-                    error_kind(error)
-                ));
+                self.log_line(
+                    "notifications.testNotShown",
+                    format!(
+                        "farm3d: notifications: the test notification was not shown ({})",
+                        error_kind(error)
+                    ),
+                );
                 Err(error.status())
             }
         }
@@ -281,6 +287,7 @@ impl<R: tauri::Runtime> NotificationService<R> {
             Ok(inputs) => inputs,
             Err(_) => {
                 self.log_line(
+                    "notifications.settingsUnreadable",
                     "farm3d: notifications: could not read the settings; skipped one candidate",
                 );
                 return None;
@@ -300,10 +307,13 @@ impl<R: tauri::Runtime> NotificationService<R> {
         let handle = match self.sink().show(&notification).await {
             Ok(handle) => handle,
             Err(error) => {
-                self.log_line(format!(
-                    "farm3d: notifications: a notification was not shown ({})",
-                    error_kind(error)
-                ));
+                self.log_line(
+                    "notifications.notShown",
+                    format!(
+                        "farm3d: notifications: a notification was not shown ({})",
+                        error_kind(error)
+                    ),
+                );
                 return None;
             }
         };
@@ -317,7 +327,10 @@ impl<R: tauri::Runtime> NotificationService<R> {
             Ok(())
         });
         if marked.is_err() {
-            self.log_line("farm3d: notifications: could not record notified_at");
+            self.log_line(
+                "notifications.notifiedAtFailed",
+                "farm3d: notifications: could not record notified_at",
+            );
         }
         Some(handle)
     }
@@ -427,13 +440,18 @@ impl<R: tauri::Runtime> NotificationService<R> {
                     .publish_change(app, &events, &[], &[]);
             }
             Ok(_) => {}
-            Err(_) => self.log_line("farm3d: notifications: could not mark a clicked Event read"),
+            Err(_) => self.log_line(
+                "notifications.markReadFailed",
+                "farm3d: notifications: could not mark a clicked Event read",
+            ),
         }
     }
 
-    fn log_line(&self, line: impl Into<String>) {
+    /// Keeps `line` (a fixed message) in the in-memory buffer and logs its
+    /// `code` to the diagnostics log. The line itself never reaches the file.
+    fn log_line(&self, code: &'static str, line: impl Into<String>) {
         let line = line.into();
-        eprintln!("{line}");
+        crate::f3d_log!(warn, code);
         let mut log = lock(&self.log);
         log.push_back(line);
         while log.len() > LOG_LINES {
@@ -582,9 +600,10 @@ async fn run_candidates<R: tauri::Runtime>(
             // Attention center.
             Err(RecvError::Lagged(missed)) => {
                 service.lagged.fetch_add(1, Ordering::SeqCst);
-                service.log_line(format!(
-                    "farm3d: notifications: dropped {missed} missed projector passes"
-                ));
+                service.log_line(
+                    "notifications.passesDropped",
+                    format!("farm3d: notifications: dropped {missed} missed projector passes"),
+                );
             }
             Err(RecvError::Closed) => return,
         }

@@ -625,7 +625,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                 }
             }
             Err(error) => {
-                eprintln!("farm3d: cannot hydrate telemetry cache: {error}");
+                crate::f3d_log!(warn, "connections.cacheHydrateFailed", error = error);
                 record_cache_warning_in(
                     &cache_warnings,
                     None,
@@ -751,7 +751,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                     .unwrap_or_else(|| format_time(now)),
             };
             if let Err(error) = self.repository.save_if_due(&snapshot, write) {
-                eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+                crate::f3d_log!(
+                    warn,
+                    "connections.cacheSaveFailed",
+                    printer_id = crate::diagnostics::log::LogId::printer(printer_id),
+                    error = error
+                );
                 self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Save);
             } else {
                 self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Save);
@@ -930,7 +935,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
 
     fn delete_telemetry_snapshot(&self, printer_id: &str) {
         if let Err(error) = self.repository.delete(printer_id) {
-            eprintln!("farm3d: cannot clear telemetry cache: {error}");
+            crate::f3d_log!(
+                warn,
+                "connections.cacheDeleteFailed",
+                printer_id = crate::diagnostics::log::LogId::printer(printer_id),
+                error = error
+            );
             self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         } else {
             self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
@@ -1059,7 +1069,12 @@ fn apply_observation_to<R: tauri::Runtime>(
                 .unwrap_or_else(|| format_time(now)),
         };
         if let Err(error) = repository.save_if_due(&snapshot, write) {
-            eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+            crate::f3d_log!(
+                warn,
+                "connections.cacheSaveFailed",
+                printer_id = crate::diagnostics::log::LogId::printer(id),
+                error = error
+            );
             record_cache_warning_in(cache_warnings, Some(id), StatusCacheWarningOperation::Save);
         } else {
             clear_cache_warning_in(cache_warnings, Some(id), StatusCacheWarningOperation::Save);

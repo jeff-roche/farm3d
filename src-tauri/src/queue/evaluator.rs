@@ -836,10 +836,8 @@ async fn run_task<R: tauri::Runtime>(
                 }
                 !run.refused.is_empty()
             }
-            // Repository errors carry no credential (D2), so neither does
-            // this.
             Err(error) => {
-                eprintln!("farm3d: automatic evaluator: a run failed: {error:?}");
+                crate::f3d_log!(warn, "queue.evaluatorRunFailed", error = error);
                 true
             }
         };

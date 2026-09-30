@@ -977,8 +977,8 @@ impl<R: tauri::Runtime> SlicingServices<R> {
                 .and_then(|source| source.cache_hash.as_deref())
                 .into_iter()
                 .collect();
-            if let Err(error) = runtime::sweep_stale_profile_caches(&services.cache_dir, &keep) {
-                eprintln!("farm3d: could not sweep the preset cache: {error}");
+            if runtime::sweep_stale_profile_caches(&services.cache_dir, &keep).is_err() {
+                crate::f3d_log!(warn, "slicing.presetCacheSweepFailed");
             }
         });
     }

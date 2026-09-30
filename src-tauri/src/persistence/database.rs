@@ -23,6 +23,8 @@ pub struct StoragePaths {
     snapshot_root: PathBuf,
     content_root: PathBuf,
     media_root: PathBuf,
+    log_root: PathBuf,
+    backup_root: PathBuf,
 }
 
 impl StoragePaths {
@@ -43,19 +45,15 @@ impl StoragePaths {
             create_contained_directory(&app_data_root, Path::new("farm3d-content/v1"))?;
         // P8 D5: camera snapshots, beside (never inside) the content store.
         let media_root = create_contained_directory(&app_data_root, Path::new("farm3d-media/v1"))?;
+        // P9 D12: the diagnostics log, `<app data>/logs` unless production
+        // replaces it with `with_log_root`.
+        let log_root = create_contained_directory(&app_data_root, Path::new("logs"))?;
+        // P9: the backup tree (`safety/` and `tmp/` sit below it).
+        let backup_root =
+            create_contained_directory(&app_data_root, Path::new("farm3d-backups/v1"))?;
         let database = validate_database_path(&metadata_root)?;
 
-        let trees = [&legacy_root, &snapshot_root, &content_root, &media_root];
-        let overlapping = trees.iter().enumerate().any(|(index, left)| {
-            trees[index + 1..]
-                .iter()
-                .any(|right| trees_overlap(left, right))
-        });
-        if trees.iter().any(|tree| database.starts_with(tree)) || overlapping {
-            return Err(StorageError::PathCollision);
-        }
-
-        Ok(Self {
+        let paths = Self {
             database,
             ownership_lock: metadata_root.join("farm3d.lock"),
             metadata_root,
@@ -63,7 +61,43 @@ impl StoragePaths {
             snapshot_root,
             content_root,
             media_root,
-        })
+            log_root,
+            backup_root,
+        };
+        paths.check_trees()?;
+        Ok(paths)
+    }
+
+    /// The trees must be pairwise neither equal nor nested, and none may
+    /// contain the database.
+    fn check_trees(&self) -> Result<(), StorageError> {
+        let trees = [
+            &self.legacy_root,
+            &self.snapshot_root,
+            &self.content_root,
+            &self.media_root,
+            &self.log_root,
+            &self.backup_root,
+        ];
+        let overlapping = trees.iter().enumerate().any(|(index, left)| {
+            trees[index + 1..]
+                .iter()
+                .any(|right| trees_overlap(left, right))
+        });
+        if trees.iter().any(|tree| self.database.starts_with(tree)) || overlapping {
+            return Err(StorageError::PathCollision);
+        }
+        Ok(())
+    }
+
+    /// Replaces the log root (production: the platform's `app_log_dir()`;
+    /// on Linux that is the default) and re-runs the collision checks.
+    pub fn with_log_root(mut self, log_root: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let log_root = normalize_absolute(log_root.as_ref())?;
+        create_private_directory(&log_root)?;
+        self.log_root = log_root.canonicalize()?;
+        self.check_trees()?;
+        Ok(self)
     }
 
     pub fn metadata_root(&self) -> &Path {
@@ -91,6 +125,16 @@ impl StoragePaths {
 
     pub fn legacy_root(&self) -> &Path {
         &self.legacy_root
+    }
+
+    /// P9 D12: where `farm3d.log` and its rotated files live.
+    pub fn log_root(&self) -> &Path {
+        &self.log_root
+    }
+
+    /// P9: `<app data>/farm3d-backups/v1`, the backup tree.
+    pub fn backup_root(&self) -> &Path {
+        &self.backup_root
     }
 }
 

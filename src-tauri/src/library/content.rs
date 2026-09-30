@@ -678,8 +678,9 @@ impl ContentStore {
     fn clear_staging(&self) -> (usize, usize) {
         let entries = match fs::read_dir(&self.staging) {
             Ok(entries) => entries,
-            Err(error) => {
-                eprintln!("farm3d: content sweep could not list staging: {error}");
+            // The filesystem error can name a path, so only the code is logged.
+            Err(_) => {
+                crate::f3d_log!(warn, "library.sweepListStagingFailed");
                 return (0, 1);
             }
         };
@@ -692,12 +693,8 @@ impl ContentStore {
                 } else {
                     fs::remove_file(&path)
                 };
-                result.map_err(|error| {
-                    eprintln!(
-                        "farm3d: content sweep could not remove staging entry {:?}: {error}",
-                        entry.file_name()
-                    );
-                    error
+                result.inspect_err(|_| {
+                    crate::f3d_log!(warn, "library.sweepRemoveStagingFailed");
                 })
             });
             match outcome {
@@ -726,8 +723,8 @@ impl ContentStore {
         let (mut removed, mut failed) = (0, 0);
         let prefixes = match fs::read_dir(&self.blobs) {
             Ok(prefixes) => prefixes,
-            Err(error) => {
-                eprintln!("farm3d: content sweep could not list blobs: {error}");
+            Err(_) => {
+                crate::f3d_log!(warn, "library.sweepListBlobsFailed");
                 return Ok((0, 1));
             }
         };
@@ -745,10 +742,8 @@ impl ContentStore {
             let prefix_name = prefix.file_name();
             let blobs = match fs::read_dir(prefix.path()) {
                 Ok(blobs) => blobs,
-                Err(error) => {
-                    eprintln!(
-                        "farm3d: content sweep could not list blob prefix {prefix_name:?}: {error}"
-                    );
+                Err(_) => {
+                    crate::f3d_log!(warn, "library.sweepListBlobPrefixFailed");
                     failed += 1;
                     continue;
                 }
@@ -769,8 +764,8 @@ impl ContentStore {
                 }
                 match remove_blob_file(&blob.path()) {
                     Ok(()) => removed += 1,
-                    Err(error) => {
-                        eprintln!("farm3d: content sweep could not remove blob {name:?}: {error}");
+                    Err(_) => {
+                        crate::f3d_log!(warn, "library.sweepRemoveBlobFailed");
                         failed += 1;
                     }
                 }

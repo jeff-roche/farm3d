@@ -449,9 +449,10 @@ impl<R: tauri::Runtime> Driver<R> {
     }
 }
 
-fn log_failure(what: &str, error: &RepositoryError) {
-    // Repository errors carry no credential (D2), so neither does this.
-    eprintln!("farm3d: dispatch driver: could not {what}: {error:?}");
+/// Logs a failed repository step of the dispatch driver. `code` names the
+/// step; the error logs its variant only.
+fn log_failure(code: &'static str, error: &RepositoryError) {
+    crate::f3d_log!(warn, code, error = error);
 }
 
 /// Publishes `change` on the `queue` stream, with live `startBlockers`,
@@ -587,7 +588,7 @@ async fn apply_linked_job<R: tauri::Runtime>(
         }
         Ok(None) => None,
         Err(error) => {
-            log_failure("apply a Host Operation's outcome", &error);
+            log_failure("jobs.applyHostOperationOutcomeFailed", &error);
             None
         }
     }
@@ -642,7 +643,7 @@ async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id
         Ok(Some(context)) => context,
         Ok(None) => return,
         Err(error) => {
-            log_failure("read a Job's start context", &error);
+            log_failure("jobs.readStartContextFailed", &error);
             return;
         }
     };
@@ -673,7 +674,7 @@ async fn track<R: tauri::Runtime>(services: &RuntimeServices<R>, job_id: &str) {
     match tracker::check(services, job_id).await {
         Ok(Some(change)) => publish(services, change),
         Ok(None) => {}
-        Err(error) => log_failure("track a Job's history", &error),
+        Err(error) => log_failure("jobs.trackHistoryFailed", &error),
     }
 }
 
@@ -689,7 +690,7 @@ async fn follow_status<R: tauri::Runtime>(services: &RuntimeServices<R>, job: &J
             check_now
         }
         Err(error) => {
-            log_failure("follow a Job's status", &error);
+            log_failure("jobs.followStatusFailed", &error);
             false
         }
     };
@@ -884,7 +885,7 @@ async fn record_refusal<R: tauri::Runtime>(
             },
         ),
         Ok(None) => {}
-        Err(error) => log_failure("record a refused handoff", &error),
+        Err(error) => log_failure("jobs.recordRefusedHandoffFailed", &error),
     }
 }
 

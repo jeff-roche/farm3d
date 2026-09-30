@@ -4,6 +4,7 @@ pub mod cameras;
 pub mod catalog;
 pub mod connections;
 pub mod contracts;
+pub mod diagnostics;
 pub mod document_io;
 mod file_links;
 pub mod host_ops;
@@ -43,13 +44,13 @@ use jobs::commands::{
     assign_queue_entry, cancel_job, correct_job_material, declare_job_outcome, get_job_history,
     pause_job, release_job, resume_job, retry_job, settle_job_material, stage_job, start_job,
 };
-use notifications::commands::{notification_status, send_test_notification};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
     library_content_info, list_library, list_model_revisions, locate_linked_source,
     pick_model_files, rename_project, set_model_projects, update_model,
 };
+use notifications::commands::{notification_status, send_test_notification};
 use printers::alerts::{get_printer_alert_defaults, set_printer_alert_defaults};
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
@@ -450,10 +451,7 @@ fn notification_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
             .path()
             .resolve("resources/farm3d-notification.png", BaseDirectory::Resource)
             .ok();
-        notifications::dbus::resolve_icon(
-            &notifications::dbus::xdg_data_dirs(),
-            bundled.as_deref(),
-        )
+        notifications::dbus::resolve_icon(&notifications::dbus::xdg_data_dirs(), bundled.as_deref())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -513,7 +511,16 @@ fn build_runtime_services<R: tauri::Runtime>(
         .path()
         .app_data_dir()
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
-    let paths = persistence::StoragePaths::new(metadata_root, data_root).map_err(startup_error)?;
+    let log_root = app
+        .path()
+        .app_log_dir()
+        .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    let paths = persistence::StoragePaths::new(metadata_root, data_root)
+        .and_then(|paths| paths.with_log_root(log_root))
+        .map_err(startup_error)?;
+    // P9 D12: the log opens before `Storage::open`, so a failed open is on
+    // record. (Task 7's installer runs before this line.)
+    diagnostics::log::init(paths.log_root());
     let storage = {
         let mut lease = retained_lease.lock().map_err(|_| {
             StartupFailure::Recoverable(contracts::command::CommandError::internal())
@@ -553,11 +560,12 @@ fn build_runtime_services<R: tauri::Runtime>(
     // P8 D2 "Startup backfill": project every durable Condition with live
     // status unknown, before any command is served. Published once the
     // attention runtime starts.
-    let backfilled =
-        attention::projector::backfill(&storage, chrono::Utc::now()).map_err(|error| match error {
+    let backfilled = attention::projector::backfill(&storage, chrono::Utc::now()).map_err(
+        |error| match error {
             persistence::RepositoryError::Storage(error) => startup_error(error),
             _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
-        })?;
+        },
+    )?;
     // P8 D5 "Startup sweep": repair whatever a crash left in the media
     // store, before any command is served. Published once the camera
     // runtime starts. A failure never blocks startup (the camera is

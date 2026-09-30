@@ -233,12 +233,10 @@ impl<R: tauri::Runtime> CameraServices<R> {
                 self.set_swept(changes);
             }
             Err(_) => {
-                // The error is dropped unformatted: a filesystem error can
-                // name a path under the app data folder.
-                eprintln!(
-                    "farm3d: media store: the startup sweep failed; camera evidence is off \
-                     until a later sweep succeeds"
-                );
+                // Camera evidence is off until a later sweep succeeds. The
+                // error is not logged: a filesystem error can name a path
+                // under the app data folder.
+                crate::f3d_log!(warn, "cameras.mediaSweepFailed");
                 self.runtime.set_media_available(false);
             }
         }

@@ -81,6 +81,68 @@ mod tests {
     }
 
     #[test]
+    fn storage_paths_default_the_log_and_backup_roots_under_the_app_data_root() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let data = temp.path().join("data");
+        let paths = StoragePaths::new(temp.path().join("metadata"), &data).expect("storage paths");
+        let data = data.canonicalize().expect("canonical data");
+
+        assert_eq!(paths.log_root(), data.join("logs"));
+        assert_eq!(paths.backup_root(), data.join("farm3d-backups/v1"));
+    }
+
+    #[test]
+    fn with_log_root_replaces_the_root_and_reruns_the_collision_checks() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let metadata = temp.path().join("metadata");
+        let data = temp.path().join("data");
+        let paths = StoragePaths::new(&metadata, &data).expect("storage paths");
+
+        let moved = paths
+            .clone()
+            .with_log_root(temp.path().join("elsewhere/logs"))
+            .expect("a separate log root");
+        assert_eq!(
+            moved.log_root(),
+            temp.path().join("elsewhere/logs").canonicalize().unwrap()
+        );
+
+        for nested in [
+            data.join("farm3d-content/v1"),
+            data.join("farm3d-media/v1/sub"),
+            data.join("farm3d-backups/v1"),
+            metadata.join("snapshots"),
+            metadata.join("legacy"),
+            metadata.clone(),
+        ] {
+            let error = paths
+                .clone()
+                .with_log_root(&nested)
+                .expect_err("a colliding log root must fail");
+            assert!(matches!(error, StorageError::PathCollision), "{nested:?}");
+        }
+    }
+
+    #[test]
+    fn storage_paths_reject_a_backup_tree_nested_under_another_tree() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let data = temp.path().join("data");
+        fs::create_dir_all(data.join("farm3d-backups")).expect("backup parent");
+        // `farm3d-backups/v1` may not be a symlink into the content store.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                temp.path().join("metadata"),
+                data.join("farm3d-backups/v1"),
+            )
+            .expect("symlink");
+            let error = StoragePaths::new(temp.path().join("metadata"), &data)
+                .expect_err("aliased backup root must fail");
+            assert!(matches!(error, StorageError::PathCollision));
+        }
+    }
+
+    #[test]
     fn storage_paths_reject_a_content_tree_nested_under_a_metadata_tree() {
         let temp = tempfile::tempdir().expect("temporary root");
         let metadata = temp.path().join("metadata");
@@ -1337,7 +1399,14 @@ mod tests {
             ("attention_events", "spool_id", "TEXT", 0, None, 0),
             ("attention_events", "requirement_id", "TEXT", 0, None, 0),
             ("attention_events", "incident_id", "TEXT", 0, None, 0),
-            ("attention_events", "subject_snapshot_json", "TEXT", 1, None, 0),
+            (
+                "attention_events",
+                "subject_snapshot_json",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             ("attention_events", "detail_json", "TEXT", 1, None, 0),
             ("attention_events", "summary", "TEXT", 1, None, 0),
             ("attention_events", "origin", "TEXT", 1, None, 0),
@@ -1725,7 +1794,14 @@ mod tests {
                 None,
                 0,
             ),
-            ("printer_alert_defaults", "notifications", "TEXT", 1, None, 0),
+            (
+                "printer_alert_defaults",
+                "notifications",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             (
                 "printer_alert_defaults",
                 "snapshot_on_incident",
@@ -1900,10 +1976,31 @@ mod tests {
                 0,
             ),
             ("settings", "notify_fatal", "INTEGER", 1, Some("1"), 0),
-            ("settings", "notify_confirmation", "INTEGER", 1, Some("1"), 0),
+            (
+                "settings",
+                "notify_confirmation",
+                "INTEGER",
+                1,
+                Some("1"),
+                0,
+            ),
             ("settings", "notify_completion", "INTEGER", 1, Some("1"), 0),
-            ("settings", "notify_reconciliation", "INTEGER", 1, Some("0"), 0),
-            ("settings", "notify_connectivity", "INTEGER", 1, Some("0"), 0),
+            (
+                "settings",
+                "notify_reconciliation",
+                "INTEGER",
+                1,
+                Some("0"),
+                0,
+            ),
+            (
+                "settings",
+                "notify_connectivity",
+                "INTEGER",
+                1,
+                Some("0"),
+                0,
+            ),
             ("settings", "notify_inventory", "INTEGER", 1, Some("0"), 0),
             (
                 "settings",

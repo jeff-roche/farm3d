@@ -426,11 +426,11 @@ impl<R: tauri::Runtime> Projector<R> {
                 Ok(_) => failures.succeeded(),
                 Err(error) => {
                     if let Some(held_back) = failures.failed(std::time::Instant::now()) {
-                        // Repository errors carry no credential, so neither
-                        // does this.
-                        eprintln!(
-                            "farm3d: attention projector: a pass failed: {error:?}{}",
-                            held_back_note(held_back)
+                        crate::f3d_log!(
+                            warn,
+                            "attention.passFailed",
+                            error = error,
+                            held_back = held_back
                         );
                     }
                 }
