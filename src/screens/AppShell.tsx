@@ -1,7 +1,9 @@
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
-import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
+import { Button, Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
 import { about, loadAbout } from "../diagnostics/about-store";
+import { acknowledgeRestoreStatus, backup, loadRestoreStatus } from "../backup/backup-store";
+import { restoreStatusText } from "../backup/presentation";
 import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
@@ -72,6 +74,9 @@ export function AppShell(props: AppShellProps) {
   // The status bar's version comes from `about_farm3d`.
   onMount(() => {
     void loadAbout().catch(() => {});
+    // Spec "Restore status banner": a finished restore or reset is shown
+    // once, until the operator acknowledges it.
+    void loadRestoreStatus();
   });
   const version = () => {
     const appVersion = about()?.appVersion;
@@ -120,6 +125,21 @@ export function AppShell(props: AppShellProps) {
         </div>
         <AttentionTrigger />
       </header>
+
+      <Show when={backup.restoreBanner()}>
+        {(status) => (
+          <div
+            class={styles.restoreBanner}
+            classList={{ [styles.restoreBannerFailed]: status().state === "failed" }}
+            role={status().state === "failed" ? "alert" : "status"}
+          >
+            <span>{restoreStatusText(status())}</span>
+            <Button size="sm" onClick={() => void acknowledgeRestoreStatus().catch(() => {})}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
 
       <ActivityBar
         active={props.active}
