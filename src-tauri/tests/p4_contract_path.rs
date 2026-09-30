@@ -49,8 +49,10 @@ const P7_COMMAND_COUNT: usize = 11 + 4 + 1 + 2;
 const P8_COMMAND_COUNT: usize = 7 + 6 + 5 + 4;
 
 /// Commands P9 added so far: Task 4's `list_job_history` and
-/// `get_job_timeline` (`tests/p9_history.rs`).
-const P9_COMMAND_COUNT: usize = 2;
+/// `get_job_timeline` (`tests/p9_history.rs`), plus Task 5's
+/// `backup_inventory`, `create_backup`, `list_backups`, and
+/// `delete_backup` (`tests/p9_backup.rs`).
+const P9_COMMAND_COUNT: usize = 2 + 4;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

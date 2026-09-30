@@ -8,7 +8,10 @@
 use rusqlite::Connection;
 
 pub const NOW: &str = "2026-01-01T00:00:00.000Z";
-pub const GCODE_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+/// The SHA-256 of [`GCODE_BYTES`], so a fixture can write a real blob.
+pub const GCODE_HASH: &str = "83ed56670125a357640623904bc0c1a17fdc835d75eef70363750f1a9c8ba724";
+/// The shared G-code blob's bytes: 200 bytes of 0x07.
+pub const GCODE_BYTES: [u8; 200] = [7; 200];
 
 pub fn exec(connection: &Connection, sql: &str) {
     connection

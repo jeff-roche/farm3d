@@ -20,7 +20,9 @@
 //! [`assert_no_corpus`] and [`assert_none_of`] scan raw bytes and, for a zip,
 //! every entry name, every entry's compressed bytes, and every entry's
 //! decompressed bytes (recursing into nested zips). Each needle is matched
-//! in its exact, lowercase, uppercase, and percent-encoded forms.
+//! in its exact, lowercase, uppercase, and percent-encoded forms. Input
+//! that starts with `PK` must parse as a zip and every entry must read, or
+//! the scan panics: a corrupt archive never scans clean.
 #![allow(dead_code)]
 
 use std::io::{Cursor, Read};
@@ -139,41 +141,50 @@ fn scan(needles: &[&str], bytes: &[u8], label: &str, hits: &mut Vec<String>) {
     if !bytes.starts_with(b"PK") {
         return;
     }
-    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) else {
-        return;
-    };
+    // A `PK`-prefixed input that doesn't parse, or an entry that can't be
+    // read, fails the scan: a corrupt archive must never scan clean.
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap_or_else(|error| {
+        panic!("{label} starts with PK but is not a readable zip: {error}")
+    });
     for index in 0..archive.len() {
-        let name = match archive.by_index_raw(index) {
-            Ok(mut raw) => {
-                let name = raw.name().to_string();
-                scan(
-                    needles,
-                    name.as_bytes(),
-                    &format!("{label}!{name} (entry name)"),
-                    hits,
-                );
-                let mut compressed = Vec::new();
-                let _ = raw.read_to_end(&mut compressed);
-                scan(
-                    needles,
-                    &compressed,
-                    &format!("{label}!{name} (compressed)"),
-                    hits,
-                );
-                name
-            }
-            Err(_) => continue,
-        };
-        if let Ok(mut entry) = archive.by_index(index) {
-            let mut decompressed = Vec::new();
-            let _ = entry.read_to_end(&mut decompressed);
+        let name = {
+            let mut raw = archive.by_index_raw(index).unwrap_or_else(|error| {
+                panic!("{label}: entry {index} could not be read: {error}")
+            });
+            let name = raw.name().to_string();
             scan(
                 needles,
-                &decompressed,
-                &format!("{label}!{name} (decompressed)"),
+                name.as_bytes(),
+                &format!("{label}!{name} (entry name)"),
                 hits,
             );
-        }
+            let mut compressed = Vec::new();
+            raw.read_to_end(&mut compressed).unwrap_or_else(|error| {
+                panic!("{label}!{name}: compressed bytes could not be read: {error}")
+            });
+            scan(
+                needles,
+                &compressed,
+                &format!("{label}!{name} (compressed)"),
+                hits,
+            );
+            name
+        };
+        let mut entry = archive
+            .by_index(index)
+            .unwrap_or_else(|error| panic!("{label}!{name} could not be read: {error}"));
+        let mut decompressed = Vec::new();
+        entry
+            .read_to_end(&mut decompressed)
+            .unwrap_or_else(|error| {
+                panic!("{label}!{name} could not be read (decompressed): {error}")
+            });
+        scan(
+            needles,
+            &decompressed,
+            &format!("{label}!{name} (decompressed)"),
+            hits,
+        );
     }
 }
 

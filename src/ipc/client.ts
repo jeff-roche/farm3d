@@ -184,6 +184,10 @@ type CommandMap = {
   send_test_notification: [Contracts.SendTestNotificationRequest, Contracts.SendTestNotificationResult];
   list_job_history: [Contracts.ListJobHistoryRequest, Contracts.ListJobHistoryResult];
   get_job_timeline: [Contracts.GetJobTimelineRequest, Contracts.GetJobTimelineResult];
+  backup_inventory: [Contracts.BackupInventoryRequest, Contracts.BackupInventoryResult];
+  create_backup: [Contracts.CreateBackupRequest, Contracts.CreateBackupResult];
+  list_backups: [Contracts.ListBackupsRequest, Contracts.ListBackupsResult];
+  delete_backup: [Contracts.DeleteBackupRequest, Contracts.DeleteBackupResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

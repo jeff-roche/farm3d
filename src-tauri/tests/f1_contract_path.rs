@@ -2,8 +2,9 @@
 fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions() {
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
     // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
-    // P8 Task 6's 7, Task 7's 6, Task 8's 5, and Task 9's 4, plus P9 Task 4's 2.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2);
+    // P8 Task 6's 7, Task 7's 6, Task 8's 5, and Task 9's 4, plus P9 Task 4's 2
+    // and Task 5's 4.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2 + 4);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -138,6 +139,10 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "send_test_notification",
             "list_job_history",
             "get_job_timeline",
+            "backup_inventory",
+            "create_backup",
+            "list_backups",
+            "delete_backup",
         ]
     );
 }
@@ -323,6 +328,10 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::notifications::commands::send_test_notification,
             farm3d_lib::history::commands::list_job_history,
             farm3d_lib::history::commands::get_job_timeline,
+            farm3d_lib::backup::commands::backup_inventory,
+            farm3d_lib::backup::commands::create_backup,
+            farm3d_lib::backup::commands::list_backups,
+            farm3d_lib::backup::commands::delete_backup,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -691,6 +700,10 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ("send_test_notification", json!({})),
         ("list_job_history", json!({"query": {}})),
         ("get_job_timeline", json!({"jobId": "j"})),
+        ("backup_inventory", json!({})),
+        ("create_backup", json!({"operationId": "op", "media": "all"})),
+        ("list_backups", json!({})),
+        ("delete_backup", json!({"operationId": "op", "backupId": "sfb-x"})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

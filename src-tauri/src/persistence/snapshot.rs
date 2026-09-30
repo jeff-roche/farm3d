@@ -91,10 +91,7 @@ impl Storage {
             .join(format!("{stem}.sqlite3.partial"));
         let accepted = self.paths.snapshot_root().join(format!("{stem}.sqlite3"));
 
-        let source = self.open_reader()?;
-        backup_database(&source, &partial)?;
-        validate_database(&partial)?;
-        File::open(&partial)?.sync_all()?;
+        self.create_snapshot_to(&partial)?;
         fs::rename(&partial, &accepted)?;
         sync_directory(self.paths.snapshot_root())?;
         if retain_newest_snapshots(self.paths.snapshot_root(), &accepted, |path| {
@@ -117,6 +114,23 @@ impl Storage {
             });
         }
         Ok(Snapshot { path: accepted })
+    }
+
+    /// Copies the live database to `path` with the online backup API
+    /// (ADR-0008: never a file copy of the database and its WAL), in one
+    /// step, so the copy is the Farm at one instant. Then validates the copy
+    /// (schema, `integrity_check`, `foreign_key_check`) and `fsync`s it.
+    /// `path` must not name an existing non-file or a symlink. Returns the
+    /// validated copy; on failure the caller removes `path`.
+    pub fn create_snapshot_to(&self, path: &Path) -> Result<Snapshot, StorageError> {
+        let source = self.open_reader()?;
+        backup_database(&source, path)?;
+        drop(source);
+        validate_database(path)?;
+        File::open(path)?.sync_all()?;
+        Ok(Snapshot {
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn stage_restore(&self, selected_snapshot: &Path) -> Result<StagedRestore, StorageError> {
@@ -178,7 +192,9 @@ fn backup_database(source: &Connection, destination: &Path) -> Result<(), Storag
     create_private_file(destination)?;
     let mut destination_connection = Connection::open(destination)?;
     let backup = Backup::new(source, &mut destination_connection)?;
-    backup.run_to_completion(64, Duration::from_millis(1), None)?;
+    // Every page in one step: a step that spans a source write restarts,
+    // and one step reads a single snapshot of the source.
+    backup.run_to_completion(i32::MAX, Duration::from_millis(1), None)?;
     drop(backup);
     destination_connection
         .close()

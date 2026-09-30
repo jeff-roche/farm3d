@@ -1,4 +1,5 @@
 pub mod attention;
+pub mod backup;
 pub mod bootstrap;
 pub mod cameras;
 pub mod catalog;
@@ -23,6 +24,7 @@ pub mod spools;
 use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
+use backup::commands::{backup_inventory, create_backup, delete_backup, list_backups};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -113,6 +115,10 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     /// P8 D6: the notify policy, the platform sink, focus, and click
     /// activation.
     pub notifications: Arc<notifications::services::NotificationService<R>>,
+    /// P9 D5/D18: the backup lease (shared with the content store and the
+    /// media janitor), the process-local operation ledger, and the
+    /// portability dialogs.
+    pub backup: Arc<backup::BackupServices>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -141,10 +147,18 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
         manager: Arc<ConnectionManager<R>>,
         documents: Arc<dyn document_io::DocumentIo>,
     ) -> Self {
+        let backup_lease = backup::lease::BackupLease::new();
         let content = Arc::new(
             library::content::ContentStore::open(storage.paths().content_root())
-                .expect("content store"),
+                .expect("content store")
+                .with_backup_lease(backup_lease.clone()),
         );
+        let backup = Arc::new(backup::BackupServices::new(
+            backup_lease.clone(),
+            &storage,
+            &content,
+            Arc::new(backup::dialogs::CancelledPortabilityDialogs),
+        ));
         let slicing = Arc::new(slicing::SlicingServices::new(
             Arc::clone(&storage),
             Arc::clone(&content),
@@ -178,14 +192,17 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             evaluator: Arc::default(),
             attention: Arc::default(),
-            cameras: Arc::default(),
+            cameras: Arc::new(
+                cameras::services::CameraServices::default().with_backup_lease(backup_lease),
+            ),
             notifications: Arc::default(),
+            backup,
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 131] = [
+pub const COMMAND_NAMES: [&str; 135] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -317,6 +334,10 @@ pub const COMMAND_NAMES: [&str; 131] = [
     "send_test_notification",
     "list_job_history",
     "get_job_timeline",
+    "backup_inventory",
+    "create_backup",
+    "list_backups",
+    "delete_backup",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -539,13 +560,19 @@ fn build_runtime_services<R: tauri::Runtime>(
         )
     };
     persistence::migrate_legacy(&storage).map_err(startup_error)?;
+    // P9 D9: what a crashed backup left in farm3d's own directories.
+    backup::writer::clear_working_files(storage.paths());
     settings::repository::SettingsRepository::new(Arc::clone(&storage))
         .ensure_default()
         .map_err(startup_error)?;
+    // P9 D5: one backup lease, shared by the content store, the media
+    // janitor, and the backup commands.
+    let backup_lease = backup::lease::BackupLease::new();
     // P4 D4: reconcile the content store before any command is served.
     let content = Arc::new(
         library::content::ContentStore::open(storage.paths().content_root())
-            .map_err(startup_error)?,
+            .map_err(startup_error)?
+            .with_backup_lease(backup_lease.clone()),
     );
     content.startup_sweep(&storage).map_err(startup_error)?;
     // P5 D10: interrupt what a previous run left queued or running, and
@@ -650,6 +677,12 @@ fn build_runtime_services<R: tauri::Runtime>(
         attention::services::AttentionTimings::default(),
     ));
     attention.set_backfilled(backfilled);
+    let backup = Arc::new(backup::BackupServices::new(
+        backup_lease.clone(),
+        &storage,
+        &content,
+        Arc::new(backup::dialogs::NativePortabilityDialogs::new(app.clone())),
+    ));
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -668,15 +701,17 @@ fn build_runtime_services<R: tauri::Runtime>(
         jobs,
         evaluator: Arc::default(),
         attention,
-        cameras: Arc::new(cameras::services::CameraServices::new(
-            cameras::services::CameraTimings::default(),
-        )),
+        cameras: Arc::new(
+            cameras::services::CameraServices::new(cameras::services::CameraTimings::default())
+                .with_backup_lease(backup_lease),
+        ),
         notifications: Arc::new(notifications::services::NotificationService::platform(
             app.try_state::<notifications::focus::Focus>()
                 .map(|focus| focus.inner().clone())
                 .unwrap_or_default(),
             notification_icon(app),
         )),
+        backup,
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -986,6 +1021,10 @@ pub fn run() {
             send_test_notification,
             list_job_history,
             get_job_timeline,
+            backup_inventory,
+            create_backup,
+            list_backups,
+            delete_backup,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

@@ -116,6 +116,7 @@ const PRUNE_REASON_LABEL = {
   age: "past retention",
   diskCap: "disk cap reached",
   missingFile: "file missing",
+  notInBackup: "not in backup",
 } satisfies Record<PruneReason, string>;
 
 export function pruneReasonLabel(reason: PruneReason): string {

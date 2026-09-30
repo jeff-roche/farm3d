@@ -401,6 +401,14 @@ pub enum ErrorCode {
     /// P8 D8: a Printers import while any Incident or camera snapshot
     /// exists.
     EvidenceExists,
+    /// P9 D5: another backup, restore, reset, or cleanup holds the backup
+    /// lease.
+    BackupInProgress,
+    /// P9 D5/D9: a file the Farm uses is missing or damaged, so the backup
+    /// (or safety backup) was not written.
+    BackupSourceDamaged,
+    /// P9 D5/D9/D8: the destination hasn't room for the estimate plus 10 %.
+    InsufficientSpace,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -683,6 +691,52 @@ impl CommandError {
         error
     }
 
+    /// P9 D5 `BACKUP_IN_PROGRESS`: `activity` names the lease's holder.
+    pub fn backup_in_progress(activity: &str) -> Self {
+        Self::typed(
+            ErrorCode::BackupInProgress,
+            "Another backup, restore, reset, or cleanup is running.",
+            vec![RecoveryCode::Retry],
+            true,
+        )
+        .with_string_details(&[("activity", activity)])
+    }
+
+    /// P9 D5 `BACKUP_SOURCE_DAMAGED`: `entry` is `database` or the archive
+    /// path of the first missing or damaged file (never a filesystem path).
+    pub fn backup_source_damaged(entry: &str) -> Self {
+        Self::typed(
+            ErrorCode::BackupSourceDamaged,
+            "A file this Farm uses is missing or damaged, so it can't be backed up.",
+            vec![],
+            false,
+        )
+        .with_string_details(&[("entry", entry)])
+    }
+
+    /// P9 `INSUFFICIENT_SPACE`: `target` is `backupDestination`,
+    /// `safetyBackup`, `restoreStaging`, or `install`.
+    pub fn insufficient_space(required_bytes: u64, available_bytes: u64, target: &str) -> Self {
+        let number = |value: u64| {
+            JsonValue::Number(
+                JsonNumber::try_from(value.min(9_007_199_254_740_991))
+                    .expect("clamped to the JS-safe range"),
+            )
+        };
+        let mut error = Self::typed(
+            ErrorCode::InsufficientSpace,
+            "There isn't enough free disk space.",
+            vec![RecoveryCode::Retry],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("requiredBytes".to_string(), number(required_bytes)),
+            ("availableBytes".to_string(), number(available_bytes)),
+            ("target".to_string(), JsonValue::String(target.to_string())),
+        ]));
+        error
+    }
+
     pub fn persistence_unavailable() -> Self {
         Self::typed(
             ErrorCode::PersistenceUnavailable,
@@ -885,6 +939,7 @@ impl CommandError {
             PruneReason::Age => "past the retention period",
             PruneReason::DiskCap => "to stay under the disk cap",
             PruneReason::MissingFile => "its file was missing",
+            PruneReason::NotInBackup => "it wasn't in the restored backup",
         };
         Self::typed(
             ErrorCode::EvidencePruned,

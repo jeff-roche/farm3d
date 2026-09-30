@@ -303,11 +303,19 @@ pub enum PruneReason {
     Age,
     DiskCap,
     MissingFile,
+    /// P9 D5: a backup copy's snapshot the operator's media choice left
+    /// out. Written only into a backup's database copy, never the live
+    /// Farm; a restored Farm carries it.
+    NotInBackup,
 }
 
 impl PruneReason {
-    pub const ALL: [PruneReason; 3] =
-        [PruneReason::Age, PruneReason::DiskCap, PruneReason::MissingFile];
+    pub const ALL: [PruneReason; 4] = [
+        PruneReason::Age,
+        PruneReason::DiskCap,
+        PruneReason::MissingFile,
+        PruneReason::NotInBackup,
+    ];
 }
 
 /// A captured frame's image format — `camera_snapshots.content_type`

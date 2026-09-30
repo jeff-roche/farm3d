@@ -206,6 +206,16 @@ impl MediaStore {
         }
     }
 
+    /// P9 D5: unlinks `rel_paths` after a commit, or, while the backup
+    /// lease is held, queues them until it drops.
+    fn unlink_after_commit(&self, janitor: &MediaJanitor, rel_paths: &[String]) {
+        let paths = rel_paths
+            .iter()
+            .filter_map(|rel_path| self.path_of(rel_path))
+            .collect();
+        janitor.backup_lease().unlink_or_defer(paths);
+    }
+
     /// Every entry of `tmp/`, removed.
     fn clear_tmp(&self) -> Result<(), StorageError> {
         let tmp = self.root.join(TMP_DIRECTORY);
@@ -913,7 +923,7 @@ pub async fn store_frame(
             Ok((touched.load(tx)?, rel_paths))
         })?;
         drop(guard);
-        store.unlink_all(&rel_paths);
+        store.unlink_after_commit(janitor, &rel_paths);
         return Ok(StoreOutcome::DiskCap { totals, changes });
     }
 
@@ -993,7 +1003,7 @@ pub async fn store_frame(
     match written {
         Ok(Written::Stored(snapshot, changes, rel_paths)) => {
             drop(guard);
-            store.unlink_all(&rel_paths);
+            store.unlink_after_commit(janitor, &rel_paths);
             Ok(StoreOutcome::Stored { snapshot, changes })
         }
         Ok(Written::Already(existing)) => {
@@ -1039,7 +1049,9 @@ pub fn mark_prunable(
 }
 
 /// D5 "`MediaJanitor`": one prune pass under the janitor lock; the files
-/// are unlinked after commit and after the lock is released.
+/// are unlinked after commit and after the lock is released. P9 D5: while
+/// the backup lease is held the pass is skipped (nothing marked, nothing
+/// unlinked); dropping the lease pokes the janitor for another.
 pub async fn prune_pass(
     storage: &Storage,
     janitor: &MediaJanitor,
@@ -1047,9 +1059,13 @@ pub async fn prune_pass(
     now: DateTime<Utc>,
 ) -> Result<MediaChanges, RepositoryError> {
     let guard = janitor.lock().await;
+    let Some(permit) = janitor.backup_lease().deletion_permit() else {
+        return Ok(MediaChanges::default());
+    };
     let commit = mark_prunable(storage, policy, now)?;
     drop(guard);
     MediaStore::for_storage(storage).unlink_all(&commit.rel_paths);
+    drop(permit);
     Ok(commit.changes)
 }
 

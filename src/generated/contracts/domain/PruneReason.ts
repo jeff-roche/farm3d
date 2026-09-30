@@ -4,4 +4,4 @@
  * D11: why a snapshot's image was pruned. The row survives; only the
  * file is removed.
  */
-export type PruneReason = "age" | "diskCap" | "missingFile";
+export type PruneReason = "age" | "diskCap" | "missingFile" | "notInBackup";

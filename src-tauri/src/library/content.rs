@@ -32,6 +32,7 @@ use std::time::SystemTime;
 use rusqlite::{params, Transaction};
 use sha2::{Digest, Sha256};
 
+use crate::backup::lease::BackupLease;
 use crate::contracts::command::CommandError;
 use crate::persistence::{create_contained_directory, RepositoryError, Storage, StorageError};
 use crate::printers::now_rfc3339;
@@ -276,6 +277,10 @@ pub struct ContentStore {
     before_restat: Mutex<Option<SourceHook>>,
     pause: Mutex<Option<Arc<StagePause>>>,
     placement_pause: Mutex<Option<Arc<StagePause>>>,
+    /// P9 D5: while a backup (or any P9 file operation) holds this lease,
+    /// [`release_unreferenced`](Self::release_unreferenced) unlinks
+    /// nothing. A store built on its own gets a private lease.
+    lease: BackupLease,
 }
 
 impl ContentStore {
@@ -296,7 +301,20 @@ impl ContentStore {
             before_restat: Mutex::new(None),
             pause: Mutex::new(None),
             placement_pause: Mutex::new(None),
+            lease: BackupLease::new(),
         })
+    }
+
+    /// P9 D5: shares the process-wide `lease` (`RuntimeServices` builds
+    /// the store with it).
+    pub fn with_backup_lease(mut self, lease: BackupLease) -> Self {
+        self.lease = lease;
+        self
+    }
+
+    /// The lease this store honors.
+    pub fn backup_lease(&self) -> &BackupLease {
+        &self.lease
     }
 
     /// Test hook (S3): lowers the source size limit.
@@ -590,7 +608,14 @@ impl ContentStore {
     /// is dropped. A failed unlink leaves the row with `attempt_count`
     /// bumped for the startup sweep to retry. Returns the number of blobs
     /// unlinked.
+    ///
+    /// P9 D5: while the backup lease is held this returns `Ok(0)` without
+    /// unlinking; the pending rows stay, and dropping the lease runs this
+    /// again.
     pub fn release_unreferenced(&self, storage: &Storage) -> Result<usize, StorageError> {
+        let Some(_permit) = self.lease.deletion_permit() else {
+            return Ok(0);
+        };
         let _placement = self
             .placement
             .lock()

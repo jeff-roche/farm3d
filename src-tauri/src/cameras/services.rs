@@ -202,6 +202,13 @@ impl<R: tauri::Runtime> CameraServices<R> {
         }
     }
 
+    /// P9 D5: the same services with a janitor on the process-wide backup
+    /// `lease`.
+    pub fn with_backup_lease(mut self, lease: crate::backup::lease::BackupLease) -> Self {
+        self.janitor = MediaJanitor::with_backup_lease(lease);
+        self
+    }
+
     /// D5: the lock every capture and prune takes, and the janitor's poke.
     /// Contract: a command that changes the retention settings must call
     /// [`MediaJanitor::poke`] after its commit (`save_settings` and

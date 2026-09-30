@@ -48,6 +48,11 @@ use farm3d_lib::contracts::inventory::CommandContracts;
 use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
+use farm3d_lib::backup::{
+    BackupContentTotals, BackupExcludedClass, BackupInvalidReason, BackupInventory,
+    BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupSummary, CreateBackupOutcome,
+    DeleteBackupOutcome, DesktopRequiredReason, TableCount,
+};
 use farm3d_lib::contracts::ContractVersion;
 use farm3d_lib::history::{
     JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
@@ -676,6 +681,18 @@ fn export_registry() -> Vec<Export> {
         export::<JobTimelineSliceRevision>(),
         export::<JobTimelineItem>(),
         export::<JobTimeline>(),
+        export::<BackupMediaChoice>(),
+        export::<BackupOrigin>(),
+        export::<BackupExcludedClass>(),
+        export::<TableCount>(),
+        export::<BackupContentTotals>(),
+        export::<BackupMediaTotals>(),
+        export::<BackupInventory>(),
+        export::<DesktopRequiredReason>(),
+        export::<CreateBackupOutcome>(),
+        export::<BackupSummary>(),
+        export::<DeleteBackupOutcome>(),
+        export::<BackupInvalidReason>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -948,6 +965,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::SnapshotDiskCap,
         ErrorCode::NotificationsUnavailable,
         ErrorCode::EvidenceExists,
+        ErrorCode::BackupInProgress,
+        ErrorCode::BackupSourceDamaged,
+        ErrorCode::InsufficientSpace,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -993,7 +1013,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
                 "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
-                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS"
+                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS", "BACKUP_IN_PROGRESS",
+                "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
@@ -1272,10 +1293,14 @@ fn generated_contracts_use_safe_precise_types() {
     let generated = String::from_utf8(generated).expect("generated contracts should be UTF-8");
     let lower = generated.to_lowercase();
 
-    // The `any` type, not the quoted `"any"` literal of P9's
-    // `PrinterLifecycleFilter` (a spec-mandated value).
+    // The `any` type, not the quoted spec-mandated literals that contain
+    // the letters: P9's `PrinterLifecycleFilter` `"any"` and
+    // `BackupInvalidReason` `"tooManyEntries"`.
     assert!(
-        !generated.replace("\"any\"", "").contains("any"),
+        !generated
+            .replace("\"any\"", "")
+            .replace("\"tooManyEntries\"", "")
+            .contains("any"),
         "generated contracts contain `any`"
     );
     assert!(generated.contains("contractVersion: 1"));

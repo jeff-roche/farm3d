@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 131] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 135] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -575,9 +575,25 @@ contracts![
         "GetJobTimelineRequest",
         "GetJobTimelineResult"
     ),
+    (
+        "backup_inventory",
+        "BackupInventoryRequest",
+        "BackupInventoryResult"
+    ),
+    (
+        "create_backup",
+        "CreateBackupRequest",
+        "CreateBackupResult"
+    ),
+    ("list_backups", "ListBackupsRequest", "ListBackupsResult"),
+    (
+        "delete_backup",
+        "DeleteBackupRequest",
+        "DeleteBackupResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 131] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 135] {
     &COMMAND_CONTRACTS
 }
 
@@ -861,7 +877,15 @@ export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;
 export type ListJobHistoryRequest = ContractRequest & { query: JobHistoryQuery };
 export type ListJobHistoryResult = CommandSuccess<JobHistoryPage>;
 export type GetJobTimelineRequest = ContractRequest & { jobId: string };
-export type GetJobTimelineResult = CommandSuccess<JobTimeline>;"#.to_string()
+export type GetJobTimelineResult = CommandSuccess<JobTimeline>;
+export type BackupInventoryRequest = NoArgsRequest;
+export type BackupInventoryResult = CommandSuccess<BackupInventory>;
+export type CreateBackupRequest = ContractRequest & { operationId: string; media: BackupMediaChoice };
+export type CreateBackupResult = CommandSuccess<CreateBackupOutcome>;
+export type ListBackupsRequest = NoArgsRequest;
+export type ListBackupsResult = CommandSuccess<BackupSummary[]>;
+export type DeleteBackupRequest = ContractRequest & { operationId: string; backupId: string };
+export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -985,6 +1009,11 @@ export type GetJobTimelineResult = CommandSuccess<JobTimeline>;"#.to_string()
         visitor.visit::<crate::history::JobHistoryQuery>();
         visitor.visit::<crate::history::JobHistoryPage>();
         visitor.visit::<crate::history::JobTimeline>();
+        visitor.visit::<crate::backup::BackupInventory>();
+        visitor.visit::<crate::backup::BackupMediaChoice>();
+        visitor.visit::<crate::backup::CreateBackupOutcome>();
+        visitor.visit::<crate::backup::BackupSummary>();
+        visitor.visit::<crate::backup::DeleteBackupOutcome>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

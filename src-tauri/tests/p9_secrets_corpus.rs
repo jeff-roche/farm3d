@@ -6,6 +6,8 @@
 
 use std::io::Write;
 
+use zip::CompressionMethod::{Deflated, Stored};
+
 #[path = "common/secrets.rs"]
 mod secrets;
 use secrets::*;
@@ -87,7 +89,6 @@ fn raw_bytes_are_scanned_in_every_form() {
 
 #[test]
 fn zip_entries_are_scanned_stored_deflated_named_and_nested() {
-    use zip::CompressionMethod::{Deflated, Stored};
     let secret = format!("value={CREDENTIAL_VALUE}").into_bytes();
     let stored = zip_of(&[("a.txt", &secret, Stored)]);
     let deflated = zip_of(&[("a.txt", &secret, Deflated)]);
@@ -124,4 +125,35 @@ fn a_backup_may_hold_farm_data_but_not_credentials() {
     let farm_data = format!("{HOST} {HOST_NAME} {HOME_PATH} {PRINTER_NAME} {STORED_CAMERA_URL}");
     assert_no_backup_forbidden(farm_data.as_bytes(), "farm data");
     assert!(!find_any(FULL_CORPUS, farm_data.as_bytes(), "farm data").is_empty());
+}
+
+/// A corrupt archive must not scan clean: input that starts with `PK` but
+/// doesn't parse as a zip fails the scan instead of being skipped.
+#[test]
+#[should_panic(expected = "is not a readable zip")]
+fn a_pk_prefixed_input_that_is_not_a_zip_fails_the_scan() {
+    let mut bytes = zip_of(&[("a.txt", b"nothing", Deflated)]);
+    bytes.truncate(bytes.len() - 10);
+    assert_no_backup_forbidden(&bytes, "truncated zip");
+}
+
+/// ...and so does an entry that can't be read (here, deflate data that
+/// no longer decompresses to its CRC-32).
+#[test]
+#[should_panic(expected = "could not be read")]
+fn an_unreadable_entry_fails_the_scan() {
+    let original: Vec<u8> = (0..4096_u32).map(|value| (value % 7) as u8).collect();
+    let mut bytes = zip_of(&[("a.bin", &original, Stored)]);
+    // Flip a byte inside the stored data: the CRC-32 check fails on read.
+    let at = bytes.windows(4).position(|w| w == [0, 1, 2, 3]).unwrap() + 2;
+    bytes[at] ^= 0xff;
+    assert_no_backup_forbidden(&bytes, "corrupt entry");
+}
+
+/// A nested entry that starts with `PK` is held to the same rule.
+#[test]
+#[should_panic(expected = "is not a readable zip")]
+fn a_nested_pk_entry_that_is_not_a_zip_fails_the_scan() {
+    let outer = zip_of(&[("inner.3mf", b"PK not a zip at all", Stored)]);
+    assert_no_backup_forbidden(&outer, "nested");
 }
