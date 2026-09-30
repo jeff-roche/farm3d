@@ -493,6 +493,7 @@ pub fn startup_command_error(
 }
 
 fn startup_error(error: persistence::StorageError) -> StartupFailure {
+    f3d_log!(error, "startup.failed", error = error);
     match startup_command_error(error) {
         Ok(error) => StartupFailure::Recoverable(error),
         Err(()) => StartupFailure::Fatal,
@@ -838,10 +839,15 @@ pub fn run() {
                     }));
                     Ok(())
                 }
-                Err(StartupFailure::Fatal) => Err(std::io::Error::other(
+                Err(StartupFailure::Fatal) => {
+                    // The line `startup_error` logged must be on disk before
+                    // setup returns its error and the app exits.
+                    diagnostics::log::shutdown();
+                    Err(std::io::Error::other(
                     "Unsupported metadata locking. This platform or data location cannot run farm3d; contact support with the platform and filesystem type.",
-                )
-                .into()),
+                    )
+                    .into())
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -977,6 +983,12 @@ pub fn run() {
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // P9 D12: queued log lines reach disk before the process ends.
+            if matches!(event, tauri::RunEvent::Exit) {
+                diagnostics::log::shutdown();
+            }
+        });
 }

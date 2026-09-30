@@ -290,6 +290,70 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+const FORBIDDEN: &[&str] = &[
+    "eprintln!",
+    "println!",
+    "eprint!",
+    "print!",
+    "dbg!(",
+    "io::stderr(",
+    "io::stdout(",
+];
+
+/// 1-based lines of `text` that hold a forbidden output call outside a
+/// `#[cfg(test)] mod` block. A `#[cfg(test)]` on any other item (a `use`,
+/// a `fn`, a `impl`) is skipped for that item's attribute only: the walker
+/// keeps scanning after it.
+fn offending_lines(text: &str) -> Vec<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut offenders = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        if trimmed == "#[cfg(test)]" {
+            // The item the attribute guards: the next non-attribute line.
+            let mut item = index + 1;
+            while item < lines.len() && lines[item].trim_start().starts_with("#[") {
+                item += 1;
+            }
+            let header = lines.get(item).map_or("", |line| line.trim_start());
+            let is_mod = header.starts_with("mod ") || header.starts_with("pub mod ")
+                || header.starts_with("pub(crate) mod ");
+            if is_mod && header.trim_end().ends_with('{') {
+                // Skip to the matching close brace.
+                let mut depth = 0i32;
+                let mut end = item;
+                'walk: for (offset, line) in lines[item..].iter().enumerate() {
+                    for c in line.chars() {
+                        match c {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end = item + offset;
+                                    break 'walk;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    end = item + offset;
+                }
+                index = end + 1;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        let code = lines[index].split("//").next().unwrap_or("");
+        if FORBIDDEN.iter().any(|needle| code.contains(needle)) {
+            offenders.push(index + 1);
+        }
+        index += 1;
+    }
+    offenders
+}
+
 #[test]
 fn no_eprintln_or_println_remains_outside_test_code() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -298,19 +362,72 @@ fn no_eprintln_or_println_remains_outside_test_code() {
     assert!(files.len() > 50);
     let mut offenders = Vec::new();
     for file in files {
+        // The log's own mirror is the one sanctioned stderr writer.
+        if file.ends_with("diagnostics/log.rs") {
+            continue;
+        }
         let text = std::fs::read_to_string(&file).unwrap();
-        for (number, line) in text.lines().enumerate() {
-            // Test modules sit at the end of each file.
-            if line.trim() == "#[cfg(test)]" {
-                break;
-            }
-            let code = line.split("//").next().unwrap_or("");
-            if code.contains("eprintln!") || code.contains("println!") || code.contains("dbg!(") {
-                offenders.push(format!("{}:{}", file.display(), number + 1));
-            }
+        for number in offending_lines(&text) {
+            offenders.push(format!("{}:{number}", file.display()));
         }
     }
     assert!(offenders.is_empty(), "use f3d_log!: {offenders:#?}");
+}
+
+#[test]
+fn the_walker_sees_past_a_single_item_cfg_test_and_skips_test_modules() {
+    let source = "\
+#[cfg(test)]
+use std::fmt::Debug;
+
+fn production() {
+    eprintln!(\"after a guarded use\");
+    print!(\"x\");
+    let _ = std::io::stderr();
+}
+
+#[cfg(test)]
+fn helper() {}
+
+fn more() {
+    eprint!(\"y\");
+}
+
+#[cfg(test)]
+mod tests {
+    fn t() {
+        println!(\"fine here\");
+        if true {
+            eprintln!(\"and here\");
+        }
+    }
+}
+
+fn last() {
+    println!(\"after the test module\");
+}
+";
+    assert_eq!(offending_lines(source), vec![5, 6, 7, 14, 28]);
+}
+
+// ---- shutdown flushes ----
+
+/// The process-wide log is shared: tests that `init` it take turns.
+static GLOBAL_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn shutdown_writes_every_queued_line_before_it_returns() {
+    let _global = GLOBAL_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("logs");
+    farm3d_lib::diagnostics::log::init(&dir);
+    for index in 0..200u32 {
+        farm3d_lib::f3d_log!(info, "log.queued", n = index);
+    }
+    farm3d_lib::diagnostics::log::shutdown();
+    let lines = read_lines(&dir.join(LOG_FILE));
+    let queued = lines.iter().filter(|l| l["code"] == "log.queued").count();
+    assert_eq!(queued, 200);
 }
 
 // ---- the corpus scan (P9 Task 3, step 4) ----
@@ -319,6 +436,7 @@ fn no_eprintln_or_println_remains_outside_test_code() {
 /// seeded secrets in play, and scans every log file for the corpus.
 #[tokio::test]
 async fn the_seeded_corpus_never_reaches_a_log_file() {
+    let _global = GLOBAL_LOG.lock().unwrap_or_else(|e| e.into_inner());
     use common::secrets::{assert_no_corpus, FULL_CORPUS, PRINTER_NAME, USERINFO_URL};
     use farm3d_lib::connections::moonraker::MoonrakerConnection;
     use farm3d_lib::connections::{ConnectionConfig, PrinterConnection};
