@@ -138,6 +138,24 @@ describe("QueueScreen", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("That Job is gone.");
   });
 
+  it("retries an older Job's timeline from its error", async () => {
+    loadWebQueueFixture();
+    const timeline = webJobTimeline(WEB_QUEUE_JOB_DEFERRED)!;
+    const older = { ...timeline.entry, id: "qen-older", jobId: "job-older", display: { ...timeline.entry.display, modelName: "Older Lid" } };
+    historyStoreMock.getJobTimeline
+      .mockRejectedValueOnce(commandError("PERSISTENCE_UNAVAILABLE", "Try again."))
+      .mockResolvedValueOnce({ ...timeline, entry: older });
+    navigation.navigate(
+      { version: 1, destination: "queue", selection: { kind: "job", id: "job-older" } },
+      { availableDestinations: ["queue"], availableIds: ["job-older"] },
+    );
+    render(() => <QueueScreen />);
+    const alert = await screen.findByRole("alert");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: /Older Lid/ })).toBeInTheDocument();
+    expect(historyStoreMock.getJobTimeline).toHaveBeenCalledTimes(2);
+  });
+
   it("lists an assigned entry whose Job isn't printing under Assigned", async () => {
     setQueueStoreState({
       entries: [

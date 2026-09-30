@@ -232,7 +232,7 @@ export function QueueScreen() {
   });
   // A Job opened from the History view can be older than the Queue store
   // holds; its timeline carries its Queue Entry.
-  const [olderEntry] = createResource(
+  const [olderEntry, { refetch: refetchOlderEntry }] = createResource(
     () => {
       const id = selectedId();
       return id !== undefined && id.startsWith("job-") && storedEntry() === undefined ? id : undefined;
@@ -452,6 +452,7 @@ export function QueueScreen() {
         {(message) => (
           <div class={styles.errorBanner} role="alert">
             <p class={styles.errorMessage}>{message()}</p>
+            <Button variant="ghost" onClick={() => void refetchOlderEntry()}>Retry</Button>
           </div>
         )}
       </Show>
