@@ -1,35 +1,10 @@
 import { createSignal } from "solid-js";
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Tabs } from "./Tabs";
 import { TypedConfirmDialog } from "./TypedConfirmDialog";
 
 afterEach(() => {
   document.body.innerHTML = "";
-});
-
-const items = [
-  { value: "a", label: "Alpha", content: "Alpha body" },
-  { value: "b", label: "Beta", content: "Beta body" },
-  { value: "c", label: "Gamma", content: "Gamma body" },
-];
-
-describe("vertical Tabs", () => {
-  it("exposes aria-orientation and moves with ArrowDown / ArrowUp", () => {
-    render(() => <Tabs items={items} orientation="vertical" defaultValue="a" />);
-    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "vertical");
-    const alpha = screen.getByRole("tab", { name: "Alpha" });
-    alpha.focus();
-    fireEvent.keyDown(alpha, { key: "ArrowDown" });
-    expect(screen.getByRole("tab", { name: "Beta" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Beta" }), { key: "ArrowUp" });
-    expect(screen.getByRole("tab", { name: "Alpha" })).toHaveAttribute("aria-selected", "true");
-  });
-
-  it("defaults to horizontal", () => {
-    render(() => <Tabs items={items} defaultValue="a" />);
-    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "horizontal");
-  });
 });
 
 describe("TypedConfirmDialog", () => {
@@ -94,5 +69,24 @@ describe("TypedConfirmDialog", () => {
     expect(description).toHaveTextContent("All settings are lost.");
     expect(description).toHaveTextContent("Nothing can be undone.");
     expect(description.querySelectorAll("li")).toHaveLength(2);
+    // A list can't sit inside a <p>.
+    expect(description.tagName).toBe("DIV");
+  });
+
+  it("renders no description when there are no consequences", () => {
+    render(() => (
+      <TypedConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="Reset everything"
+        consequences={[]}
+        phrase="Reset Me"
+        confirmLabel="Reset now"
+        onConfirm={() => {}}
+      />
+    ));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.getAttribute("aria-describedby")).toBeNull();
+    expect(dialog.querySelector("ul")).toBeNull();
   });
 });

@@ -38,7 +38,9 @@ export function Dialog(props: DialogProps) {
             </KDialog.CloseButton>
           </div>
           {props.description && (
-            <KDialog.Description class={styles.description}>
+            // A `<p>` for text; a `<div>` for markup, which may hold block
+            // content such as a list.
+            <KDialog.Description as={typeof props.description === "string" ? "p" : "div"} class={styles.description}>
               {props.description}
             </KDialog.Description>
           )}

@@ -8,7 +8,8 @@ export interface TypedConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  /** What will happen; rendered as a list inside the dialog's description. */
+  /** What will happen; rendered as a list inside the dialog's description
+   *  (no description when empty). */
   consequences: string[];
   /** The text the user must type back. Matching is exact: no trim, no case folding. */
   phrase: string;
@@ -44,9 +45,11 @@ export function TypedConfirmDialog(props: TypedConfirmDialogProps) {
       open={props.open}
       onOpenChange={props.onOpenChange}
       description={
-        <ul class={styles.consequences}>
-          <For each={props.consequences}>{(line) => <li>{line}</li>}</For>
-        </ul>
+        props.consequences.length > 0 ? (
+          <ul class={styles.consequences}>
+            <For each={props.consequences}>{(line) => <li>{line}</li>}</For>
+          </ul>
+        ) : undefined
       }
     >
       <div class={styles.body}>
