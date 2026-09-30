@@ -12,6 +12,7 @@
 import { createStore, reconcile } from "solid-js/store";
 import { command, desktopAvailable, isCommandError, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import { commandError } from "../ipc/local-errors";
+import { resetRestoreStatusStore, restoreBanner } from "./restore-status-store";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type {
   BackupInventory,
@@ -21,7 +22,6 @@ import type {
   PreviewRestoreOutcome,
   RestorePreview,
   RestoreSource,
-  RestoreStatus,
 } from "./types";
 
 export type RestorePhase = "idle" | "choosing" | "previewing" | "confirming" | "restarting" | "failed" | "cancelled";
@@ -44,16 +44,14 @@ interface BackupState {
   preview: RestorePreview | null;
   error: CommandError | null;
   safetyBackupId: string | null;
-  restoreStatus: RestoreStatus;
 }
 
 const initialState = (): BackupState => ({
   inventory: null, backups: [], lastExport: null, phase: "idle", preview: null, error: null,
-  safetyBackupId: null, restoreStatus: { state: "none" },
+  safetyBackupId: null,
 });
 
 const [state, setState] = createStore<BackupState>(initialState());
-let restoreStatusLoad: Promise<void> | null = null;
 let applyOperationId: string | null = null;
 
 export const backup = {
@@ -67,8 +65,7 @@ export const backup = {
     safetyBackupId: (): string | null => state.safetyBackupId,
   },
   /** The finished restore/reset to tell the operator about, until acknowledged. */
-  restoreBanner: (): Exclude<RestoreStatus, { state: "none" }> | null =>
-    state.restoreStatus.state === "none" ? null : state.restoreStatus,
+  restoreBanner,
 };
 
 const UNSUPPORTED = { status: "unsupported", reason: "desktopRequired" } as const;
@@ -228,30 +225,12 @@ export async function leaveRestorePanel(): Promise<void> {
 }
 
 // --- Restore status banner --------------------------------------------------
-
-/** Reads `restore_status` once (startup); later calls reuse the first read. */
-export function loadRestoreStatus(): Promise<void> {
-  restoreStatusLoad ??= (async () => {
-    if (!desktopAvailable()) return;
-    try {
-      setState("restoreStatus", await retryOnTransportFailure(() => command("restore_status")));
-    } catch {
-      restoreStatusLoad = null; // a failed read may be retried
-    }
-  })();
-  return restoreStatusLoad;
-}
-
-export async function acknowledgeRestoreStatus(): Promise<void> {
-  const status = state.restoreStatus;
-  if (status.state === "none") return;
-  const next = await retryOnTransportFailure(() => command("acknowledge_restore_status", { journalId: status.journalId }));
-  setState("restoreStatus", next);
-}
+// Lives in `restore-status-store` so AppShell can import it alone.
+export { acknowledgeRestoreStatus, loadRestoreStatus } from "./restore-status-store";
 
 /** Test seam. */
 export function resetBackupStore(): void {
   setState(reconcile(initialState()));
-  restoreStatusLoad = null;
+  resetRestoreStatusStore();
   applyOperationId = null;
 }

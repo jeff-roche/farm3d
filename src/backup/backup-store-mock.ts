@@ -57,6 +57,18 @@ export const backupStoreMock = {
   resetBackupStore: vi.fn(),
 };
 
+/** A stand-in for `restore-status-store`, over the same state. Spread it
+ *  over the real module so `restoreStatusText` stays real:
+ *
+ *    vi.mock("../backup/restore-status-store", async (importActual) =>
+ *      ({ ...(await importActual()), ...(await import("../backup/backup-store-mock")).restoreStatusStoreMock }));
+ */
+export const restoreStatusStoreMock = {
+  restoreBanner: backupStoreMock.backup.restoreBanner,
+  loadRestoreStatus: backupStoreMock.loadRestoreStatus,
+  acknowledgeRestoreStatus: backupStoreMock.acknowledgeRestoreStatus,
+};
+
 export function setBackupStoreState(patch: Partial<MockBackupState>): void {
   const { backups, ...rest } = patch;
   if (backups) setState("backups", reconcile(backups));

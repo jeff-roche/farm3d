@@ -2,8 +2,7 @@ import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Button, Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
 import { about, loadAbout } from "../diagnostics/about-store";
-import { acknowledgeRestoreStatus, backup, loadRestoreStatus } from "../backup/backup-store";
-import { restoreStatusText } from "../backup/presentation";
+import { acknowledgeRestoreStatus, loadRestoreStatus, restoreBanner, restoreStatusText } from "../backup/restore-status-store";
 import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
@@ -126,14 +125,17 @@ export function AppShell(props: AppShellProps) {
         <AttentionTrigger />
       </header>
 
-      <Show when={backup.restoreBanner()}>
+      <Show when={restoreBanner()}>
         {(status) => (
           <div
             class={styles.restoreBanner}
             classList={{ [styles.restoreBannerFailed]: status().state === "failed" }}
             role={status().state === "failed" ? "alert" : "status"}
+            aria-label="Restore outcome"
           >
             <span>{restoreStatusText(status())}</span>
+            {/* A failed acknowledgement keeps the banner (the store only clears
+                it on success), so Dismiss can simply be clicked again. */}
             <Button size="sm" onClick={() => void acknowledgeRestoreStatus().catch(() => {})}>
               Dismiss
             </Button>

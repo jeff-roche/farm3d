@@ -1,7 +1,7 @@
 /** Pure presentation for backup and restore: groups Rust's conflicts and
  *  words its notices and blockers. Rust owns what is a conflict, a blocker,
  *  or a notice; nothing here decides. */
-import type { BackupOrigin, RestoreBlocker, RestoreConflictGroup, RestoreNotice, RestorePreview, RestoreStatus } from "./types";
+import type { BackupOrigin, RestoreBlocker, RestoreConflictGroup, RestoreNotice, RestorePreview } from "./types";
 import type { RestoreConflictClass } from "../generated/contracts/domain/RestoreConflictClass";
 import type { RestoreDomain } from "../generated/contracts/domain/RestoreDomain";
 
@@ -107,14 +107,8 @@ const ORIGIN_LABEL = {
 
 export const backupOriginLabel = (origin: BackupOrigin): string => ORIGIN_LABEL[origin];
 
-/** The banner's one-line outcome. Never names a path. */
-export function restoreStatusText(status: Exclude<RestoreStatus, { state: "none" }>): string {
-  const what = status.kind === "restore" ? "restore" : "reset";
-  const safety = status.safetyBackupId ? ` You can restore from safety backup ${status.safetyBackupId}.` : "";
-  return status.state === "done"
-    ? `The ${what} finished.${safety}`
-    : `The ${what} did not finish, and your previous data was kept.${safety}`;
-}
+/** The banner's one-line outcome (kept with the banner's own store). */
+export { restoreStatusText } from "./restore-status-store";
 
 export function previewSourceText(preview: RestorePreview): string {
   return preview.source.kind === "file" ? preview.source.fileName : `Safety backup ${preview.source.backupId}`;

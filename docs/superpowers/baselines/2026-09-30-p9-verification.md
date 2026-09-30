@@ -53,7 +53,7 @@ described below.
 | Item | Result |
 | --- | --- |
 | `just package` | Verified |
-| Install the deb on Linux x86_64 | Verified, by extraction (see the substitution above) |
+| Install the deb on Linux x86_64 | Verified (extracted, not installed; see the substitution above) |
 | The log file lands in `app_log_dir()` and rotates | Verified |
 | A backup is created through the real save dialog | Pending owner |
 | A restore through the real open dialog restarts the app and shows the outcome banner | Partly verified; the dialog and in-app restart are pending owner. The banner was missing; fixed in `69f5a6b` |
@@ -225,5 +225,6 @@ This run covered Linux x86_64 only.
 - `farm3d.log` and `restore/journal.json` are created with mode `0644`,
   while the database files are `0600`. The directories that hold them are
   `0700`, so no other user can read them.
-- The banner fix pulls the backup store into the main chunk: `index-*.js`
-  grows from 581.49 kB to 588.29 kB.
+- The banner's state lives in its own small `restore-status-store`, so
+  the shell doesn't pull the backup store into the main chunk.
+  `index-*.js` is 582.76 kB with the banner, against 581.49 kB before it.

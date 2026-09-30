@@ -8,7 +8,10 @@ import { backupStoreMock, resetBackupStoreMock, setBackupStoreState } from "../b
 import { AppShell } from "./AppShell";
 
 vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
-vi.mock("../backup/backup-store", async () => (await import("../backup/backup-store-mock")).backupStoreMock);
+vi.mock("../backup/restore-status-store", async (importActual) => ({
+  ...(await importActual<typeof import("../backup/restore-status-store")>()),
+  ...(await import("../backup/backup-store-mock")).restoreStatusStoreMock,
+}));
 vi.mock("../diagnostics/about-store", async () =>
   (await import("../diagnostics/diagnostics-store-mock")).aboutStoreMock);
 
@@ -220,8 +223,8 @@ describe("AppShell", () => {
       },
     });
     renderShell();
-    expect(screen.getByText("The restore finished. You can restore from safety backup sfb-1.").parentElement)
-      .toHaveAttribute("role", "status");
+    expect(screen.getByRole("status", { name: "Restore outcome" })).toHaveTextContent(
+      "The restore finished. You can restore from safety backup sfb-1.");
     await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(backupStoreMock.acknowledgeRestoreStatus).toHaveBeenCalledTimes(1);
   });
@@ -234,6 +237,6 @@ describe("AppShell", () => {
       },
     });
     renderShell();
-    expect(screen.getByRole("alert")).toHaveTextContent("The reset did not finish, and your previous data was kept.");
+    expect(screen.getByRole("alert", { name: "Restore outcome" })).toHaveTextContent("The reset did not finish, and your previous data was kept.");
   });
 });

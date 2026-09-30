@@ -68,7 +68,7 @@
 }
 
 .restoreBannerFailed {
-  color: var(--f3d-color-warning);
+  color: var(--f3d-color-danger);
 }
 
 .content {
