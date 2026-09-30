@@ -16,7 +16,7 @@ mod p9_farm;
 #[path = "common/secrets.rs"]
 mod secrets;
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -31,7 +31,6 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use farm3d_lib::backup::archive::{self, ArchiveError, DATABASE_PATH, MANIFEST_PATH};
 use farm3d_lib::backup::lease::{BackupLease, LeaseActivity};
-use farm3d_lib::backup::manifest::Manifest;
 use farm3d_lib::backup::preview;
 use farm3d_lib::backup::staging::{self, RestoreError, StagingOptions};
 use farm3d_lib::backup::writer::{write_backup, BackupRequest, WriterHooks};
@@ -40,7 +39,7 @@ use farm3d_lib::backup::{BackupInvalidReason, BackupMediaChoice, BackupOrigin};
 use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::contracts::command::{CommandError, ErrorCode};
 use farm3d_lib::persistence::integrity::{self, IntegrityRoots};
-use farm3d_lib::persistence::{RepositoryError, Storage};
+use farm3d_lib::persistence::RepositoryError;
 
 use p9_farm::{ids, Farm};
 
@@ -94,7 +93,13 @@ fn regenerate_backup_fixtures() {
     let lease = BackupLease::new();
     let guard = lease.try_acquire(LeaseActivity::Backup).unwrap();
     let path = fixture();
-    let _ = fs::remove_file(&path);
+    // A committed fixture is never regenerated: a new format or schema gets
+    // a new `tests/fixtures/backup/vN/` (README).
+    assert!(
+        !path.exists(),
+        "{} exists; add a new fixture instead of overwriting it",
+        path.display()
+    );
     write_backup(
         &farm.storage,
         &guard,
@@ -354,11 +359,23 @@ fn the_fixture_previews_applies_and_installs() {
     let integrity =
         integrity::check(&connection, Some(&IntegrityRoots::from_paths(&paths))).unwrap();
     assert!(integrity.violations().is_empty(), "{integrity:?}");
-    for (table, rows) in &integrity.counts {
+    // Both key sets, so a table only one side has fails too. D8 carries
+    // two tables from the local Farm rather than the backup: the local
+    // `pending_credential_cleanup` rows and `slicer_runtime_config`.
+    let tables: BTreeSet<&String> = integrity
+        .counts
+        .keys()
+        .chain(manifest.counts.keys())
+        .collect();
+    for table in tables {
         if table == "pending_credential_cleanup" || table == "slicer_runtime_config" {
-            continue; // D8's two carried exceptions
+            continue;
         }
-        assert_eq!(Some(rows), manifest.counts.get(table), "{table}");
+        assert_eq!(
+            integrity.counts.get(table),
+            manifest.counts.get(table),
+            "{table}"
+        );
     }
     let restored: i64 = connection
         .query_row(
@@ -542,7 +559,3 @@ fn a_database_schema_migrations_checksum_mismatch_is_refused_migration_mismatch(
         BackupInvalidReason::MigrationMismatch
     );
 }
-
-/// Silences the unused-import lint for helpers only some tests use.
-#[allow(dead_code)]
-fn _uses(_: &Manifest, _: &BTreeMap<String, i64>, _: &Storage) {}
