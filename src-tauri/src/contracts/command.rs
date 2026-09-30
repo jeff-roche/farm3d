@@ -425,6 +425,9 @@ pub enum ErrorCode {
     ConfirmationMismatch,
     /// P9 D8: a restore or reset is waiting for the restart.
     RestartPending,
+    /// P9 D13: the egress scan found a protected value in a diagnostics
+    /// section; nothing was written.
+    DiagnosticsRedactionFailed,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -876,6 +879,24 @@ impl CommandError {
             ("step".to_string(), step),
         ]));
         error
+    }
+
+    /// P9 D13 `DIAGNOSTICS_REDACTION_FAILED`: `section` is the wire name
+    /// of the section the egress scan stopped on. The matched term is
+    /// never reported.
+    pub fn diagnostics_redaction_failed(
+        section: crate::diagnostics::bundle::DiagnosticsSection,
+    ) -> Self {
+        Self::typed(
+            ErrorCode::DiagnosticsRedactionFailed,
+            &format!(
+                "farm3d stopped the export: the {} section wasn't fully redacted. Nothing was written.",
+                section.label()
+            ),
+            vec![],
+            false,
+        )
+        .with_string_details(&[("section", section.as_str())])
     }
 
     /// P9 D18 `CONFIRMATION_MISMATCH`: `expected` is the exact phrase.

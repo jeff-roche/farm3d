@@ -94,6 +94,11 @@ notify-debouncer-full = "0.7"
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 quick-xml = "0.42"
 base64 = "0.22"
+# P9 D13: the diagnostics egress scan (one pass over each entry for every
+# corpus term; `memmem` for credential values, which it only borrows).
+# Both were already in the lockfile.
+aho-corasick = "1"
+memchr = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

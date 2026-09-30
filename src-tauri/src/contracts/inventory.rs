@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 142] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 145] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -618,9 +618,20 @@ contracts![
     ),
     ("reset_preview", "ResetPreviewRequest", "ResetPreviewResult"),
     ("reset_farm", "ResetFarmRequest", "ResetFarmResult"),
+    (
+        "diagnostics_preview",
+        "DiagnosticsPreviewRequest",
+        "DiagnosticsPreviewResult"
+    ),
+    (
+        "export_diagnostics",
+        "ExportDiagnosticsRequest",
+        "ExportDiagnosticsResult"
+    ),
+    ("about_farm3d", "AboutFarm3dRequest", "AboutFarm3dResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 142] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 145] {
     &COMMAND_CONTRACTS
 }
 
@@ -926,7 +937,13 @@ export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;
 export type ResetPreviewRequest = ContractRequest & { tier: ResetTier };
 export type ResetPreviewResult = CommandSuccess<ResetPreview>;
 export type ResetFarmRequest = ContractRequest & { operationId: string; request: ResetRequest; confirmation: string };
-export type ResetFarmResult = CommandSuccess<ResetResult>;"#.to_string()
+export type ResetFarmResult = CommandSuccess<ResetResult>;
+export type DiagnosticsPreviewRequest = NoArgsRequest;
+export type DiagnosticsPreviewResult = CommandSuccess<DiagnosticsPreview>;
+export type ExportDiagnosticsRequest = ContractRequest & { operationId: string; sections: DiagnosticsSection[] };
+export type ExportDiagnosticsResult = CommandSuccess<ExportDiagnosticsOutcome>;
+export type AboutFarm3dRequest = NoArgsRequest;
+export type AboutFarm3dResult = CommandSuccess<AboutInfo>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -1064,6 +1081,10 @@ export type ResetFarmResult = CommandSuccess<ResetResult>;"#.to_string()
         visitor.visit::<crate::diagnostics::reset::ResetPreview>();
         visitor.visit::<crate::diagnostics::reset::ResetRequest>();
         visitor.visit::<crate::diagnostics::reset::ResetResult>();
+        visitor.visit::<crate::diagnostics::bundle::DiagnosticsSection>();
+        visitor.visit::<crate::diagnostics::bundle::DiagnosticsPreview>();
+        visitor.visit::<crate::diagnostics::bundle::ExportDiagnosticsOutcome>();
+        visitor.visit::<crate::diagnostics::about::AboutInfo>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

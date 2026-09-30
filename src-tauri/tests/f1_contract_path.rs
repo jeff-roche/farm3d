@@ -3,8 +3,8 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
     // P4's 58 plus P5's 21 plus P6 Task 5's 2 plus P6 Task 9's 8, plus
     // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
     // P8 Task 6's 7, Task 7's 6, Task 8's 5, and Task 9's 4, plus P9 Task 4's 2,
-    // Task 5's 4, Task 6's 2, Task 7's 3, and Task 8's 2.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2 + 4 + 2 + 3 + 2);
+    // Task 5's 4, Task 6's 2, Task 7's 3, Task 8's 2, and Task 9's 3.
+    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2 + 4 + 2 + 3 + 2 + 3);
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -150,6 +150,9 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
             "acknowledge_restore_status",
             "reset_preview",
             "reset_farm",
+            "diagnostics_preview",
+            "export_diagnostics",
+            "about_farm3d",
         ]
     );
 }
@@ -346,6 +349,9 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
             farm3d_lib::backup::commands::acknowledge_restore_status,
             farm3d_lib::diagnostics::commands::reset_preview,
             farm3d_lib::diagnostics::commands::reset_farm,
+            farm3d_lib::diagnostics::commands::diagnostics_preview,
+            farm3d_lib::diagnostics::commands::export_diagnostics,
+            farm3d_lib::diagnostics::commands::about_farm3d,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -735,6 +741,12 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
                 "confirmation": "reset settings"
             }),
         ),
+        ("diagnostics_preview", json!({})),
+        (
+            "export_diagnostics",
+            json!({"operationId": "op", "sections": ["about"]}),
+        ),
+        ("about_farm3d", json!({})),
     ];
     assert_eq!(cases.len(), farm3d_lib::COMMAND_NAMES.len());
     for (command, mut body) in cases {

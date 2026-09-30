@@ -1,5 +1,12 @@
-//! The reset commands (spec "Commands", D15, D18): `reset_preview` and
-//! `reset_farm`.
+//! The diagnostics, reset, and About commands (spec "Commands", D13, D15,
+//! D18): `diagnostics_preview`, `export_diagnostics`, `reset_preview`,
+//! `reset_farm`, and `about_farm3d`.
+//!
+//! `export_diagnostics` owns its native save dialog (the frontend never
+//! passes a path; the result carries the basename), builds the bundle in
+//! memory, and writes it with `document_io::atomic_write` only after the
+//! egress scan passes. It claims its `operationId` in the process-local
+//! ledger (D18, digest `{ sections }` sorted).
 //!
 //! `reset_farm` checks the exact phrase first, then, for every tier, the
 //! journal (`RESTART_PENDING` while a restore or reset waits for the
@@ -11,7 +18,9 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -22,7 +31,17 @@ use crate::bootstrap::BootstrapState;
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
 use crate::RuntimeServices;
 
+use super::about::{self, AboutInfo};
+use super::bundle::{
+    self, BundleError, BundleInputs, DiagnosticsPreview, DiagnosticsSection,
+    ExportDiagnosticsOutcome,
+};
+use super::collect::CollectContext;
 use super::reset::{self, ResetPreview, ResetRequest, ResetResult, ResetTier};
+use crate::persistence::integrity::IntegrityRoots;
+use crate::persistence::RepositoryError;
+use crate::printers::StoredPrinter;
+use crate::slicing::runtime::{EngineState, PresetSourceState};
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
 
@@ -251,4 +270,209 @@ fn run_farm_reset<R: tauri::Runtime>(
         status: RestartingStatus::Restarting,
         safety_backup_id,
     })
+}
+
+// --- diagnostics (D13) and About --------------------------------------------------------
+
+/// Builds the bundle inputs from the live services and runs `work` on them.
+fn with_bundle_inputs<R: tauri::Runtime, T>(
+    services: &RuntimeServices<R>,
+    app_version: &str,
+    now: DateTime<Utc>,
+    work: impl FnOnce(&BundleInputs<'_>) -> T,
+) -> T {
+    let slicer_status = services.slicing.runtime_status().ok();
+    let about = about::about(
+        app_version,
+        &services.catalog,
+        slicer_status.as_ref(),
+        &services.credentials,
+    );
+    let statuses = services.manager.statuses();
+    let ids: Vec<String> = statuses.keys().cloned().collect();
+    let error_causes = services.manager.error_causes(&ids);
+    let host_ops = Arc::clone(&services.host_ops);
+    let capabilities = move |printer: &StoredPrinter| host_ops.capabilities(printer);
+    // Paths farm3d knows only at runtime: the profile cache and whatever
+    // engine and preset source discovery resolved.
+    let mut runtime_paths = vec![services.slicing.cache_dir().to_path_buf()];
+    if let Some(status) = &slicer_status {
+        if let EngineState::Available { path, .. } = &status.engine {
+            runtime_paths.push(path.into());
+        }
+        if let PresetSourceState::Available { path, .. } = &status.preset_source {
+            runtime_paths.push(path.into());
+        }
+        runtime_paths.extend(
+            status
+                .engine_candidates
+                .iter()
+                .map(|candidate| candidate.path.clone().into()),
+        );
+    }
+    let mut home_dirs = services.diagnostics.home_dirs();
+    home_dirs.extend(services.slicing.discovery_env().home);
+    let paths = services.storage.paths();
+    let inputs = BundleInputs {
+        storage: &services.storage,
+        credentials: &services.credentials,
+        context: CollectContext {
+            about,
+            catalog: &services.catalog,
+            statuses,
+            error_causes,
+            capabilities: &capabilities,
+            integrity_roots: IntegrityRoots::from_paths(paths),
+            log_root: paths.log_root(),
+            now,
+        },
+        home_dirs,
+        runtime_paths,
+        app_version,
+        created_at: now,
+        entry_hook: services.diagnostics.entry_hook(),
+    };
+    work(&inputs)
+}
+
+fn bundle_error(error: BundleError) -> CommandError {
+    match error {
+        BundleError::RedactionFailed(section) => {
+            crate::f3d_log!(warn, "diagnostics.redactionFailed", section = section);
+            CommandError::diagnostics_redaction_failed(section)
+        }
+        BundleError::Repository(error) => CommandError::from_repository(error),
+        BundleError::Internal => CommandError::internal(),
+    }
+}
+
+/// `diagnostics_preview`: every section with its estimated size. Reads
+/// only; opens no dialog and writes nothing.
+#[tauri::command]
+pub async fn diagnostics_preview<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<DiagnosticsPreview>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let app_version = app.package_info().version.to_string();
+    let sections = blocking(move || {
+        with_bundle_inputs(&services, &app_version, Utc::now(), bundle::preview)
+            .map_err(bundle_error)
+    })
+    .await?;
+    Ok(CommandSuccess::new(DiagnosticsPreview { sections }))
+}
+
+/// The process-local ledger digest, `{ sections }` sorted.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportDiagnosticsDigest {
+    sections: Vec<DiagnosticsSection>,
+}
+
+/// `export_diagnostics`: asks for a destination, builds the bundle of
+/// `sections` (1–6, distinct), and writes it only if the egress scan
+/// passes. A closed dialog is `cancelled` with no side effect.
+#[tauri::command]
+pub async fn export_diagnostics<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    sections: Vec<DiagnosticsSection>,
+) -> Result<CommandSuccess<ExportDiagnosticsOutcome>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let selected: BTreeSet<DiagnosticsSection> = sections.iter().copied().collect();
+    if sections.is_empty()
+        || sections.len() > DiagnosticsSection::ALL.len()
+        || selected.len() != sections.len()
+    {
+        return Err(CommandError::from_repository(RepositoryError::Validation {
+            field_path: "sections",
+        }));
+    }
+    let digest = ExportDiagnosticsDigest {
+        sections: selected.iter().copied().collect(),
+    };
+    let ledger = &services.backup.operations;
+    if let Some(cached) = ledger.replay(
+        &operation_id,
+        ProcessOperationKind::ExportDiagnostics,
+        &digest,
+    )? {
+        return Ok(CommandSuccess::new(cached));
+    }
+    let app_version = app.package_info().version.to_string();
+    let outcome = {
+        let services = Arc::clone(&services);
+        blocking(move || run_export(&services, &selected, &app_version)).await?
+    };
+    if matches!(outcome, ExportDiagnosticsOutcome::Exported { .. }) {
+        ledger.record(
+            &operation_id,
+            ProcessOperationKind::ExportDiagnostics,
+            &digest,
+            &outcome,
+        );
+    }
+    Ok(CommandSuccess::new(outcome))
+}
+
+fn run_export<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    sections: &BTreeSet<DiagnosticsSection>,
+    app_version: &str,
+) -> Result<ExportDiagnosticsOutcome, CommandError> {
+    let suggested = bundle::suggested_file_name(Utc::now());
+    let Some(destination) = services.backup.dialogs.save_diagnostics(&suggested)? else {
+        return Ok(ExportDiagnosticsOutcome::Cancelled);
+    };
+    let file_name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| CommandError::validation("Select a file name for the diagnostics."))?;
+    // Stamped after the dialog closes, at the collection.
+    let created_at = Utc::now();
+    let bytes = with_bundle_inputs(services, app_version, created_at, |inputs| {
+        bundle::build(inputs, sections)
+    })
+    .map_err(bundle_error)?;
+    crate::document_io::atomic_write(&destination, &bytes)?;
+    crate::f3d_log!(
+        info,
+        "diagnostics.exported",
+        bytes = bytes.len() as u64,
+        sections = sections.len() as u64,
+    );
+    Ok(ExportDiagnosticsOutcome::Exported {
+        exported_at: created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        file_name,
+        bytes: bytes.len() as u64,
+        sections: sections.iter().copied().collect(),
+    })
+}
+
+/// `about_farm3d`: the version (from `app.package_info()`), the schema and
+/// backup format versions, the platform, the catalog, the OrcaSlicer
+/// version (never its path), and the credential tier.
+#[tauri::command]
+pub async fn about_farm3d<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<AboutInfo>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let app_version = app.package_info().version.to_string();
+    let info = blocking(move || {
+        let slicer_status = services.slicing.runtime_status().ok();
+        Ok(about::about(
+            &app_version,
+            &services.catalog,
+            slicer_status.as_ref(),
+            &services.credentials,
+        ))
+    })
+    .await?;
+    Ok(CommandSuccess::new(info))
 }

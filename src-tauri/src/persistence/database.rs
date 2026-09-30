@@ -25,6 +25,7 @@ pub struct StoragePaths {
     media_root: PathBuf,
     log_root: PathBuf,
     backup_root: PathBuf,
+    app_data_root: PathBuf,
 }
 
 impl StoragePaths {
@@ -63,6 +64,7 @@ impl StoragePaths {
             media_root,
             log_root,
             backup_root,
+            app_data_root,
         };
         paths.check_trees()?;
         Ok(paths)
@@ -135,6 +137,12 @@ impl StoragePaths {
     /// P9: `<app data>/farm3d-backups/v1`, the backup tree.
     pub fn backup_root(&self) -> &Path {
         &self.backup_root
+    }
+
+    /// The app data root the content, media, log, and backup trees sit in
+    /// (P9 D13: a storage root the diagnostics egress scan protects).
+    pub fn app_data_root(&self) -> &Path {
+        &self.app_data_root
     }
 }
 

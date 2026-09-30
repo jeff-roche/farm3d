@@ -58,6 +58,12 @@ use farm3d_lib::backup::{
     ApplyRestoreOutcome, InstallerStep, RestartingStatus, RestoreJournalKind, RestoreStatus,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::diagnostics::about::{
+    AboutCatalog, AboutCredentialStore, AboutInfo, AboutPlatform, AboutSlicer,
+};
+use farm3d_lib::diagnostics::bundle::{
+    DiagnosticsPreview, DiagnosticsSection, DiagnosticsSectionEstimate, ExportDiagnosticsOutcome,
+};
 use farm3d_lib::diagnostics::reset::{
     ResetClass, ResetDataClass, ResetEffect, ResetMediaScope, ResetPreview, ResetRequest,
     ResetResult, ResetTier, ResetWarning,
@@ -730,6 +736,15 @@ fn export_registry() -> Vec<Export> {
         export::<ResetWarning>(),
         export::<ResetPreview>(),
         export::<ResetResult>(),
+        export::<DiagnosticsSection>(),
+        export::<DiagnosticsSectionEstimate>(),
+        export::<DiagnosticsPreview>(),
+        export::<ExportDiagnosticsOutcome>(),
+        export::<AboutPlatform>(),
+        export::<AboutCatalog>(),
+        export::<AboutSlicer>(),
+        export::<AboutCredentialStore>(),
+        export::<AboutInfo>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -1012,6 +1027,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::RestoreFailed,
         ErrorCode::ConfirmationMismatch,
         ErrorCode::RestartPending,
+        ErrorCode::DiagnosticsRedactionFailed,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -1061,7 +1077,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS", "BACKUP_IN_PROGRESS",
                 "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE", "BACKUP_INVALID",
                 "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED", "RESTORE_BLOCKED",
-                "RESTORE_FAILED", "CONFIRMATION_MISMATCH", "RESTART_PENDING"
+                "RESTORE_FAILED", "CONFIRMATION_MISMATCH", "RESTART_PENDING",
+                "DIAGNOSTICS_REDACTION_FAILED"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

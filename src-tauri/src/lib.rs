@@ -28,7 +28,9 @@ use backup::commands::{
     acknowledge_restore_status, apply_restore, backup_inventory, create_backup, delete_backup,
     discard_restore_preview, list_backups, preview_restore, restore_status,
 };
-use diagnostics::commands::{reset_farm, reset_preview};
+use diagnostics::commands::{
+    about_farm3d, diagnostics_preview, export_diagnostics, reset_farm, reset_preview,
+};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -123,6 +125,8 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     /// media janitor), the process-local operation ledger, and the
     /// portability dialogs.
     pub backup: Arc<backup::BackupServices>,
+    /// P9 D13: the diagnostics bundle's home directories and test hook.
+    pub diagnostics: Arc<diagnostics::DiagnosticsServices>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -201,12 +205,13 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             ),
             notifications: Arc::default(),
             backup,
+            diagnostics: Arc::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 142] = [
+pub const COMMAND_NAMES: [&str; 145] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -349,6 +354,9 @@ pub const COMMAND_NAMES: [&str; 142] = [
     "acknowledge_restore_status",
     "reset_preview",
     "reset_farm",
+    "diagnostics_preview",
+    "export_diagnostics",
+    "about_farm3d",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -760,6 +768,7 @@ fn build_runtime_services<R: tauri::Runtime>(
             notification_icon(app),
         )),
         backup,
+        diagnostics: Arc::default(),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -1080,6 +1089,9 @@ pub fn run() {
             acknowledge_restore_status,
             reset_preview,
             reset_farm,
+            diagnostics_preview,
+            export_diagnostics,
+            about_farm3d,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

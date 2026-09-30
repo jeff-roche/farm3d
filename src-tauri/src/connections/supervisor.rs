@@ -657,6 +657,15 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
     pub(crate) fn status_facts(&self) -> HashMap<String, PrinterStatusFacts> {
         self.statuses.facts()
     }
+    /// P9 D13: why each errored Printer's connection failed, by id (the
+    /// typed cause, never the message).
+    pub fn error_causes(&self, printer_ids: &[String]) -> HashMap<String, ConnectionErrorCause> {
+        printer_ids
+            .iter()
+            .filter_map(|id| self.statuses.cause(id).map(|cause| (id.clone(), cause)))
+            .collect()
+    }
+
     pub fn status_backfill(&self) -> PrinterStatusBackfill {
         let mut backfill = self.statuses.backfill();
         backfill.cache_warnings = self.cache_warnings();

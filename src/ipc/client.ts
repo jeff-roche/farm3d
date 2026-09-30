@@ -195,6 +195,9 @@ type CommandMap = {
   acknowledge_restore_status: [Contracts.AcknowledgeRestoreStatusRequest, Contracts.AcknowledgeRestoreStatusResult];
   reset_preview: [Contracts.ResetPreviewRequest, Contracts.ResetPreviewResult];
   reset_farm: [Contracts.ResetFarmRequest, Contracts.ResetFarmResult];
+  diagnostics_preview: [Contracts.DiagnosticsPreviewRequest, Contracts.DiagnosticsPreviewResult];
+  export_diagnostics: [Contracts.ExportDiagnosticsRequest, Contracts.ExportDiagnosticsResult];
+  about_farm3d: [Contracts.AboutFarm3dRequest, Contracts.AboutFarm3dResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */
