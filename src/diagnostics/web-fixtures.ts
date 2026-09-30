@@ -41,7 +41,7 @@ export function webStorageUsage(): StorageUsage {
 export function webAboutInfo(): AboutInfo {
   return {
     appVersion: "0.9.0",
-    schemaVersion: 11,
+    schemaVersion: 10,
     backupFormatVersion: 1,
     platform: { os: "linux", arch: "x86_64" },
     catalog: { sourceTag: "web-fixture", generatedAt: "2026-09-01T00:00:00Z" },

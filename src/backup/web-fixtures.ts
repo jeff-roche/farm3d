@@ -25,8 +25,8 @@ export function webBackupInventory(): BackupInventory {
 
 export function webBackupList(): BackupSummary[] {
   return [
-    { backupId: "bkp-web-before-restore", origin: "beforeRestore", createdAt: "2026-09-27T10:00:00Z", bytes: 2_048_000, appVersion: "0.9.0", schemaVersion: 11, media: "pinned", valid: true },
-    { backupId: "bkp-web-before-reset", origin: "beforeReset", createdAt: "2026-09-26T08:30:00Z", bytes: 1_900_000, appVersion: "0.9.0", schemaVersion: 11, media: "none", valid: true },
+    { backupId: "bkp-web-before-restore", origin: "beforeRestore", createdAt: "2026-09-27T10:00:00Z", bytes: 2_048_000, appVersion: "0.9.0", schemaVersion: 10, media: "pinned", valid: true },
+    { backupId: "bkp-web-before-reset", origin: "beforeReset", createdAt: "2026-09-26T08:30:00Z", bytes: 1_900_000, appVersion: "0.9.0", schemaVersion: 10, media: "none", valid: true },
     { backupId: "bkp-web-broken", origin: "beforeRestore", createdAt: null, bytes: 512, appVersion: null, schemaVersion: null, media: null, valid: false },
   ];
 }
@@ -39,7 +39,7 @@ export function webRestorePreview(): RestorePreview {
     createdAt: "2026-09-29T09:00:00Z",
     expiresAt: "2026-09-29T09:30:00Z",
     source: { kind: "file", fileName: "farm-2026-09-20.farm3d-backup" },
-    backup: { createdAt: "2026-09-20T12:00:00Z", appVersion: "0.9.0", schemaVersion: 11, formatVersion: 1, origin: "operator", media: "pinned", platform: { os: "linux", arch: "x86_64" } },
+    backup: { createdAt: "2026-09-20T12:00:00Z", appVersion: "0.9.0", schemaVersion: 10, formatVersion: 1, origin: "operator", media: "pinned", platform: { os: "linux", arch: "x86_64" } },
     counts: [{ table: "jobs", local: 6, backup: 5 }, { table: "printers", local: 4, backup: 4 }],
     conflicts: [{
       class: "changed", domain: "printer", total: 1,
