@@ -1045,6 +1045,38 @@ fn every_d3_and_d4_rejection_fails_and_leaves_nothing_staged() {
             invalid("databaseInvalid", "database"),
         ),
         (
+            // I2: a CHECK joined onto the comment line before it, so the
+            // comment swallows it; only the whitespace differs.
+            "a database table with a CHECK joined onto a comment",
+            with_database(
+                &directory,
+                &original,
+                |db| {
+                    let joined = "replace(sql, '-- history_mark is required exactly for start.'
+                                   || char(10) || '  CHECK',
+                                   '-- history_mark is required exactly for start. CHECK')";
+                    db.execute_batch(&format!(
+                        "PRAGMA writable_schema = ON;
+                         UPDATE sqlite_schema SET sql = {joined}
+                          WHERE name = 'host_operations';
+                         PRAGMA writable_schema = OFF;"
+                    ))
+                    .unwrap();
+                    let sql: String = db
+                        .query_row(
+                            "SELECT sql FROM sqlite_schema WHERE name = 'host_operations'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    assert!(sql.contains("for start. CHECK"), "{sql}");
+                },
+                |_| {},
+            ),
+            StagingOptions::default(),
+            invalid("databaseInvalid", "database"),
+        ),
+        (
             "a database entry that isn't a database",
             rebuilt(
                 &directory,

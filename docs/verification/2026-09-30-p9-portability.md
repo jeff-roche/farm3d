@@ -57,8 +57,11 @@ The fix wave, `02079da`..`709b663` plus this record's update:
   candidate table that farm3d's migrations don't create at the manifest's
   schema version before any count query reads its name, both count
   helpers quote identifiers, and the post-migration schema comparison
-  includes each object's whitespace-normalized DDL (a same-named index
-  over other columns, or a dropped `CHECK`, is `databaseInvalid`).
+  includes each object's stored DDL byte for byte (a same-named index
+  over other columns, a dropped `CHECK`, or a `CHECK` joined onto the
+  `--` comment line before it is `databaseInvalid`). An earlier
+  whitespace-normalized comparison let that last case through; the
+  re-review caught it.
 - **Reset asides (I3, `e1e32f4`).** Each moved root's aside is
   `<parent>/.aside-<journalId>-<root name>`, so two roots under one
   parent both move (`p9_reset` r3b). The spec's step 3 and step 7 follow.
@@ -424,6 +427,15 @@ Looking at the PNGs turned up two things, neither fixed here:
 
 ## Residual risks (plan)
 
+- **Byte-exact schema DDL on restore.** The candidate's `sqlite_schema.sql`
+  must equal a fresh migration's text exactly. SQLite stores CREATE text
+  verbatim, but `ALTER TABLE … RENAME` rewrites references in stored
+  text, and a backup made by an older build ran those rewrites under that
+  build's bundled SQLite. If a future SQLite rewrites them differently,
+  legitimate older backups would be refused as `databaseInvalid`. The v1
+  fixture and backups from this build restore. If it ever happens, compare
+  tokens with comments stripped by a real SQL lexer, never by collapsing
+  whitespace.
 - **`AppHandle::restart` in the installed bundle.** Startup install and
   recovery run correctly on the bundle. The in-app restart after the
   native restore dialog is pending owner (checklist step 3 of "Restore

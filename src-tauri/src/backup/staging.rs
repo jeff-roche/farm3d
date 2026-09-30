@@ -489,13 +489,16 @@ fn open_candidate(path: &Path) -> Result<Connection, RestoreError> {
     Ok(connection)
 }
 
-/// `(type, name, tbl_name, sql)`, with `sql` whitespace-normalized.
+/// `(type, name, tbl_name, sql)`, `sql` byte for byte.
 type SchemaObject = (String, String, String, Option<String>);
 
 /// Every schema object but the ones SQLite creates itself (automatic
-/// indexes, `sqlite_sequence`, and `ANALYZE`'s statistics), with its DDL:
-/// a same-named index over other columns, or a table with a relaxed
-/// `CHECK`, is not farm3d's schema.
+/// indexes, `sqlite_sequence`, and `ANALYZE`'s statistics), with its DDL
+/// exactly as stored: a same-named index over other columns, or a table
+/// with a relaxed `CHECK`, is not farm3d's schema. SQLite stores CREATE
+/// text verbatim and both sides run the same migration text, so the DDL is
+/// not normalized (collapsing whitespace would let a `--` comment swallow
+/// the clause after it).
 fn schema_objects(connection: &Connection) -> Result<BTreeSet<SchemaObject>, RestoreError> {
     connection
         .prepare(
@@ -506,23 +509,11 @@ fn schema_objects(connection: &Connection) -> Result<BTreeSet<SchemaObject>, Res
         .and_then(|mut statement| {
             statement
                 .query_map([], |row| {
-                    let sql: Option<String> = row.get(3)?;
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        sql.as_deref().map(normalize_sql),
-                    ))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                 })?
                 .collect::<rusqlite::Result<BTreeSet<_>>>()
         })
         .map_err(|_| database_invalid())
-}
-
-/// Collapses every whitespace run to one space, so only the DDL's tokens
-/// are compared.
-fn normalize_sql(sql: &str) -> String {
-    sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The schema objects a freshly migrated database has.
