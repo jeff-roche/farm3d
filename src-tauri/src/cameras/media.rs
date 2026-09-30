@@ -1174,13 +1174,21 @@ pub fn set_pinned(
 
 /// The startup sweep again, at runtime, under the janitor lock (so no
 /// capture is between its file write and its commit): the janitor's retry
-/// while the media store is unavailable.
+/// while the media store is unavailable. P9 D5: the sweep deletes orphan
+/// files, so while the backup lease is held it doesn't run and fails
+/// `PersistenceUnavailable` (the store stays unavailable; dropping the
+/// lease pokes the janitor, which retries).
 pub async fn sweep_under_lock(
     storage: &Storage,
     janitor: &MediaJanitor,
     now: DateTime<Utc>,
 ) -> Result<MediaChanges, RepositoryError> {
     let _serialized = janitor.lock().await;
+    let Some(_permit) = janitor.backup_lease().deletion_permit() else {
+        return Err(RepositoryError::Storage(
+            StorageError::PersistenceUnavailable,
+        ));
+    };
     startup_sweep(storage, now)
 }
 

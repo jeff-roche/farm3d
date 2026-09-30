@@ -61,7 +61,7 @@ fn request(media: BackupMediaChoice) -> BackupRequest {
     BackupRequest {
         media,
         origin: BackupOrigin::Operator,
-        created_at: created_at(),
+        created_at: Some(created_at()),
         app_version: "0.1.0".to_string(),
     }
 }
@@ -472,9 +472,13 @@ fn a_destination_without_room_is_insufficient_space() {
 
 // --- Step 3: consistency ---------------------------------------------------------------
 
+/// What runs while the (fake) save dialog is open.
+type DialogHook = Box<dyn FnOnce() + Send>;
+
 struct FakeDialogs {
     save_to: Option<PathBuf>,
     saves: AtomicUsize,
+    while_open: Mutex<Option<DialogHook>>,
 }
 
 impl PortabilityDialogs for FakeDialogs {
@@ -488,6 +492,9 @@ impl PortabilityDialogs for FakeDialogs {
             "{suggested_name}"
         );
         self.saves.fetch_add(1, Ordering::SeqCst);
+        if let Some(hook) = self.while_open.lock().unwrap().take() {
+            hook();
+        }
         Ok(self.save_to.clone())
     }
     fn save_diagnostics(&self, _suggested_name: &str) -> Result<Option<PathBuf>, CommandError> {
@@ -514,6 +521,7 @@ impl Rig {
         let dialogs = Arc::new(FakeDialogs {
             save_to,
             saves: AtomicUsize::new(0),
+            while_open: Mutex::new(None),
         });
         let injected: Arc<dyn PortabilityDialogs> = dialogs.clone();
         let (app, webview, _manager, services) = common::runtime_with(
@@ -1126,4 +1134,94 @@ fn a_safety_backup_that_fails_verification_is_deleted() {
     );
     let safety_root = farm.paths().backup_root().join("safety");
     assert_eq!(leftovers(&safety_root), Vec::<String>::new());
+}
+
+/// The backup is the Farm at the instant of its copy, which happens after
+/// the save dialog closes: `createdAt` (and the `pruned_at` of every
+/// snapshot left out) is never earlier than anything captured while the
+/// dialog was open.
+#[test]
+fn created_at_is_stamped_at_the_copy_not_before_the_dialog() {
+    let farm = Farm::with_every_domain();
+    let save_to = destination(&farm, "late.farm3d-backup");
+    let rig = Rig::new(&farm, Some(save_to.clone()));
+    let opened_at = Arc::new(Mutex::new(None::<DateTime<Utc>>));
+    {
+        let storage = Arc::clone(&farm.storage);
+        let opened_at = Arc::clone(&opened_at);
+        *rig.dialogs.while_open.lock().unwrap() = Some(Box::new(move || {
+            // The operator takes a while; a snapshot is captured meanwhile.
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let captured = Utc::now();
+            *opened_at.lock().unwrap() = Some(captured);
+            storage
+                .write(|tx| {
+                    p9_farm::farm_seed::seed_manual_snapshot(
+                        tx,
+                        "snp-during-dialog",
+                        ids::PRINTER_A,
+                        &snapshot_rel_path("snp-during-dialog"),
+                    );
+                    tx.execute(
+                        "UPDATE camera_snapshots SET captured_at = ?1 WHERE id = 'snp-during-dialog'",
+                        [captured.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }));
+    }
+    let result = rig.ok(
+        "create_backup",
+        json!({ "operationId": "op-late", "media": "none" }),
+    );
+    assert_eq!(result["status"], "exported", "{result}");
+    let captured = opened_at.lock().unwrap().expect("the dialog ran");
+
+    let manifest = archive::verify(&save_to).unwrap();
+    let created_at: DateTime<Utc> = manifest.created_at.parse().unwrap();
+    assert!(created_at >= captured, "{created_at} < {captured}");
+    let exported_at: DateTime<Utc> = result["exportedAt"].as_str().unwrap().parse().unwrap();
+    assert_eq!(exported_at, created_at);
+
+    let copy = open_read_only(&extracted_database(&save_to));
+    let inverted: i64 = copy
+        .query_row(
+            "SELECT count(*) FROM camera_snapshots
+              WHERE pruned_at IS NOT NULL AND pruned_at < captured_at",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(inverted, 0, "a snapshot pruned before it was captured");
+    let reason: String = copy
+        .query_row(
+            "SELECT prune_reason FROM camera_snapshots WHERE id = 'snp-during-dialog'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "notInBackup");
+}
+
+/// The janitor's runtime retry of the startup sweep deletes orphan image
+/// files, so it waits for the lease too.
+#[tokio::test]
+async fn the_runtime_media_sweep_waits_for_the_lease() {
+    let farm = Farm::with_every_domain();
+    let lease = BackupLease::new();
+    let janitor = MediaJanitor::with_backup_lease(lease.clone());
+    let orphan = farm.media_file("snapshots/2026/01/snp-orphan.jpg");
+    fs::write(&orphan, b"no row").unwrap();
+    let guard = lease.try_acquire(LeaseActivity::Backup).unwrap();
+    assert!(media::sweep_under_lock(&farm.storage, &janitor, soon())
+        .await
+        .is_err());
+    assert!(orphan.is_file(), "kept under the lease");
+    drop(guard);
+    media::sweep_under_lock(&farm.storage, &janitor, soon())
+        .await
+        .unwrap();
+    assert!(!orphan.exists(), "swept after the lease");
 }

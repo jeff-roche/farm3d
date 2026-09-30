@@ -62,8 +62,12 @@ pub struct BackupRequest {
     pub media: BackupMediaChoice,
     pub origin: BackupOrigin,
     /// The manifest's `createdAt`, every entry's modification time, and
-    /// the `pruned_at` of every snapshot the backup leaves out.
-    pub created_at: DateTime<Utc>,
+    /// the `pruned_at` of every snapshot the backup leaves out. `None`
+    /// stamps it at the database copy (the backup's point in time), which
+    /// is what an operator backup wants: anything captured before the copy
+    /// is then never "pruned" before it was captured. Tests and fixtures
+    /// pass a fixed time.
+    pub created_at: Option<DateTime<Utc>>,
     pub app_version: String,
 }
 
@@ -226,14 +230,54 @@ pub fn write_backup(
         .map_err(io_error)?;
     let work = create_contained_directory(&tmp_root, Path::new(&uuid::Uuid::new_v4().to_string()))
         .map_err(io_error)?;
-    let result = write_in(storage, &work, destination, directory, request, hooks);
-    let _ = fs::remove_dir_all(&work);
-    result
+    // Removed on every exit, a panic included.
+    let _work = RemoveOnDrop::directory(work.clone());
+    write_in(storage, &work, destination, directory, request, hooks)
+}
+
+/// Removes a path when dropped (error returns and panics alike) unless
+/// [`disarm`](Self::disarm)ed.
+struct RemoveOnDrop {
+    path: Option<PathBuf>,
+    directory: bool,
+}
+
+impl RemoveOnDrop {
+    fn directory(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            directory: true,
+        }
+    }
+
+    fn file(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            directory: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = if self.directory {
+                fs::remove_dir_all(path)
+            } else {
+                fs::remove_file(path)
+            };
+        }
+    }
 }
 
 /// Everything the copy tells the manifest.
 struct Copied {
     copy: PathBuf,
+    created_at: DateTime<Utc>,
     database: ManifestEntry,
     blobs: Vec<BlobItem>,
     media: Vec<MediaItem>,
@@ -253,25 +297,22 @@ fn write_in(
         "{TEMPORARY_PREFIX}{}{TEMPORARY_SUFFIX}",
         uuid::Uuid::new_v4()
     ));
-    let result = (|| {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(io_error)?;
-        stream_archive(storage, &copied, file, request.created_at)?;
-        crate::document_io::atomic_replace(&temporary, destination).map_err(io_error)?;
-        sync_directory(directory).map_err(io_error)?;
-        let bytes = fs::metadata(destination).map_err(io_error)?.len();
-        Ok(WrittenBackup {
-            manifest: copied.manifest.clone(),
-            bytes,
-        })
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(io_error)?;
+    // Removed on an error or a panic until the rename has happened.
+    let mut cleanup = RemoveOnDrop::file(temporary.clone());
+    stream_archive(storage, &copied, file)?;
+    crate::document_io::atomic_replace(&temporary, destination).map_err(io_error)?;
+    cleanup.disarm();
+    sync_directory(directory).map_err(io_error)?;
+    let bytes = fs::metadata(destination).map_err(io_error)?.len();
+    Ok(WrittenBackup {
+        manifest: copied.manifest,
+        bytes,
+    })
 }
 
 /// Steps 2–6, then the manifest (step 7's first half).
@@ -289,13 +330,13 @@ fn copy_and_describe(
             StorageError::InvalidSnapshot | StorageError::MigrationFailed => database_damaged(),
             _ => BackupWriteError::Io,
         })?;
+    // The copy is the backup's point in time.
+    let created_at_time = request.created_at.unwrap_or_else(Utc::now);
     if let Some(hook) = &hooks.after_database_copy {
         hook();
     }
 
-    let created_at = request
-        .created_at
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let created_at = created_at_time.to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut connection = Connection::open(&copy).map_err(io_error)?;
     // A self-contained file: no `-wal` beside it.
     connection
@@ -391,6 +432,7 @@ fn copy_and_describe(
     };
     Ok(Copied {
         copy,
+        created_at: created_at_time,
         database,
         blobs,
         media,
@@ -413,13 +455,9 @@ fn open_source(path: &Path, entry: &str) -> Result<File, BackupWriteError> {
 
 /// Step 7's second half and step 8's `fsync`: streams every entry, and
 /// checks each written length and hash against the manifest.
-fn stream_archive(
-    storage: &Storage,
-    copied: &Copied,
-    file: File,
-    created_at: DateTime<Utc>,
-) -> Result<(), BackupWriteError> {
-    let mut writer = ArchiveWriter::new(BufWriter::new(file), created_at).map_err(io_error)?;
+fn stream_archive(storage: &Storage, copied: &Copied, file: File) -> Result<(), BackupWriteError> {
+    let mut writer =
+        ArchiveWriter::new(BufWriter::new(file), copied.created_at).map_err(io_error)?;
     writer.write_manifest(&copied.manifest).map_err(io_error)?;
 
     let database = File::open(&copied.copy).map_err(io_error)?;
@@ -478,6 +516,37 @@ fn stream_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panic_mid_backup_leaves_no_working_directory() {
+        let (temp, _lease, storage) = crate::test_storage();
+        let lease = crate::backup::lease::BackupLease::new();
+        let guard = lease
+            .try_acquire(crate::backup::lease::LeaseActivity::Backup)
+            .unwrap();
+        let destination = temp.path().join("out.farm3d-backup");
+        let hooks = WriterHooks {
+            after_database_copy: Some(Box::new(|| panic!("injected"))),
+            ..WriterHooks::default()
+        };
+        let request = BackupRequest {
+            media: BackupMediaChoice::All,
+            origin: BackupOrigin::Operator,
+            created_at: None,
+            app_version: "0.1.0".to_string(),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_backup(&storage, &guard, &destination, &request, &hooks)
+        }));
+        assert!(outcome.is_err());
+        let tmp = storage.paths().backup_root().join("tmp");
+        assert_eq!(
+            fs::read_dir(&tmp).unwrap().count(),
+            0,
+            "working directory left"
+        );
+        assert!(!destination.exists());
+    }
 
     #[test]
     fn startup_clears_working_directories_and_temporary_safety_archives() {

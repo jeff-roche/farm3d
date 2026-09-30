@@ -76,7 +76,7 @@ pub fn write_safety_backup(
         &BackupRequest {
             media: BackupMediaChoice::All,
             origin,
-            created_at,
+            created_at: Some(created_at),
             app_version: app_version.to_string(),
         },
         hooks,

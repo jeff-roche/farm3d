@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use tauri::AppHandle;
 
@@ -124,8 +124,12 @@ fn run_create_backup<R: tauri::Runtime>(
     app_version: String,
 ) -> Result<CreateBackupOutcome, CommandError> {
     let guard = lease(services, LeaseActivity::Backup)?;
-    let now = Utc::now();
-    let suggested = format!("farm3d-{}.{BACKUP_EXTENSION}", now.format("%Y%m%dT%H%M%SZ"));
+    // Only the suggested name uses the time the dialog opens; `createdAt`
+    // is stamped at the database copy, after the dialog closes.
+    let suggested = format!(
+        "farm3d-{}.{BACKUP_EXTENSION}",
+        Utc::now().format("%Y%m%dT%H%M%SZ")
+    );
     let Some(destination) = services.backup.dialogs.save_backup(&suggested)? else {
         return Ok(CreateBackupOutcome::Cancelled);
     };
@@ -140,7 +144,7 @@ fn run_create_backup<R: tauri::Runtime>(
         &BackupRequest {
             media,
             origin: BackupOrigin::Operator,
-            created_at: now,
+            created_at: None,
             app_version,
         },
         &services.backup.writer_hooks,
@@ -153,7 +157,7 @@ fn run_create_backup<R: tauri::Runtime>(
         entries = written.manifest.entries.len() as u64,
     );
     Ok(CreateBackupOutcome::Exported {
-        exported_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        exported_at: written.manifest.created_at.clone(),
         file_name,
         bytes: written.bytes,
         media,
