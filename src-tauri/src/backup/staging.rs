@@ -41,8 +41,8 @@ use crate::contracts::command::CommandError;
 use crate::diagnostics::storage::available_bytes;
 use crate::persistence::integrity;
 use crate::persistence::{
-    apply_migrations, create_contained_directory, embedded_migrations, has_foreign_key_violation,
-    StorageError, StoragePaths, CURRENT_SCHEMA_VERSION,
+    apply_migrations, apply_through, create_contained_directory, embedded_migrations,
+    has_foreign_key_violation, StorageError, StoragePaths, CURRENT_SCHEMA_VERSION,
 };
 
 /// `<snapshot_root>/.restore-staging/`.
@@ -411,6 +411,17 @@ fn validate_candidate(path: &Path, manifest: &Manifest) -> Result<Option<i64>, R
         return Err(migration_mismatch("manifest.schemaVersion"));
     }
 
+    // Before counting: every table must be one farm3d's own migrations
+    // create at this schema version (the names come from the candidate, so
+    // they are checked before any of them reaches a query).
+    let known = known_tables(manifest.schema_version)?;
+    if candidate_tables(&connection)?
+        .iter()
+        .any(|table| !known.contains(table))
+    {
+        return Err(database_invalid());
+    }
+
     // Before migrating: the same tables with the same counts.
     let counts = super::inventory::table_counts(&connection).map_err(|_| database_invalid())?;
     let tables: BTreeSet<&String> = counts.keys().chain(manifest.counts.keys()).collect();
@@ -478,24 +489,40 @@ fn open_candidate(path: &Path) -> Result<Connection, RestoreError> {
     Ok(connection)
 }
 
-type SchemaObject = (String, String, String);
+/// `(type, name, tbl_name, sql)`, with `sql` whitespace-normalized.
+type SchemaObject = (String, String, String, Option<String>);
 
-/// `(type, name, tbl_name)` of every schema object but the ones SQLite
-/// creates itself (automatic indexes, `sqlite_sequence`, and `ANALYZE`'s
-/// statistics).
+/// Every schema object but the ones SQLite creates itself (automatic
+/// indexes, `sqlite_sequence`, and `ANALYZE`'s statistics), with its DDL:
+/// a same-named index over other columns, or a table with a relaxed
+/// `CHECK`, is not farm3d's schema.
 fn schema_objects(connection: &Connection) -> Result<BTreeSet<SchemaObject>, RestoreError> {
     connection
         .prepare(
-            "SELECT type, name, tbl_name FROM sqlite_schema
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema
               WHERE name NOT LIKE 'sqlite\\_autoindex\\_%' ESCAPE '\\'
                 AND name NOT IN ('sqlite_sequence', 'sqlite_stat1', 'sqlite_stat4')",
         )
         .and_then(|mut statement| {
             statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .query_map([], |row| {
+                    let sql: Option<String> = row.get(3)?;
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        sql.as_deref().map(normalize_sql),
+                    ))
+                })?
                 .collect::<rusqlite::Result<BTreeSet<_>>>()
         })
         .map_err(|_| database_invalid())
+}
+
+/// Collapses every whitespace run to one space, so only the DDL's tokens
+/// are compared.
+fn normalize_sql(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The schema objects a freshly migrated database has.
@@ -506,6 +533,28 @@ fn fresh_schema_objects() -> Result<BTreeSet<SchemaObject>, RestoreError> {
         .map_err(io)?;
     apply_migrations(&mut connection).map_err(io)?;
     schema_objects(&connection)
+}
+
+/// The names of the candidate's tables (SQLite's own excluded).
+fn candidate_tables(connection: &Connection) -> Result<BTreeSet<String>, RestoreError> {
+    connection
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<BTreeSet<String>>>()
+        })
+        .map_err(|_| database_invalid())
+}
+
+/// The tables a database migrated through `schema_version` has.
+fn known_tables(schema_version: i64) -> Result<BTreeSet<String>, RestoreError> {
+    let mut connection = Connection::open_in_memory().map_err(io)?;
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(io)?;
+    apply_through(&mut connection, schema_version).map_err(io)?;
+    candidate_tables(&connection)
 }
 
 fn is_plain_identifier(name: &str) -> bool {

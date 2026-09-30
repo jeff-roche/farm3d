@@ -872,3 +872,32 @@ fn check_runs_in_one_transaction_and_composes_with_an_open_one() {
         .expect("read");
     assert_eq!(through_storage, alone);
 }
+
+/// A table name read from the database is quoted as one identifier: a `"`
+/// in it can't end the name early and count another table instead (both
+/// the catalogue's counts and the backup inventory's).
+#[test]
+fn a_table_name_with_a_quote_counts_that_table() {
+    let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+    farm3d_lib::persistence::test_support::apply_through(
+        &mut connection,
+        farm3d_lib::persistence::CURRENT_SCHEMA_VERSION,
+    )
+    .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE t(x);
+             INSERT INTO t VALUES (1), (2), (3);
+             CREATE TABLE \"t\"\" --\"(y);",
+        )
+        .unwrap();
+    let hostile = "t\" --".to_string();
+
+    let report = check(&connection, None).expect("check");
+    assert_eq!(report.counts.get("t"), Some(&3));
+    assert_eq!(report.counts.get(&hostile), Some(&0));
+
+    let counts = farm3d_lib::backup::inventory::table_counts(&connection).unwrap();
+    assert_eq!(counts.get("t"), Some(&3));
+    assert_eq!(counts.get(&hostile), Some(&0));
+}

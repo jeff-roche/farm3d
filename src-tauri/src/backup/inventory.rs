@@ -16,6 +16,7 @@ use super::{
     BackupContentTotals, BackupExcludedClass, BackupInventory, BackupMediaChoice,
     BackupMediaTotals, TableCount,
 };
+use crate::persistence::integrity::quote_identifier;
 
 /// One `content_blobs` row.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -55,10 +56,11 @@ pub fn table_counts(connection: &Connection) -> rusqlite::Result<BTreeMap<String
         .collect::<rusqlite::Result<_>>()?;
     let mut counts = BTreeMap::new();
     for name in names {
-        let rows: i64 =
-            connection.query_row(&format!("SELECT count(*) FROM \"{name}\""), [], |row| {
-                row.get(0)
-            })?;
+        let rows: i64 = connection.query_row(
+            &format!("SELECT count(*) FROM {}", quote_identifier(&name)),
+            [],
+            |row| row.get(0),
+        )?;
         counts.insert(name, rows);
     }
     Ok(counts)

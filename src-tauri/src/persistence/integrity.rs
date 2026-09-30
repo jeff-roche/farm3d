@@ -196,13 +196,20 @@ fn table_counts(connection: &Connection) -> Result<BTreeMap<String, i64>, Storag
         .collect::<Result<Vec<_>, _>>()?;
     let mut counts = BTreeMap::new();
     for name in names {
-        let rows: i64 =
-            connection.query_row(&format!("SELECT count(*) FROM \"{name}\""), [], |row| {
-                row.get(0)
-            })?;
+        let rows: i64 = connection.query_row(
+            &format!("SELECT count(*) FROM {}", quote_identifier(&name)),
+            [],
+            |row| row.get(0),
+        )?;
         counts.insert(name, rows);
     }
     Ok(counts)
+}
+
+/// `name` as an SQL identifier: double-quoted, with each `"` doubled, so a
+/// table name read from a database can't end the identifier early.
+pub(crate) fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn finding(rule: IntegrityRule, count: i64, sample: Vec<String>) -> Option<IntegrityFinding> {

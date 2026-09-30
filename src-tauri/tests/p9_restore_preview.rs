@@ -982,6 +982,69 @@ fn every_d3_and_d4_rejection_fails_and_leaves_nothing_staged() {
             invalid("databaseInvalid", "database"),
         ),
         (
+            // I1: a table name that would end its quoted identifier early is
+            // refused before any count query reads it.
+            "a database table farm3d never creates, named to break its quoting",
+            with_database(
+                &directory,
+                &original,
+                |db| {
+                    db.execute_batch("CREATE TABLE \"settings\"\" --\"(x);")
+                        .unwrap()
+                },
+                |_| {},
+            ),
+            StagingOptions::default(),
+            invalid("databaseInvalid", "database"),
+        ),
+        (
+            // I2: the right name over the wrong columns.
+            "a database index with farm3d's name over other columns",
+            with_database(
+                &directory,
+                &original,
+                |db| {
+                    db.execute_batch(
+                        "DROP INDEX jobs_history;
+                         CREATE INDEX jobs_history ON jobs(id);",
+                    )
+                    .unwrap();
+                },
+                |_| {},
+            ),
+            StagingOptions::default(),
+            invalid("databaseInvalid", "database"),
+        ),
+        (
+            // I2: the right table with a CHECK dropped.
+            "a database table with a CHECK dropped",
+            with_database(
+                &directory,
+                &original,
+                |db| {
+                    db.execute_batch(
+                        "PRAGMA writable_schema = ON;
+                         UPDATE sqlite_schema
+                            SET sql = replace(sql, 'CHECK (theme_mode <> '''')', '')
+                          WHERE name = 'settings';
+                         PRAGMA writable_schema = OFF;",
+                    )
+                    .unwrap();
+                    let sql: String = db
+                        .query_row(
+                            "SELECT sql FROM sqlite_schema WHERE name = 'settings'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap();
+                    assert!(!sql.contains("theme_mode <> ''"), "{sql}");
+                },
+                |_| {},
+            ),
+            StagingOptions::default(),
+            invalid("databaseInvalid", "database"),
+        ),
+        (
             "a database entry that isn't a database",
             rebuilt(
                 &directory,

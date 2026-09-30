@@ -16,7 +16,8 @@ pub use migrations::CURRENT_SCHEMA_VERSION;
 /// P9 restore staging migrates and checks a staged copy with the same code
 /// the live database uses (D4).
 pub(crate) use migrations::{
-    apply as apply_migrations, embedded as embedded_migrations, has_foreign_key_violation,
+    apply as apply_migrations, apply_through, embedded as embedded_migrations,
+    has_foreign_key_violation,
 };
 pub use snapshot::{SnapshotKind, ValidationSummary};
 
