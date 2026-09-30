@@ -549,11 +549,10 @@ struct Row {
     /// Exactly the tolerated findings afterwards: `(rule, sample)`.
     tolerated: &'static [(IntegrityRule, &'static [&'static str])],
     /// The row's own effect, checked on the Farm afterwards (proof the
-    /// action did what the row names).
-    effect: fn(&Connection, &Site, &Value),
+    /// action did what the row names); `None` for a row with nothing of its
+    /// own to check (a refusal, whose unchanged Farm is checked instead).
+    effect: Option<fn(&Connection, &Site, &Value)>,
 }
-
-fn nothing(_: &Connection, _: &Site, _: &Value) {}
 
 fn one<T: rusqlite::types::FromSql>(connection: &Connection, statement: &str) -> T {
     connection
@@ -639,7 +638,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["HOST_OPERATION_UNRESOLVED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printer archive, blocked by a loaded Spool",
@@ -653,7 +652,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["SPOOLS_LOADED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printer archive, allowed with a disposition",
@@ -664,7 +663,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(one::<Option<String>>(
                     connection,
                     &format!(
@@ -683,7 +682,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "printer unarchive, allowed",
@@ -697,7 +696,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -708,7 +707,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "printer unarchive, blocked (not archived)",
@@ -722,7 +721,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["NOT_ARCHIVED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printer delete, allowed (the archived Printer; decision 20's loss)",
@@ -736,10 +735,10 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[(SliceTargetPrinter, &[ids::SLICE_REVISION_FARM3D])],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 printer_deleted(connection, ids::PRINTER_ARCHIVED);
                 assert!(exists(connection, "spools", ids::SPOOL_ARCHIVED));
-            },
+            }),
         },
         Row {
             name: "printer delete, allowed after archive (Printer B; decision 20's loss)",
@@ -757,7 +756,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 printer_deleted(connection, ids::PRINTER_B);
                 // The Event resolved before the delete keeps its resolution.
                 assert_eq!(
@@ -786,7 +785,7 @@ fn rows() -> Vec<Row> {
                     "host_operations",
                     ids::HOST_OPERATION_FAILED
                 ));
-            },
+            }),
         },
         Row {
             name: "printer delete, blocked (an open Queue Entry is pinned to it)",
@@ -803,7 +802,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["QUEUE_ENTRY_PINNED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printer delete, blocked (active, with history)",
@@ -823,14 +822,14 @@ fn rows() -> Vec<Row> {
                 "PINNED_EVIDENCE_EXISTS",
             ]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printers import (replace all), refused while a Spool is loaded",
             act: |farm| live(farm, None, |_, _| {}, |farm, _| import_nothing(farm)),
             expect: Expect::Refused("VALIDATION"),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printers import (replace all), refused while Jobs exist",
@@ -847,7 +846,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Refused("JOBS_EXIST"),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "printer camera clear",
@@ -866,7 +865,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -877,7 +876,7 @@ fn rows() -> Vec<Row> {
                     ),
                     0
                 );
-            },
+            }),
         },
         Row {
             name: "printer connection clear (its ref is queued for cleanup)",
@@ -899,7 +898,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -910,7 +909,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "material slot removal (an empty slot)",
@@ -933,7 +932,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 // Soft-removed: the row stays for the movement history.
                 assert!(one::<Option<String>>(
                     connection,
@@ -943,7 +942,7 @@ fn rows() -> Vec<Row> {
                     )
                 )
                 .is_some());
-            },
+            }),
         },
         // --- Spools and tares -------------------------------------------------------
         Row {
@@ -958,7 +957,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["SPOOLS_LOADED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "spool archive, blocked (reserved)",
@@ -972,7 +971,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["SPOOL_RESERVED"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "spool archive, allowed (emptied into storage first)",
@@ -989,7 +988,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1000,7 +999,7 @@ fn rows() -> Vec<Row> {
                     ),
                     "archived"
                 );
-            },
+            }),
         },
         Row {
             name: "spool mark empty (unloads it)",
@@ -1016,7 +1015,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1037,7 +1036,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "spool reactivate",
@@ -1054,7 +1053,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1065,7 +1064,7 @@ fn rows() -> Vec<Row> {
                     ),
                     "active"
                 );
-            },
+            }),
         },
         Row {
             name: "spool unarchive",
@@ -1079,7 +1078,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1090,7 +1089,7 @@ fn rows() -> Vec<Row> {
                     ),
                     "active"
                 );
-            },
+            }),
         },
         Row {
             name: "tare delete (clears the Spool's tare)",
@@ -1112,7 +1111,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(!exists(connection, "spool_tares", ids::TARE));
                 assert_eq!(
                     one::<Option<String>>(
@@ -1124,7 +1123,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         // --- Library ----------------------------------------------------------------
         Row {
@@ -1147,14 +1146,14 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(!exists(connection, "library_projects", ids::PROJECT));
                 assert_eq!(
                     one::<i64>(connection, "SELECT count(*) FROM project_models"),
                     0
                 );
                 assert!(exists(connection, "library_models", ids::MODEL_GCODE));
-            },
+            }),
         },
         Row {
             name: "model delete, allowed (its blobs are released)",
@@ -1168,7 +1167,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site, _| {
+            effect: Some(|connection, site, _| {
                 assert!(!exists(connection, "library_models", ids::MODEL_3MF));
                 assert_eq!(
                     one::<i64>(
@@ -1194,7 +1193,7 @@ fn rows() -> Vec<Row> {
                     );
                     assert!(!blob_file(site, &sha256).exists(), "{sha256} unlinked");
                 }
-            },
+            }),
         },
         Row {
             name: "model delete, blocked (its Slice Revisions)",
@@ -1208,7 +1207,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["SLICE_REVISIONS_EXIST"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "model delete, blocked (the linked Model's farm3d Slice Revision)",
@@ -1222,7 +1221,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["SLICE_REVISIONS_EXIST"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "preparation delete",
@@ -1244,9 +1243,9 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(!exists(connection, "slice_preparations", ids::PREPARATION));
-            },
+            }),
         },
         // --- Slice Revisions --------------------------------------------------------
         Row {
@@ -1261,7 +1260,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(!exists(
                     connection,
                     "slice_revisions",
@@ -1277,7 +1276,7 @@ fn rows() -> Vec<Row> {
                         )
                     ) == 1
                 );
-            },
+            }),
         },
         Row {
             name: "slice revision delete, allowed (external, a terminal upload of it)",
@@ -1291,7 +1290,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(!exists(
                     connection,
                     "slice_revisions",
@@ -1307,7 +1306,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "slice revision delete, blocked (Queue Entries and Jobs)",
@@ -1321,7 +1320,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Blocked(&["QUEUE_REFERENCES_REVISION"]),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         // --- Queue ------------------------------------------------------------------
         Row {
@@ -1336,7 +1335,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1347,7 +1346,7 @@ fn rows() -> Vec<Row> {
                     ),
                     "removed"
                 );
-            },
+            }),
         },
         Row {
             name: "queue entry remove (a retry successor)",
@@ -1361,7 +1360,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1373,7 +1372,7 @@ fn rows() -> Vec<Row> {
                     "removed"
                 );
                 assert!(exists(connection, "queue_entries", ids::QUEUE_FAILED));
-            },
+            }),
         },
         // --- Camera media -----------------------------------------------------------
         Row {
@@ -1401,7 +1400,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site, _| {
+            effect: Some(|connection, site, _| {
                 for id in [ids::SNAPSHOT_INCIDENT, ids::SNAPSHOT_MANUAL] {
                     assert_eq!(
                         one::<Option<String>>(
@@ -1427,7 +1426,7 @@ fn rows() -> Vec<Row> {
                     ),
                     1
                 );
-            },
+            }),
         },
         Row {
             name: "media pin",
@@ -1441,7 +1440,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(one::<Option<String>>(
                     connection,
                     &format!(
@@ -1450,7 +1449,7 @@ fn rows() -> Vec<Row> {
                     )
                 )
                 .is_some());
-            },
+            }),
         },
         Row {
             name: "media unpin",
@@ -1464,7 +1463,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -1475,7 +1474,7 @@ fn rows() -> Vec<Row> {
                     ),
                     None
                 );
-            },
+            }),
         },
         Row {
             name: "retention sweep (a missing file and an orphan file)",
@@ -1502,7 +1501,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site, _| {
+            effect: Some(|connection, site, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -1519,7 +1518,7 @@ fn rows() -> Vec<Row> {
                     .media_root
                     .join(snapshot_rel_path("snp-orphan"))
                     .exists());
-            },
+            }),
         },
         // --- Storage cleanup --------------------------------------------------------
         Row {
@@ -1534,13 +1533,13 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site, _| {
+            effect: Some(|connection, site, _| {
                 assert_eq!(
                     one::<i64>(connection, "SELECT count(*) FROM pending_blob_cleanup"),
                     0
                 );
                 assert!(!blob_file(site, ids::PENDING_BLOB).exists());
-            },
+            }),
         },
         Row {
             name: "clear storage: pre-import snapshots",
@@ -1570,13 +1569,13 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |_, site, result| {
+            effect: Some(|_, site, result| {
                 assert_eq!(result["removedCount"], 1, "{result}");
                 // The newest valid snapshot stays.
                 let left = pre_import_snapshots(site.storage.paths());
                 assert_eq!(left.len(), 1, "{left:?}");
                 assert_eq!(result["newest"], left[0].as_str(), "the newest stays");
-            },
+            }),
         },
         Row {
             name: "clear storage: rotated logs",
@@ -1595,7 +1594,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |_, site, result| {
+            effect: Some(|_, site, result| {
                 assert_eq!(result["removedCount"], 1, "{result}");
                 let logs = site.storage.paths().log_root();
                 assert!(
@@ -1603,7 +1602,7 @@ fn rows() -> Vec<Row> {
                     "the rotated log is gone"
                 );
                 assert!(logs.join("farm3d.log").is_file(), "the active log stays");
-            },
+            }),
         },
         Row {
             name: "clear storage: OrcaSlicer profile cache",
@@ -1629,11 +1628,11 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |_, _, result| {
+            effect: Some(|_, _, result| {
                 assert_eq!(result["removedCount"], 1, "{result}");
                 assert_eq!(result["freedBytes"], 2, "{result}");
                 assert_eq!(result["cacheLeft"], false, "the cache is gone");
-            },
+            }),
         },
         // --- Resets -----------------------------------------------------------------
         Row {
@@ -1666,7 +1665,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 // The settings are the defaults again.
                 assert_eq!(
                     one::<String>(connection, "SELECT theme_mode FROM settings"),
@@ -1700,7 +1699,7 @@ fn rows() -> Vec<Row> {
                     one::<i64>(connection, "SELECT count(*) FROM printer_alert_defaults"),
                     2
                 );
-            },
+            }),
         },
         Row {
             name: "reset (b): camera media, unpinned",
@@ -1720,7 +1719,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -1733,7 +1732,7 @@ fn rows() -> Vec<Row> {
                     one::<i64>(connection, "SELECT count(*) FROM camera_snapshots"),
                     4
                 );
-            },
+            }),
         },
         Row {
             name: "reset (b): camera media, all",
@@ -1753,7 +1752,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -1765,7 +1764,7 @@ fn rows() -> Vec<Row> {
                     one::<i64>(connection, "SELECT count(*) FROM camera_snapshots"),
                     4
                 );
-            },
+            }),
         },
         Row {
             name: "reset (c): the Farm, through the startup installer",
@@ -1789,7 +1788,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 for table in [
                     "printers",
                     "spools",
@@ -1809,7 +1808,7 @@ fn rows() -> Vec<Row> {
                         "{table}"
                     );
                 }
-            },
+            }),
         },
         // --- Restores ---------------------------------------------------------------
         Row {
@@ -1843,7 +1842,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Refused("RESTORE_BLOCKED"),
             tolerated: &[],
-            effect: nothing,
+            effect: None,
         },
         Row {
             name: "restore of the Farm's own backup",
@@ -1855,7 +1854,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 for (table, count) in [
                     ("printers", 3),
                     ("jobs", 3),
@@ -1870,7 +1869,7 @@ fn rows() -> Vec<Row> {
                         "{table}"
                     );
                 }
-            },
+            }),
         },
         Row {
             name: "restore of a conflicting backup (replace-only)",
@@ -1910,7 +1909,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[(SliceTargetPrinter, &[ids::SLICE_REVISION_FARM3D])],
-            effect: |connection, _, _| {
+            effect: Some(|connection, _, _| {
                 assert!(exists(connection, "library_projects", "prj-remote"));
                 assert!(!exists(connection, "library_projects", "prj-local"));
                 assert!(!exists(connection, "printers", ids::PRINTER_ARCHIVED));
@@ -1921,7 +1920,7 @@ fn rows() -> Vec<Row> {
                     ),
                     "Bravo (remote)"
                 );
-            },
+            }),
         },
     ]
 }
@@ -1987,11 +1986,13 @@ fn check_row(row: &Row, done: &Done) {
         .collect();
     assert_eq!(tolerated, expected, "{name}: tolerated findings");
 
-    (row.effect)(
-        &connection,
-        &done.site,
-        done.result.as_ref().unwrap_or(&Value::Null),
-    );
+    if let Some(effect) = row.effect {
+        effect(
+            &connection,
+            &done.site,
+            done.result.as_ref().unwrap_or(&Value::Null),
+        );
+    }
 
     // Decision 20: the named allowed loss, and no other.
     let after = movements(&connection);
@@ -2028,7 +2029,7 @@ fn no_archive_delete_prune_cleanup_reset_or_restore_leaves_a_dangling_reference(
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if matches!(row.expect, Expect::Ok) {
                 assert!(
-                    row.effect as usize != nothing as usize,
+                    row.effect.is_some(),
                     "{}: a success row checks its own effect",
                     row.name
                 );

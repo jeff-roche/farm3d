@@ -353,14 +353,6 @@ impl FailureLog {
     }
 }
 
-fn held_back_note(held_back: u64) -> String {
-    match held_back {
-        0 => String::new(),
-        1 => " (and 1 more failure since the last report)".to_string(),
-        n => format!(" (and {n} more failures since the last report)"),
-    }
-}
-
 struct Projector<R: tauri::Runtime> {
     _task: TaskGuard,
     services: Weak<RuntimeServices<R>>,
@@ -564,10 +556,5 @@ mod tests {
         // A success starts over: the next failure is logged at once.
         log.succeeded();
         assert_eq!(log.failed(at(62)), Some(0));
-        assert_eq!(held_back_note(0), "");
-        assert_eq!(
-            held_back_note(59),
-            " (and 59 more failures since the last report)"
-        );
     }
 }
