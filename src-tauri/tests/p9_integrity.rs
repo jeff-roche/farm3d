@@ -371,6 +371,330 @@ fn host_operation_gcode_is_quiet_for_terminal_or_non_gcode_operations() {
     assert_clean(&run(&farm));
 }
 
+// --- embeddedReference (Task 11's audit) ------------------------------------------
+
+/// A `job_events` row for Job A with `detail_json`.
+fn seed_job_event(connection: &rusqlite::Connection, id: &str, sequence: i64, detail: &str) {
+    exec(
+        connection,
+        &format!(
+            "INSERT INTO job_events(id, job_id, sequence, kind, from_state, to_state, detail_json, at)
+             VALUES ('{id}', 'job-a', {sequence}, 'materialCorrected', 'completed', 'completed',
+                     '{detail}', '{NOW}');"
+        ),
+    );
+}
+
+/// An `incident_events` note row on Incident A with `detail_json`.
+fn seed_incident_note(connection: &rusqlite::Connection, id: &str, sequence: i64, detail: &str) {
+    exec(
+        connection,
+        &format!(
+            "INSERT INTO incident_events(id, incident_id, sequence, kind, detail_json, at)
+             VALUES ('{id}', 'inc-a', {sequence}, 'noteAdded', '{detail}', '{NOW}');"
+        ),
+    );
+}
+
+#[test]
+fn embedded_reference_fires_for_a_job_event_naming_a_missing_row() {
+    let farm = farm();
+    seed_job_event(
+        &farm.connection,
+        "jev-x1",
+        1,
+        "{\"correctionEventId\":\"sev-gone\"}",
+    );
+    assert_only(&run(&farm), IntegrityRule::EmbeddedReference, V, 1);
+    seed_job_event(
+        &farm.connection,
+        "jev-x2",
+        2,
+        "{\"hostOperationId\":\"hop-gone\"}",
+    );
+    let report = run(&farm);
+    assert_only(&report, IntegrityRule::EmbeddedReference, V, 2);
+    assert_eq!(
+        report
+            .finding(IntegrityRule::EmbeddedReference)
+            .unwrap()
+            .sample,
+        vec!["jev-x1", "jev-x2"]
+    );
+}
+
+#[test]
+fn embedded_reference_fires_for_a_job_failure_naming_a_missing_host_operation() {
+    let farm = farm();
+    exec(
+        &farm.connection,
+        "UPDATE jobs SET last_failure_json =
+           '{\"kind\":\"hostOperationAbandoned\",\"at\":\"x\",\"hostOperationId\":\"hop-gone\"}'
+         WHERE id = 'job-a';",
+    );
+    assert_only(&run(&farm), IntegrityRule::EmbeddedReference, V, 1);
+}
+
+#[test]
+fn embedded_reference_fires_for_an_attention_detail_naming_a_missing_spool() {
+    let farm = farm();
+    exec(
+        &farm.connection,
+        "UPDATE attention_events SET detail_json =
+           '{\"kind\":\"requirementMaterialReconciliation\",\"requirementStatus\":\"pending\",\"spoolId\":\"spl-gone\"}'
+         WHERE id = 'att-off';",
+    );
+    assert_only(&run(&farm), IntegrityRule::EmbeddedReference, V, 1);
+}
+
+#[test]
+fn embedded_reference_fires_for_an_incident_entry_naming_a_missing_event_or_snapshot() {
+    let farm = farm();
+    seed_incident_note(
+        &farm.connection,
+        "iev-x1",
+        2,
+        "{\"kind\":\"evidencePinned\",\"snapshotId\":\"snp-gone\"}",
+    );
+    assert_only(&run(&farm), IntegrityRule::EmbeddedReference, V, 1);
+    seed_incident_note(
+        &farm.connection,
+        "iev-x2",
+        3,
+        "{\"kind\":\"eventLinked\",\"eventId\":\"att-gone\"}",
+    );
+    assert_only(&run(&farm), IntegrityRule::EmbeddedReference, V, 2);
+}
+
+#[test]
+fn embedded_reference_is_quiet_when_every_embedded_id_names_its_row() {
+    let farm = farm();
+    // The seed's `iev-a` already names `snp-a` in its detail.
+    seed_job_event(
+        &farm.connection,
+        "jev-x1",
+        1,
+        "{\"correctionEventId\":\"sev-a\"}",
+    );
+    seed_job_event(
+        &farm.connection,
+        "jev-x2",
+        2,
+        "{\"hostOperationId\":\"hop-a\",\"kind\":\"pause\"}",
+    );
+    seed_job_event(&farm.connection, "jev-x3", 3, "{\"hostJobId\":\"0000A1\"}");
+    exec(
+        &farm.connection,
+        "INSERT INTO job_events(id, job_id, sequence, kind, to_state, at)
+           VALUES ('jev-x4', 'job-a', 4, 'completed', 'completed', 'x');
+         UPDATE jobs SET last_failure_json =
+           '{\"kind\":\"hostOperationFailed\",\"at\":\"x\",\"hostOperationId\":\"hop-a\",\"failure\":{}}'
+         WHERE id = 'job-a';
+         UPDATE attention_events SET detail_json =
+           '{\"kind\":\"requirementMaterialReconciliation\",\"requirementStatus\":\"pending\",\"spoolId\":\"spl-a\"}'
+         WHERE id = 'att-off';",
+    );
+    seed_incident_note(
+        &farm.connection,
+        "iev-x1",
+        2,
+        "{\"kind\":\"eventLinked\",\"eventId\":\"att-off\"}",
+    );
+    seed_incident_note(
+        &farm.connection,
+        "iev-x2",
+        3,
+        "{\"kind\":\"noteAdded\",\"text\":\"x\"}",
+    );
+    assert_clean(&run(&farm));
+}
+
+// --- the Task 11 audit ------------------------------------------------------------
+
+/// Every `*_json` column and every `TEXT` column ending `_id` that has no
+/// foreign key, and how the catalogue covers it (spec D17, Task 11 Step 2).
+/// A column added later fails the audit test below until it is classified
+/// here and, if it is a reference, gets a rule or a named tolerance.
+const LOOSE_COLUMNS: &[(&str, &str, &str)] = &[
+    // Covered by a rule.
+    ("attention_events", "source_id", "rule attentionSource"),
+    (
+        "attention_events",
+        "evidence_json",
+        "rule completionEvidence ($.snapshotId)",
+    ),
+    (
+        "attention_events",
+        "detail_json",
+        "rule embeddedReference ($.spoolId)",
+    ),
+    (
+        "incident_events",
+        "detail_json",
+        "rule embeddedReference ($.eventId, $.snapshotId)",
+    ),
+    (
+        "job_events",
+        "detail_json",
+        "rule embeddedReference ($.correctionEventId, $.hostOperationId)",
+    ),
+    (
+        "jobs",
+        "last_failure_json",
+        "rule embeddedReference ($.hostOperationId)",
+    ),
+    ("jobs", "correction_event_id", "rule jobCorrectionEvent"),
+    (
+        "spool_amount_events",
+        "reservation_id",
+        "rule amountEventReservation",
+    ),
+    ("spool_reservations", "holder_id", "rule reservationHolder"),
+    (
+        "slice_revisions",
+        "target_json",
+        "rule sliceTargetPrinter (tolerated)",
+    ),
+    (
+        "slice_preparations",
+        "document_json",
+        "rule preparationTargetPrinter (tolerated)",
+    ),
+    // Named tolerances (integrity.rs, D17).
+    (
+        "pending_credential_cleanup",
+        "printer_id",
+        "tolerated: provenance; the Printer is usually gone",
+    ),
+    (
+        "migration_warnings",
+        "details_json",
+        "tolerated: an advisory ledger of a one-time migration",
+    ),
+    (
+        "printers",
+        "connection_json",
+        "tolerated: credentialRef names the credential store (D10)",
+    ),
+    // Not a reference to a row.
+    (
+        "attention_events",
+        "subject_snapshot_json",
+        "a point-in-time label snapshot",
+    ),
+    (
+        "incidents",
+        "printer_snapshot_json",
+        "a point-in-time Printer snapshot",
+    ),
+    (
+        "jobs",
+        "printer_snapshot_json",
+        "a point-in-time Printer snapshot",
+    ),
+    ("camera_snapshots", "operation_id", "an idempotency key"),
+    ("host_operations", "operation_id", "an idempotency key"),
+    ("incident_events", "operation_id", "an idempotency key"),
+    ("job_events", "operation_id", "an idempotency key"),
+    ("spool_movements", "operation_id", "an idempotency key"),
+    ("spool_reservations", "operation_id", "an idempotency key"),
+    (
+        "host_operations",
+        "endpoint_json",
+        "the host endpoint at dispatch",
+    ),
+    (
+        "host_operations",
+        "failure_json",
+        "a failure code and message",
+    ),
+    (
+        "host_operations",
+        "resolution_json",
+        "evidence; historyJobId is the host's id",
+    ),
+    (
+        "library_models",
+        "link_observed_file_id",
+        "a filesystem identity",
+    ),
+    (
+        "model_source_revisions",
+        "inspection_json",
+        "the file's inspection",
+    ),
+    (
+        "printer_status_snapshots",
+        "telemetry_json",
+        "a telemetry cache",
+    ),
+    ("printers", "catalog_model_id", "a bundled-catalog id"),
+    ("printers", "last_known_good_json", "a resolved profile"),
+    ("printers", "overrides_json", "profile overrides"),
+    (
+        "queue_entries",
+        "lineage_id",
+        "a grouping key with no table",
+    ),
+    (
+        "reconciliation_requirements",
+        "resolution_json",
+        "a settlement method and amount",
+    ),
+    (
+        "slice_operations",
+        "failure_json",
+        "a failure code and message",
+    ),
+    (
+        "slice_operations",
+        "plate_snapshot_json",
+        "plate keys into the source's own geometry",
+    ),
+    ("slice_revisions", "estimates_json", "estimates"),
+    ("slice_revisions", "facts_json", "slice facts"),
+    (
+        "slice_revisions",
+        "runtime_json",
+        "the slicer runtime's versions",
+    ),
+];
+
+#[test]
+fn the_audit_classifies_every_json_and_id_column_without_a_foreign_key() {
+    let farm = farm();
+    let mut statement = farm
+        .connection
+        .prepare(
+            "SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p
+              WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
+                AND (p.name LIKE '%!_json' ESCAPE '!'
+                     OR (p.name LIKE '%!_id' ESCAPE '!' AND p.type = 'TEXT'))
+                AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_list(m.name) f
+                                 WHERE f.\"from\" = p.name)
+              ORDER BY 1, 2",
+        )
+        .unwrap();
+    let found: std::collections::BTreeSet<(String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let classified: std::collections::BTreeSet<(String, String)> = LOOSE_COLUMNS
+        .iter()
+        .map(|(table, column, _)| (table.to_string(), column.to_string()))
+        .collect();
+    assert_eq!(
+        classified.len(),
+        LOOSE_COLUMNS.len(),
+        "no column is classified twice"
+    );
+    let unclassified: Vec<_> = found.difference(&classified).collect();
+    assert!(unclassified.is_empty(), "classify these: {unclassified:?}");
+    let stale: Vec<_> = classified.difference(&found).collect();
+    assert!(stale.is_empty(), "no longer loose: {stale:?}");
+}
+
 #[test]
 fn slice_target_printer_reports_tolerated_for_a_missing_target_printer() {
     let farm = farm();

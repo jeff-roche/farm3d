@@ -184,7 +184,7 @@ fn diagnostics_farm() -> Farm {
     sql(
         &farm,
         "INSERT INTO incident_events(id, incident_id, sequence, kind, detail_json, at)
-         VALUES ('iev-note', 'inc-a', 2, 'noteAdded', ?1, ?2)",
+         VALUES ('iev-note', 'inc-a', 3, 'noteAdded', ?1, ?2)",
         &[
             &json!({ "kind": "noteAdded", "text": INCIDENT_NOTE }).to_string(),
             &now,
@@ -600,13 +600,14 @@ fn health_reports_each_printer_by_pseudonym_with_typed_facts_only() {
     let bytes = rig.export_all("health.zip");
     let health = json_entry(&bytes, "health.json");
     let printers = health["printers"].as_array().unwrap();
-    // A, B, the two state-word Printers, and the Profile-only one.
-    assert_eq!(printers.len(), 5, "{health}");
+    // A, B, the Farm's archived one, the two state-word Printers, and the
+    // Profile-only one.
+    assert_eq!(printers.len(), 6, "{health}");
     let pseudonyms: BTreeSet<&str> = printers
         .iter()
         .map(|printer| printer["printer"].as_str().unwrap())
         .collect();
-    assert_eq!(pseudonyms.len(), 5);
+    assert_eq!(pseudonyms.len(), 6);
     assert!(printers
         .iter()
         .all(|printer| is_pseudonym(&printer["printer"], "printer")));
@@ -637,12 +638,12 @@ fn health_reports_each_printer_by_pseudonym_with_typed_facts_only() {
         .iter()
         .filter(|printer| printer["archived"] == true)
         .collect();
-    assert_eq!(archived.len(), 1);
+    assert_eq!(archived.len(), 2);
     let profile_only: Vec<&Value> = printers
         .iter()
         .filter(|printer| printer["adapterKind"].is_null())
         .collect();
-    assert_eq!(profile_only.len(), 2, "{health}");
+    assert_eq!(profile_only.len(), 3, "{health}");
     assert!(profile_only
         .iter()
         .all(|printer| printer["setupIncomplete"] == true));
@@ -755,15 +756,15 @@ fn configuration_holds_settings_counts_and_whether_a_slicer_runtime_is_configure
     }
     assert_eq!(
         configuration["cameraSources"],
-        json!({ "hostWebcam": 0, "snapshotUrl": 1 })
+        json!({ "hostWebcam": 2, "snapshotUrl": 1 })
     );
     assert_eq!(
         configuration["printers"],
         json!({
-            "total": 5,
+            "total": 6,
             "byAdapterKind": { "moonraker": 3 },
-            "archived": 1,
-            "profileOnly": 2,
+            "archived": 2,
+            "profileOnly": 3,
         })
     );
     assert_eq!(configuration["slicerRuntimeConfigured"], true);
@@ -1156,8 +1157,8 @@ fn an_unreadable_credential_store_is_logged_and_the_export_goes_on() {
         .unwrap_or_else(|| panic!("no credentialCorpusUnavailable line in {text}"));
     assert_eq!(line["level"], "warn");
     // Every ref: the two stored, the orphan, `cred-a`, and the derived
-    // ref of each of the three Printers without a stored one.
-    assert_eq!(line["fields"]["unreadableRefs"], 7, "{line}");
+    // ref of each of the four Printers without a stored one.
+    assert_eq!(line["fields"]["unreadableRefs"], 8, "{line}");
     assert_eq!(line["ids"], json!({}));
 }
 

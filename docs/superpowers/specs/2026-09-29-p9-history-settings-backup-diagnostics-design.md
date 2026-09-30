@@ -1273,6 +1273,7 @@ matrix. Its reads run in one deferred read transaction.**
 | `attentionSource` | `attention_events(source_kind, source_id)` names a row of `printers`, `jobs`, `reconciliation_requirements`, or `spools`; a Printer source may be missing only when the Event is resolved (Printer delete resolves open Events `sourceRemoved`; one resolved earlier keeps its resolution; Task 11) | violation |
 | `completionEvidence` | a `job.completed` Event whose `evidence_json` has `status: "captured"` names a `camera_snapshots` row | violation |
 | `hostOperationGcode` | an unresolved (`dispatching`, `uncertain`, `reconciling`) `upload` or `start` Host Operation's `gcode_sha256` has a `content_blobs` row | violation |
+| `embeddedReference` | (Task 11 audit) an id embedded in JSON names its row: `job_events.detail_json` `$.correctionEventId`/`$.hostOperationId`, `jobs.last_failure_json` `$.hostOperationId`, `attention_events.detail_json` `$.spoolId`, `incident_events.detail_json` `$.eventId`/`$.snapshotId` | violation |
 | `blobFile` | every `content_blobs` row has `blobs/sha256/<hh>/<hex>` with its `size_bytes` length (roots only) | violation |
 | `mediaFile` | every unpruned `camera_snapshots` row has its `rel_path` file (roots only) | violation |
 | `sliceTargetPrinter` | `slice_revisions.target_json` `$.target.printerId` names a Printer | tolerated (label fallback by design) |
@@ -1290,6 +1291,12 @@ matrix. Its reads run in one deferred read transaction.**
   ending `_id` for references this catalogue misses. Each one it finds
   gets a rule or a named tolerance here and in `integrity.rs`, in the same
   commit.
+- (Task 11) Named tolerances, with no rule: `pending_credential_cleanup.printer_id`
+  (provenance; the Printer is usually gone), `migration_warnings.details_json`
+  (an advisory migration ledger), `printers.connection_json`'s
+  `credentialRef` (the credential store, D10), and a terminal Host
+  Operation's `gcode_sha256`. `p9_integrity.rs` classifies every loose
+  column, so a new one fails until it is classified.
 
 ### D18. Commands, idempotency, and dialogs
 
@@ -1657,7 +1664,8 @@ and digests are in D18. A reused id with a different request is
 ```ts
 // persistence::integrity (diagnostics and the matrix)
 type IntegrityRule = "fk" | "jobCorrectionEvent" | "amountEventReservation" | "reservationHolder"
-  | "attentionSource" | "completionEvidence" | "hostOperationGcode" | "blobFile" | "mediaFile"
+  | "attentionSource" | "completionEvidence" | "hostOperationGcode" | "embeddedReference"
+  | "blobFile" | "mediaFile"
   | "sliceTargetPrinter" | "preparationTargetPrinter" | "orphanBlobFile" | "orphanMediaFile";
 type IntegrityOutcome = "violation" | "tolerated";
 

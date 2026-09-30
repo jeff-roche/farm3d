@@ -1338,7 +1338,8 @@ fn c09_printers_without_a_connection_do_not_clash() {
 fn c10_a_backup_only_printer_is_added_not_a_conflict() {
     let preview = fixture("", &printer("prn-b3", "B3", None, false));
     assert_eq!(conflicts(&preview), vec![]);
-    assert_eq!(count(&preview, "printers"), (2, 3));
+    // The Farm's A, B, and archived Printer, and B3 in the backup.
+    assert_eq!(count(&preview, "printers"), (3, 4));
 }
 
 #[test]
@@ -1575,7 +1576,8 @@ fn c27_an_equal_job_is_not_a_conflict() {
         .conflicts
         .iter()
         .all(|group| group.domain != RestoreDomain::Job));
-    assert_eq!(count(&preview, "jobs"), (1, 1));
+    // The Farm's completed, failed, and cancelled Jobs.
+    assert_eq!(count(&preview, "jobs"), (3, 3));
 }
 
 #[test]
@@ -1646,7 +1648,8 @@ fn c32_a_renamed_child_row_is_not_a_conflict() {
         &slot,
     );
     assert_eq!(conflicts(&preview), vec![]);
-    assert_eq!(count(&preview, "material_slots"), (1, 1));
+    // Slot A plus the Farm's three.
+    assert_eq!(count(&preview, "material_slots"), (4, 4));
 }
 
 #[test]
@@ -1872,7 +1875,9 @@ fn notices_follow_the_type_order() {
             RestoreNotice::CredentialsToReenter { printer_count: 1 },
             // The seeded `cred-a` cleanup row and Printer L2's ref.
             RestoreNotice::CredentialsOrphaned { ref_count: 2 },
-            RestoreNotice::LinkedPathsMissing { model_count: 1 },
+            // The missing one, and the Farm's own linked Model (its path
+            // isn't on this machine).
+            RestoreNotice::LinkedPathsMissing { model_count: 2 },
             RestoreNotice::ActiveJobsAtBackup { job_count: 1 },
             RestoreNotice::MediaNotInBackup {
                 snapshot_count: 2,
@@ -1895,6 +1900,8 @@ fn a_baseline_preview_has_only_the_always_notices() {
             // The seeded `cred-a` cleanup row names a ref no restored
             // Printer uses.
             RestoreNotice::CredentialsOrphaned { ref_count: 1 },
+            // The Farm's linked Model: its path isn't on this machine.
+            RestoreNotice::LinkedPathsMissing { model_count: 1 },
             RestoreNotice::SlicerRuntimeKeptLocal,
         ]
     );

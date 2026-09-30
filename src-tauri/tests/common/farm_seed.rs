@@ -13,6 +13,20 @@ pub const GCODE_HASH: &str = "83ed56670125a357640623904bc0c1a17fdc835d75eef70363
 /// The shared G-code blob's bytes: 200 bytes of 0x07.
 pub const GCODE_BYTES: [u8; 200] = [7; 200];
 
+/// A G-code Model Source Revision's `inspection_json` the Library can
+/// decode.
+pub const GCODE_INSPECTION: &str = r#"{"format":"gcode","claims":[],"trusted":false,"lineCount":1,"commandCount":0,"toolsUsed":[],"relativePositioningSeen":false,"relativeExtrusionSeen":false,"thumbnails":[],"warnings":[]}"#;
+/// A 3MF Model Source Revision's `inspection_json` the Library can decode.
+pub const THREE_MF_INSPECTION: &str = r#"{"format":"3mf","unit":"millimeter","objectCount":1,"buildItemCount":1,"triangleCount":12,"boundsMm":{"min":[0.0,0.0,0.0],"max":[10.0,10.0,10.0]},"plates":[],"requiredExtensions":[],"unsupported":[],"thumbnails":[],"warnings":[]}"#;
+
+/// An external Slice Revision's `facts_json` and `estimates_json` the
+/// slicing repository can decode (material confirmed, no printer profile).
+pub const EXTERNAL_FACTS: &str = r#"{"printerProfile":{"provenance":"absent","value":null},"nozzleDiameterMm":{"provenance":"absent","value":null},"materialFamily":{"provenance":"operatorConfirmed","value":"PLA"},"filamentDiameterMm":{"provenance":"operatorConfirmed","value":1.75}}"#;
+pub const EXTERNAL_ESTIMATES: &str = r#"{"estimates":null,"claimedEstimates":{"printSeconds":60,"filamentGrams":5.0,"filamentMm":null,"layerCount":null,"maxZMm":null,"source":"fileClaim","trusted":false}}"#;
+
+/// `prp-a`'s `document_json`: one empty plate, targeting `prn-a`.
+pub const PREPARATION_DOCUMENT: &str = r#"{"plates":[{"plateKey":"plate-1","instances":[]}],"target":{"kind":"printer","printerId":"prn-a"},"controls":{}}"#;
+
 pub fn exec(connection: &Connection, sql: &str) {
     connection
         .execute_batch(sql)
@@ -49,9 +63,10 @@ pub fn seed_blob(connection: &Connection, sha256: &str, size: i64) {
 }
 
 /// An external Slice Revision `id` over the shared G-code blob (which it
-/// creates on first use) and a Model. `target_json` is `{}` (no target).
+/// creates on first use) and a Model. `target_json` is `null` (no target,
+/// as the repository writes it).
 pub fn seed_slice_revision(connection: &Connection, id: &str) {
-    seed_slice_revision_targeting(connection, id, "{}");
+    seed_slice_revision_targeting(connection, id, "null");
 }
 
 /// [`seed_slice_revision`] with an explicit `target_json` (Slice Revisions
@@ -68,12 +83,12 @@ pub fn seed_slice_revision_targeting(connection: &Connection, id: &str, target_j
                id, model_id, sequence, content_sha256, size_bytes, format, origin,
                source_file_name, source_path, captured_at, inspector_version, inspection_json
              ) VALUES ('msr-a', 'mdl-a', 1, '{GCODE_HASH}', 200, 'gcode', 'import', 'part.gcode',
-                       '/src/part.gcode', '{NOW}', 1, '{{}}');
+                       '/src/part.gcode', '{NOW}', 1, '{GCODE_INSPECTION}');
              INSERT INTO slice_revisions(id, kind, model_id, source_revision_id, gcode_sha256,
                gcode_size, target_json, facts_json, requires_manual_printer_selection,
                estimates_json, created_at)
-             VALUES ('{id}', 'external', 'mdl-a', 'msr-a', '{GCODE_HASH}', 200, '{target_json}', '{{}}', 1,
-                     '{{}}', '{NOW}');"
+             VALUES ('{id}', 'external', 'mdl-a', 'msr-a', '{GCODE_HASH}', 200, '{target_json}',
+                     '{EXTERNAL_FACTS}', 1, '{EXTERNAL_ESTIMATES}', '{NOW}');"
         ),
     );
 }
@@ -187,7 +202,8 @@ pub fn seed_printer_event(connection: &Connection, id: &str, printer_id: &str, r
                  read_at, resolved_at, resolution
              ) VALUES ('{id}', 'printer.offline:printer:{printer_id}', 'printer.offline',
                        'warning', 1, 'auto', 'connectivity', 'printer', '{printer_id}', NULL,
-                       '{{}}', '{{}}', 'Offline.', 'live', '{NOW}', '{NOW}',
+                       '{{}}', '{{\"kind\":\"printerOffline\",\"unreachableSince\":\"{NOW}\"}}',
+                       'Offline.', 'live', '{NOW}', '{NOW}',
                        {read_at}, {resolved_at}, {resolution});"
         ),
     );
@@ -209,7 +225,8 @@ pub fn seed_completed_event(
                  notification_class, source_kind, source_id, job_id, subject_snapshot_json,
                  detail_json, summary, origin, first_observed_at, last_observed_at, evidence_json
              ) VALUES ('{id}', 'job.completed:job:{job_id}', 'job.completed', 'info', 0, 'manual',
-                       'completion', 'job', '{job_id}', '{job_id}', '{{}}', '{{}}', 'Done.',
+                       'completion', 'job', '{job_id}', '{job_id}', '{{}}',
+                       '{{\"kind\":\"jobCompleted\",\"endedAt\":\"{NOW}\"}}', 'Done.',
                        'live', '{NOW}', '{NOW}', {evidence});"
         ),
     );
@@ -272,7 +289,9 @@ pub fn seed_evidence_captured_event(
         connection,
         &format!(
             "INSERT INTO incident_events(id, incident_id, sequence, kind, snapshot_id, detail_json, at)
-             VALUES ('{id}', '{incident_id}', 1, 'evidenceCaptured', '{snapshot_id}', '{{}}', '{NOW}');"
+             VALUES ('{id}', '{incident_id}', 1, 'evidenceCaptured', '{snapshot_id}',
+                     '{{\"kind\":\"evidenceCaptured\",\"snapshotId\":\"{snapshot_id}\",\"trigger\":\"incident\"}}',
+                     '{NOW}');"
         ),
     );
 }
@@ -379,8 +398,7 @@ pub fn seed_every_domain(connection: &Connection) {
         &format!(
             "INSERT INTO slice_preparations(id, model_id, source_revision_id, revision,
                document_json, created_at, updated_at)
-             VALUES ('prp-a', 'mdl-a', 'msr-a', 1,
-               '{{\"target\":{{\"printerId\":\"prn-a\"}}}}', '{NOW}', '{NOW}');"
+             VALUES ('prp-a', 'mdl-a', 'msr-a', 1, '{PREPARATION_DOCUMENT}', '{NOW}', '{NOW}');"
         ),
     );
     seed_pending_credential_cleanup(connection, "cred-a", "cleared");

@@ -908,7 +908,7 @@ fn the_preview_names_every_class_with_counts_and_bytes_and_warns_of_active_work(
     files("logs", paths.log_root());
     files("legacyArchives", paths.legacy_root());
     files("safetyBackups", &safety_dir(paths));
-    assert_eq!(class_of(&preview, "printers")["count"], json!(2));
+    assert_eq!(class_of(&preview, "printers")["count"], json!(3));
     assert_eq!(class_of(&preview, "credentials")["count"], json!(3));
     assert!(class_of(&preview, "printers")["bytes"].is_null());
     let (count, bytes) = paths

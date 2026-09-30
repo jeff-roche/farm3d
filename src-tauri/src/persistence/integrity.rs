@@ -11,6 +11,21 @@
 //!
 //! A finding's `sample` holds at most [`SAMPLE_LIMIT`] row ids or content
 //! hashes and never a path.
+//!
+//! Named tolerances (Task 11's audit): loose references with no rule, by
+//! design.
+//!
+//! - `pending_credential_cleanup.printer_id` records which Printer a
+//!   queued ref belonged to; a `printer_deleted` row's Printer is gone by
+//!   definition.
+//! - `migration_warnings.details_json` is an advisory ledger of a one-time
+//!   migration; the Printer ids it names are resolved against the live
+//!   list when read.
+//! - `printers.connection_json`'s `credentialRef` names a credential-store
+//!   entry outside the database (D10); a missing value is an auth error.
+//! - A terminal `upload`/`start` Host Operation's `gcode_sha256` may name a
+//!   collected blob once its Slice Revision is gone; only an unresolved one
+//!   needs it (`hostOperationGcode`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -37,6 +52,7 @@ pub enum IntegrityRule {
     AttentionSource,
     CompletionEvidence,
     HostOperationGcode,
+    EmbeddedReference,
     BlobFile,
     MediaFile,
     SliceTargetPrinter,
@@ -157,6 +173,7 @@ fn run(
     push(attention_source(connection)?);
     push(completion_evidence(connection)?);
     push(host_operation_gcode(connection)?);
+    push(embedded_reference(connection)?);
     if let Some(roots) = roots {
         push(blob_file(connection, roots)?);
         push(media_file(connection, roots)?);
@@ -321,6 +338,50 @@ fn host_operation_gcode(connection: &Connection) -> Result<Option<IntegrityFindi
           WHERE h.kind IN ('upload','start')
             AND h.state IN ('dispatching','uncertain','reconciling')
             AND NOT EXISTS (SELECT 1 FROM content_blobs b WHERE b.sha256 = h.gcode_sha256)",
+    )
+}
+
+/// Rule `embeddedReference` (Task 11's audit): every row id embedded in a
+/// JSON column names its row. The sample holds the offending rows' own ids
+/// (`jev-`, `job-`, `att-`, `iev-`), sorted.
+///
+/// - `job_events.detail_json`: `$.correctionEventId` (an amount event) and
+///   `$.hostOperationId` (a Host Operation);
+/// - `jobs.last_failure_json`: `$.hostOperationId`;
+/// - `attention_events.detail_json`: `$.spoolId` (a Spool);
+/// - `incident_events.detail_json`: `$.eventId` (an Attention Event) and
+///   `$.snapshotId` (a camera snapshot).
+fn embedded_reference(connection: &Connection) -> Result<Option<IntegrityFinding>, StorageError> {
+    from_query(
+        connection,
+        IntegrityRule::EmbeddedReference,
+        "SELECT e.id FROM job_events e
+          WHERE e.detail_json IS NOT NULL
+            AND ((json_extract(e.detail_json, '$.correctionEventId') IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM spool_amount_events a
+                                   WHERE a.id = json_extract(e.detail_json, '$.correctionEventId')))
+              OR (json_extract(e.detail_json, '$.hostOperationId') IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM host_operations h
+                                   WHERE h.id = json_extract(e.detail_json, '$.hostOperationId'))))
+         UNION ALL
+         SELECT j.id FROM jobs j
+          WHERE j.last_failure_json IS NOT NULL
+            AND json_extract(j.last_failure_json, '$.hostOperationId') IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM host_operations h
+                             WHERE h.id = json_extract(j.last_failure_json, '$.hostOperationId'))
+         UNION ALL
+         SELECT a.id FROM attention_events a
+          WHERE json_extract(a.detail_json, '$.spoolId') IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM spools s
+                             WHERE s.id = json_extract(a.detail_json, '$.spoolId'))
+         UNION ALL
+         SELECT i.id FROM incident_events i
+          WHERE (json_extract(i.detail_json, '$.eventId') IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM attention_events a
+                                  WHERE a.id = json_extract(i.detail_json, '$.eventId')))
+             OR (json_extract(i.detail_json, '$.snapshotId') IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM camera_snapshots c
+                                  WHERE c.id = json_extract(i.detail_json, '$.snapshotId')))",
     )
 }
 

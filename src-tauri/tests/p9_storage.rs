@@ -284,14 +284,21 @@ fn usage_reports_every_class_in_order_and_equals_the_bytes_on_disk() {
 
     // Content: the seeded blobs, each counted once in its first class.
     let (source, thumbnail, plate) = farm.blob_hashes();
+    let (linked_source, linked_thumbnail) = farm.linked_blob_hashes();
     let length = |sha: &str| fs::metadata(farm.blob_path(sha)).unwrap().len();
     // The G-code blob is a Model Source Revision's, so it is a model source
     // even though a Slice Revision holds it too.
     assert_eq!(
         class(&usage, "contentModelSources"),
-        (length(p9_farm::farm_seed::GCODE_HASH) + length(&source), 2)
+        (
+            length(p9_farm::farm_seed::GCODE_HASH) + length(&source) + length(&linked_source),
+            3
+        )
     );
-    assert_eq!(class(&usage, "contentThumbnails"), (length(&thumbnail), 1));
+    assert_eq!(
+        class(&usage, "contentThumbnails"),
+        (length(&thumbnail) + length(&linked_thumbnail), 2)
+    );
     assert_eq!(class(&usage, "contentGcode"), (0, 0));
     assert_eq!(class(&usage, "contentSliceArtifacts"), (length(&plate), 1));
     assert_eq!(

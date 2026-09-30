@@ -134,7 +134,8 @@ fn leftovers(directory: &Path) -> Vec<String> {
 fn for_each_media_choice_the_archive_holds_exactly_the_expected_entries() {
     let farm = Farm::with_every_domain();
     let (source_3mf, _, plate_3mf) = farm.blob_hashes();
-    let stored_blobs = [source_3mf.clone(), plate_3mf.clone()];
+    let (linked_3mf, _) = farm.linked_blob_hashes();
+    let stored_blobs = [source_3mf.clone(), plate_3mf.clone(), linked_3mf];
     for (choice, snapshots, counts) in [
         (BackupMediaChoice::None, vec![], (0, 3, 0)),
         (
@@ -929,10 +930,12 @@ fn backup_inventory_describes_the_live_farm() {
     let content_bytes = p9_farm::farm_seed::GCODE_BYTES.len()
         + p9_farm::three_mf_bytes("source").len()
         + p9_farm::thumbnail_bytes().len()
-        + p9_farm::three_mf_bytes("plate").len();
+        + p9_farm::three_mf_bytes("plate").len()
+        + p9_farm::three_mf_bytes("linked").len()
+        + p9_farm::linked_thumbnail_bytes().len();
     assert_eq!(
         inventory["content"],
-        json!({ "count": 4, "bytes": content_bytes })
+        json!({ "count": 6, "bytes": content_bytes })
     );
     let snapshot_len = |id: &str| p9_farm::snapshot_bytes(id).len();
     let pinned = snapshot_len(ids::SNAPSHOT_PINNED);
