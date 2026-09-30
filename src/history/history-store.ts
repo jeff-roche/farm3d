@@ -4,10 +4,10 @@
  *  carries a sequence number and a response older than the latest is
  *  dropped. Rust decides every filter's meaning (D11); this only presents. */
 import { createStore, reconcile } from "solid-js/store";
-import { command, desktopAvailable, retryOnTransportFailure } from "../ipc/client";
+import { command, desktopAvailable, isCommandError, retryOnTransportFailure } from "../ipc/client";
 import type { CommandError } from "../generated/contracts/command/CommandError";
 import type { JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobTimeline } from "./types";
-import { notFound } from "../ipc/local-errors";
+import { commandError, notFound } from "../ipc/local-errors";
 
 export const HISTORY_DEBOUNCE_MS = 250;
 
@@ -56,8 +56,11 @@ async function fetchPage(query: JobHistoryQuery): Promise<JobHistoryPage> {
   return import("./web-fixtures").then(({ webJobHistoryPage }) => webJobHistoryPage(query));
 }
 
+/** A valid `CommandError` as is; a transport failure (a plain `Error`, a
+ *  string) as one in the backend's shape, so the view never renders a
+ *  malformed error. */
 function asCommandError(error: unknown): CommandError {
-  return error as CommandError;
+  return isCommandError(error) ? error : commandError("INTERNAL", "The history couldn't be read.");
 }
 
 async function runFirstPage(): Promise<void> {

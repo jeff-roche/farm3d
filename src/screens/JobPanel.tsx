@@ -1,6 +1,5 @@
-import { createEffect, createResource, createSignal, createUniqueId, For, on, onMount, Show, type JSX } from "solid-js";
-import { AlertDialog, Button, Progress, Timeline } from "../design-system";
-import type { TimelineItem } from "../design-system";
+import { createEffect, createSignal, createUniqueId, For, lazy, on, onMount, Show, Suspense, type JSX } from "solid-js";
+import { AlertDialog, Button, Progress } from "../design-system";
 import { capabilities } from "../host-ops/capabilities-store";
 import { hostOperations, reconcileHostOperation } from "../host-ops/host-operations-store";
 import {
@@ -17,13 +16,11 @@ import type { ResolvedPrinter } from "../printers/types";
 import {
   cancelReasonLabel,
   estimateSourceLabel,
-  jobEventKindLabel,
   jobStateLabel,
   settlementLabel,
 } from "../queue/presentation";
 import {
   cancelJob,
-  getJobHistory,
   pauseJob,
   queue,
   refreshQueue,
@@ -45,6 +42,10 @@ import { SeverityLabel } from "./SeverityLabel";
 import { SettleMaterialDialog, spoolName } from "./SettleMaterialDialog";
 import { StartJobDialog } from "./StartJobDialog";
 import styles from "./JobPanel.module.css";
+
+/** The Timeline (a live Job's events, or a settled Job's full timeline)
+ *  loads on its own, so the Printer's Job tab stays light. */
+const JobTimelineSection = lazy(() => import("./JobTimelineSection").then((m) => ({ default: m.JobTimelineSection })));
 
 export interface JobPanelProps {
   job: Job;
@@ -118,14 +119,6 @@ export function JobPanel(props: JobPanelProps) {
 
   createEffect(on(() => props.job.state, (state, previous) => {
     if (previous !== undefined && state !== previous) setAnnouncement(`Job ${jobStateLabel(state).toLowerCase()}`);
-  }));
-
-  const [history] = createResource(() => `${props.job.id}|${props.job.revision}`, () => getJobHistory(props.job.id));
-  const timeline = (): TimelineItem[] => (history.error ? [] : history()?.events ?? []).map((event) => ({
-    id: event.id,
-    at: event.at,
-    title: jobEventKindLabel(event.kind),
-    marker: event.kind === "assigned" || event.kind === "hostJobPinned" ? "muted" : "default",
   }));
 
   async function run(action: () => Promise<unknown>) {
@@ -302,13 +295,9 @@ export function JobPanel(props: JobPanelProps) {
         </div>
       </Rows>
 
-      <div class={styles.group}>
-        <h4 class={styles.subheading}>Timeline</h4>
-        <Show when={history.error}>
-          <p class={styles.muted}>The Job's history couldn't be loaded.</p>
-        </Show>
-        <Timeline label={`Job timeline on ${props.job.printerSnapshot.name}`} items={timeline()} />
-      </div>
+      <Suspense fallback={<p class={styles.muted} role="status">Loading the Job's timeline…</p>}>
+        <JobTimelineSection job={props.job} />
+      </Suspense>
 
       <StartJobDialog
         open={open() === "start"}

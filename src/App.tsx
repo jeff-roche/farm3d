@@ -20,6 +20,7 @@ import type { ImportSelectionSummary } from "./library/types";
 import { startSlicing } from "./slicing/slicing-store";
 import { startHostOperations } from "./host-ops/host-operations-store";
 import { syncCapabilities } from "./host-ops/capabilities-store";
+import { historyKnownIds } from "./history/known-ids";
 import { queue, startQueue } from "./queue/queue-store";
 import { jobStateLabel } from "./queue/presentation";
 import { attention, requestAttentionCenterOpen, startAttention } from "./attention/attention-store";
@@ -117,6 +118,8 @@ function App() {
     ...attention.openIncidents().map((incident) => incident.id),
     ...attentionEvents().flatMap((event) => (event.incidentId ? [event.incidentId] : [])),
   ];
+  // Jobs and Incidents the History view lists may be older than the Queue
+  // and Attention stores hold; a listed row is still a valid deep-link target.
   const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
     availableDestinations: ["monitor", "queue", "library", "spools", "settings"] as NavigationDestination[],
     availableIds: [
@@ -126,6 +129,7 @@ function App() {
       ...library.projects().map((project) => project.id),
       ...library.models().map((model) => model.id),
       ...queueIds(),
+      ...historyKnownIds(),
       ...attentionIds(),
       ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
       ...(target.destination === "queue" && target.selection && queuePending() ? [target.selection.id] : []),

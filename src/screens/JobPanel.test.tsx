@@ -6,6 +6,7 @@ import {
   resetHostOperationsStoreMock,
   setHostOperationsStoreState,
 } from "../host-ops/host-operations-store-mock";
+import { historyStoreMock, resetHistoryStoreMock } from "../history/history-store-mock";
 import { hostOperation, printerCapabilities, printerStatus, resolvedPrinter } from "../host-ops/test-records";
 import { queueStoreMock, resetQueueStoreMock, setQueueStoreState } from "../queue/queue-store-mock";
 import { job, jobHistory, queueEntry } from "../queue/test-records";
@@ -14,6 +15,7 @@ import type { ResolvedPrinter } from "../printers/types";
 import { pressEscape, tabOrder } from "./dialog-test-helpers";
 import { JobPanel } from "./JobPanel";
 
+vi.mock("../history/history-store", async () => (await import("../history/history-store-mock")).historyStoreMock);
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 vi.mock("../host-ops/host-operations-store", async () =>
   (await import("../host-ops/host-operations-store-mock")).hostOperationsStoreMock);
@@ -29,6 +31,7 @@ vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
 
 beforeEach(() => {
   resetQueueStoreMock();
+  resetHistoryStoreMock();
   resetHostOperationsStoreMock();
   resetCapabilitiesStoreMock();
   setPrinterCapabilitiesForTest(printerCapabilities());
@@ -188,6 +191,21 @@ describe("JobPanel: state, facts, and history", () => {
     expect(screen.getByText("38.6 g")).toBeInTheDocument();
     const timeline = await screen.findByRole("list", { name: /^Job timeline/ });
     expect(within(timeline).getByText("Started")).toBeInTheDocument();
+  });
+
+  it("shows a settled Job's full timeline from get_job_timeline, not get_job_history", async () => {
+    renderPanel(job({ id: "job-web-deferred", state: "failed", allowedActions: [] }));
+    const timeline = await screen.findByRole("list", { name: /^Job timeline/ });
+    expect(within(timeline).getAllByRole("listitem").length).toBeGreaterThan(0);
+    expect(historyStoreMock.getJobTimeline).toHaveBeenCalledWith("job-web-deferred");
+    expect(queueStoreMock.getJobHistory).not.toHaveBeenCalled();
+  });
+
+  it("keeps get_job_history for a Job that hasn't settled", async () => {
+    renderPanel(job({ state: "printing", allowedActions: ["pause", "cancel"] }));
+    await screen.findByRole("list", { name: /^Job timeline/ });
+    expect(queueStoreMock.getJobHistory).toHaveBeenCalled();
+    expect(historyStoreMock.getJobTimeline).not.toHaveBeenCalled();
   });
 
   it("explains that Declare outcome opens 30 minutes after the host became unreachable", () => {

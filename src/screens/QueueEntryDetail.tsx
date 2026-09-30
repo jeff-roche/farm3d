@@ -1,5 +1,5 @@
 import { Dialog as KDialog } from "@kobalte/core/dialog";
-import { createEffect, createMemo, createResource, createSignal, createUniqueId, For, on, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, createUniqueId, For, lazy, on, Show, Suspense, type JSX } from "solid-js";
 import { AlertDialog, Button, RadioGroup, Select, SeverityMarker, Tabs, Timeline } from "../design-system";
 import type { TimelineItem } from "../design-system";
 import { isCommandError } from "../ipc/client";
@@ -22,7 +22,7 @@ import {
   updateQueueEntry,
   type UpdateQueueEntryPatch,
 } from "../queue/queue-store";
-import type { Blocker, Candidate, DispatchPolicy, DispatchPreference, QueueEntry } from "../queue/types";
+import type { Blocker, Candidate, DispatchPolicy, DispatchPreference, Job, QueueEntry } from "../queue/types";
 import {
   estimateRows,
   FACT_KEYS,
@@ -37,6 +37,10 @@ import { AssignJobDialog } from "./AssignJobDialog";
 import { JobPanel } from "./JobPanel";
 import { goTo, QueueRecoveryButton, showQueueEntry } from "./QueueRecoveryButton";
 import styles from "./QueueEntryDetail.module.css";
+
+/** A settled Job's full timeline (D11) loads only when its History tab shows one. */
+const JobTimelinePanel = lazy(() => import("./JobTimelinePanel").then((m) => ({ default: m.JobTimelinePanel })));
+const SETTLED_STATES = new Set<Job["state"]>(["completed", "failed", "cancelled", "outcomeUnknown"]);
 
 export interface QueueEntryDetailProps {
   entry: QueueEntry;
@@ -432,6 +436,11 @@ function HistoryTab(props: { entry: QueueEntry }) {
     return [...source].sort((a, b) => a.copyIndex - b.copyIndex || a.createdAt.localeCompare(b.createdAt));
   });
   const origin = () => (props.entry.originEntryId ? props.entry.originEntryId : undefined);
+  // A closed entry's Job is settled even when the store doesn't hold it.
+  const settledJob = () => {
+    const held = props.entry.jobId ? queue.job(props.entry.jobId) : undefined;
+    return held ? SETTLED_STATES.has(held.state) : props.entry.state === "closed";
+  };
   const timeline = (): TimelineItem[] => (loaded()?.events ?? []).map((event) => ({
     id: event.id,
     at: event.at,
@@ -449,8 +458,21 @@ function HistoryTab(props: { entry: QueueEntry }) {
           <Show when={loaded()} fallback={<Show when={!history.error}><p class={styles.muted} role="status">Loading the Job's history…</p></Show>}>
             {(held) => (
               <>
-                <Timeline label={`Job timeline for ${entryTitle(props.entry)}`} items={timeline()} />
-                <Show when={held().requirements.length > 0}>
+                <Show
+                  when={settledJob() && props.entry.jobId}
+                  fallback={<Timeline label={`Job timeline for ${entryTitle(props.entry)}`} items={timeline()} />}
+                >
+                  {(jobId) => (
+                    <Suspense fallback={<p class={styles.muted} role="status">Loading the Job's timeline…</p>}>
+                      <JobTimelinePanel
+                        jobId={jobId()}
+                        revision={queue.job(jobId())?.revision}
+                        label={entryTitle(props.entry)}
+                      />
+                    </Suspense>
+                  )}
+                </Show>
+                <Show when={!settledJob() && held().requirements.length > 0}>
                   <ul class={styles.list}>
                     <For each={held().requirements}>
                       {(requirement) => (

@@ -131,4 +131,26 @@ describe("history store", () => {
     expect(paged.nextCursor).not.toBeNull();
     expect(buildWebQueueFixture().jobs.length).toBeGreaterThan(0);
   });
+
+  it("turns a transport failure into a well-formed CommandError", async () => {
+    tauriMock.invoke.mockRejectedValue(new Error("socket closed"));
+    const store = await load();
+    const { isCommandError } = await import("../ipc/client");
+    await store.refreshHistory();
+    expect(store.history.status()).toBe("error");
+    expect(isCommandError(store.history.error())).toBe(true);
+  });
+
+  it("keeps the rows and sets a well-formed error when Load more fails", async () => {
+    tauriMock.invoke
+      .mockResolvedValueOnce(ok({ rows: [row("a")], nextCursor: "c1" }))
+      .mockRejectedValue(new Error("socket closed"));
+    const store = await load();
+    const { isCommandError } = await import("../ipc/client");
+    await store.refreshHistory();
+    await store.loadMoreHistory();
+    expect(store.history.status()).toBe("ready");
+    expect(store.history.rows().map((r) => r.jobId)).toEqual(["a"]);
+    expect(isCommandError(store.history.error())).toBe(true);
+  });
 });

@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, lazy, onCleanup, onMount, Show, Suspense, type JSX } from "solid-js";
 import { Button, Chip, DataTable, ReorderHandle, SeverityMarker, Tabs } from "../design-system";
 import type { DataTableColumn, SeverityMarkerProps, TabItem } from "../design-system";
+import { getJobTimeline } from "../history/history-store";
 import { isCommandError } from "../ipc/client";
 import { library } from "../library/library-store";
 import { navigation, serializeNavigationTarget, type NavigationTarget } from "../navigation/navigation-store";
@@ -22,6 +23,9 @@ import { formatGrams } from "../spools/weight";
 import { QueueEntryDetail } from "./QueueEntryDetail";
 import { goTo, QueueRecoveryButton } from "./QueueRecoveryButton";
 import styles from "./QueueScreen.module.css";
+
+/** The History tab's searchable view stays out of the main chunk until it opens. */
+const JobHistoryView = lazy(() => import("./JobHistoryView").then((m) => ({ default: m.JobHistoryView })));
 
 /** The screen's tabs: the whole open Queue in order, then each `QueueView`. */
 type ScreenView = "all" | QueueView;
@@ -52,8 +56,7 @@ function entryView(entry: QueueEntry): QueueView | undefined {
 
 function rowsFor(view: ScreenView): QueueEntry[] {
   if (view === "all") return queue.entries();
-  const source = view === "history" ? queue.history() : queue.entries();
-  return source.filter((entry) => entryView(entry) === view);
+  return queue.entries().filter((entry) => entryView(entry) === view);
 }
 
 function entryName(entry: QueueEntry): string {
@@ -217,13 +220,28 @@ export function QueueScreen() {
 
   // The selection is a Queue Entry id or a Job id, resolved by prefix
   // (spec "Navigation").
-  const selectedEntry = createMemo<QueueEntry | undefined>(() => {
+  const selectedId = (): string | undefined => {
     const target = navigation.target();
-    if (target.destination !== "queue" || target.selection?.kind !== "job") return undefined;
-    const id = target.selection.id;
+    return target.destination === "queue" && target.selection?.kind === "job" ? target.selection.id : undefined;
+  };
+  const storedEntry = createMemo<QueueEntry | undefined>(() => {
+    const id = selectedId();
+    if (id === undefined) return undefined;
     const entryId = id.startsWith("job-") ? queue.job(id)?.queueEntryId : id;
     return entryId ? queue.entry(entryId) : undefined;
   });
+  // A Job opened from the History view can be older than the Queue store
+  // holds; its timeline carries its Queue Entry.
+  const [olderEntry] = createResource(
+    () => {
+      const id = selectedId();
+      return id !== undefined && id.startsWith("job-") && storedEntry() === undefined ? id : undefined;
+    },
+    async (jobId) => (await getJobTimeline(jobId)).entry,
+  );
+  const selectedEntry = createMemo<QueueEntry | undefined>(
+    () => storedEntry() ?? (olderEntry.error ? undefined : olderEntry()),
+  );
 
   function select(id: string | null) {
     const target: NavigationTarget = id
@@ -386,10 +404,13 @@ export function QueueScreen() {
   const tabItems: TabItem[] = VIEW_ORDER.map((value) => ({
     value,
     get label() {
-      return `${screenViewLabel(value)} (${rowsFor(value).length})`;
+      // The History tab's rows come from the paged history query, not the store.
+      return value === "history" ? screenViewLabel(value) : `${screenViewLabel(value)} (${rowsFor(value).length})`;
     },
     get content() {
-      return table();
+      return value === "history"
+        ? <Suspense fallback={<p class={styles.loadingNotice} role="status">Loading history…</p>}><JobHistoryView /></Suspense>
+        : table();
     },
   }));
 
@@ -417,16 +438,18 @@ export function QueueScreen() {
       </Show>
       <div ref={workspace} class={styles.workspace}>
         <div class={styles.main}>
-          <div class={styles.toolbar} role="group" aria-label="Filter by Dispatch Policy">
-            <span class={styles.toolbarLabel}>Dispatch Policy</span>
-            <For each={POLICIES}>
-              {(policy) => (
-                <Chip selected={policies().has(policy)} onSelectedChange={() => togglePolicy(policy)}>
-                  {dispatchPolicyLabel(policy)}
-                </Chip>
-              )}
-            </For>
-          </div>
+          <Show when={view() !== "history"}>
+            <div class={styles.toolbar} role="group" aria-label="Filter by Dispatch Policy">
+              <span class={styles.toolbarLabel}>Dispatch Policy</span>
+              <For each={POLICIES}>
+                {(policy) => (
+                  <Chip selected={policies().has(policy)} onSelectedChange={() => togglePolicy(policy)}>
+                    {dispatchPolicyLabel(policy)}
+                  </Chip>
+                )}
+              </For>
+            </div>
+          </Show>
           <Show
             when={queue.status() === "ready" || allEntries().length > 0}
             fallback={
