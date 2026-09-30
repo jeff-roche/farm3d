@@ -1214,9 +1214,11 @@ impl Site {
     }
 
     fn aside(&self, root: &Path) -> PathBuf {
-        root.parent()
-            .unwrap()
-            .join(format!(".aside-{}", self.journal_id))
+        root.parent().unwrap().join(format!(
+            ".aside-{}-{}",
+            self.journal_id,
+            root.file_name().unwrap().to_string_lossy()
+        ))
     }
 
     fn pending_cleanup(&self) -> Vec<(String, Option<String>, String)> {
@@ -1426,6 +1428,32 @@ fn r3_a_partial_roots_move_skips_the_moved_root_and_moves_the_rest() {
     assert_eq!(reopened.content_root(), content);
     site.run_clean();
     site.assert_reset_done(&site.older_and_this());
+}
+
+/// Two moved roots under one parent (a `log_root` beside `content_root`):
+/// each gets its own aside, so both move, including after a crash between
+/// them.
+#[test]
+fn r3b_two_roots_under_one_parent_both_move() {
+    let mut site = site(false);
+    let parent = site.paths.content_root().parent().unwrap().to_path_buf();
+    site.paths = site
+        .paths
+        .clone()
+        .with_log_root(parent.join("logs"))
+        .unwrap();
+    fs::write(site.paths.log_root().join("farm3d.log"), b"old log").unwrap();
+    site.crash(vec![crash_at(
+        InstallerStep::MoveRootsAside,
+        FaultPoint::Within(0),
+    )]);
+    site.at_fault(InstallerStep::MoveRootsAside);
+    let [content, _, log] = site.roots();
+    assert!(site.aside(content).is_dir(), "content_root moved");
+    assert!(!names_in(log).is_empty(), "log_root not moved yet");
+    site.run_clean();
+    site.assert_reset_done(&site.older_and_this());
+    assert!(!parent.join("logs").join("farm3d.log").exists());
 }
 
 #[test]

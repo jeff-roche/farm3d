@@ -1186,8 +1186,10 @@ naming every affected data class in `reset_preview` first.**
   1. `markInstalling`.
   2. `moveDatabaseAside` (as D8; each file moved only if still present).
   3. `moveRootsAside`: rename `content_root`, `media_root`, and
-     `log_root` each to a sibling `<parent>/.aside-<journalId>` (a
-     sibling stays on the same filesystem), and move the contents of
+     `log_root` each to a sibling `<parent>/.aside-<journalId>-<name>`,
+     `<name>` being the root's own directory name (a sibling stays on the
+     same filesystem, and the name keeps two roots under one parent from
+     sharing an aside), and move the contents of
      `snapshot_root` and `legacy_root` into `restore/<id>/previous/`.
      A root whose aside already exists was moved; a root that exists
      again then is the empty directory `StoragePaths` recreated, and is
@@ -1205,7 +1207,7 @@ naming every affected data class in `reset_preview` first.**
      every file in `<backup_root>/safety/` except the journal's
      `safetyBackupId`.
   7. `removePrevious`: delete `restore/<id>/previous/` and every
-     `.aside-<journalId>` directory.
+     `.aside-<journalId>-<name>` directory.
   8. `markDone`.
 
   An I/O error at any step stops startup with `RESTORE_FAILED`
@@ -2142,7 +2144,7 @@ evidence. Where the code disagreed with the plan, the code won.
    the journal's `previous/` under `metadata_root`, but `metadata_root`
    (`app_config_dir`) and the data roots (`app_data_dir`) may be on
    different filesystems, where a rename fails. Each root moves to a
-   sibling `.aside-<journalId>`. Tier (c) also clears pre-import snapshots,
+   sibling `.aside-<journalId>-<name>`. Tier (c) also clears pre-import snapshots,
    restore staging, and F0 legacy archives, which hold Farm data too.
 9. **The manifest is closed and gains `origin`, `media`, and
    `pendingBlobCleanup`.** `origin` lets safety backups list their reason;

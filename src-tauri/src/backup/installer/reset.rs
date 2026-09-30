@@ -72,11 +72,13 @@ pub fn moved_roots(paths: &StoragePaths) -> [&Path; 3] {
     [paths.content_root(), paths.media_root(), paths.log_root()]
 }
 
-/// `<parent of root>/.aside-<journalId>`, or `None` for a root with no
-/// parent (never a `StoragePaths` root).
+/// `<parent of root>/.aside-<journalId>-<root name>`, or `None` for a root
+/// with no parent or name (never a `StoragePaths` root). The root's own name
+/// keeps two roots under one parent from sharing an aside.
 pub fn aside_of(root: &Path, journal_id: &str) -> Option<PathBuf> {
+    let name = root.file_name()?.to_string_lossy();
     root.parent()
-        .map(|parent| parent.join(format!("{ASIDE_PREFIX}{journal_id}")))
+        .map(|parent| parent.join(format!("{ASIDE_PREFIX}{journal_id}-{name}")))
 }
 
 /// A reset journal's roll-forward.
