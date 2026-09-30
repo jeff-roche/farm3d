@@ -1,0 +1,13 @@
+export type { ApplyRestoreOutcome } from "../generated/contracts/domain/ApplyRestoreOutcome";
+export type { BackupInventory } from "../generated/contracts/domain/BackupInventory";
+export type { BackupMediaChoice } from "../generated/contracts/domain/BackupMediaChoice";
+export type { BackupOrigin } from "../generated/contracts/domain/BackupOrigin";
+export type { BackupSummary } from "../generated/contracts/domain/BackupSummary";
+export type { CreateBackupOutcome } from "../generated/contracts/domain/CreateBackupOutcome";
+export type { PreviewRestoreOutcome } from "../generated/contracts/domain/PreviewRestoreOutcome";
+export type { RestoreBlocker } from "../generated/contracts/domain/RestoreBlocker";
+export type { RestoreConflictGroup } from "../generated/contracts/domain/RestoreConflictGroup";
+export type { RestoreNotice } from "../generated/contracts/domain/RestoreNotice";
+export type { RestorePreview } from "../generated/contracts/domain/RestorePreview";
+export type { RestoreSource } from "../generated/contracts/domain/RestoreSource";
+export type { RestoreStatus } from "../generated/contracts/domain/RestoreStatus";
