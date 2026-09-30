@@ -4,10 +4,12 @@
   gap: 0.75rem;
 }
 
-.note {
+.consequences {
   margin: 0;
-  color: var(--f3d-color-text-muted);
-  font-size: var(--f3d-type-body-size);
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .error {

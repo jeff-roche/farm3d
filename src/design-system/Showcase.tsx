@@ -16,6 +16,7 @@ import {
   Tabs,
   Dialog,
   AlertDialog,
+  TypedConfirmDialog,
   Popover,
   Tooltip,
   DropdownMenu,
@@ -52,6 +53,7 @@ export function Showcase() {
   const [dropActive, setDropActive] = createSignal(false);
   const [viewMode, setViewMode] = createSignal<"grid" | "list">("grid");
   const [stepperCurrent, setStepperCurrent] = createSignal("connect");
+  const [typedOpen, setTypedOpen] = createSignal(false);
   const [textareaValue, setTextareaValue] = createSignal("");
 
   interface ShowcaseSpool {
@@ -279,6 +281,31 @@ export function Showcase() {
             { value: "assets", label: "Assets", content: "Project asset browser." },
           ]}
           defaultValue="scene"
+        />
+      </Panel>
+
+      <Panel title="Tabs (vertical)">
+        <Tabs
+          orientation="vertical"
+          items={[
+            { value: "general", label: "General", content: "General settings." },
+            { value: "data", label: "Data", content: "Backup and restore." },
+            { value: "about", label: "About", content: "Diagnostics." },
+          ]}
+          defaultValue="general"
+        />
+      </Panel>
+
+      <Panel title="TypedConfirmDialog">
+        <Button variant="danger" onClick={() => setTypedOpen(true)}>Reset settings</Button>
+        <TypedConfirmDialog
+          open={typedOpen()}
+          onOpenChange={setTypedOpen}
+          title="Reset settings"
+          consequences={["Every setting returns to its default.", "This cannot be undone."]}
+          phrase="reset"
+          confirmLabel="Reset settings"
+          onConfirm={() => setTypedOpen(false)}
         />
       </Panel>
 
