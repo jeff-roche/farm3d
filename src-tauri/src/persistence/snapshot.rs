@@ -308,6 +308,30 @@ fn retain_newest_snapshots(
     Ok(())
 }
 
+/// P9 D14: every accepted pre-import snapshot in `root` (a regular file
+/// named `.farm3d-pre-import-*.sqlite3`), oldest first. A name whose
+/// timestamp can't be read sorts first, so it is never taken for the
+/// newest.
+pub fn accepted_snapshots(root: &Path) -> Vec<PathBuf> {
+    let mut snapshots: Vec<(u128, PathBuf)> = fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(SNAPSHOT_PREFIX) && name.ends_with(".sqlite3")
+                })
+        })
+        .map(|path| (snapshot_timestamp(&path).unwrap_or(0), path))
+        .collect();
+    snapshots.sort_unstable();
+    snapshots.into_iter().map(|(_, path)| path).collect()
+}
+
 fn snapshot_timestamp(path: &Path) -> Option<u128> {
     let name = path.file_name()?.to_str()?;
     let remainder = ["settings", "printers"]

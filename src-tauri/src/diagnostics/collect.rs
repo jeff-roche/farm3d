@@ -18,6 +18,7 @@ use serde::Serialize;
 use super::about::{version_token, AboutInfo};
 use super::bundle::DiagnosticsSection;
 use super::egress::EntryFormat;
+use super::storage::{usage_in, StorageUsage};
 use super::log::{is_valid_code, LOG_FILE, MAX_ENTRIES, MAX_FILES};
 use super::pseudonym::{AssignedPseudonyms, BundlePseudonyms};
 use crate::catalog::Catalog;
@@ -27,7 +28,7 @@ use crate::connections::capabilities::{
 use crate::connections::{ConnectionErrorCause, ConnectionState, PrinterStatus};
 use crate::contracts::command::ErrorCode;
 use crate::persistence::integrity::{self, IntegrityOutcome, IntegrityRoots, IntegrityRule};
-use crate::persistence::{RepositoryError, StorageError};
+use crate::persistence::{RepositoryError, StorageError, StoragePaths};
 use crate::printers::StoredPrinter;
 use crate::settings::commands::{MonitorDensity, MonitorSection, SnapshotRetention};
 
@@ -46,6 +47,9 @@ pub struct CollectContext<'a> {
     pub capabilities: &'a dyn Fn(&StoredPrinter) -> PrinterCapabilities,
     pub integrity_roots: IntegrityRoots,
     pub log_root: &'a Path,
+    pub storage_paths: &'a StoragePaths,
+    /// The app cache directory the Slicer keeps `orca-profiles/` under.
+    pub slicer_cache: &'a Path,
     pub now: DateTime<Utc>,
 }
 
@@ -230,10 +234,12 @@ struct ReasonCount {
     count: i64,
 }
 
-/// `StorageUsage` joins this section with Task 10 (`diagnostics/storage.rs`).
+/// `usage` is `StorageUsage` (`diagnostics/storage.rs`): fixed class names
+/// and numbers.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageSection {
+    usage: StorageUsage,
     integrity: Vec<IntegrityRow>,
     migration_warnings: Vec<CodeCount>,
     pending_credential_cleanup: Vec<ReasonCount>,
@@ -259,8 +265,15 @@ fn grouped(tx: &Transaction<'_>, sql: &str) -> rusqlite::Result<Vec<(String, i64
 fn collect_storage(
     tx: &Transaction<'_>,
     report: &integrity::IntegrityReport,
+    context: &CollectContext<'_>,
 ) -> rusqlite::Result<StorageSection> {
     Ok(StorageSection {
+        usage: usage_in(
+            tx,
+            context.storage_paths,
+            context.slicer_cache,
+            context.now,
+        )?,
         integrity: report
             .findings
             .iter()
@@ -622,7 +635,7 @@ pub fn collect(
                 let report = report
                     .as_ref()
                     .ok_or(RepositoryError::Storage(StorageError::OperationFailed))?;
-                collected.storage = Some(collect_storage(tx, report).map_err(storage_error)?);
+                collected.storage = Some(collect_storage(tx, report, context).map_err(storage_error)?);
             }
             S::Configuration => {
                 let report = report
@@ -658,6 +671,8 @@ pub const HEALTH_CLOSED: &[&str] = &[
     "printers[].capabilities[].reason",
 ];
 pub const STORAGE_CLOSED: &[&str] = &[
+    "usage.classes[].class",
+    "usage.measuredAt@time",
     "integrity[].rule",
     "integrity[].outcome",
     "migrationWarnings[].code",

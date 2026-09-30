@@ -405,7 +405,7 @@ pub fn write_farm_journal_with(
 // --- the preview ------------------------------------------------------------------------
 
 /// `(count, bytes)` of every regular file under `root` (0, 0 when absent).
-fn tree_usage(root: &Path) -> (i64, i64) {
+pub(crate) fn tree_usage(root: &Path) -> (i64, i64) {
     let mut count = 0_i64;
     let mut bytes = 0_i64;
     let mut pending = vec![root.to_path_buf()];

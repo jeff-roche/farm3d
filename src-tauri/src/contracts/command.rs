@@ -428,6 +428,9 @@ pub enum ErrorCode {
     /// P9 D13: the egress scan found a protected value in a diagnostics
     /// section; nothing was written.
     DiagnosticsRedactionFailed,
+    /// P9 D14: `clear_storage(orcaCache)` while a slice operation is
+    /// queued or running.
+    StorageInUse,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -897,6 +900,18 @@ impl CommandError {
             false,
         )
         .with_string_details(&[("section", section.as_str())])
+    }
+
+    /// P9 D14 `STORAGE_IN_USE`: `target` is the refused cleanup target; the
+    /// only reason is `sliceRunning`.
+    pub fn storage_in_use(target: &str) -> Self {
+        Self::typed(
+            ErrorCode::StorageInUse,
+            "The slicer is using this data right now.",
+            vec![RecoveryCode::Retry],
+            true,
+        )
+        .with_string_details(&[("target", target), ("reason", "sliceRunning")])
     }
 
     /// P9 D18 `CONFIRMATION_MISMATCH`: `expected` is the exact phrase.

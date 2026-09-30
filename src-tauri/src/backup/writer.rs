@@ -36,6 +36,7 @@ use super::manifest::{
 };
 use super::{BackupExcludedClass, BackupMediaChoice, BackupOrigin};
 use crate::contracts::command::CommandError;
+use crate::diagnostics::storage::available_bytes;
 use crate::persistence::integrity::{self, IntegrityRoots, IntegrityRule};
 use crate::persistence::{create_contained_directory, Storage, StorageError, StoragePaths};
 
@@ -120,42 +121,6 @@ fn io_error<E>(_: E) -> BackupWriteError {
 fn database_damaged() -> BackupWriteError {
     BackupWriteError::SourceDamaged {
         entry: "database".to_string(),
-    }
-}
-
-/// The free space available to this user under `path`.
-pub fn available_bytes(path: &Path) -> io::Result<u64> {
-    #[cfg(unix)]
-    {
-        let stat = rustix::fs::statvfs(path)?;
-        Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut available: u64 = 0;
-        // SAFETY: `wide` is NUL-terminated and outlives the call; the
-        // output pointer is valid; the two optional outputs are null.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(available)
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = path;
-        Ok(u64::MAX)
     }
 }
 

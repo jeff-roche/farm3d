@@ -68,6 +68,9 @@ use farm3d_lib::diagnostics::reset::{
     ResetClass, ResetDataClass, ResetEffect, ResetMediaScope, ResetPreview, ResetRequest,
     ResetResult, ResetTier, ResetWarning,
 };
+use farm3d_lib::diagnostics::storage::{
+    ClearStorageOutcome, StorageCleanupTarget, StorageClass, StorageClassUsage, StorageUsage,
+};
 use farm3d_lib::history::{
     JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
     JobTimelineSliceRevision, PrinterLifecycleFilter,
@@ -745,6 +748,11 @@ fn export_registry() -> Vec<Export> {
         export::<AboutSlicer>(),
         export::<AboutCredentialStore>(),
         export::<AboutInfo>(),
+        export::<StorageClass>(),
+        export::<StorageClassUsage>(),
+        export::<StorageUsage>(),
+        export::<StorageCleanupTarget>(),
+        export::<ClearStorageOutcome>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -1028,6 +1036,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::ConfirmationMismatch,
         ErrorCode::RestartPending,
         ErrorCode::DiagnosticsRedactionFailed,
+        ErrorCode::StorageInUse,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -1078,7 +1087,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE", "BACKUP_INVALID",
                 "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED", "RESTORE_BLOCKED",
                 "RESTORE_FAILED", "CONFIRMATION_MISMATCH", "RESTART_PENDING",
-                "DIAGNOSTICS_REDACTION_FAILED"
+                "DIAGNOSTICS_REDACTION_FAILED", "STORAGE_IN_USE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",

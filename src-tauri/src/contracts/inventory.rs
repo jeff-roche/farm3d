@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 145] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 147] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -629,9 +629,11 @@ contracts![
         "ExportDiagnosticsResult"
     ),
     ("about_farm3d", "AboutFarm3dRequest", "AboutFarm3dResult"),
+    ("storage_usage", "StorageUsageRequest", "StorageUsageResult"),
+    ("clear_storage", "ClearStorageRequest", "ClearStorageResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 145] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 147] {
     &COMMAND_CONTRACTS
 }
 
@@ -943,7 +945,11 @@ export type DiagnosticsPreviewResult = CommandSuccess<DiagnosticsPreview>;
 export type ExportDiagnosticsRequest = ContractRequest & { operationId: string; sections: DiagnosticsSection[] };
 export type ExportDiagnosticsResult = CommandSuccess<ExportDiagnosticsOutcome>;
 export type AboutFarm3dRequest = NoArgsRequest;
-export type AboutFarm3dResult = CommandSuccess<AboutInfo>;"#.to_string()
+export type AboutFarm3dResult = CommandSuccess<AboutInfo>;
+export type StorageUsageRequest = NoArgsRequest;
+export type StorageUsageResult = CommandSuccess<StorageUsage>;
+export type ClearStorageRequest = ContractRequest & { operationId: string; target: StorageCleanupTarget };
+export type ClearStorageResult = CommandSuccess<ClearStorageOutcome>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -1085,6 +1091,9 @@ export type AboutFarm3dResult = CommandSuccess<AboutInfo>;"#.to_string()
         visitor.visit::<crate::diagnostics::bundle::DiagnosticsPreview>();
         visitor.visit::<crate::diagnostics::bundle::ExportDiagnosticsOutcome>();
         visitor.visit::<crate::diagnostics::about::AboutInfo>();
+        visitor.visit::<crate::diagnostics::storage::StorageUsage>();
+        visitor.visit::<crate::diagnostics::storage::StorageCleanupTarget>();
+        visitor.visit::<crate::diagnostics::storage::ClearStorageOutcome>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

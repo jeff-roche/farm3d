@@ -32,7 +32,7 @@ use std::time::SystemTime;
 use rusqlite::{params, Transaction};
 use sha2::{Digest, Sha256};
 
-use crate::backup::lease::BackupLease;
+use crate::backup::lease::{BackupLease, LeaseGuard};
 use crate::contracts::command::CommandError;
 use crate::persistence::{create_contained_directory, RepositoryError, Storage, StorageError};
 use crate::printers::now_rfc3339;
@@ -216,6 +216,17 @@ pub struct SweepReport {
     pub orphans_removed: usize,
     /// Orphan blob files that could not be deleted (left for the next
     /// sweep).
+    pub orphans_failed: usize,
+}
+
+/// What [`ContentStore::clear_unreferenced`] removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClearedContent {
+    /// Blobs unlinked from `pending_blob_cleanup`.
+    pub released: usize,
+    /// Blob files no row named, deleted.
+    pub orphans_removed: usize,
+    /// Orphan files that could not be deleted.
     pub orphans_failed: usize,
 }
 
@@ -616,6 +627,10 @@ impl ContentStore {
         let Some(_permit) = self.lease.deletion_permit() else {
             return Ok(0);
         };
+        self.release_pending(storage)
+    }
+
+    fn release_pending(&self, storage: &Storage) -> Result<usize, StorageError> {
         let _placement = self
             .placement
             .lock()
@@ -676,6 +691,50 @@ impl ContentStore {
         }
     }
 
+    /// P9 D14 `clear_storage(unreferencedContent)`, run by the holder of the
+    /// backup lease (`lease` proves it: while it is held no other deleter
+    /// runs, so this store deletes on the holder's behalf). Marks every
+    /// `content_blobs` row no table references (D4's rule, which re-checks
+    /// each candidate), releases the `pending_blob_cleanup` blobs, and
+    /// removes blob files no row names. Referenced blobs are never touched.
+    pub fn clear_unreferenced(
+        &self,
+        storage: &Storage,
+        lease: &LeaseGuard,
+    ) -> Result<ClearedContent, StorageError> {
+        debug_assert_eq!(self.lease.holder(), Some(lease.activity()));
+        let candidates = storage.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT sha256 FROM content_blobs
+                 WHERE NOT EXISTS(SELECT 1 FROM model_source_revisions WHERE content_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_revisions WHERE gcode_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_revision_blobs WHERE sha256 = content_blobs.sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_operations WHERE log_sha256 = sha256)",
+            )?;
+            let hashes = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(hashes)
+        })?;
+        if !candidates.is_empty() {
+            // Under the placement lock: an import's rows and files land
+            // together.
+            let _placement = self
+                .placement
+                .lock()
+                .map_err(|_| StorageError::PersistenceUnavailable)?;
+            storage.write(|transaction| mark_unreferenced_blobs(transaction, &candidates))?;
+        }
+        let released = self.release_pending(storage)?;
+        let (orphans_removed, orphans_failed) = self.remove_orphans(storage)?;
+        Ok(ClearedContent {
+            released,
+            orphans_removed,
+            orphans_failed,
+        })
+    }
+
     /// D4 startup reconciliation, run before commands are served (the
     /// metadata-root lease guarantees no import is in flight): empties
     /// `staging/`, retries `pending_blob_cleanup`, and deletes blob files
@@ -734,6 +793,12 @@ impl ContentStore {
     /// `pending_blob_cleanup` row is left to `release_unreferenced`, which
     /// already tried it and recorded the attempt.
     fn remove_orphans(&self, storage: &Storage) -> Result<(usize, usize), StorageError> {
+        // Under the placement lock, so a blob an import has placed and not
+        // yet committed is never taken for an orphan.
+        let _placement = self
+            .placement
+            .lock()
+            .map_err(|_| StorageError::PersistenceUnavailable)?;
         let (known, pending) = storage.read(|connection| {
             let hashes = |sql: &str| -> rusqlite::Result<HashSet<String>> {
                 let mut statement = connection.prepare(sql)?;

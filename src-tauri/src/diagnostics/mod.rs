@@ -5,7 +5,8 @@
 //! the one-way, per-process pseudonyms that stand in for ids and the
 //! per-bundle pseudonymizer; [`collect`], [`egress`], and [`bundle`] build
 //! the diagnostics bundle (D13) and [`about`] the About facts; [`reset`]
-//! holds the three reset tiers (D15); [`commands`] the commands.
+//! holds the three reset tiers (D15); [`storage`] the storage usage and
+//! cleanup (D14); [`commands`] the commands.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub mod egress;
 pub mod log;
 pub mod pseudonym;
 pub mod reset;
+pub mod storage;
 
 /// A test-only hook over each serialized bundle entry, run after
 /// serialization and before the egress scan (a deliberately leaking

@@ -1,6 +1,11 @@
-//! The diagnostics, reset, and About commands (spec "Commands", D13, D15,
-//! D18): `diagnostics_preview`, `export_diagnostics`, `reset_preview`,
-//! `reset_farm`, and `about_farm3d`.
+//! The diagnostics, storage, reset, and About commands (spec "Commands",
+//! D13, D14, D15, D18): `diagnostics_preview`, `export_diagnostics`,
+//! `storage_usage`, `clear_storage`, `reset_preview`, `reset_farm`, and
+//! `about_farm3d`.
+//!
+//! `clear_storage` holds the backup lease (activity `storageCleanup`) for
+//! its whole run and claims its `operationId` in the process-local ledger
+//! (digest `{ target }`).
 //!
 //! `export_diagnostics` owns its native save dialog (the frontend never
 //! passes a path; the result carries the basename), builds the bundle in
@@ -38,6 +43,7 @@ use super::bundle::{
 };
 use super::collect::CollectContext;
 use super::reset::{self, ResetPreview, ResetRequest, ResetResult, ResetTier};
+use super::storage::{self, ClearStorageOutcome, StorageCleanupTarget, StorageUsage};
 use crate::persistence::integrity::IntegrityRoots;
 use crate::persistence::RepositoryError;
 use crate::printers::StoredPrinter;
@@ -324,6 +330,8 @@ fn with_bundle_inputs<R: tauri::Runtime, T>(
             capabilities: &capabilities,
             integrity_roots: IntegrityRoots::from_paths(paths),
             log_root: paths.log_root(),
+            storage_paths: paths,
+            slicer_cache: services.slicing.cache_dir(),
             now,
         },
         home_dirs,
@@ -475,4 +483,87 @@ pub async fn about_farm3d<R: tauri::Runtime>(
     })
     .await?;
     Ok(CommandSuccess::new(info))
+}
+
+// --- storage (D14) ---------------------------------------------------------------------
+
+/// `storage_usage`: every class's bytes and count. Reads only.
+#[tauri::command]
+pub async fn storage_usage<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+) -> Result<CommandSuccess<StorageUsage>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let usage = blocking(move || {
+        storage::usage(&services.storage, services.slicing.cache_dir(), Utc::now())
+            .map_err(|error| CommandError::from_repository(RepositoryError::Storage(error)))
+    })
+    .await?;
+    Ok(CommandSuccess::new(usage))
+}
+
+/// The process-local ledger digest, `{ target }`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearStorageDigest {
+    target: StorageCleanupTarget,
+}
+
+/// `clear_storage`: one cleanup target, under the lease. Returns what it
+/// freed and the new usage.
+#[tauri::command]
+pub async fn clear_storage<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    operation_id: String,
+    target: StorageCleanupTarget,
+) -> Result<CommandSuccess<ClearStorageOutcome>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let digest = ClearStorageDigest { target };
+    let ledger = &services.backup.operations;
+    if let Some(cached) =
+        ledger.replay(&operation_id, ProcessOperationKind::ClearStorage, &digest)?
+    {
+        return Ok(CommandSuccess::new(cached));
+    }
+    let result = {
+        let services = Arc::clone(&services);
+        blocking(move || run_clear_storage(&services, target)).await?
+    };
+    ledger.record(
+        &operation_id,
+        ProcessOperationKind::ClearStorage,
+        &digest,
+        &result,
+    );
+    Ok(CommandSuccess::new(result))
+}
+
+fn run_clear_storage<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    target: StorageCleanupTarget,
+) -> Result<ClearStorageOutcome, CommandError> {
+    let guard = services
+        .backup
+        .lease
+        .try_acquire(LeaseActivity::StorageCleanup)
+        .map_err(|holder| CommandError::backup_in_progress(holder.as_str()))?;
+    let cleared = storage::clear(
+        &services.storage,
+        &services.library.content,
+        services.slicing.cache_dir(),
+        &guard,
+        target,
+    )?;
+    let usage = storage::usage(&services.storage, services.slicing.cache_dir(), Utc::now())
+        .map_err(|error| CommandError::from_repository(RepositoryError::Storage(error)))?;
+    drop(guard);
+    Ok(ClearStorageOutcome {
+        target,
+        removed_count: cleared.removed_count,
+        freed_bytes: cleared.freed_bytes,
+        usage,
+    })
 }

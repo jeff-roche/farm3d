@@ -198,6 +198,8 @@ type CommandMap = {
   diagnostics_preview: [Contracts.DiagnosticsPreviewRequest, Contracts.DiagnosticsPreviewResult];
   export_diagnostics: [Contracts.ExportDiagnosticsRequest, Contracts.ExportDiagnosticsResult];
   about_farm3d: [Contracts.AboutFarm3dRequest, Contracts.AboutFarm3dResult];
+  storage_usage: [Contracts.StorageUsageRequest, Contracts.StorageUsageResult];
+  clear_storage: [Contracts.ClearStorageRequest, Contracts.ClearStorageResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

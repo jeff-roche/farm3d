@@ -56,8 +56,10 @@ const P8_COMMAND_COUNT: usize = 7 + 6 + 5 + 4;
 /// 7's `apply_restore`, `restore_status`, and `acknowledge_restore_status`
 /// (`tests/p9_installer.rs`), plus Task 8's `reset_preview` and
 /// `reset_farm` (`tests/p9_reset.rs`), plus Task 9's `diagnostics_preview`,
-/// `export_diagnostics`, and `about_farm3d` (`tests/p9_diagnostics.rs`).
-const P9_COMMAND_COUNT: usize = 2 + 4 + 2 + 3 + 2 + 3;
+/// `export_diagnostics`, and `about_farm3d` (`tests/p9_diagnostics.rs`),
+/// plus Task 10's `storage_usage` and `clear_storage`
+/// (`tests/p9_storage.rs`).
+const P9_COMMAND_COUNT: usize = 2 + 4 + 2 + 3 + 2 + 3 + 2;
 
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",

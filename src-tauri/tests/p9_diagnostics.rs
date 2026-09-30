@@ -694,6 +694,26 @@ fn storage_holds_integrity_findings_warning_codes_and_cleanup_counts_only() {
         ])
     );
     assert_eq!(storage["pendingBlobCleanup"], 1);
+    // D14's usage: every class in order, numbers and fixed names only.
+    let classes: Vec<&str> = storage["usage"]["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["class"].as_str().unwrap())
+        .collect();
+    assert_eq!(classes.len(), 13);
+    assert_eq!(classes[0], "database");
+    assert_eq!(classes[12], "slicerProfileCache");
+    assert_eq!(
+        storage["usage"]["totalBytes"].as_u64().unwrap(),
+        storage["usage"]["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["bytes"].as_u64().unwrap())
+            .sum::<u64>()
+    );
+    assert!(storage["usage"]["measuredAt"].as_str().unwrap().ends_with('Z'));
     secrets::assert_none_of(&every_needle(), &bytes, "storage");
 }
 

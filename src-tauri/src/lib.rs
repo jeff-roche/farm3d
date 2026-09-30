@@ -29,7 +29,8 @@ use backup::commands::{
     discard_restore_preview, list_backups, preview_restore, restore_status,
 };
 use diagnostics::commands::{
-    about_farm3d, diagnostics_preview, export_diagnostics, reset_farm, reset_preview,
+    about_farm3d, clear_storage, diagnostics_preview, export_diagnostics, reset_farm,
+    reset_preview, storage_usage,
 };
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
@@ -211,7 +212,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 145] = [
+pub const COMMAND_NAMES: [&str; 147] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -357,6 +358,8 @@ pub const COMMAND_NAMES: [&str; 145] = [
     "diagnostics_preview",
     "export_diagnostics",
     "about_farm3d",
+    "storage_usage",
+    "clear_storage",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -1092,6 +1095,8 @@ pub fn run() {
             diagnostics_preview,
             export_diagnostics,
             about_farm3d,
+            storage_usage,
+            clear_storage,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])
