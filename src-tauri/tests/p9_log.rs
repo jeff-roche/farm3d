@@ -77,8 +77,12 @@ fn exactly_the_documented_types_are_log_safe() {
     assert!(is_log_safe!(ErrorCode));
     assert!(is_log_safe!(StatusCacheWarningOperation));
     assert!(is_log_safe!(farm3d_lib::backup::InstallerStep));
-    assert!(is_log_safe!(farm3d_lib::diagnostics::bundle::DiagnosticsSection));
-    assert!(is_log_safe!(farm3d_lib::diagnostics::storage::StorageCleanupTarget));
+    assert!(is_log_safe!(
+        farm3d_lib::diagnostics::bundle::DiagnosticsSection
+    ));
+    assert!(is_log_safe!(
+        farm3d_lib::diagnostics::storage::StorageCleanupTarget
+    ));
     assert!(is_log_safe!(StorageError));
     assert!(is_log_safe!(RepositoryError));
     assert!(is_log_safe!(u8) && is_log_safe!(u16) && is_log_safe!(u32) && is_log_safe!(u64));
@@ -320,7 +324,8 @@ fn offending_lines(text: &str) -> Vec<usize> {
                 item += 1;
             }
             let header = lines.get(item).map_or("", |line| line.trim_start());
-            let is_mod = header.starts_with("mod ") || header.starts_with("pub mod ")
+            let is_mod = header.starts_with("mod ")
+                || header.starts_with("pub mod ")
                 || header.starts_with("pub(crate) mod ");
             if is_mod && header.trim_end().ends_with('{') {
                 // Skip to the matching close brace.

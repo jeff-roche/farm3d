@@ -68,7 +68,10 @@ impl JobHistoryState {
 /// Whether the Job's Printer is archived now.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/PrinterLifecycleFilter.ts")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/PrinterLifecycleFilter.ts"
+)]
 pub enum PrinterLifecycleFilter {
     #[default]
     Any,
@@ -165,7 +168,10 @@ pub struct JobHistoryPage {
 /// The Slice Revision's immutable facts, without its current-label fields.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/JobTimelineSliceRevision.ts")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/JobTimelineSliceRevision.ts"
+)]
 pub struct JobTimelineSliceRevision {
     pub id: String,
     pub kind: SliceRevisionKind,
@@ -185,7 +191,11 @@ pub struct JobTimelineSliceRevision {
 /// Attention Event's `firstObservedAt`, an Incident entry's `at`, a
 /// snapshot's `capturedAt`.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "source", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "source",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "source",
     rename_all = "camelCase",

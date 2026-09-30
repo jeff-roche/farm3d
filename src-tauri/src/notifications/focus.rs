@@ -110,14 +110,20 @@ mod tests {
     fn the_seed_takes_is_focused_and_an_error_seeds_unfocused() {
         let focus = Focus::default();
         focus.seed(Ok::<_, ()>(false));
-        assert!(!focus.is_focused(), "a window shown unfocused notifies at once");
+        assert!(
+            !focus.is_focused(),
+            "a window shown unfocused notifies at once"
+        );
         focus.seed(Ok::<_, ()>(true));
         assert!(focus.is_focused());
         assert_eq!(focus.gained(), 0, "a seed is not a Focused(true) event");
 
         let errored = Focus::default();
         errored.seed(Err::<bool, _>("is_focused failed"));
-        assert!(!errored.is_focused(), "an error seeds false: notify, not silence");
+        assert!(
+            !errored.is_focused(),
+            "an error seeds false: notify, not silence"
+        );
 
         // The events stay the source after the seed.
         errored.set(true);

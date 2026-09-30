@@ -652,9 +652,15 @@ fn linked_start_and_control_run_their_links_and_carry_the_job() {
     seed_active_job(&rig.storage);
     rig.observe(HostActivity::Idle);
     let upload = rig
-        .linked_stage("op-u#hostOperation", Some(marker_link(Arc::new(Mutex::new(None)))))
+        .linked_stage(
+            "op-u#hostOperation",
+            Some(marker_link(Arc::new(Mutex::new(None)))),
+        )
         .expect("a linked stage");
-    assert_eq!(rig.wait_settled(&upload.id).state, HostOperationState::Succeeded);
+    assert_eq!(
+        rig.wait_settled(&upload.id).state,
+        HostOperationState::Succeeded
+    );
 
     let seen = Arc::new(Mutex::new(None));
     let start = tauri::async_runtime::block_on(api::start(
@@ -670,7 +676,10 @@ fn linked_start_and_control_run_their_links_and_carry_the_job() {
     assert_eq!(start.job_id.as_deref(), Some(JOB));
     assert_eq!(seen.lock().unwrap().as_deref(), Some(start.id.as_str()));
     assert_eq!(marker_count(&rig), 2);
-    assert_eq!(rig.wait_settled(&start.id).state, HostOperationState::Succeeded);
+    assert_eq!(
+        rig.wait_settled(&start.id).state,
+        HostOperationState::Succeeded
+    );
 
     rig.manager.apply_observation(
         PRINTER,
@@ -687,10 +696,16 @@ fn linked_start_and_control_run_their_links_and_carry_the_job() {
     ))
     .expect("a linked pause");
     assert_eq!(pause.job_id.as_deref(), Some(JOB));
-    assert_eq!(pause.host_path, upload.host_path, "the host reports the staged file");
+    assert_eq!(
+        pause.host_path, upload.host_path,
+        "the host reports the staged file"
+    );
     assert_eq!(seen.lock().unwrap().as_deref(), Some(pause.id.as_str()));
     assert_eq!(marker_count(&rig), 3);
-    assert_eq!(rig.wait_settled(&pause.id).state, HostOperationState::Succeeded);
+    assert_eq!(
+        rig.wait_settled(&pause.id).state,
+        HostOperationState::Succeeded
+    );
 }
 
 // --- broadcasts -----------------------------------------------------------------

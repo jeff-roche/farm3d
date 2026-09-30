@@ -1110,7 +1110,9 @@ fn object_status(state: &FakeState, name: &str) -> Option<Value> {
         }),
         "pause_resume" => json!({"is_paused": state.is_paused}),
         "display_status" => json!({"progress": state.progress, "message": null}),
-        "virtual_sdcard" => json!({"progress": state.progress, "is_active": state.print_state == "printing"}),
+        "virtual_sdcard" => {
+            json!({"progress": state.progress, "is_active": state.print_state == "printing"})
+        }
         "heater_bed" => {
             let (temperature, target) = state.bed?;
             json!({"temperature": temperature, "target": target, "power": 0.0})

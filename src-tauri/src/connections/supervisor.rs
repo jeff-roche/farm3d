@@ -795,7 +795,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             self.now(),
         );
         next.cache_warnings = cache_warnings;
-        self.publish_changed(printer_id, next, hydrated, Some(ConnectionErrorCause::Protocol));
+        self.publish_changed(
+            printer_id,
+            next,
+            hydrated,
+            Some(ConnectionErrorCause::Protocol),
+        );
     }
 
     pub fn seed(&self, printer_id: &str, status: PrinterStatus) {
@@ -1434,7 +1439,12 @@ mod tests {
             },
         );
         manager
-            .start("prn-1".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .start(
+                "prn-1".to_string(),
+                a_config(),
+                None,
+                PrinterSetupFacts::complete(),
+            )
             .await;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -1501,7 +1511,12 @@ mod tests {
         assert_eq!(manager.status_facts()["prn-1"].cause, None);
 
         manager
-            .start("prn-2".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .start(
+                "prn-2".to_string(),
+                a_config(),
+                None,
+                PrinterSetupFacts::complete(),
+            )
             .await;
         tokio::task::yield_now().await;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1509,13 +1524,23 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "no error status");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert_eq!(manager.status_facts()["prn-2"].cause, None, "unsupported kind");
+        assert_eq!(
+            manager.status_facts()["prn-2"].cause,
+            None,
+            "unsupported kind"
+        );
 
-        manager.report_error("prn-1", "bad answer", PrinterSetupFacts::complete()).await;
+        manager
+            .report_error("prn-1", "bad answer", PrinterSetupFacts::complete())
+            .await;
         manager.stop("prn-1").await;
         assert!(!manager.status_facts().contains_key("prn-1"));
         manager.seed("prn-1", PrinterStatus::new(ConnectionState::Error));
-        assert_eq!(manager.status_facts()["prn-1"].cause, None, "removal forgot it");
+        assert_eq!(
+            manager.status_facts()["prn-1"].cause,
+            None,
+            "removal forgot it"
+        );
     }
 
     #[tokio::test]
@@ -1718,7 +1743,12 @@ mod tests {
     #[test]
     fn removal_publishes_a_tombstone_and_deletes_the_backfill_entry() {
         let statuses = StatusMap::default();
-        statuses.publish_changed("prn-1", PrinterStatus::new(ConnectionState::Online), false, None);
+        statuses.publish_changed(
+            "prn-1",
+            PrinterStatus::new(ConnectionState::Online),
+            false,
+            None,
+        );
 
         let event = statuses.publish_removed("prn-1");
 

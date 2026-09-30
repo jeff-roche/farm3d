@@ -19,13 +19,13 @@ use tauri::AppHandle;
 
 use crate::bootstrap::BootstrapState;
 use crate::contracts::command::{CommandError, CommandSuccess, IncomingContractVersion};
+use crate::host_ops::start_rule::ControlVerb;
+use crate::host_ops::PriorState;
 use crate::persistence::{RepositoryError, StorageError};
 use crate::printers::now_rfc3339;
 use crate::queue::commands::publish;
 use crate::queue::eligibility::AssignMode;
 use crate::queue::world::LiveWorld;
-use crate::host_ops::start_rule::ControlVerb;
-use crate::host_ops::PriorState;
 use crate::queue::QueueChange;
 use crate::RuntimeServices;
 
@@ -297,7 +297,8 @@ pub async fn pause_job<R: tauri::Runtime>(
     job_id: String,
 ) -> Result<CommandSuccess<QueueChange>, CommandError> {
     let services = ready(&bootstrap, contract_version)?;
-    let handoff = dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Pause).await?;
+    let handoff =
+        dispatch::control_job(&services, operation_id, &job_id, ControlVerb::Pause).await?;
     Ok(finish(&app, &services, handoff))
 }
 

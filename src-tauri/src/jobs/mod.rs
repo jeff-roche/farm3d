@@ -260,7 +260,11 @@ pub struct PrinterSnapshot {
 /// to the host); the other two describe the linked Host Operation's own
 /// outcome.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -307,7 +311,11 @@ pub fn estimated_use_mg(estimate_mg: i64, max_progress_pct: i64) -> i64 {
 /// allowed while settlement is `pending` or `deferred`; `Defer` only from
 /// `pending` (`jobs::settlement::settle`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -429,7 +437,11 @@ pub enum DeclaredOutcome {
 
 /// D1/D4: how a resolved Reconciliation Requirement was closed.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -450,7 +462,10 @@ pub enum RequirementResolution {
 /// D1: a durable Reconciliation Requirement row, one per `(job, kind)`.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "domain/ReconciliationRequirement.ts")]
+#[ts(
+    rename_all = "camelCase",
+    export_to = "domain/ReconciliationRequirement.ts"
+)]
 pub struct ReconciliationRequirement {
     pub id: String,
     pub job_id: String,

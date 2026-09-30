@@ -231,7 +231,8 @@ mod tests {
         // else (every other state is already read).
         for (i, &(read, acknowledged, resolved)) in STATES.iter().enumerate() {
             let event = an_event(Manual, read, acknowledged, resolved);
-            let change = apply(&event, LifecycleOp::MarkRead, now()).expect("MarkRead never errors");
+            let change =
+                apply(&event, LifecycleOp::MarkRead, now()).expect("MarkRead never errors");
             if i == 0 {
                 assert!(change.changed, "row {i}");
                 assert_eq!(change.read_at, Some(rfc3339(now())));
@@ -292,7 +293,10 @@ mod tests {
             } else {
                 assert!(change.changed, "row {i}");
                 assert_eq!(change.resolved_at, Some(rfc3339(now())));
-                assert_eq!(change.resolution, Some(AttentionResolution::OperatorResolved));
+                assert_eq!(
+                    change.resolution,
+                    Some(AttentionResolution::OperatorResolved)
+                );
                 assert_eq!(
                     change.read_at,
                     Some(event.read_at.clone().unwrap_or_else(|| rfc3339(now()))),
@@ -368,15 +372,40 @@ mod tests {
         // Row order matches STATES: unread/open, read-unacked/open,
         // read-acked/open, read-unacked/resolved, read-acked/resolved.
         let auto_and_action_table: [[Expect; 4]; 5] = [
-            [Expect::Changed, Expect::Changed, Expect::NotManual, Expect::Changed],
-            [Expect::NoOp, Expect::Changed, Expect::NotManual, Expect::Changed],
-            [Expect::NoOp, Expect::NoOp, Expect::NotManual, Expect::Changed],
+            [
+                Expect::Changed,
+                Expect::Changed,
+                Expect::NotManual,
+                Expect::Changed,
+            ],
+            [
+                Expect::NoOp,
+                Expect::Changed,
+                Expect::NotManual,
+                Expect::Changed,
+            ],
+            [
+                Expect::NoOp,
+                Expect::NoOp,
+                Expect::NotManual,
+                Expect::Changed,
+            ],
             [Expect::NoOp, Expect::NoOp, Expect::NotManual, Expect::NoOp],
             [Expect::NoOp, Expect::NoOp, Expect::NotManual, Expect::NoOp],
         ];
         let manual_table: [[Expect; 4]; 5] = [
-            [Expect::Changed, Expect::Changed, Expect::Changed, Expect::Changed],
-            [Expect::NoOp, Expect::Changed, Expect::Changed, Expect::Changed],
+            [
+                Expect::Changed,
+                Expect::Changed,
+                Expect::Changed,
+                Expect::Changed,
+            ],
+            [
+                Expect::NoOp,
+                Expect::Changed,
+                Expect::Changed,
+                Expect::Changed,
+            ],
             [Expect::NoOp, Expect::NoOp, Expect::Changed, Expect::Changed],
             [Expect::NoOp, Expect::NoOp, Expect::NoOp, Expect::NoOp],
             [Expect::NoOp, Expect::NoOp, Expect::NoOp, Expect::NoOp],
@@ -391,7 +420,9 @@ mod tests {
                 let event = an_event(mode, read, acknowledged, resolved);
                 let ops = [
                     LifecycleOp::MarkRead,
-                    LifecycleOp::Acknowledge { by: AckBy::Operator },
+                    LifecycleOp::Acknowledge {
+                        by: AckBy::Operator,
+                    },
                     LifecycleOp::Resolve(AttentionResolution::OperatorResolved),
                     LifecycleOp::Resolve(AttentionResolution::ConditionCleared),
                 ];

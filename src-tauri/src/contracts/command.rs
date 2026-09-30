@@ -520,7 +520,9 @@ pub struct CommandError {
 
 /// A detail value that is a string or `null`.
 fn optional_string(value: Option<&str>) -> JsonValue {
-    value.map_or(JsonValue::Null(()), |value| JsonValue::String(value.to_string()))
+    value.map_or(JsonValue::Null(()), |value| {
+        JsonValue::String(value.to_string())
+    })
 }
 
 impl CommandError {
@@ -764,10 +766,9 @@ impl CommandError {
     /// P9 D3/D4 `BACKUP_INVALID`: `field_path` is a safe path into the
     /// archive or its manifest (never an entry's bytes or an unsafe name).
     pub fn backup_invalid(reason: crate::backup::BackupInvalidReason, field_path: &str) -> Self {
-        let reason = JsonValue::from_serde_value(
-            serde_json::to_value(reason).expect("a reason serializes"),
-        )
-        .expect("a reason is a string");
+        let reason =
+            JsonValue::from_serde_value(serde_json::to_value(reason).expect("a reason serializes"))
+                .expect("a reason is a string");
         let mut error = Self::typed(
             ErrorCode::BackupInvalid,
             "This file is damaged or isn't a farm3d backup.",
@@ -819,10 +820,7 @@ impl CommandError {
                 "supportedVersion".to_string(),
                 safe_number(crate::persistence::CURRENT_SCHEMA_VERSION),
             ),
-            (
-                "receivedVersion".to_string(),
-                safe_number(received_version),
-            ),
+            ("receivedVersion".to_string(), safe_number(received_version)),
         ]));
         error
     }
@@ -1013,7 +1011,11 @@ impl CommandError {
     /// Job (`job_id`), `details` also carries `jobId`, `recovery` is
     /// `OPEN_JOB`, and the message is the Job one -- an active Job with no
     /// unresolved Host Operation never reaches this at all.
-    pub fn connection_in_use(printer_id: &str, host_operation_id: &str, job_id: Option<&str>) -> Self {
+    pub fn connection_in_use(
+        printer_id: &str,
+        host_operation_id: &str,
+        job_id: Option<&str>,
+    ) -> Self {
         match job_id {
             Some(job_id) => {
                 let mut error = Self::typed(
@@ -1051,7 +1053,11 @@ impl CommandError {
 
     /// P7 D8 `JOBS_EXIST`: `import_printers` while any Job exists, or any
     /// open Queue Entry is pinned to a Printer. Each list is at most 20.
-    pub fn jobs_exist(printer_ids: &[String], job_ids: &[String], queue_entry_ids: &[String]) -> Self {
+    pub fn jobs_exist(
+        printer_ids: &[String],
+        job_ids: &[String],
+        queue_entry_ids: &[String],
+    ) -> Self {
         let strings = |values: &[String]| {
             JsonValue::Array(values.iter().cloned().map(JsonValue::String).collect())
         };
@@ -1107,7 +1113,10 @@ impl CommandError {
             false,
         );
         error.details = Some(BTreeMap::from([
-            ("eventId".to_string(), JsonValue::String(event_id.to_string())),
+            (
+                "eventId".to_string(),
+                JsonValue::String(event_id.to_string()),
+            ),
             (
                 "condition".to_string(),
                 JsonValue::String(condition.as_str().to_string()),
@@ -1175,9 +1184,10 @@ impl CommandError {
     /// only pinned snapshots are left to prune.
     pub fn snapshot_disk_cap(used_bytes: i64, cap_bytes: i64, pinned_bytes: i64) -> Self {
         let number = |value: i64| {
-            JsonValue::Number(JsonNumber::try_from(value).unwrap_or_else(|_| {
-                JsonNumber::try_from(0_i64).expect("zero is JS-safe")
-            }))
+            JsonValue::Number(
+                JsonNumber::try_from(value)
+                    .unwrap_or_else(|_| JsonNumber::try_from(0_i64).expect("zero is JS-safe")),
+            )
         };
         let mut error = Self::typed(
             ErrorCode::SnapshotDiskCap,
@@ -1248,8 +1258,14 @@ impl CommandError {
         let mut error = Self::typed(ErrorCode::CapabilityUnsupported, detail, vec![], false);
         error.details = Some(BTreeMap::from([
             ("printerId".to_string(), optional_string(printer_id)),
-            ("capability".to_string(), JsonValue::String("camera".to_string())),
-            ("reason".to_string(), JsonValue::String("adapter".to_string())),
+            (
+                "capability".to_string(),
+                JsonValue::String("camera".to_string()),
+            ),
+            (
+                "reason".to_string(),
+                JsonValue::String("adapter".to_string()),
+            ),
             ("detail".to_string(), JsonValue::String(detail.to_string())),
         ]));
         error
@@ -1866,7 +1882,10 @@ impl CommandError {
         let message = first
             .map(|blocker| blocker.message.clone())
             .unwrap_or_else(|| "This Job can't start yet.".to_string());
-        let recovery = first.and_then(|blocker| blocker.recovery).into_iter().collect();
+        let recovery = first
+            .and_then(|blocker| blocker.recovery)
+            .into_iter()
+            .collect();
         let mut error = Self::typed(ErrorCode::JobStartBlocked, message, recovery, false)
             .with_string_details(&[("jobId", job_id)]);
         let blockers = serde_json::to_value(blockers)
@@ -1911,8 +1930,16 @@ impl CommandError {
             SettleFailureReason::Settled => "This Job's material is already settled.",
             SettleFailureReason::Corrected => "This Job already has a correction.",
         };
-        Self::typed(ErrorCode::JobAlreadySettled, message, vec![RecoveryCode::Reload], false)
-            .with_string_details(&[("jobId", job_id), ("reason", &crate::spools::encode_enum(reason))])
+        Self::typed(
+            ErrorCode::JobAlreadySettled,
+            message,
+            vec![RecoveryCode::Reload],
+            false,
+        )
+        .with_string_details(&[
+            ("jobId", job_id),
+            ("reason", &crate::spools::encode_enum(reason)),
+        ])
     }
 
     /// P7 D2 `JOB_ALREADY_RETRIED`.
@@ -1954,7 +1981,10 @@ impl CommandError {
                 });
                 mapped.message = format!("{spool_label} no longer has enough material.");
                 let mut details = BTreeMap::from([
-                    ("spoolId".to_string(), JsonValue::String(spool_id.to_string())),
+                    (
+                        "spoolId".to_string(),
+                        JsonValue::String(spool_id.to_string()),
+                    ),
                     ("availableMg".to_string(), number(*available_mg)),
                 ]);
                 if let Some(required_mg) = required_mg {
@@ -1971,17 +2001,18 @@ impl CommandError {
                 mapped.message =
                     format!("{spool_label} is {lifecycle_text} and can't be reserved.");
                 mapped.details = Some(BTreeMap::from([
-                    ("spoolId".to_string(), JsonValue::String(spool_id.to_string())),
+                    (
+                        "spoolId".to_string(),
+                        JsonValue::String(spool_id.to_string()),
+                    ),
                     ("lifecycle".to_string(), JsonValue::String(lifecycle_text)),
                 ]));
                 mapped
             }
             ReservationError::InvalidTransition { from } => {
                 let mut mapped = Self::from(ReservationError::InvalidTransition { from: *from });
-                let mut details = BTreeMap::from([(
-                    "state".to_string(),
-                    JsonValue::String(encode_enum(*from)),
-                )]);
+                let mut details =
+                    BTreeMap::from([("state".to_string(), JsonValue::String(encode_enum(*from)))]);
                 if let Some(reservation_id) = reservation_id {
                     details.insert(
                         "reservationId".to_string(),
@@ -2473,14 +2504,18 @@ mod tests {
         use crate::spools::reservations::{ReservationError, ReservationState};
         use crate::spools::SpoolLifecycle;
 
-        let insufficient: CommandError =
-            ReservationError::InsufficientAvailable { available_mg: -1_000 }.into();
+        let insufficient: CommandError = ReservationError::InsufficientAvailable {
+            available_mg: -1_000,
+        }
+        .into();
         assert_eq!(insufficient.code, ErrorCode::InsufficientMaterial);
         assert_eq!(insufficient.recovery, vec![RecoveryCode::Reload]);
         assert!(!insufficient.retryable);
         assert_eq!(
             insufficient.details.unwrap().get("availableMg"),
-            Some(&JsonValue::Number(JsonNumber::try_from(-1_000_i64).unwrap()))
+            Some(&JsonValue::Number(
+                JsonNumber::try_from(-1_000_i64).unwrap()
+            ))
         );
 
         let not_reservable: CommandError = ReservationError::SpoolNotReservable {
@@ -2608,13 +2643,21 @@ mod tests {
             spool_number: Some(7),
             reservation_id: None,
             required_mg: Some(12_500),
-            error: ReservationError::InsufficientAvailable { available_mg: 4_000 },
+            error: ReservationError::InsufficientAvailable {
+                available_mg: 4_000,
+            },
         });
         assert_eq!(insufficient.code, ErrorCode::InsufficientMaterial);
-        assert_eq!(insufficient.message, "Spool #7 no longer has enough material.");
+        assert_eq!(
+            insufficient.message,
+            "Spool #7 no longer has enough material."
+        );
         assert_eq!(insufficient.recovery, vec![RecoveryCode::Reload]);
         let details = insufficient.details.unwrap();
-        assert_eq!(details.get("spoolId"), Some(&JsonValue::String("spl-a".to_string())));
+        assert_eq!(
+            details.get("spoolId"),
+            Some(&JsonValue::String("spl-a".to_string()))
+        );
         assert_eq!(details.get("availableMg"), Some(&mg(4_000)));
         assert_eq!(details.get("requiredMg"), Some(&mg(12_500)));
 
@@ -2628,9 +2671,15 @@ mod tests {
             },
         });
         assert_eq!(archived.code, ErrorCode::SpoolNotReservable);
-        assert_eq!(archived.message, "Spool #7 is archived and can't be reserved.");
+        assert_eq!(
+            archived.message,
+            "Spool #7 is archived and can't be reserved."
+        );
         let details = archived.details.unwrap();
-        assert_eq!(details.get("spoolId"), Some(&JsonValue::String("spl-a".to_string())));
+        assert_eq!(
+            details.get("spoolId"),
+            Some(&JsonValue::String("spl-a".to_string()))
+        );
         assert_eq!(
             details.get("lifecycle"),
             Some(&JsonValue::String("archived".to_string()))
@@ -2676,14 +2725,21 @@ mod tests {
             "This Queue Entry is assigned. Release or cancel its Job instead."
         );
         let details = remove.details.unwrap();
-        assert_eq!(details.get("action"), Some(&JsonValue::String("remove".to_string())));
-        assert_eq!(details.get("state"), Some(&JsonValue::String("assigned".to_string())));
+        assert_eq!(
+            details.get("action"),
+            Some(&JsonValue::String("remove".to_string()))
+        );
+        assert_eq!(
+            details.get("state"),
+            Some(&JsonValue::String("assigned".to_string()))
+        );
 
-        let internal = CommandError::from_repository(RepositoryError::IllegalQueueEntryTransition {
-            entry_id: "qen-1".to_string(),
-            from: QueueEntryState::Queued,
-            event: EntryEvent::JobTerminal(CloseReason::Completed),
-        });
+        let internal =
+            CommandError::from_repository(RepositoryError::IllegalQueueEntryTransition {
+                entry_id: "qen-1".to_string(),
+                from: QueueEntryState::Queued,
+                event: EntryEvent::JobTerminal(CloseReason::Completed),
+            });
         assert_eq!(internal.code, ErrorCode::Internal);
 
         let release = CommandError::from_repository(RepositoryError::IllegalJobTransition {
@@ -2692,11 +2748,23 @@ mod tests {
             event: JobEventKind::Released,
         });
         assert_eq!(release.code, ErrorCode::JobActionNotAllowed);
-        assert_eq!(release.message, "This Job can't release while it is printing.");
+        assert_eq!(
+            release.message,
+            "This Job can't release while it is printing."
+        );
         let details = release.details.unwrap();
-        assert_eq!(details.get("jobId"), Some(&JsonValue::String("job-1".to_string())));
-        assert_eq!(details.get("action"), Some(&JsonValue::String("release".to_string())));
-        assert_eq!(details.get("state"), Some(&JsonValue::String("printing".to_string())));
+        assert_eq!(
+            details.get("jobId"),
+            Some(&JsonValue::String("job-1".to_string()))
+        );
+        assert_eq!(
+            details.get("action"),
+            Some(&JsonValue::String("release".to_string()))
+        );
+        assert_eq!(
+            details.get("state"),
+            Some(&JsonValue::String("printing".to_string()))
+        );
 
         let tracker = CommandError::from_repository(RepositoryError::IllegalJobTransition {
             job_id: "job-1".to_string(),
@@ -2720,8 +2788,14 @@ mod tests {
         );
         assert_eq!(not_on.recovery, vec![RecoveryCode::Reload]);
         let details = not_on.details.unwrap();
-        assert_eq!(details.get("jobId"), Some(&JsonValue::String("job-1".to_string())));
-        assert_eq!(details.get("printerId"), Some(&JsonValue::String("prn-1".to_string())));
+        assert_eq!(
+            details.get("jobId"),
+            Some(&JsonValue::String("job-1".to_string()))
+        );
+        assert_eq!(
+            details.get("printerId"),
+            Some(&JsonValue::String("prn-1".to_string()))
+        );
 
         let blocker = crate::queue::Blocker {
             code: crate::queue::BlockerCode::SpoolNotLoaded,

@@ -91,8 +91,12 @@ pub fn validate(query: &JobHistoryQuery) -> Result<ValidQuery, QueryError> {
         .after
         .as_deref()
         .map(|cursor| {
-            decode_cursor(cursor)
-                .ok_or_else(|| error("query.after", "after must be a cursor list_job_history returned"))
+            decode_cursor(cursor).ok_or_else(|| {
+                error(
+                    "query.after",
+                    "after must be a cursor list_job_history returned",
+                )
+            })
         })
         .transpose()?;
     Ok(ValidQuery {
@@ -113,8 +117,9 @@ pub fn validate(query: &JobHistoryQuery) -> Result<ValidQuery, QueryError> {
             .ended_before
             .as_deref()
             .map(|at| {
-                normalize_instant(at)
-                    .ok_or_else(|| error("query.endedBefore", "endedBefore must be an RFC 3339 time"))
+                normalize_instant(at).ok_or_else(|| {
+                    error("query.endedBefore", "endedBefore must be an RFC 3339 time")
+                })
             })
             .transpose()?,
         text,
@@ -127,9 +132,10 @@ pub fn validate(query: &JobHistoryQuery) -> Result<ValidQuery, QueryError> {
 /// of fraction digits, so the query compares `julianday` values rather than
 /// this text.
 fn normalize_instant(text: &str) -> Option<String> {
-    DateTime::parse_from_rfc3339(text)
-        .ok()
-        .map(|at| at.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::AutoSi, true))
+    DateTime::parse_from_rfc3339(text).ok().map(|at| {
+        at.with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+    })
 }
 
 /// The cursor for the row keyed `(history_at, id)`.
@@ -204,11 +210,15 @@ pub fn build_list_sql(query: &ValidQuery) -> (String, Vec<Value>) {
     }
     if let Some(at) = &query.ended_after {
         let placeholder = push(&mut params, Value::Text(at.clone()));
-        clauses.push(format!("julianday({HISTORY_AT}) >= julianday({placeholder})"));
+        clauses.push(format!(
+            "julianday({HISTORY_AT}) >= julianday({placeholder})"
+        ));
     }
     if let Some(at) = &query.ended_before {
         let placeholder = push(&mut params, Value::Text(at.clone()));
-        clauses.push(format!("julianday({HISTORY_AT}) < julianday({placeholder})"));
+        clauses.push(format!(
+            "julianday({HISTORY_AT}) < julianday({placeholder})"
+        ));
     }
     if let Some(text) = &query.text {
         let pattern = push(&mut params, Value::Text(escape_like(text)));

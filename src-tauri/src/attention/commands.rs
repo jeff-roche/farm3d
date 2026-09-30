@@ -94,7 +94,11 @@ fn with_incident(
     })
 }
 
-fn publish<R: tauri::Runtime>(app: &AppHandle<R>, services: &RuntimeServices<R>, change: &AttentionChange) {
+fn publish<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    services: &RuntimeServices<R>,
+    change: &AttentionChange,
+) {
     if change.events.is_empty() && change.incidents.is_empty() {
         return;
     }
@@ -134,7 +138,8 @@ pub async fn list_attention<R: tauri::Runtime>(
         .storage
         .read_transaction(|tx| {
             Ok((|| -> Result<_, StorageError> {
-                let page = attention_repository::list_attention(tx, resolved_before.as_ref(), limit)?;
+                let page =
+                    attention_repository::list_attention(tx, resolved_before.as_ref(), limit)?;
                 let (incidents, camera_sources) = if first_page {
                     (
                         incidents_repository::list_open(tx)?,
@@ -178,7 +183,8 @@ pub async fn mark_attention_read<R: tauri::Runtime>(
 ) -> Result<CommandSuccess<AttentionChange>, CommandError> {
     let services = ready(&bootstrap, contract_version)?;
     let distinct: HashSet<&String> = event_ids.iter().collect();
-    if event_ids.is_empty() || event_ids.len() > MAX_READ_BATCH || distinct.len() != event_ids.len() {
+    if event_ids.is_empty() || event_ids.len() > MAX_READ_BATCH || distinct.len() != event_ids.len()
+    {
         return Err(CommandError::validation_at(
             "eventIds",
             "eventIds must name 1 to 200 distinct Attention Events",
@@ -251,13 +257,19 @@ pub async fn acknowledge_attention_event<R: tauri::Runtime>(
     event_id: String,
 ) -> Result<CommandSuccess<AttentionChange>, CommandError> {
     let services = ready(&bootstrap, contract_version)?;
-    let digest = operations::digest(&EventDigest { event_id: &event_id });
+    let digest = operations::digest(&EventDigest {
+        event_id: &event_id,
+    });
     let now = services.attention.now();
     let (change, publishes) = services
         .storage
         .write_repo(|tx| {
-            if operations::claim(tx, &operation_id, OperationKind::AcknowledgeAttention, &digest)?
-                == Claim::Replay
+            if operations::claim(
+                tx,
+                &operation_id,
+                OperationKind::AcknowledgeAttention,
+                &digest,
+            )? == Claim::Replay
             {
                 return Ok((with_incident(tx, load_event(tx, &event_id)?)?, false));
             }
@@ -300,7 +312,9 @@ pub async fn resolve_attention_event<R: tauri::Runtime>(
     event_id: String,
 ) -> Result<CommandSuccess<AttentionChange>, CommandError> {
     let services = ready(&bootstrap, contract_version)?;
-    let digest = operations::digest(&EventDigest { event_id: &event_id });
+    let digest = operations::digest(&EventDigest {
+        event_id: &event_id,
+    });
     let now = services.attention.now();
     let (change, publishes) = services
         .storage

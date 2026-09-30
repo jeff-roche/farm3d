@@ -90,6 +90,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use common::fake_camera::{Answer, FakeCamera, JPEG};
 use farm3d_lib::attention::deep_link;
 use farm3d_lib::attention::projector::{AppliedChanges, EventChange};
 use farm3d_lib::attention::services::AttentionTimings;
@@ -104,10 +105,9 @@ use farm3d_lib::notifications::recording::{RecordingSink, RecordingWindowControl
 use farm3d_lib::notifications::NAVIGATE_EVENT;
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::printers::{StartSafety, StoredPrinter};
-use common::fake_camera::{Answer, FakeCamera, JPEG};
 use p7_dispatch_rig::{
-    boot_with_attention, fast, id, status_from_host, AttentionBoot, ManualClock,
-    NotificationBoot, RigTimings, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR,
+    boot_with_attention, fast, id, status_from_host, AttentionBoot, ManualClock, NotificationBoot,
+    RigTimings, Roots, Running, HOST_PATH, PRINTER, SECRET, SLR,
 };
 use serde_json::{json, Value};
 use sim::camera::{CameraSim, TEST_PATTERN, WEBCAM_NAME, WEBCAM_SERVICE};
@@ -418,7 +418,10 @@ impl Backend for SimBackend<'_> {
 
     fn before_start(&self) {
         for (heater, target) in self.sim.heater_targets() {
-            assert!(target == 0.0, "refusing to start: {heater} has target {target}");
+            assert!(
+                target == 0.0,
+                "refusing to start: {heater} has target {target}"
+            );
         }
     }
 }
@@ -557,7 +560,9 @@ impl<'b, B: Backend> Tracer<'b, B> {
         let text = match &result {
             Ok(value) | Err(value) => value.to_string(),
         };
-        self.responses.borrow_mut().push(format!("{command}: {text}"));
+        self.responses
+            .borrow_mut()
+            .push(format!("{command}: {text}"));
         result
     }
 
@@ -567,7 +572,12 @@ impl<'b, B: Backend> Tracer<'b, B> {
     }
 
     /// A binary frame command's header and image.
-    fn frame(&self, app: &Running, command: &str, mut body: Value) -> Result<(Value, Vec<u8>), Value> {
+    fn frame(
+        &self,
+        app: &Running,
+        command: &str,
+        mut body: Value,
+    ) -> Result<(Value, Vec<u8>), Value> {
         body["contractVersion"] = json!(1);
         let response = tauri::test::get_ipc_response(
             &app.webview,
@@ -594,7 +604,9 @@ impl<'b, B: Backend> Tracer<'b, B> {
             Ok((header, _)) => header.to_string(),
             Err(error) => error.to_string(),
         };
-        self.responses.borrow_mut().push(format!("{command}: {text}"));
+        self.responses
+            .borrow_mut()
+            .push(format!("{command}: {text}"));
         result
     }
 
@@ -623,7 +635,11 @@ impl<'b, B: Backend> Tracer<'b, B> {
         if self.seeded.borrow().as_ref() == Some(&key) {
             return;
         }
-        app.seed(status_from_host(&view.print_state, view.filename, view.progress));
+        app.seed(status_from_host(
+            &view.print_state,
+            view.filename,
+            view.progress,
+        ));
         *self.seeded.borrow_mut() = Some(key);
     }
 
@@ -761,7 +777,12 @@ impl<'b, B: Backend> Tracer<'b, B> {
             .unwrap_or_else(|| panic!("no Event {event_id}"))
     }
 
-    fn job_event(&self, app: &Running, condition: ConditionKind, job_id: &str) -> Option<AttentionEvent> {
+    fn job_event(
+        &self,
+        app: &Running,
+        condition: ConditionKind,
+        job_id: &str,
+    ) -> Option<AttentionEvent> {
         self.events(app, condition)
             .into_iter()
             .find(|event| event.job_id.as_deref() == Some(job_id))
@@ -781,7 +802,10 @@ impl<'b, B: Backend> Tracer<'b, B> {
 
     /// The notifications shown so far that cover `dedup_key` (by
     /// themselves or folded into a summary).
-    fn notifications_for(&self, dedup_key: &str) -> Vec<(u32, farm3d_lib::notifications::Notification)> {
+    fn notifications_for(
+        &self,
+        dedup_key: &str,
+    ) -> Vec<(u32, farm3d_lib::notifications::Notification)> {
         self.sink
             .shown()
             .into_iter()
@@ -818,17 +842,29 @@ impl<'b, B: Backend> Tracer<'b, B> {
                 Ok(rows)
             })
             .unwrap();
-        assert!(duplicated.is_empty(), "{at}: a dedup key has two open Events: {duplicated:?}");
+        assert!(
+            duplicated.is_empty(),
+            "{at}: a dedup key has two open Events: {duplicated:?}"
+        );
 
         let endpoint = self.backend.camera_endpoint();
         let needles: Vec<&str> = CORPUS
             .iter()
             .copied()
-            .chain([SECRET, endpoint.as_str(), "/snapshot.jpg", "snapshots/", "farm3d-media"])
+            .chain([
+                SECRET,
+                endpoint.as_str(),
+                "/snapshot.jpg",
+                "snapshots/",
+                "farm3d-media",
+            ])
             .collect();
         let scan = |what: &str, text: &str| {
             for needle in &needles {
-                assert!(!text.contains(needle), "{at}: {what} leaked {needle:?}: {text}");
+                assert!(
+                    !text.contains(needle),
+                    "{at}: {what} leaked {needle:?}: {text}"
+                );
             }
         };
         for event in app.events.lock().unwrap().iter() {
@@ -918,12 +954,18 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
             },
         }),
     );
-    assert_eq!(alerts["alertDefaults"]["offlineAfterMinutes"], 1, "{alerts}");
+    assert_eq!(
+        alerts["alertDefaults"]["offlineAfterMinutes"], 1,
+        "{alerts}"
+    );
     farm3d_lib::settings::repository::SettingsRepository::new(Arc::clone(&app.storage))
         .ensure_default()
         .unwrap();
     let settings = t.ok(&app, "load_settings", json!({}));
-    assert_eq!(settings["notifications"]["connectivity"], false, "off by default");
+    assert_eq!(
+        settings["notifications"]["connectivity"], false,
+        "off by default"
+    );
     let saved = t.ok(
         &app,
         "save_settings",
@@ -949,9 +991,8 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     // userinfo and token. Written as-is (validation refuses userinfo; the
     // stored row is what's under test).
     let authority = backend.camera_endpoint();
-    let decoy_url = |userinfo: &str| {
-        format!("http://{userinfo}{authority}/snapshot.jpg?token=tok-P8N-77")
-    };
+    let decoy_url =
+        |userinfo: &str| format!("http://{userinfo}{authority}/snapshot.jpg?token=tok-P8N-77");
     let set_decoy_url = |url: String| {
         app.storage
             .write(|tx| {
@@ -989,7 +1030,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     set_decoy_url(decoy_url("operator:s3cr3t-P8N@"));
     app.services.attention.poke();
     app.attention_pass();
-    assert!(!app.services.notifications.focus().is_focused(), "unfocused");
+    assert!(
+        !app.services.notifications.focus().is_focused(),
+        "unfocused"
+    );
     assert!(app.attention_rows().is_empty(), "nothing to attend to yet");
     t.check(&app, "after seeding");
 
@@ -997,9 +1041,13 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     //    the grace, no Event.
     t.cut(&app);
     app.attention_pass();
-    assert!(t.events(&app, ConditionKind::PrinterOffline).is_empty(), "inside the grace");
     assert!(
-        t.events(&app, ConditionKind::PrinterConnectionError).is_empty(),
+        t.events(&app, ConditionKind::PrinterOffline).is_empty(),
+        "inside the grace"
+    );
+    assert!(
+        t.events(&app, ConditionKind::PrinterConnectionError)
+            .is_empty(),
         "an unreachable host is never a connection error"
     );
     t.check(&app, "after the cut, inside the grace");
@@ -1010,7 +1058,8 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     assert_eq!(offline.len(), 1, "{offline:?}");
     let first = offline[0].clone();
     assert!(
-        t.events(&app, ConditionKind::PrinterConnectionError).is_empty(),
+        t.events(&app, ConditionKind::PrinterConnectionError)
+            .is_empty(),
         "the unreachable cause projects to printer.offline only"
     );
     assert_eq!(first.printer_id.as_deref(), Some(PRINTER));
@@ -1027,7 +1076,11 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         printer_target(PRINTER)
     );
     assert_eq!(notification.event_id.as_deref(), Some(first.id.as_str()));
-    assert!(notification.body.starts_with("Warning: "), "{}", notification.body);
+    assert!(
+        notification.body.starts_with("Warning: "),
+        "{}",
+        notification.body
+    );
 
     // Twenty more offline observations amend quietly: inside the minute
     // none is persisted, and a minute on one is (decision 40).
@@ -1038,20 +1091,43 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     }
     let offline = t.open(&app, ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "still one Event: {offline:?}");
-    assert_eq!(offline[0].observation_count, first.observation_count, "{offline:?}");
-    assert_eq!(offline[0].last_observed_at, first.last_observed_at, "{offline:?}");
+    assert_eq!(
+        offline[0].observation_count, first.observation_count,
+        "{offline:?}"
+    );
+    assert_eq!(
+        offline[0].last_observed_at, first.last_observed_at,
+        "{offline:?}"
+    );
     t.clock.advance(Duration::from_secs(60));
     app.services.attention.poke();
     app.attention_pass();
     let offline = t.open(&app, ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "still one Event: {offline:?}");
-    assert_eq!(offline[0].observation_count, first.observation_count + 1, "{offline:?}");
-    assert_ne!(offline[0].last_observed_at, first.last_observed_at, "{offline:?}");
-    assert_eq!(offline[0].revision, first.revision, "an unchanged amendment bumps nothing");
+    assert_eq!(
+        offline[0].observation_count,
+        first.observation_count + 1,
+        "{offline:?}"
+    );
+    assert_ne!(
+        offline[0].last_observed_at, first.last_observed_at,
+        "{offline:?}"
+    );
+    assert_eq!(
+        offline[0].revision, first.revision,
+        "an unchanged amendment bumps nothing"
+    );
     for changes in drain(&mut applied) {
-        assert!(changes.notify.is_empty(), "an amendment never notifies: {changes:?}");
+        assert!(
+            changes.notify.is_empty(),
+            "an amendment never notifies: {changes:?}"
+        );
     }
-    assert_eq!(t.notifications_for(&first.dedup_key).len(), 1, "still one notification");
+    assert_eq!(
+        t.notifications_for(&first.dedup_key).len(),
+        1,
+        "still one notification"
+    );
     t.check(&app, "after twenty more offline observations");
 
     // 5. The click (before the restart; see the module doc): the window is
@@ -1062,12 +1138,18 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     app.wait_until("the click is handled", || {
         app.services.notifications.signals_handled() > before
     });
-    app.wait_until("the navigation", || !t.navigations.lock().unwrap().is_empty());
+    app.wait_until("the navigation", || {
+        !t.navigations.lock().unwrap().is_empty()
+    });
     assert_eq!(
         t.navigations.lock().unwrap().clone(),
-        vec![json!({"contractVersion": 1, "target": printer_target(PRINTER), "openAttentionCenter": false})]
+        vec![
+            json!({"contractVersion": 1, "target": printer_target(PRINTER), "openAttentionCenter": false})
+        ]
     );
-    app.wait_until("the Event is read", || t.event(&app, &first.id).read_at.is_some());
+    app.wait_until("the Event is read", || {
+        t.event(&app, &first.id).read_at.is_some()
+    });
     app.wait_until("the window is raised", || !t.control.steps().is_empty());
     t.check(&app, "after the click");
 
@@ -1079,7 +1161,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     // Before supervision restarts: the backfill (and the first pass, with
     // the reach still inside the new grace) left the open Event as it was.
     let after_backfill = t.event(&app, &first.id);
-    assert_eq!(after_backfill.revision, before_restart.revision, "{after_backfill:?}");
+    assert_eq!(
+        after_backfill.revision, before_restart.revision,
+        "{after_backfill:?}"
+    );
     assert_eq!(after_backfill.resolved_at, None, "{after_backfill:?}");
     assert_eq!(t.open(&app, ConditionKind::PrinterOffline).len(), 1);
     assert!(
@@ -1101,7 +1186,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     assert_eq!(offline[0].id, first.id);
     assert!(offline[0].read_at.is_some(), "still read");
     for changes in drain(&mut applied) {
-        assert!(changes.notify.is_empty(), "nothing new to notify: {changes:?}");
+        assert!(
+            changes.notify.is_empty(),
+            "nothing new to notify: {changes:?}"
+        );
     }
     assert_eq!(t.sink.shown().len(), shown_before, "no new notification");
     // A restart forgot the notification: clicking it now does nothing.
@@ -1110,7 +1198,11 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     app.wait_until("the stale click is handled", || {
         app.services.notifications.signals_handled() > before
     });
-    assert_eq!(t.navigations.lock().unwrap().len(), 1, "a stale click navigates nowhere");
+    assert_eq!(
+        t.navigations.lock().unwrap().len(),
+        1,
+        "a stale click navigates nowhere"
+    );
     t.check(&app, "after the restart");
 
     // 6. Acknowledge: still open, still actionable.
@@ -1119,8 +1211,14 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         "acknowledge_attention_event",
         json!({"operationId": "trc-ack", "eventId": first.id}),
     );
-    assert!(!acknowledged["events"][0]["acknowledgedAt"].is_null(), "{acknowledged}");
-    assert!(acknowledged["events"][0]["resolvedAt"].is_null(), "acknowledge never resolves");
+    assert!(
+        !acknowledged["events"][0]["acknowledgedAt"].is_null(),
+        "{acknowledged}"
+    );
+    assert!(
+        acknowledged["events"][0]["resolvedAt"].is_null(),
+        "acknowledge never resolves"
+    );
     assert_eq!(t.actionable(&app), vec![first.id.clone()]);
     let acknowledged = t.event(&app, &first.id);
     t.check(&app, "after acknowledging");
@@ -1128,18 +1226,27 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     // 7. Restore: the Event resolves conditionCleared, its history intact.
     t.restore(&app);
     let resolved = t.event(&app, &first.id);
-    assert_eq!(resolved.resolution, Some(AttentionResolution::ConditionCleared));
+    assert_eq!(
+        resolved.resolution,
+        Some(AttentionResolution::ConditionCleared)
+    );
     assert_eq!(resolved.read_at, acknowledged.read_at);
     assert_eq!(resolved.acknowledged_at, acknowledged.acknowledged_at);
     assert_eq!(resolved.first_observed_at, first.first_observed_at);
     assert!(resolved.observation_count >= acknowledged.observation_count);
-    assert!(t.actionable(&app).is_empty(), "nothing actionable once resolved");
+    assert!(
+        t.actionable(&app).is_empty(),
+        "nothing actionable once resolved"
+    );
     t.check(&app, "after the restore");
 
     // 8. Cut and restore again: a recurrence of step 3's Event.
     t.cut(&app);
     app.attention_pass();
-    assert!(t.open(&app, ConditionKind::PrinterOffline).is_empty(), "inside the grace");
+    assert!(
+        t.open(&app, ConditionKind::PrinterOffline).is_empty(),
+        "inside the grace"
+    );
     t.pass_the_grace(&app);
     let offline = t.open(&app, ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "{offline:?}");
@@ -1179,7 +1286,8 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     let staged = t.wait_job(&app, &job, "awaitingStart");
     assert_eq!(staged["hostPath"], HOST_PATH, "{staged}");
     t.wait_mirrored(&app, "job.startConfirmation opens", || {
-        t.job_event(&app, ConditionKind::JobStartConfirmation, &job).is_some()
+        t.job_event(&app, ConditionKind::JobStartConfirmation, &job)
+            .is_some()
     });
     backend.before_start();
     let prior = prior_state(&t.host().print_state);
@@ -1200,14 +1308,21 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
 
     backend.fail_print(&t.roots);
     t.wait_job(&app, &job, "failed");
-    t.wait_mirrored(&app, "the failure's Events are projected into one Incident", || {
-        [ConditionKind::JobFailed, ConditionKind::RequirementMaterialReconciliation]
+    t.wait_mirrored(
+        &app,
+        "the failure's Events are projected into one Incident",
+        || {
+            [
+                ConditionKind::JobFailed,
+                ConditionKind::RequirementMaterialReconciliation,
+            ]
             .iter()
             .all(|condition| {
                 t.job_event(&app, *condition, &job)
                     .is_some_and(|event| event.incident_id.is_some())
             })
-    });
+        },
+    );
     t.expect_camera_fetch();
     t.settle_captures(&app);
     let failed = t.job_event(&app, ConditionKind::JobFailed, &job).unwrap();
@@ -1215,18 +1330,28 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         .job_event(&app, ConditionKind::RequirementMaterialReconciliation, &job)
         .unwrap();
     let incident_id = failed.incident_id.clone().unwrap();
-    assert_eq!(material.incident_id.as_deref(), Some(incident_id.as_str()), "the same Incident");
+    assert_eq!(
+        material.incident_id.as_deref(),
+        Some(incident_id.as_str()),
+        "the same Incident"
+    );
     assert_eq!(t.events(&app, ConditionKind::JobFailed).len(), 1);
-    assert_eq!(t.events(&app, ConditionKind::RequirementMaterialReconciliation).len(), 1);
+    assert_eq!(
+        t.events(&app, ConditionKind::RequirementMaterialReconciliation)
+            .len(),
+        1
+    );
     assert!(
         t.events(&app, ConditionKind::PrinterHostFailed).is_empty(),
         "the Job carries the failure"
     );
-    let incidents = t.ok(&app, "list_incidents", json!({"printerId": PRINTER}))["incidents"].clone();
+    let incidents =
+        t.ok(&app, "list_incidents", json!({"printerId": PRINTER}))["incidents"].clone();
     assert_eq!(incidents.as_array().unwrap().len(), 1, "{incidents}");
     assert_eq!(incidents[0]["id"], json!(incident_id));
     assert_eq!(incidents[0]["kind"], "job.failed");
-    let snapshots = t.ok(&app, "list_snapshots", json!({"incidentId": incident_id}))["snapshots"].clone();
+    let snapshots =
+        t.ok(&app, "list_snapshots", json!({"incidentId": incident_id}))["snapshots"].clone();
     assert_eq!(snapshots.as_array().unwrap().len(), 1, "{snapshots}");
     let evidence = snapshots[0].clone();
     assert_eq!(evidence["trigger"], "incident", "{evidence}");
@@ -1251,7 +1376,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         !t.notifications_for(&failed.dedup_key).is_empty()
     });
     assert_eq!(t.notifications_for(&failed.dedup_key).len(), 1);
-    assert!(t.notifications_for(&material.dedup_key).is_empty(), "reconciliation is off");
+    assert!(
+        t.notifications_for(&material.dedup_key).is_empty(),
+        "reconciliation is off"
+    );
     t.check(&app, "after the failure");
 
     backend.recover(&t.roots);
@@ -1266,7 +1394,11 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     app.wait_until("the deferral acknowledges the material Event", || {
         t.event(&app, &material.id).acknowledged_at.is_some()
     });
-    assert_eq!(t.event(&app, &material.id).resolved_at, None, "deferring never resolves");
+    assert_eq!(
+        t.event(&app, &material.id).resolved_at,
+        None,
+        "deferring never resolves"
+    );
     t.check(&app, "after deferring");
 
     // Restart: no duplicates.
@@ -1313,10 +1445,20 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         "resolve_attention_event",
         json!({"operationId": "trc-resolve", "eventId": failed.id}),
     );
-    assert_eq!(resolved["events"][0]["resolution"], "operatorResolved", "{resolved}");
-    assert_eq!(resolved["incidents"][0]["id"], json!(incident_id), "{resolved}");
+    assert_eq!(
+        resolved["events"][0]["resolution"], "operatorResolved",
+        "{resolved}"
+    );
+    assert_eq!(
+        resolved["incidents"][0]["id"],
+        json!(incident_id),
+        "{resolved}"
+    );
     assert_eq!(resolved["incidents"][0]["state"], "closed", "{resolved}");
-    assert_eq!(t.incident(&app, &incident_id)["incident"]["state"], "closed");
+    assert_eq!(
+        t.incident(&app, &incident_id)["incident"]["state"],
+        "closed"
+    );
     t.check(&app, "after settling and resolving");
 
     // 11. Pin the evidence, capture a manual snapshot, age the clock past
@@ -1355,13 +1497,20 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     };
     let kept = row(&evidence_id);
     assert!(kept["pinnedAt"].is_string(), "{kept}");
-    assert_eq!(kept["prunedAt"], Value::Null, "the pinned snapshot survives: {kept}");
+    assert_eq!(
+        kept["prunedAt"],
+        Value::Null,
+        "the pinned snapshot survives: {kept}"
+    );
     let (_, image) = t
         .frame(&app, "snapshot_image", json!({"snapshotId": evidence_id}))
         .unwrap();
     assert_eq!(image, backend.camera_bytes());
     let pruned = row(&manual_id);
-    assert!(pruned["prunedAt"].is_string(), "the manual snapshot is pruned: {pruned}");
+    assert!(
+        pruned["prunedAt"].is_string(),
+        "the manual snapshot is pruned: {pruned}"
+    );
     assert_eq!(pruned["pruneReason"], "age", "{pruned}");
     let gone = t
         .frame(&app, "snapshot_image", json!({"snapshotId": manual_id}))
@@ -1378,9 +1527,15 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
     let open_offline = t.open(&app, ConditionKind::PrinterOffline);
     assert_eq!(open_offline.len(), 1, "{open_offline:?}");
     let archived_away = open_offline[0].clone();
-    let revision = app.scalar(&format!("SELECT revision FROM printers WHERE id = '{PRINTER}'"));
+    let revision = app.scalar(&format!(
+        "SELECT revision FROM printers WHERE id = '{PRINTER}'"
+    ));
     let refused = t
-        .call(&app, "delete_printer", json!({"id": PRINTER, "expectedRevision": revision}))
+        .call(
+            &app,
+            "delete_printer",
+            json!({"id": PRINTER, "expectedRevision": revision}),
+        )
         .unwrap_err();
     assert_eq!(refused["code"], "LIFECYCLE_BLOCKED", "{refused}");
     assert!(
@@ -1400,8 +1555,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         }),
     );
     assert!(
-        app.text(&format!("SELECT archived_at FROM printers WHERE id = '{PRINTER}'"))
-            .is_some(),
+        app.text(&format!(
+            "SELECT archived_at FROM printers WHERE id = '{PRINTER}'"
+        ))
+        .is_some(),
         "archived"
     );
     // Archiving stopped the supervisor (`discard_connection`); the host
@@ -1415,7 +1572,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         Some(AttentionResolution::ConditionCleared),
         "D8: archiving resolves the Printer's open Events: {resolved:?}"
     );
-    assert_eq!(resolved.recurrence_of.as_deref(), Some(recurrence.id.as_str()));
+    assert_eq!(
+        resolved.recurrence_of.as_deref(),
+        Some(recurrence.id.as_str())
+    );
     let offline_event = t.event(&app, &first.id);
     let exists = app
         .storage
@@ -1428,7 +1588,11 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         printer_target(PRINTER)
     );
     let detail = t.incident(&app, &incident_id);
-    assert_eq!(detail["incident"]["id"], json!(incident_id), "the Incident still opens");
+    assert_eq!(
+        detail["incident"]["id"],
+        json!(incident_id),
+        "the Incident still opens"
+    );
     assert_eq!(
         t.ok(&app, "list_incidents", json!({"printerId": PRINTER}))["incidents"][0]["id"],
         json!(incident_id)
@@ -1438,7 +1602,10 @@ fn run_attention_tracer<B: Backend>(backend: &B) {
         ConditionKind::PrinterConnectionError,
         ConditionKind::PrinterHostFailed,
     ] {
-        assert!(t.open(&app, condition).is_empty(), "{condition:?} open on an archived Printer");
+        assert!(
+            t.open(&app, condition).is_empty(),
+            "{condition:?} open on an archived Printer"
+        );
     }
 
     // 13. And at the end.

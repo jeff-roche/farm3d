@@ -344,7 +344,11 @@ impl EligibilitySummary {
 /// evaluator exists and has run (ruling R3), `list_queue` reports
 /// `evaluatorNotRunning`.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",

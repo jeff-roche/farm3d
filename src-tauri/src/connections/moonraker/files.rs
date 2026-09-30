@@ -1238,14 +1238,22 @@ mod tests {
             Some("http://192.0.2.10/webcam/snapshot?token=abc")
         );
         assert_eq!(
-            parse_webcam_snapshot_url(&body, "top").unwrap().as_deref().map(String::as_str),
+            parse_webcam_snapshot_url(&body, "top")
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
             Some("")
         );
         assert_eq!(
-            parse_webcam_snapshot_url(&body, "side").unwrap().as_deref().map(String::as_str),
+            parse_webcam_snapshot_url(&body, "side")
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
             Some("")
         );
-        assert!(parse_webcam_snapshot_url(&body, "missing").unwrap().is_none());
+        assert!(parse_webcam_snapshot_url(&body, "missing")
+            .unwrap()
+            .is_none());
         assert!(parse_webcam_snapshot_url(&body, "FRONT").unwrap().is_none());
         assert!(
             parse_webcam_snapshot_url(&fixture!("webcams_empty.json"), "front")

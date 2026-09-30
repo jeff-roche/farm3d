@@ -31,8 +31,8 @@ use std::time::Duration;
 use common::fake_camera::{Answer, FakeCamera};
 use farm3d_lib::attention::services::AttentionTimings;
 use farm3d_lib::attention::{
-    deep_link, repository as attention_repo, AttentionEvent, AttentionOrigin,
-    AttentionResolution, ConditionKind,
+    deep_link, repository as attention_repo, AttentionEvent, AttentionOrigin, AttentionResolution,
+    ConditionKind,
 };
 use farm3d_lib::cameras::media;
 use farm3d_lib::cameras::services::CameraTimings;
@@ -118,14 +118,15 @@ impl GuardRig {
     }
 
     fn revision(&self) -> i64 {
-        self.app
-            .scalar(&format!("SELECT revision FROM printers WHERE id = '{PRINTER}'"))
+        self.app.scalar(&format!(
+            "SELECT revision FROM printers WHERE id = '{PRINTER}'"
+        ))
     }
 
     fn printer_exists(&self) -> bool {
-        self.app
-            .scalar(&format!("SELECT COUNT(*) FROM printers WHERE id = '{PRINTER}'"))
-            == 1
+        self.app.scalar(&format!(
+            "SELECT COUNT(*) FROM printers WHERE id = '{PRINTER}'"
+        )) == 1
     }
 
     fn archive(&self) {
@@ -218,7 +219,11 @@ impl GuardRig {
             .map(|blocker| {
                 (
                     blocker.action,
-                    serde_json::to_value(blocker.code).unwrap().as_str().unwrap().to_string(),
+                    serde_json::to_value(blocker.code)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
                 )
             })
             .collect()
@@ -227,7 +232,9 @@ impl GuardRig {
     /// Every file under the media root's `snapshots/`, relative.
     fn snapshot_files(&self) -> BTreeSet<String> {
         fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -251,8 +258,8 @@ impl GuardRig {
     fn unpruned_paths(&self) -> BTreeSet<String> {
         self.storage()
             .read(|conn| {
-                let mut statement = conn
-                    .prepare("SELECT rel_path FROM camera_snapshots WHERE pruned_at IS NULL")?;
+                let mut statement =
+                    conn.prepare("SELECT rel_path FROM camera_snapshots WHERE pruned_at IS NULL")?;
                 let paths = statement
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect();
@@ -275,7 +282,10 @@ impl GuardRig {
                 rows
             })
             .unwrap();
-        assert!(violations.is_empty(), "foreign key violations in {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "foreign key violations in {violations:?}"
+        );
         for (what, sql) in [
             (
                 "a snapshot's Printer",
@@ -353,10 +363,14 @@ fn a_printer_with_an_incident_can_be_archived_but_not_deleted() {
     rig.app.attention_pass();
     let failed = rig.of(ConditionKind::PrinterHostFailed);
     assert_eq!(failed.len(), 1, "{failed:?}");
-    let incident_id = failed[0].incident_id.clone().expect("the Event opened an Incident");
+    let incident_id = failed[0]
+        .incident_id
+        .clone()
+        .expect("the Event opened an Incident");
     rig.settle_captures();
     assert_eq!(
-        rig.app.scalar("SELECT COUNT(*) FROM camera_snapshots WHERE trigger = 'incident'"),
+        rig.app
+            .scalar("SELECT COUNT(*) FROM camera_snapshots WHERE trigger = 'incident'"),
         1
     );
 
@@ -365,9 +379,14 @@ fn a_printer_with_an_incident_can_be_archived_but_not_deleted() {
     rig.archive();
     rig.app.attention_pass();
     let failed = rig.event(&failed[0].id);
-    assert_eq!(failed.resolution, Some(AttentionResolution::ConditionCleared));
+    assert_eq!(
+        failed.resolution,
+        Some(AttentionResolution::ConditionCleared)
+    );
     assert_eq!(failed.printer_id.as_deref(), Some(PRINTER));
-    let incident = rig.app.ok("get_incident", json!({"incidentId": incident_id}));
+    let incident = rig
+        .app
+        .ok("get_incident", json!({"incidentId": incident_id}));
     assert_eq!(incident["incident"]["id"], json!(incident_id));
     assert_eq!(incident["incident"]["printerId"], PRINTER);
     // An archived Printer stays a valid deep-link target.
@@ -384,9 +403,10 @@ fn a_printer_with_an_incident_can_be_archived_but_not_deleted() {
 
     // Delete is blocked, and says why, both in the eligibility and the
     // command's error.
-    assert!(rig
-        .eligibility_blockers()
-        .contains(&(LifecycleAction::Delete, "INCIDENT_HISTORY_EXISTS".to_string())));
+    assert!(rig.eligibility_blockers().contains(&(
+        LifecycleAction::Delete,
+        "INCIDENT_HISTORY_EXISTS".to_string()
+    )));
     let files = rig.snapshot_files();
     let error = rig.delete().unwrap_err();
     assert_eq!(error["code"], "LIFECYCLE_BLOCKED", "{error}");
@@ -416,8 +436,16 @@ fn deleting_a_printer_with_only_attention_events_resolves_them_source_removed() 
     rig.go_offline_past_grace();
     let offline = rig.of(ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 2, "{offline:?}");
-    let resolved = offline.iter().find(|event| event.resolved_at.is_some()).unwrap().clone();
-    let open = offline.iter().find(|event| event.resolved_at.is_none()).unwrap().clone();
+    let resolved = offline
+        .iter()
+        .find(|event| event.resolved_at.is_some())
+        .unwrap()
+        .clone();
+    let open = offline
+        .iter()
+        .find(|event| event.resolved_at.is_none())
+        .unwrap()
+        .clone();
     assert_eq!(open.subject.printer_name.as_deref(), Some("Alpha"));
     assert_eq!(open.subject.printer_location.as_deref(), Some("Bay A"));
 
@@ -425,8 +453,13 @@ fn deleting_a_printer_with_only_attention_events_resolves_them_source_removed() 
     // first: the delete itself must resolve it.
     rig.app.services.attention.hold();
     rig.archive();
-    assert!(rig.eligibility_blockers().iter().all(|(action, _)| *action != LifecycleAction::Delete));
-    let deleted = rig.delete().unwrap_or_else(|error| panic!("delete failed: {error}"));
+    assert!(rig
+        .eligibility_blockers()
+        .iter()
+        .all(|(action, _)| *action != LifecycleAction::Delete));
+    let deleted = rig
+        .delete()
+        .unwrap_or_else(|error| panic!("delete failed: {error}"));
     assert_eq!(deleted["deletedId"], PRINTER);
     assert!(!rig.printer_exists());
 
@@ -434,8 +467,14 @@ fn deleting_a_printer_with_only_attention_events_resolves_them_source_removed() 
     assert_eq!(removed.resolution, Some(AttentionResolution::SourceRemoved));
     assert!(removed.resolved_at.is_some() && removed.read_at.is_some());
     assert_eq!(removed.printer_id, None, "ON DELETE SET NULL");
-    assert_eq!(removed.subject, open.subject, "the subject keeps the Printer's identity");
-    assert_eq!(removed.source.id, PRINTER, "the source still names the Printer");
+    assert_eq!(
+        removed.subject, open.subject,
+        "the subject keeps the Printer's identity"
+    );
+    assert_eq!(
+        removed.source.id, PRINTER,
+        "the source still names the Printer"
+    );
     assert!(removed.revision > open.revision);
     let kept = rig.event(&resolved.id);
     assert_eq!(kept.resolution, Some(AttentionResolution::ConditionCleared));
@@ -454,7 +493,9 @@ fn deleting_a_printer_with_only_attention_events_resolves_them_source_removed() 
     assert!(raw.contains("Alpha") && raw.contains("Bay A"), "{raw}");
 
     // The resolution was published after commit.
-    let published = rig.app.attention_stream("attention.event.changed", &open.id);
+    let published = rig
+        .app
+        .attention_stream("attention.event.changed", &open.id);
     assert_eq!(
         published.last().unwrap()["payload"]["event"]["resolution"],
         "sourceRemoved",
@@ -476,9 +517,13 @@ fn deleting_a_printer_with_only_attention_events_resolves_them_source_removed() 
     rig.app.services.attention.release();
     rig.app.services.attention.poke();
     rig.app.attention_pass();
-    assert_eq!(rig.event(&open.id).resolution, Some(AttentionResolution::SourceRemoved));
     assert_eq!(
-        rig.app.scalar("SELECT COUNT(*) FROM attention_events WHERE resolved_at IS NULL"),
+        rig.event(&open.id).resolution,
+        Some(AttentionResolution::SourceRemoved)
+    );
+    assert_eq!(
+        rig.app
+            .scalar("SELECT COUNT(*) FROM attention_events WHERE resolved_at IS NULL"),
         0
     );
     rig.assert_no_orphans();
@@ -496,7 +541,13 @@ fn pinned_unattached_evidence_blocks_delete_and_the_rest_goes_with_the_printer()
     // left to protect.
     let missing = rig.capture("op-cap-missing");
     rig.pin("op-pin-missing", &missing, true);
-    std::fs::remove_file(rig.storage().paths().media_root().join(rig.rel_path(&missing))).unwrap();
+    std::fs::remove_file(
+        rig.storage()
+            .paths()
+            .media_root()
+            .join(rig.rel_path(&missing)),
+    )
+    .unwrap();
     media::mark_missing(rig.storage(), &missing, rig.app.services.attention.now()).unwrap();
     // Unpinned and pruned for age (its file already unlinked).
     let aged = rig.capture("op-cap-aged");
@@ -521,9 +572,10 @@ fn pinned_unattached_evidence_blocks_delete_and_the_rest_goes_with_the_printer()
     rig.assert_no_orphans();
 
     // Only the pinned, unpruned one blocks.
-    assert!(rig
-        .eligibility_blockers()
-        .contains(&(LifecycleAction::Delete, "PINNED_EVIDENCE_EXISTS".to_string())));
+    assert!(rig.eligibility_blockers().contains(&(
+        LifecycleAction::Delete,
+        "PINNED_EVIDENCE_EXISTS".to_string()
+    )));
     let files = rig.snapshot_files();
     assert_eq!(files.len(), 2, "{files:?}");
     let error = rig.delete().unwrap_err();
@@ -540,10 +592,15 @@ fn pinned_unattached_evidence_blocks_delete_and_the_rest_goes_with_the_printer()
     // Unpinned, the delete removes every unattached manual row, and the
     // unpruned ones' files after commit.
     rig.pin("op-unpin", &pinned, false);
-    rig.delete().unwrap_or_else(|error| panic!("delete failed: {error}"));
+    rig.delete()
+        .unwrap_or_else(|error| panic!("delete failed: {error}"));
     assert!(!rig.printer_exists());
     assert_eq!(rig.app.scalar("SELECT COUNT(*) FROM camera_snapshots"), 0);
-    assert!(rig.snapshot_files().is_empty(), "{:?}", rig.snapshot_files());
+    assert!(
+        rig.snapshot_files().is_empty(),
+        "{:?}",
+        rig.snapshot_files()
+    );
     let _ = unpinned;
     rig.assert_no_orphans();
 
@@ -697,7 +754,9 @@ fn an_import_resolves_the_replaced_printers_open_events_source_removed() {
             )
         })
         .unwrap();
-    plain.import().unwrap_or_else(|error| panic!("import failed: {error}"));
+    plain
+        .import()
+        .unwrap_or_else(|error| panic!("import failed: {error}"));
     let after = plain
         .storage
         .read(|conn| Ok(attention_repo::load_event(conn, &event.id)))
@@ -742,7 +801,14 @@ fn a_repository_delete_removes_unattached_rows_and_resolves_open_events() {
     let event = plain
         .storage
         .write_repo(|tx| {
-            attention_repo::insert(tx, &offline_condition(P1), None, false, AttentionOrigin::Live, now)
+            attention_repo::insert(
+                tx,
+                &offline_condition(P1),
+                None,
+                false,
+                AttentionOrigin::Live,
+                now,
+            )
         })
         .unwrap();
     plain.insert_snapshot("snp-unattached", P1);
@@ -753,7 +819,10 @@ fn a_repository_delete_removes_unattached_rows_and_resolves_open_events() {
         .archive(P1, printer.revision, "op-archive-p1", &[])
         .unwrap();
     repository.delete(P1, archived.revision).unwrap();
-    assert_eq!(plain.scalar("SELECT COUNT(*) FROM printers WHERE id = 'prn-guard-1'"), 0);
+    assert_eq!(
+        plain.scalar("SELECT COUNT(*) FROM printers WHERE id = 'prn-guard-1'"),
+        0
+    );
     assert_eq!(
         plain.scalar("SELECT COUNT(*) FROM camera_snapshots WHERE id = 'snp-unattached'"),
         0

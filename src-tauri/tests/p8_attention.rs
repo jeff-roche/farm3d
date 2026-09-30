@@ -20,9 +20,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use farm3d_lib::attention::{
-    dedup_key, repository as attention_repo, AttentionDetail, AttentionOrigin,
-    AttentionResolution, AttentionSeverity, AttentionSource, AttentionSourceKind,
-    AttentionSubject, Condition, ConditionKind, EvidenceOutcome,
+    dedup_key, repository as attention_repo, AttentionDetail, AttentionOrigin, AttentionResolution,
+    AttentionSeverity, AttentionSource, AttentionSourceKind, AttentionSubject, Condition,
+    ConditionKind, EvidenceOutcome,
 };
 use farm3d_lib::cameras::EvidenceSkipReason;
 use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StoragePaths};
@@ -145,11 +145,17 @@ fn insert_amend_resolve_round_trip_through_the_public_api() {
             let inserted =
                 attention_repo::insert(tx, &condition, None, false, AttentionOrigin::Live, now())?;
             assert_eq!(inserted.revision, 1);
-            assert_eq!(inserted.dedup_key, dedup_key(ConditionKind::PrinterOffline, "prn-a"));
-            assert_eq!(inserted.source, AttentionSource {
-                kind: AttentionSourceKind::Printer,
-                id: "prn-a".to_string(),
-            });
+            assert_eq!(
+                inserted.dedup_key,
+                dedup_key(ConditionKind::PrinterOffline, "prn-a")
+            );
+            assert_eq!(
+                inserted.source,
+                AttentionSource {
+                    kind: AttentionSourceKind::Printer,
+                    id: "prn-a".to_string(),
+                }
+            );
 
             let later = now() + chrono::Duration::minutes(1);
             let amended = attention_repo::amend(
@@ -164,8 +170,12 @@ fn insert_amend_resolve_round_trip_through_the_public_api() {
             assert_eq!(amended.revision, 2);
             assert_eq!(amended.severity, AttentionSeverity::Fatal);
 
-            let (resolved, changed) =
-                attention_repo::resolve(tx, &inserted.id, AttentionResolution::ConditionCleared, later)?;
+            let (resolved, changed) = attention_repo::resolve(
+                tx,
+                &inserted.id,
+                AttentionResolution::ConditionCleared,
+                later,
+            )?;
             assert!(changed);
             assert_eq!(resolved.revision, 3);
             assert!(resolved.resolved_at.is_some());
@@ -284,7 +294,11 @@ fn list_attention_orders_open_by_severity_and_resolved_by_recency_with_a_cursor(
             let open_ids: Vec<_> = page.open.iter().map(|e| e.id.clone()).collect();
             assert_eq!(
                 open_ids,
-                [fatal_event.id.clone(), warn_new.id.clone(), warn_old.id.clone()],
+                [
+                    fatal_event.id.clone(),
+                    warn_new.id.clone(),
+                    warn_old.id.clone()
+                ],
                 "fatal first, then warning by first_observed_at descending"
             );
 
@@ -296,7 +310,8 @@ fn list_attention_orders_open_by_severity_and_resolved_by_recency_with_a_cursor(
             assert_eq!(first_page[0].id, warn_new.id);
             let cursor = cursor.expect("one more resolved Event remains");
 
-            let (second_page, cursor2) = attention_repo::list_resolved(connection, Some(&cursor), 1)?;
+            let (second_page, cursor2) =
+                attention_repo::list_resolved(connection, Some(&cursor), 1)?;
             assert_eq!(second_page.len(), 1);
             assert_eq!(second_page[0].id, warn_old.id);
             assert!(cursor2.is_none());
@@ -317,13 +332,23 @@ fn latest_resolved_for_keys_reports_the_newest_resolution() {
             let t1 = t0 + chrono::Duration::minutes(10);
             let t2 = t1 + chrono::Duration::minutes(10);
 
-            let first = attention_repo::insert(tx, &condition, None, false, AttentionOrigin::Live, t0)?;
+            let first =
+                attention_repo::insert(tx, &condition, None, false, AttentionOrigin::Live, t0)?;
             attention_repo::resolve(tx, &first.id, AttentionResolution::ConditionCleared, t1)?;
-            let second =
-                attention_repo::insert(tx, &condition, Some(&first.id), false, AttentionOrigin::Live, t1)?;
+            let second = attention_repo::insert(
+                tx,
+                &condition,
+                Some(&first.id),
+                false,
+                AttentionOrigin::Live,
+                t1,
+            )?;
             attention_repo::resolve(tx, &second.id, AttentionResolution::ConditionCleared, t2)?;
 
-            let map = attention_repo::latest_resolved_for_keys(connection, [condition.dedup_key().as_str()])?;
+            let map = attention_repo::latest_resolved_for_keys(
+                connection,
+                [condition.dedup_key().as_str()],
+            )?;
             assert_eq!(map.get(&condition.dedup_key()), Some(&second.id));
             Ok(())
         })
@@ -359,7 +384,10 @@ fn resolve_for_printer_resolves_only_that_printers_open_events_source_removed() 
             let changed = attention_repo::resolve_for_printer(tx, "prn-a", now())?;
             assert_eq!(changed.len(), 1);
             assert_eq!(changed[0].id, a.id);
-            assert_eq!(changed[0].resolution, Some(AttentionResolution::SourceRemoved));
+            assert_eq!(
+                changed[0].resolution,
+                Some(AttentionResolution::SourceRemoved)
+            );
 
             let b_after = attention_repo::load_event(connection, &b.id)?.unwrap();
             assert!(b_after.resolved_at.is_none());
@@ -454,7 +482,12 @@ fn the_seeded_secret_never_appears_in_attention_events_json_columns() {
                 false,
                 now() + chrono::Duration::minutes(1),
             )?;
-            attention_repo::resolve(tx, &offline.id, AttentionResolution::ConditionCleared, now())?;
+            attention_repo::resolve(
+                tx,
+                &offline.id,
+                AttentionResolution::ConditionCleared,
+                now(),
+            )?;
 
             let completed = Condition {
                 kind: ConditionKind::JobCompleted,
@@ -489,7 +522,10 @@ fn the_seeded_secret_never_appears_in_attention_events_json_columns() {
                 [SECRET_CORPUS],
                 |row| row.get(0),
             )?;
-            assert_eq!(leaked, 0, "the secret corpus must never reach attention_events");
+            assert_eq!(
+                leaked, 0,
+                "the secret corpus must never reach attention_events"
+            );
 
             // Sanity: the corpus really is in the database somewhere (its
             // one legitimate home), so this test isn't vacuous.
@@ -525,7 +561,12 @@ fn the_resolved_cursor_is_stable_across_an_identical_resolved_at() {
                     now(),
                 )?;
                 // Every resolution at the same instant.
-                attention_repo::resolve(tx, &event.id, AttentionResolution::ConditionCleared, now())?;
+                attention_repo::resolve(
+                    tx,
+                    &event.id,
+                    AttentionResolution::ConditionCleared,
+                    now(),
+                )?;
                 ids.push(event.id);
             }
             ids.sort();
@@ -541,7 +582,10 @@ fn the_resolved_cursor_is_stable_across_an_identical_resolved_at() {
                     None => break,
                 }
             }
-            assert_eq!(seen, ids, "id descending within one resolved_at, each exactly once");
+            assert_eq!(
+                seen, ids,
+                "id descending within one resolved_at, each exactly once"
+            );
             Ok(())
         })
         .unwrap();
@@ -575,7 +619,12 @@ fn keyset_pages_cross_a_tie_group_larger_than_the_page() {
                     28..=30 => tie + chrono::Duration::minutes(i - 27),
                     _ => tie,
                 };
-                attention_repo::resolve(tx, &event.id, AttentionResolution::ConditionCleared, resolved_at)?;
+                attention_repo::resolve(
+                    tx,
+                    &event.id,
+                    AttentionResolution::ConditionCleared,
+                    resolved_at,
+                )?;
                 expected.push((resolved_at, event.id));
             }
             expected.sort();
@@ -670,7 +719,10 @@ impl ProjectorRig {
 }
 
 fn open_of(events: &[AttentionEvent]) -> Vec<&AttentionEvent> {
-    events.iter().filter(|event| event.resolved_at.is_none()).collect()
+    events
+        .iter()
+        .filter(|event| event.resolved_at.is_none())
+        .collect()
 }
 
 #[test]
@@ -680,7 +732,10 @@ fn offline_opens_once_amends_quietly_resolves_and_recurs() {
 
     app.seed(status_of(OperationalState::Offline));
     app.attention_pass();
-    assert!(rig.of(ConditionKind::PrinterOffline).is_empty(), "inside the grace");
+    assert!(
+        rig.of(ConditionKind::PrinterOffline).is_empty(),
+        "inside the grace"
+    );
 
     rig.clock.advance(PAST_GRACE);
     app.services.attention.poke();
@@ -697,7 +752,10 @@ fn offline_opens_once_amends_quietly_resolves_and_recurs() {
     app.attention_pass();
     let offline = rig.of(ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "still one Event");
-    assert_eq!(offline[0], first, "inside the minute an unchanged observation writes nothing");
+    assert_eq!(
+        offline[0], first,
+        "inside the minute an unchanged observation writes nothing"
+    );
     // Decision 40: a minute on, the observation is persisted once.
     rig.clock.advance(Duration::from_secs(60));
     app.services.attention.poke();
@@ -706,9 +764,13 @@ fn offline_opens_once_amends_quietly_resolves_and_recurs() {
     assert_eq!(offline.len(), 1, "still one Event");
     assert_eq!(offline[0].observation_count, first.observation_count + 1);
     assert_ne!(offline[0].last_observed_at, first.last_observed_at);
-    assert_eq!(offline[0].revision, first.revision, "an unchanged amendment bumps nothing");
     assert_eq!(
-        app.attention_stream("attention.event.changed", &first.id).len(),
+        offline[0].revision, first.revision,
+        "an unchanged amendment bumps nothing"
+    );
+    assert_eq!(
+        app.attention_stream("attention.event.changed", &first.id)
+            .len(),
         1,
         "only the insert was published"
     );
@@ -716,9 +778,16 @@ fn offline_opens_once_amends_quietly_resolves_and_recurs() {
     app.seed(status_of(OperationalState::Ready));
     app.attention_pass();
     let offline = rig.of(ConditionKind::PrinterOffline);
-    assert_eq!(offline[0].resolution, Some(AttentionResolution::ConditionCleared));
+    assert_eq!(
+        offline[0].resolution,
+        Some(AttentionResolution::ConditionCleared)
+    );
     assert!(offline[0].read_at.is_some());
-    assert_eq!(app.attention_stream("attention.event.changed", &first.id).len(), 2);
+    assert_eq!(
+        app.attention_stream("attention.event.changed", &first.id)
+            .len(),
+        2
+    );
 
     rig.go_offline_past_grace();
     let offline = rig.of(ConditionKind::PrinterOffline);
@@ -743,7 +812,10 @@ fn a_lagged_receiver_forces_a_full_pass_without_duplicates() {
     }
     app.services.attention.release();
     app.attention_pass();
-    assert!(app.services.attention.lagged() > lagged, "the projector saw Lagged");
+    assert!(
+        app.services.attention.lagged() > lagged,
+        "the projector saw Lagged"
+    );
     let offline = rig.of(ConditionKind::PrinterOffline);
     assert_eq!(offline.len(), 1, "no duplicate: {offline:?}");
     assert_eq!(open_of(&offline).len(), 1);
@@ -776,7 +848,8 @@ fn a_hundred_concurrent_wakes_open_exactly_one_event() {
     assert_eq!(offline.len(), 1, "{offline:?}");
     assert_eq!(open_of(&offline).len(), 1);
     assert_eq!(
-        app.attention_stream("attention.event.changed", &offline[0].id).len(),
+        app.attention_stream("attention.event.changed", &offline[0].id)
+            .len(),
         1,
         "inserted and published once"
     );
@@ -805,7 +878,10 @@ fn a_protocol_error_opens_a_connection_error_and_a_live_status_clears_it() {
     app.seed(status_of(OperationalState::Ready));
     app.attention_pass();
     let errors = rig.of(ConditionKind::PrinterConnectionError);
-    assert_eq!(errors[0].resolution, Some(AttentionResolution::ConditionCleared));
+    assert_eq!(
+        errors[0].resolution,
+        Some(AttentionResolution::ConditionCleared)
+    );
 }
 
 // --- Task 6: the Job-failure Incident and the commands ---------------------------
@@ -848,12 +924,17 @@ fn failed_job_rig() -> (ProjectorRig, String) {
     let job = rig.app.printing();
     rig.roots.fake.finish_print("klippy_shutdown");
     rig.app.wait_job(&job, "failed");
-    rig.app.wait_until("the failure's Events are projected", || {
-        rig.app.attention_rows().iter().filter(|event| {
-            event.job_id.as_deref() == Some(job.as_str()) && event.incident_id.is_some()
-        }).count()
-            == 2
-    });
+    rig.app
+        .wait_until("the failure's Events are projected", || {
+            rig.app
+                .attention_rows()
+                .iter()
+                .filter(|event| {
+                    event.job_id.as_deref() == Some(job.as_str()) && event.incident_id.is_some()
+                })
+                .count()
+                == 2
+        });
     (rig, job)
 }
 
@@ -877,7 +958,12 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     let listed = ok(app, "list_attention", json!({}));
     assert!(!listed["streamId"].as_str().unwrap().is_empty());
     assert!(listed["snapshotSequence"].as_i64().unwrap() >= 1);
-    let open_ids: Vec<&str> = listed["open"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap()).collect();
+    let open_ids: Vec<&str> = listed["open"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
     assert!(open_ids.contains(&failed.id.as_str()) && open_ids.contains(&material.id.as_str()));
     assert_eq!(listed["openIncidents"][0]["id"], json!(incident_id));
     assert_eq!(listed["openIncidents"][0]["kind"], "job.failed");
@@ -888,7 +974,11 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
                 "lastSuccessAt": null, "lastFailureAt": null, "lastFailureKind": null}])
     );
     let listed_text = listed.to_string();
-    let older = ok(app, "list_attention", json!({"resolvedBefore": format!("2999-01-01T00:00:00Z|att-z"), "limit": 5}));
+    let older = ok(
+        app,
+        "list_attention",
+        json!({"resolvedBefore": format!("2999-01-01T00:00:00Z|att-z"), "limit": 5}),
+    );
     assert_eq!(older["open"], json!([]));
     assert_eq!(older["openIncidents"], json!([]));
 
@@ -900,22 +990,37 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     )
     .unwrap_err();
     assert_eq!(missing["code"], "NOT_FOUND");
-    assert_eq!(event_of(&rig, ConditionKind::JobFailed, &job).read_at, None, "nothing was written");
+    assert_eq!(
+        event_of(&rig, ConditionKind::JobFailed, &job).read_at,
+        None,
+        "nothing was written"
+    );
     let read = ok(
         app,
         "mark_attention_read",
         json!({"operationId": "op-read", "eventIds": [failed.id, material.id]}),
     );
     assert_eq!(read["events"].as_array().unwrap().len(), 2);
-    assert!(read["events"].as_array().unwrap().iter().all(|e| !e["readAt"].is_null()));
-    let published = app.attention_stream("attention.event.changed", &failed.id).len();
+    assert!(read["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| !e["readAt"].is_null()));
+    let published = app
+        .attention_stream("attention.event.changed", &failed.id)
+        .len();
     let replay = ok(
         app,
         "mark_attention_read",
         json!({"operationId": "op-read", "eventIds": [failed.id, material.id]}),
     );
     assert_eq!(replay["events"].as_array().unwrap().len(), 2);
-    assert_eq!(app.attention_stream("attention.event.changed", &failed.id).len(), published, "a replay publishes nothing");
+    assert_eq!(
+        app.attention_stream("attention.event.changed", &failed.id)
+            .len(),
+        published,
+        "a replay publishes nothing"
+    );
     let reused = call(
         app,
         "mark_attention_read",
@@ -932,7 +1037,10 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
         json!({"operationId": "op-ack", "eventId": failed.id}),
     );
     assert!(!acknowledged["events"][0]["acknowledgedAt"].is_null());
-    assert!(acknowledged["events"][0]["resolvedAt"].is_null(), "acknowledge never resolves");
+    assert!(
+        acknowledged["events"][0]["resolvedAt"].is_null(),
+        "acknowledge never resolves"
+    );
     assert_eq!(acknowledged["incidents"][0]["id"], json!(incident_id));
     assert_eq!(acknowledged["incidents"][0]["state"], "open");
 
@@ -955,7 +1063,8 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     );
 
     // Settling the material resolves its Event; the Incident stays open.
-    app.settle("op-settle", &job, json!({"kind": "estimated"})).expect("settle");
+    app.settle("op-settle", &job, json!({"kind": "estimated"}))
+        .expect("settle");
     app.wait_until("the material Event resolves", || {
         event_of(&rig, ConditionKind::RequirementMaterialReconciliation, &job)
             .resolved_at
@@ -973,7 +1082,9 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     assert_eq!(resolved["events"][0]["resolution"], "operatorResolved");
     assert_eq!(resolved["incidents"][0]["state"], "closed");
     assert_eq!(resolved["incidents"][0]["openLinkedEventCount"], 0);
-    let incident_published = app.attention_stream("attention.incident.changed", &incident_id).len();
+    let incident_published = app
+        .attention_stream("attention.incident.changed", &incident_id)
+        .len();
     let again = ok(
         app,
         "resolve_attention_event",
@@ -981,7 +1092,8 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     );
     assert_eq!(again["events"][0]["id"], json!(failed.id));
     assert_eq!(
-        app.attention_stream("attention.incident.changed", &incident_id).len(),
+        app.attention_stream("attention.incident.changed", &incident_id)
+            .len(),
         incident_published,
         "a replay publishes nothing"
     );
@@ -989,7 +1101,10 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     // list_incidents / get_incident / add_incident_note.
     let closed = ok(app, "list_incidents", json!({"state": "closed"}));
     assert_eq!(closed["incidents"][0]["id"], json!(incident_id));
-    assert_eq!(ok(app, "list_incidents", json!({"state": "open"}))["incidents"], json!([]));
+    assert_eq!(
+        ok(app, "list_incidents", json!({"state": "open"}))["incidents"],
+        json!([])
+    );
     assert_eq!(
         ok(app, "list_incidents", json!({"printerId": PRINTER}))["incidents"][0]["id"],
         json!(incident_id)
@@ -1035,13 +1150,27 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
             "noteAdded"
         ]
     );
-    let note = noted["timeline"].as_array().unwrap().iter().find(|item| item["entry"]["kind"] == "noteAdded").unwrap();
+    let note = noted["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["entry"]["kind"] == "noteAdded")
+        .unwrap();
     assert_eq!(note["entry"]["detail"]["text"], "Nozzle clogged.");
     assert_eq!(note["entry"]["operationId"], "op-note");
-    let acknowledgement = noted["timeline"].as_array().unwrap().iter().find(|item| item["entry"]["kind"] == "eventAcknowledged").unwrap();
+    let acknowledgement = noted["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["entry"]["kind"] == "eventAcknowledged")
+        .unwrap();
     assert_eq!(acknowledgement["entry"]["detail"]["by"], "operator");
     assert!(
-        noted["timeline"].as_array().unwrap().iter().any(|item| item["source"] == "job"),
+        noted["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "job"),
         "the Job's own timeline is merged in"
     );
     let ats: Vec<DateTime<Utc>> = noted["timeline"]
@@ -1049,18 +1178,31 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
         .unwrap()
         .iter()
         .map(|item| {
-            let at = if item["source"] == "incident" { &item["entry"]["at"] } else { &item["event"]["at"] };
+            let at = if item["source"] == "incident" {
+                &item["entry"]["at"]
+            } else {
+                &item["event"]["at"]
+            };
             at.as_str().unwrap().parse().unwrap()
         })
         .collect();
-    assert!(ats.windows(2).all(|pair| pair[0] <= pair[1]), "ordered by at: {ats:?}");
+    assert!(
+        ats.windows(2).all(|pair| pair[0] <= pair[1]),
+        "ordered by at: {ats:?}"
+    );
     assert_eq!(noted["events"].as_array().unwrap().len(), 2);
     let replay = ok(
         app,
         "add_incident_note",
         json!({"operationId": "op-note", "incidentId": incident_id, "text": "Nozzle clogged."}),
     );
-    assert_eq!(kinds(&replay).iter().filter(|kind| *kind == "noteAdded").count(), 1);
+    assert_eq!(
+        kinds(&replay)
+            .iter()
+            .filter(|kind| *kind == "noteAdded")
+            .count(),
+        1
+    );
     let reused = call(
         app,
         "add_incident_note",
@@ -1069,10 +1211,17 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     .unwrap_err();
     assert_eq!(reused["details"]["fieldPath"], "operationId");
 
-    assert_eq!(call(app, "get_incident", json!({"incidentId": "inc-missing"})).unwrap_err()["code"], "NOT_FOUND");
     assert_eq!(
-        call(app, "acknowledge_attention_event", json!({"operationId": "op-ack-missing", "eventId": "att-missing"}))
-            .unwrap_err()["code"],
+        call(app, "get_incident", json!({"incidentId": "inc-missing"})).unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        call(
+            app,
+            "acknowledge_attention_event",
+            json!({"operationId": "op-ack-missing", "eventId": "att-missing"})
+        )
+        .unwrap_err()["code"],
         "NOT_FOUND"
     );
 
@@ -1107,11 +1256,19 @@ fn a_failed_job_opens_one_incident_that_the_commands_settle_and_close() {
     for haystack in [&rows, &emitted, &listed_text] {
         assert!(!haystack.is_empty());
         assert!(!haystack.contains(SECRET), "the API key leaked");
-        assert!(!haystack.contains(&format!("{host}:{port}")), "the endpoint leaked");
+        assert!(
+            !haystack.contains(&format!("{host}:{port}")),
+            "the endpoint leaked"
+        );
         assert!(!haystack.contains("credentialRef") && !haystack.contains("apikey"));
         // Task 7: nothing of the Printer's camera URL crosses into
         // Attention or Incident rows, events, or `list_attention`.
-        for needle in [CAMERA_SEED_PASS, CAMERA_SEED_TOKEN, CAMERA_SEED_HOST, "snap?user="] {
+        for needle in [
+            CAMERA_SEED_PASS,
+            CAMERA_SEED_TOKEN,
+            CAMERA_SEED_HOST,
+            "snap?user=",
+        ] {
             assert!(!haystack.contains(needle), "{needle} leaked");
         }
     }
@@ -1124,18 +1281,39 @@ fn command_arguments_are_validated() {
     for (command, body, field) in [
         ("list_attention", json!({"limit": 0}), "limit"),
         ("list_attention", json!({"limit": 201}), "limit"),
-        ("list_attention", json!({"resolvedBefore": "not-a-cursor"}), "resolvedBefore"),
-        ("mark_attention_read", json!({"operationId": "op-a", "eventIds": []}), "eventIds"),
-        ("mark_attention_read", json!({"operationId": "op-b", "eventIds": ["att-1", "att-1"]}), "eventIds"),
+        (
+            "list_attention",
+            json!({"resolvedBefore": "not-a-cursor"}),
+            "resolvedBefore",
+        ),
+        (
+            "mark_attention_read",
+            json!({"operationId": "op-a", "eventIds": []}),
+            "eventIds",
+        ),
+        (
+            "mark_attention_read",
+            json!({"operationId": "op-b", "eventIds": ["att-1", "att-1"]}),
+            "eventIds",
+        ),
         ("list_incidents", json!({"limit": 0}), "limit"),
-        ("list_incidents", json!({"before": "not-a-cursor"}), "before"),
+        (
+            "list_incidents",
+            json!({"before": "not-a-cursor"}),
+            "before",
+        ),
     ] {
         let error = call(app, command, body.clone()).unwrap_err();
         assert_eq!(error["code"], "VALIDATION", "{command} {body}");
         assert_eq!(error["details"]["fieldPath"], field, "{command} {body}");
     }
     let many: Vec<String> = (0..201).map(|i| format!("att-{i}")).collect();
-    let error = call(app, "mark_attention_read", json!({"operationId": "op-c", "eventIds": many})).unwrap_err();
+    let error = call(
+        app,
+        "mark_attention_read",
+        json!({"operationId": "op-c", "eventIds": many}),
+    )
+    .unwrap_err();
     assert_eq!(error["details"]["fieldPath"], "eventIds");
     assert_eq!(ok(app, "list_incidents", json!({}))["incidents"], json!([]));
 }

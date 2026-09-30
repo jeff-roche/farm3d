@@ -22,7 +22,10 @@ use super::{Job, JobState};
 ///    it starts;
 /// 3. an `assigned` Job that never staged is left for the driver's first
 ///    pass (R2), and `printing`/`paused` Jobs for the tracker (R9–R11).
-pub fn recover_after_restart(storage: &Storage, now: DateTime<Utc>) -> Result<Vec<Job>, StorageError> {
+pub fn recover_after_restart(
+    storage: &Storage,
+    now: DateTime<Utc>,
+) -> Result<Vec<Job>, StorageError> {
     let now = format_time(now);
     let active = storage.read(|connection| Ok(jobs_repository::list_active(connection)))??;
     let mut changed = Vec::new();

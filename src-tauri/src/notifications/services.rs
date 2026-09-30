@@ -44,8 +44,8 @@ use super::focus::Focus;
 use super::null::NullNotificationSink;
 use super::policy::{self, NotifyCandidate, RateLimiter};
 use super::{
-    NavigateRequest, Notification, NotificationClassSettings, NotificationHandle,
-    NotificationSink, NotifierStatus, NotifyError, SinkSignal,
+    NavigateRequest, Notification, NotificationClassSettings, NotificationHandle, NotificationSink,
+    NotifierStatus, NotifyError, SinkSignal,
 };
 
 /// The most notifications remembered for a click (D6, step 1).
@@ -153,7 +153,11 @@ impl<R: tauri::Runtime> Default for NotificationService<R> {
 }
 
 impl<R: tauri::Runtime> NotificationService<R> {
-    pub fn new(sink: Arc<dyn NotificationSink>, focus: Focus, timings: NotificationTimings) -> Self {
+    pub fn new(
+        sink: Arc<dyn NotificationSink>,
+        focus: Focus,
+        timings: NotificationTimings,
+    ) -> Self {
         let (signals, signal_receiver) = mpsc::unbounded_channel();
         let service = Self {
             sink: RwLock::new(Arc::clone(&sink)),
@@ -183,7 +187,8 @@ impl<R: tauri::Runtime> NotificationService<R> {
     /// the null sink elsewhere. `icon` is D6's `app_icon`.
     pub fn platform(focus: Focus, icon: String) -> Self {
         #[cfg(target_os = "linux")]
-        let sink: Arc<dyn NotificationSink> = Arc::new(super::dbus::DbusNotificationSink::new(icon));
+        let sink: Arc<dyn NotificationSink> =
+            Arc::new(super::dbus::DbusNotificationSink::new(icon));
         #[cfg(not(target_os = "linux"))]
         let sink: Arc<dyn NotificationSink> = {
             let _ = icon;
@@ -200,14 +205,22 @@ impl<R: tauri::Runtime> NotificationService<R> {
     }
 
     fn sink(&self) -> Arc<dyn NotificationSink> {
-        Arc::clone(&self.sink.read().unwrap_or_else(|poisoned| poisoned.into_inner()))
+        Arc::clone(
+            &self
+                .sink
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
     /// Test hook: replaces the sink (before `start`).
     #[doc(hidden)]
     pub fn set_sink(&self, sink: Arc<dyn NotificationSink>) {
         self.attach(&sink);
-        *self.sink.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = sink;
+        *self
+            .sink
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = sink;
     }
 
     /// Where a click's raise goes; the main window unless set before
@@ -320,12 +333,14 @@ impl<R: tauri::Runtime> NotificationService<R> {
         // Only a notification the sink showed counts toward the limits.
         lock(&self.limiter).record(&notification, handle.id, now);
         self.remember(handle, &notification);
-        let marked = services.storage.write_repo(|tx| -> Result<(), RepositoryError> {
-            for event_id in &notification.event_ids {
-                attention_repository::mark_notified(tx, event_id, now)?;
-            }
-            Ok(())
-        });
+        let marked = services
+            .storage
+            .write_repo(|tx| -> Result<(), RepositoryError> {
+                for event_id in &notification.event_ids {
+                    attention_repository::mark_notified(tx, event_id, now)?;
+                }
+                Ok(())
+            });
         if marked.is_err() {
             self.log_line(
                 "notifications.notifiedAtFailed",

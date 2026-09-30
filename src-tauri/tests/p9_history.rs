@@ -138,7 +138,12 @@ struct Seed {
 }
 
 impl Seed {
-    fn new(id: &'static str, state: &'static str, created: &'static str, ended: Option<&'static str>) -> Self {
+    fn new(
+        id: &'static str,
+        state: &'static str,
+        created: &'static str,
+        ended: Option<&'static str>,
+    ) -> Self {
         Seed {
             id,
             printer: "prn-a",
@@ -188,7 +193,9 @@ fn seed_job(conn: &Connection, seed: &Seed) {
         ..
     } = seed.clone();
     let snapshot = serde_json::to_string(&printer_snapshot(printer_name)).unwrap();
-    let ended = seed.ended.map_or("NULL".to_string(), |at| format!("'{at}'"));
+    let ended = seed
+        .ended
+        .map_or("NULL".to_string(), |at| format!("'{at}'"));
     let (settlement, method, cancel) = match state {
         "completed" => ("settled", "'estimated'", "NULL"),
         "failed" => ("pending", "NULL", "NULL"),
@@ -269,26 +276,46 @@ fn standard(farm: &Farm) {
     farm.write(|conn| {
         seed_job(
             conn,
-            &Seed::new("job-1", "completed", "2026-03-01T08:00:00.000Z", Some("2026-03-01T09:00:00.000Z"))
-                .plate("Plate One"),
+            &Seed::new(
+                "job-1",
+                "completed",
+                "2026-03-01T08:00:00.000Z",
+                Some("2026-03-01T09:00:00.000Z"),
+            )
+            .plate("Plate One"),
         );
         seed_job(
             conn,
-            &Seed::new("job-2", "failed", "2026-03-02T08:00:00.000Z", Some("2026-03-02T09:00:00.000Z"))
-                .printer("prn-b", "Trident")
-                .spool("spl-b", 2),
+            &Seed::new(
+                "job-2",
+                "failed",
+                "2026-03-02T08:00:00.000Z",
+                Some("2026-03-02T09:00:00.000Z"),
+            )
+            .printer("prn-b", "Trident")
+            .spool("spl-b", 2),
         );
         seed_job(
             conn,
-            &Seed::new("job-3", "cancelled", "2026-03-03T08:00:00.000Z", Some("2026-03-03T09:00:00.000Z"))
-                .model("mdl-b", "Gear"),
+            &Seed::new(
+                "job-3",
+                "cancelled",
+                "2026-03-03T08:00:00.000Z",
+                Some("2026-03-03T09:00:00.000Z"),
+            )
+            .model("mdl-b", "Gear"),
         );
         seed_job(
             conn,
-            &Seed::new("job-4", "completed", "2026-03-04T08:00:00.000Z", Some("2026-03-04T09:00:00.000Z"))
-                .printer("prn-b", "Trident")
-                .spool("spl-b", 2)
-                .model("mdl-b", "Gear"),
+            &Seed::new(
+                "job-4",
+                "completed",
+                "2026-03-04T08:00:00.000Z",
+                Some("2026-03-04T09:00:00.000Z"),
+            )
+            .printer("prn-b", "Trident")
+            .spool("spl-b", 2)
+            .model("mdl-b", "Gear"),
         );
         seed_job(
             conn,
@@ -307,7 +334,10 @@ fn the_default_query_lists_settled_jobs_newest_first_and_hides_outcome_unknown()
     standard(&farm);
     let page = farm.list(&q());
     assert_eq!(
-        page.rows.iter().map(|row| row.job_id.as_str()).collect::<Vec<_>>(),
+        page.rows
+            .iter()
+            .map(|row| row.job_id.as_str())
+            .collect::<Vec<_>>(),
         ["job-4", "job-3", "job-2", "job-1"]
     );
     assert_eq!(page.next_cursor, None);
@@ -330,7 +360,10 @@ fn every_filter_works_alone() {
     standard(&farm);
     let by = |query: JobHistoryQuery| farm.ids(&query);
     assert_eq!(
-        by(JobHistoryQuery { states: Some(vec![JobHistoryState::Failed]), ..q() }),
+        by(JobHistoryQuery {
+            states: Some(vec![JobHistoryState::Failed]),
+            ..q()
+        }),
         ["job-2"]
     );
     assert_eq!(
@@ -340,21 +373,48 @@ fn every_filter_works_alone() {
         }),
         ["job-4", "job-3", "job-1"]
     );
-    assert_eq!(by(JobHistoryQuery { printer_id: Some("prn-b".into()), ..q() }), ["job-4", "job-2"]);
-    assert_eq!(by(JobHistoryQuery { spool_id: Some("spl-a".into()), ..q() }), ["job-3", "job-1"]);
-    assert_eq!(by(JobHistoryQuery { model_id: Some("mdl-b".into()), ..q() }), ["job-4", "job-3"]);
+    assert_eq!(
+        by(JobHistoryQuery {
+            printer_id: Some("prn-b".into()),
+            ..q()
+        }),
+        ["job-4", "job-2"]
+    );
+    assert_eq!(
+        by(JobHistoryQuery {
+            spool_id: Some("spl-a".into()),
+            ..q()
+        }),
+        ["job-3", "job-1"]
+    );
+    assert_eq!(
+        by(JobHistoryQuery {
+            model_id: Some("mdl-b".into()),
+            ..q()
+        }),
+        ["job-4", "job-3"]
+    );
     // After is inclusive, before exclusive.
     assert_eq!(
-        by(JobHistoryQuery { ended_after: Some("2026-03-02T09:00:00.000Z".into()), ..q() }),
+        by(JobHistoryQuery {
+            ended_after: Some("2026-03-02T09:00:00.000Z".into()),
+            ..q()
+        }),
         ["job-4", "job-3", "job-2"]
     );
     assert_eq!(
-        by(JobHistoryQuery { ended_before: Some("2026-03-02T09:00:00.000Z".into()), ..q() }),
+        by(JobHistoryQuery {
+            ended_before: Some("2026-03-02T09:00:00.000Z".into()),
+            ..q()
+        }),
         ["job-1"]
     );
     // An offset is normalised to UTC: 10:00+01:00 is 09:00Z.
     assert_eq!(
-        by(JobHistoryQuery { ended_after: Some("2026-03-04T10:00:00+01:00".into()), ..q() }),
+        by(JobHistoryQuery {
+            ended_after: Some("2026-03-04T10:00:00+01:00".into()),
+            ..q()
+        }),
         ["job-4"]
     );
     assert_eq!(by(text("Trident")), ["job-4", "job-2"]);
@@ -362,7 +422,11 @@ fn every_filter_works_alone() {
     assert_eq!(by(text("plate one")), ["job-1"]);
     assert_eq!(by(text("job-3")), ["job-3"]);
     assert_eq!(by(text("#2")), ["job-4", "job-2"]);
-    assert_eq!(by(text("   ")), ["job-4", "job-3", "job-2", "job-1"], "blank means absent");
+    assert_eq!(
+        by(text("   ")),
+        ["job-4", "job-3", "job-2", "job-1"],
+        "blank means absent"
+    );
 }
 
 #[test]
@@ -382,7 +446,10 @@ fn filters_combine() {
     };
     assert_eq!(farm.ids(&combined), ["job-4"]);
     assert_eq!(
-        farm.ids(&JobHistoryQuery { model_id: Some("mdl-a".into()), ..combined }),
+        farm.ids(&JobHistoryQuery {
+            model_id: Some("mdl-a".into()),
+            ..combined
+        }),
         Vec::<String>::new()
     );
 }
@@ -405,15 +472,24 @@ fn the_archived_filter_finds_jobs_by_the_snapshot_name_of_an_archived_printer() 
     };
     assert_eq!(farm.ids(&archived), ["job-4", "job-2"]);
     assert_eq!(
-        farm.ids(&JobHistoryQuery { text: Some("Trident".into()), ..archived.clone() }),
+        farm.ids(&JobHistoryQuery {
+            text: Some("Trident".into()),
+            ..archived.clone()
+        }),
         ["job-4", "job-2"]
     );
     assert_eq!(
-        farm.ids(&JobHistoryQuery { text: Some("Renamed".into()), ..archived.clone() }),
+        farm.ids(&JobHistoryQuery {
+            text: Some("Renamed".into()),
+            ..archived.clone()
+        }),
         Vec::<String>::new()
     );
     assert_eq!(
-        farm.ids(&JobHistoryQuery { printer_lifecycle: Some(PrinterLifecycleFilter::Active), ..q() }),
+        farm.ids(&JobHistoryQuery {
+            printer_lifecycle: Some(PrinterLifecycleFilter::Active),
+            ..q()
+        }),
         ["job-3", "job-1"]
     );
     let row = &farm.list(&archived).rows[0];
@@ -436,7 +512,8 @@ fn text_escapes_like_wildcards_and_handles_non_ascii() {
             let model: &'static str = ["mdl-p", "mdl-u", "mdl-x", "mdl-s", "mdl-n"][index];
             seed_job(
                 conn,
-                &Seed::new(id, "completed", "2026-03-01T00:00:00.000Z", Some(ended)).model(model, name),
+                &Seed::new(id, "completed", "2026-03-01T00:00:00.000Z", Some(ended))
+                    .model(model, name),
             );
         }
     });
@@ -457,7 +534,10 @@ fn text_escapes_like_wildcards_and_handles_non_ascii() {
 fn keyset_paging_is_stable_while_new_jobs_finish() {
     let farm = farm();
     farm.write(|conn| {
-        for (index, id) in ["job-01", "job-02", "job-03", "job-04", "job-05"].into_iter().enumerate() {
+        for (index, id) in ["job-01", "job-02", "job-03", "job-04", "job-05"]
+            .into_iter()
+            .enumerate()
+        {
             let ended: &'static str = [
                 "2026-03-01T09:00:00.000Z",
                 "2026-03-02T09:00:00.000Z",
@@ -465,28 +545,64 @@ fn keyset_paging_is_stable_while_new_jobs_finish() {
                 "2026-03-04T09:00:00.000Z",
                 "2026-03-05T09:00:00.000Z",
             ][index];
-            seed_job(conn, &Seed::new(id, "completed", "2026-03-01T00:00:00.000Z", Some(ended)));
+            seed_job(
+                conn,
+                &Seed::new(id, "completed", "2026-03-01T00:00:00.000Z", Some(ended)),
+            );
         }
     });
-    let first = farm.list(&JobHistoryQuery { limit: Some(2), ..q() });
-    assert_eq!(first.rows.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["job-05", "job-04"]);
+    let first = farm.list(&JobHistoryQuery {
+        limit: Some(2),
+        ..q()
+    });
+    assert_eq!(
+        first
+            .rows
+            .iter()
+            .map(|r| r.job_id.as_str())
+            .collect::<Vec<_>>(),
+        ["job-05", "job-04"]
+    );
     let cursor = first.next_cursor.clone().expect("more rows follow");
 
     // A Job finishes between pages: it sorts above the first page.
     farm.write(|conn| {
         seed_job(
             conn,
-            &Seed::new("job-06", "completed", "2026-03-06T00:00:00.000Z", Some("2026-03-06T09:00:00.000Z")),
+            &Seed::new(
+                "job-06",
+                "completed",
+                "2026-03-06T00:00:00.000Z",
+                Some("2026-03-06T09:00:00.000Z"),
+            ),
         );
     });
-    let second = farm.list(&JobHistoryQuery { limit: Some(2), after: Some(cursor), ..q() });
-    assert_eq!(second.rows.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["job-03", "job-02"]);
+    let second = farm.list(&JobHistoryQuery {
+        limit: Some(2),
+        after: Some(cursor),
+        ..q()
+    });
+    assert_eq!(
+        second
+            .rows
+            .iter()
+            .map(|r| r.job_id.as_str())
+            .collect::<Vec<_>>(),
+        ["job-03", "job-02"]
+    );
     let third = farm.list(&JobHistoryQuery {
         limit: Some(2),
         after: second.next_cursor.clone(),
         ..q()
     });
-    assert_eq!(third.rows.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["job-01"]);
+    assert_eq!(
+        third
+            .rows
+            .iter()
+            .map(|r| r.job_id.as_str())
+            .collect::<Vec<_>>(),
+        ["job-01"]
+    );
     assert_eq!(third.next_cursor, None, "no extra row, no cursor");
 }
 
@@ -497,14 +613,23 @@ fn ties_on_the_history_time_page_by_id() {
         for id in ["job-a", "job-b", "job-c", "job-d"] {
             seed_job(
                 conn,
-                &Seed::new(id, "completed", "2026-03-01T00:00:00.000Z", Some("2026-03-01T09:00:00.000Z")),
+                &Seed::new(
+                    id,
+                    "completed",
+                    "2026-03-01T00:00:00.000Z",
+                    Some("2026-03-01T09:00:00.000Z"),
+                ),
             );
         }
     });
     let mut seen = Vec::new();
     let mut after = None;
     loop {
-        let page = farm.list(&JobHistoryQuery { limit: Some(1), after: after.clone(), ..q() });
+        let page = farm.list(&JobHistoryQuery {
+            limit: Some(1),
+            after: after.clone(),
+            ..q()
+        });
         seen.extend(page.rows.iter().map(|r| r.job_id.clone()));
         after = page.next_cursor;
         if after.is_none() {
@@ -518,14 +643,24 @@ fn ties_on_the_history_time_page_by_id() {
 fn outcome_unknown_is_opt_in_and_pages_by_created_at() {
     let farm = farm();
     farm.write(|conn| {
-        seed_job(conn, &Seed::new("job-1", "completed", "2026-03-01T00:00:00.000Z", Some("2026-03-01T09:00:00.000Z")));
         seed_job(
             conn,
-            &Seed::new("job-u1", "outcomeUnknown", "2026-03-02T08:00:00.000Z", None).printer("prn-u1", "U1"),
+            &Seed::new(
+                "job-1",
+                "completed",
+                "2026-03-01T00:00:00.000Z",
+                Some("2026-03-01T09:00:00.000Z"),
+            ),
         );
         seed_job(
             conn,
-            &Seed::new("job-u2", "outcomeUnknown", "2026-03-03T08:00:00.000Z", None).printer("prn-u2", "U2"),
+            &Seed::new("job-u1", "outcomeUnknown", "2026-03-02T08:00:00.000Z", None)
+                .printer("prn-u1", "U1"),
+        );
+        seed_job(
+            conn,
+            &Seed::new("job-u2", "outcomeUnknown", "2026-03-03T08:00:00.000Z", None)
+                .printer("prn-u2", "U2"),
         );
     });
     assert_eq!(farm.ids(&q()), ["job-1"]);
@@ -535,13 +670,36 @@ fn outcome_unknown_is_opt_in_and_pages_by_created_at() {
         ..q()
     };
     let first = farm.list(&all);
-    assert_eq!(first.rows.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["job-u2", "job-u1"]);
-    assert_eq!(first.rows[0].history_at, "2026-03-03T08:00:00.000Z", "created_at, no ended_at");
-    assert_eq!(first.rows[0].ended_at, None);
-    let second = farm.list(&JobHistoryQuery { after: first.next_cursor, ..all });
-    assert_eq!(second.rows.iter().map(|r| r.job_id.as_str()).collect::<Vec<_>>(), ["job-1"]);
     assert_eq!(
-        farm.ids(&JobHistoryQuery { states: Some(vec![JobHistoryState::OutcomeUnknown]), ..q() }),
+        first
+            .rows
+            .iter()
+            .map(|r| r.job_id.as_str())
+            .collect::<Vec<_>>(),
+        ["job-u2", "job-u1"]
+    );
+    assert_eq!(
+        first.rows[0].history_at, "2026-03-03T08:00:00.000Z",
+        "created_at, no ended_at"
+    );
+    assert_eq!(first.rows[0].ended_at, None);
+    let second = farm.list(&JobHistoryQuery {
+        after: first.next_cursor,
+        ..all
+    });
+    assert_eq!(
+        second
+            .rows
+            .iter()
+            .map(|r| r.job_id.as_str())
+            .collect::<Vec<_>>(),
+        ["job-1"]
+    );
+    assert_eq!(
+        farm.ids(&JobHistoryQuery {
+            states: Some(vec![JobHistoryState::OutcomeUnknown]),
+            ..q()
+        }),
         ["job-u2", "job-u1"]
     );
 }
@@ -549,12 +707,44 @@ fn outcome_unknown_is_opt_in_and_pages_by_created_at() {
 #[test]
 fn the_query_is_validated() {
     let bad = |query: JobHistoryQuery| validate(&query).expect_err("invalid").field;
-    assert_eq!(bad(JobHistoryQuery { limit: Some(0), ..q() }), "query.limit");
-    assert_eq!(bad(JobHistoryQuery { limit: Some(201), ..q() }), "query.limit");
-    assert_eq!(bad(JobHistoryQuery { limit: Some(-1), ..q() }), "query.limit");
-    assert!(validate(&JobHistoryQuery { limit: Some(1), ..q() }).is_ok());
-    assert!(validate(&JobHistoryQuery { limit: Some(200), ..q() }).is_ok());
-    assert_eq!(bad(JobHistoryQuery { states: Some(vec![]), ..q() }), "query.states");
+    assert_eq!(
+        bad(JobHistoryQuery {
+            limit: Some(0),
+            ..q()
+        }),
+        "query.limit"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            limit: Some(201),
+            ..q()
+        }),
+        "query.limit"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            limit: Some(-1),
+            ..q()
+        }),
+        "query.limit"
+    );
+    assert!(validate(&JobHistoryQuery {
+        limit: Some(1),
+        ..q()
+    })
+    .is_ok());
+    assert!(validate(&JobHistoryQuery {
+        limit: Some(200),
+        ..q()
+    })
+    .is_ok());
+    assert_eq!(
+        bad(JobHistoryQuery {
+            states: Some(vec![]),
+            ..q()
+        }),
+        "query.states"
+    );
     assert_eq!(
         bad(JobHistoryQuery {
             states: Some(vec![JobHistoryState::Failed, JobHistoryState::Failed]),
@@ -562,15 +752,49 @@ fn the_query_is_validated() {
         }),
         "query.states"
     );
-    assert!(validate(&JobHistoryQuery { states: Some(JobHistoryState::ALL.to_vec()), ..q() }).is_ok());
+    assert!(validate(&JobHistoryQuery {
+        states: Some(JobHistoryState::ALL.to_vec()),
+        ..q()
+    })
+    .is_ok());
     assert_eq!(bad(text(&"x".repeat(201))), "query.text");
     assert!(validate(&text(&"x".repeat(200))).is_ok());
-    assert!(validate(&text(&format!("  {}  ", "x".repeat(200)))).is_ok(), "trimmed first");
-    assert!(validate(&text(&"é".repeat(200))).is_ok(), "characters, not bytes");
-    assert_eq!(bad(JobHistoryQuery { after: Some("not a cursor".into()), ..q() }), "query.after");
-    assert_eq!(bad(JobHistoryQuery { after: Some("bm9waXBl".into()), ..q() }), "query.after");
-    assert_eq!(bad(JobHistoryQuery { ended_after: Some("yesterday".into()), ..q() }), "query.endedAfter");
-    assert_eq!(bad(JobHistoryQuery { ended_before: Some("2026-03-01".into()), ..q() }), "query.endedBefore");
+    assert!(
+        validate(&text(&format!("  {}  ", "x".repeat(200)))).is_ok(),
+        "trimmed first"
+    );
+    assert!(
+        validate(&text(&"é".repeat(200))).is_ok(),
+        "characters, not bytes"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            after: Some("not a cursor".into()),
+            ..q()
+        }),
+        "query.after"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            after: Some("bm9waXBl".into()),
+            ..q()
+        }),
+        "query.after"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            ended_after: Some("yesterday".into()),
+            ..q()
+        }),
+        "query.endedAfter"
+    );
+    assert_eq!(
+        bad(JobHistoryQuery {
+            ended_before: Some("2026-03-01".into()),
+            ..q()
+        }),
+        "query.endedBefore"
+    );
 }
 
 // --- index use ---------------------------------------------------------------
@@ -583,7 +807,9 @@ fn plan(farm: &Farm, query: &JobHistoryQuery) -> Vec<String> {
         .read_transaction(|tx| {
             let mut statement = tx.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
             let rows = statement
-                .query_map(rusqlite::params_from_iter(params), |row| row.get::<_, String>(3))?
+                .query_map(rusqlite::params_from_iter(params), |row| {
+                    row.get::<_, String>(3)
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
@@ -612,11 +838,28 @@ fn the_default_query_uses_jobs_history_with_a_seekable_keyset() {
     let farm = farm();
     standard(&farm);
     assert_plan_uses(&plan(&farm, &q()), "jobs_history");
-    let cursor = farm.list(&JobHistoryQuery { limit: Some(1), ..q() }).next_cursor;
-    let seeking = plan(&farm, &JobHistoryQuery { after: cursor, ..q() });
+    let cursor = farm
+        .list(&JobHistoryQuery {
+            limit: Some(1),
+            ..q()
+        })
+        .next_cursor;
+    let seeking = plan(
+        &farm,
+        &JobHistoryQuery {
+            after: cursor,
+            ..q()
+        },
+    );
     assert_plan_uses(&seeking, "jobs_history");
-    let scan = seeking.iter().find(|line| line.contains("jobs_history")).unwrap();
-    assert!(scan.starts_with("SEARCH j"), "the keyset seeks instead of scanning: {scan}");
+    let scan = seeking
+        .iter()
+        .find(|line| line.contains("jobs_history"))
+        .unwrap();
+    assert!(
+        scan.starts_with("SEARCH j"),
+        "the keyset seeks instead of scanning: {scan}"
+    );
     assert!(scan.contains('<'), "{scan}");
 }
 
@@ -624,12 +867,23 @@ fn the_default_query_uses_jobs_history_with_a_seekable_keyset() {
 fn the_printer_and_text_filters_use_the_matching_index() {
     let farm = farm();
     standard(&farm);
-    let printer = JobHistoryQuery { printer_id: Some("prn-b".into()), ..q() };
+    let printer = JobHistoryQuery {
+        printer_id: Some("prn-b".into()),
+        ..q()
+    };
     assert_plan_uses(&plan(&farm, &printer), "jobs_history_printer");
-    let with_text = JobHistoryQuery { text: Some("Trident".into()), ..printer.clone() };
+    let with_text = JobHistoryQuery {
+        text: Some("Trident".into()),
+        ..printer.clone()
+    };
     assert_plan_uses(&plan(&farm, &with_text), "jobs_history_printer");
     let seeking = JobHistoryQuery {
-        after: farm.list(&JobHistoryQuery { limit: Some(1), ..printer.clone() }).next_cursor,
+        after: farm
+            .list(&JobHistoryQuery {
+                limit: Some(1),
+                ..printer.clone()
+            })
+            .next_cursor,
         ..printer
     };
     assert_plan_uses(&plan(&farm, &seeking), "jobs_history_printer");
@@ -791,10 +1045,19 @@ fn the_timeline_carries_every_item_kind_in_a_deterministic_order() {
 
     let kinds = sources(&timeline);
     for kind in [
-        "job", "hostOperation", "reservation", "amountEvent", "requirement", "attention", "incident",
+        "job",
+        "hostOperation",
+        "reservation",
+        "amountEvent",
+        "requirement",
+        "attention",
+        "incident",
         "snapshot",
     ] {
-        assert!(kinds.iter().any(|k| k == kind), "{kind} missing from {kinds:?}");
+        assert!(
+            kinds.iter().any(|k| k == kind),
+            "{kind} missing from {kinds:?}"
+        );
     }
     // By time, then source, then the source's sequence.
     assert_eq!(
@@ -825,7 +1088,12 @@ fn the_timeline_order_is_pinned() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|item| (item["at"].as_str().unwrap().to_string(), item["source"].as_str().unwrap().to_string()))
+        .map(|item| {
+            (
+                item["at"].as_str().unwrap().to_string(),
+                item["source"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
     let sorted = {
         let mut sorted = shape.clone();
@@ -838,10 +1106,19 @@ fn the_timeline_order_is_pinned() {
         "ascending by time"
     );
     let rank = |source: &str| {
-        ["job", "hostOperation", "reservation", "amountEvent", "requirement", "attention", "incident", "snapshot"]
-            .iter()
-            .position(|s| *s == source)
-            .unwrap()
+        [
+            "job",
+            "hostOperation",
+            "reservation",
+            "amountEvent",
+            "requirement",
+            "attention",
+            "incident",
+            "snapshot",
+        ]
+        .iter()
+        .position(|s| *s == source)
+        .unwrap()
     };
     for pair in shape.windows(2) {
         if pair[0].0 == pair[1].0 {
@@ -853,9 +1130,11 @@ fn the_timeline_order_is_pinned() {
         .items
         .iter()
         .filter_map(|item| match item {
-            JobTimelineItem::AmountEvent { amount_event, is_correction, .. } => {
-                Some(format!("{}:{is_correction}", amount_event.id))
-            }
+            JobTimelineItem::AmountEvent {
+                amount_event,
+                is_correction,
+                ..
+            } => Some(format!("{}:{is_correction}", amount_event.id)),
             _ => None,
         })
         .collect();
@@ -888,11 +1167,19 @@ fn a_pruned_snapshot_shows_as_pruned() {
         .items
         .iter()
         .filter_map(|item| match item {
-            JobTimelineItem::Snapshot { snapshot, .. } => Some((snapshot.id.clone(), snapshot.pruned_at.is_some())),
+            JobTimelineItem::Snapshot { snapshot, .. } => {
+                Some((snapshot.id.clone(), snapshot.pruned_at.is_some()))
+            }
             _ => None,
         })
         .collect();
-    assert_eq!(pruned, [("snp-live".to_string(), false), ("snp-done".to_string(), true)]);
+    assert_eq!(
+        pruned,
+        [
+            ("snp-live".to_string(), false),
+            ("snp-done".to_string(), true)
+        ]
+    );
     let history = farm.list(&q());
     assert_eq!(history.rows[0].snapshot_count, 2, "pruned rows still count");
     assert!(history.rows[0].incident_id.is_some());
@@ -920,17 +1207,32 @@ fn the_timeline_is_immutable_across_archiving_and_pruning() {
     farm.write(|conn| {
         exec(conn, "UPDATE printers SET archived_at = '2026-05-01T00:00:00.000Z', revision = revision + 1 WHERE id = 'prn-a';");
     });
-    assert_eq!(farm.timeline_json("job-t"), before, "archiving the Printer changes nothing");
+    assert_eq!(
+        farm.timeline_json("job-t"),
+        before,
+        "archiving the Printer changes nothing"
+    );
     farm.write(|conn| {
-        exec(conn, "UPDATE printers SET name = 'Something else' WHERE id = 'prn-a';");
+        exec(
+            conn,
+            "UPDATE printers SET name = 'Something else' WHERE id = 'prn-a';",
+        );
     });
-    assert_eq!(farm.timeline_json("job-t"), before, "the Printer's current name never shows");
+    assert_eq!(
+        farm.timeline_json("job-t"),
+        before,
+        "the Printer's current name never shows"
+    );
 
     // Archive the Spool.
     farm.write(|conn| {
         exec(conn, "UPDATE spools SET lifecycle = 'archived', archived_from = 'active', revision = revision + 1 WHERE id = 'spl-a';");
     });
-    assert_eq!(farm.timeline_json("job-t"), before, "archiving the Spool changes nothing");
+    assert_eq!(
+        farm.timeline_json("job-t"),
+        before,
+        "archiving the Spool changes nothing"
+    );
 
     // Prune media.
     farm.write(|conn| {

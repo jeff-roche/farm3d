@@ -4,7 +4,10 @@ fn command_inventory_is_exactly_the_f1_inventory_plus_p2_p3_p4_p5_p6_additions()
     // P7's: Task 6's 11, Task 8a's 4, Task 8b's 1, and Task 9's 2, plus
     // P8 Task 6's 7, Task 7's 6, Task 8's 5, and Task 9's 4, plus P9 Task 4's 2,
     // Task 5's 4, Task 6's 2, Task 7's 3, Task 8's 2, Task 9's 3, and Task 10's 2.
-    assert_eq!(farm3d_lib::COMMAND_NAMES.len(), 58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2 + 4 + 2 + 3 + 2 + 3 + 2);
+    assert_eq!(
+        farm3d_lib::COMMAND_NAMES.len(),
+        58 + 21 + 2 + 8 + 11 + 4 + 1 + 2 + 7 + 6 + 5 + 4 + 2 + 4 + 2 + 3 + 2 + 3 + 2
+    );
     assert_eq!(
         farm3d_lib::COMMAND_NAMES,
         [
@@ -725,9 +728,15 @@ fn every_registered_handler_returns_the_captured_nonretryable_bootstrap_error() 
         ("list_job_history", json!({"query": {}})),
         ("get_job_timeline", json!({"jobId": "j"})),
         ("backup_inventory", json!({})),
-        ("create_backup", json!({"operationId": "op", "media": "all"})),
+        (
+            "create_backup",
+            json!({"operationId": "op", "media": "all"}),
+        ),
         ("list_backups", json!({})),
-        ("delete_backup", json!({"operationId": "op", "backupId": "sfb-x"})),
+        (
+            "delete_backup",
+            json!({"operationId": "op", "backupId": "sfb-x"}),
+        ),
         ("preview_restore", json!({"source": {"kind": "file"}})),
         ("discard_restore_preview", json!({"stagingId": "stg-x"})),
         (

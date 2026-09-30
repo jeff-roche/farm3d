@@ -324,9 +324,7 @@ pub fn accepted_snapshots(root: &Path) -> Vec<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(SNAPSHOT_PREFIX) && name.ends_with(".sqlite3")
-                })
+                .is_some_and(|name| name.starts_with(SNAPSHOT_PREFIX) && name.ends_with(".sqlite3"))
         })
         .filter_map(|path| Some((snapshot_timestamp(&path)?, path)))
         .filter(|(_, path)| validate_database(path).is_ok())

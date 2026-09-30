@@ -17,7 +17,9 @@ use ts_rs::TS;
 
 use crate::attention::lifecycle::AckBy;
 use crate::attention::{AttentionEvent, AttentionResolution};
-use crate::cameras::{CameraErrorKind, CameraSnapshot, EvidenceSkipReason, PruneReason, SnapshotTrigger};
+use crate::cameras::{
+    CameraErrorKind, CameraSnapshot, EvidenceSkipReason, PruneReason, SnapshotTrigger,
+};
 use crate::jobs::{JobEvent, PrinterSnapshot};
 
 /// D1: an Incident's own open/closed lifecycle, independent of its linked
@@ -127,7 +129,11 @@ impl IncidentEntryKind {
 
 /// `incident_events.detail_json`, tagged by [`IncidentEntryKind`].
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -194,7 +200,11 @@ pub struct IncidentEntry {
 /// D9 decision 9: the Incident timeline merges `incident_events` with
 /// the Job's own `job_events` at read time.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "source", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "source",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "source",
     rename_all = "camelCase",

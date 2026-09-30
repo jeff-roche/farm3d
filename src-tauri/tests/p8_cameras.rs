@@ -62,7 +62,10 @@ fn a_manual_url_must_be_plain_http_with_a_host_and_no_userinfo_or_fragment() {
         ("http:///snapshot", "an empty authority"),
         ("http://:8080/snap", "an empty host"),
         ("http://user@192.0.2.10/snap", "a user name"),
-        ("http://user:SEEDPASS@192.0.2.10/snap", "a user name and password"),
+        (
+            "http://user:SEEDPASS@192.0.2.10/snap",
+            "a user name and password",
+        ),
         ("http://@192.0.2.10/snap", "an empty userinfo"),
         ("http://192.0.2.10/snap#frag", "a fragment"),
         ("http://192.0.2.10/snap#", "an empty fragment"),
@@ -78,10 +81,16 @@ fn a_manual_url_must_be_plain_http_with_a_host_and_no_userinfo_or_fragment() {
             .expect_err(&format!("{why} must be refused"));
         assert_eq!(field_of(&error), "source.snapshotUrl", "{why}");
         let text = format!("{error:?} {}", serde_json::to_string(&error).unwrap());
-        assert!(!text.contains("SEEDPASS") && !text.contains("192.0.2.10"), "{why}: {text}");
+        assert!(
+            !text.contains("SEEDPASS") && !text.contains("192.0.2.10"),
+            "{why}: {text}"
+        );
     }
     let too_long = format!("http://192.0.2.10/{long_path}");
-    assert_eq!(field_of(&validate_snapshot_url(&too_long, "camera.snapshotUrl").unwrap_err()), "camera.snapshotUrl");
+    assert_eq!(
+        field_of(&validate_snapshot_url(&too_long, "camera.snapshotUrl").unwrap_err()),
+        "camera.snapshotUrl"
+    );
 }
 
 #[test]
@@ -92,7 +101,11 @@ fn a_source_is_validated_field_by_field() {
         web_port: port,
     };
     assert_eq!(
-        validate_source(&webcam("  front ", Some(" mjpegstreamer "), Some(8080)), "source").unwrap(),
+        validate_source(
+            &webcam("  front ", Some(" mjpegstreamer "), Some(8080)),
+            "source"
+        )
+        .unwrap(),
         webcam("front", Some("mjpegstreamer"), Some(8080))
     );
     assert_eq!(
@@ -105,7 +118,10 @@ fn a_source_is_validated_field_by_field() {
         (webcam("   ", None, None), "source.webcamName"),
         (webcam(&"n".repeat(129), None, None), "source.webcamName"),
         (webcam("bad\u{7}name", None, None), "source.webcamName"),
-        (webcam("front", Some(&"s".repeat(65)), None), "source.webcamService"),
+        (
+            webcam("front", Some(&"s".repeat(65)), None),
+            "source.webcamService",
+        ),
         (webcam("front", None, Some(0)), "source.webPort"),
         (
             CameraSource::SnapshotUrl {
@@ -114,13 +130,19 @@ fn a_source_is_validated_field_by_field() {
             "source.snapshotUrl",
         ),
     ] {
-        assert_eq!(field_of(&validate_source(&source, "source").unwrap_err()), field);
+        assert_eq!(
+            field_of(&validate_source(&source, "source").unwrap_err()),
+            field
+        );
     }
     assert_eq!(
         field_of(&validate_source(&webcam("", None, None), "camera").unwrap_err()),
         "camera.webcamName"
     );
-    assert_eq!(validate_source(&webcam(&"n".repeat(128), None, Some(65535)), "source").unwrap(), webcam(&"n".repeat(128), None, Some(65535)));
+    assert_eq!(
+        validate_source(&webcam(&"n".repeat(128), None, Some(65535)), "source").unwrap(),
+        webcam(&"n".repeat(128), None, Some(65535))
+    );
 }
 
 fn resolved(host: &str, port: Option<u16>, url: &str) -> Result<String, CameraErrorKind> {
@@ -158,7 +180,12 @@ fn a_relative_webcam_url_resolves_against_the_connection_host_and_web_port() {
 #[test]
 fn an_absolute_webcam_url_must_stay_on_the_connection_host() {
     assert_eq!(
-        resolved("192.0.2.10", Some(8080), "http://192.0.2.10:8081/snap?token=abc").unwrap(),
+        resolved(
+            "192.0.2.10",
+            Some(8080),
+            "http://192.0.2.10:8081/snap?token=abc"
+        )
+        .unwrap(),
         "http://192.0.2.10:8081/snap?token=abc",
         "an absolute URL on the Connection host is used as it is"
     );
@@ -174,7 +201,10 @@ fn an_absolute_webcam_url_must_stay_on_the_connection_host() {
     );
     for (value, why) in [
         ("http://192.0.2.99/snap", "another host"),
-        ("//192.0.2.99/snap", "a scheme-relative value on another host"),
+        (
+            "//192.0.2.99/snap",
+            "a scheme-relative value on another host",
+        ),
         ("https://192.0.2.10/snap", "https"),
         ("ftp://192.0.2.10/snap", "another scheme"),
         ("http://user:pass@192.0.2.10/snap", "userinfo"),
@@ -196,19 +226,28 @@ fn a_missing_webcam_or_snapshot_url_is_typed() {
     );
     for empty in ["", "   "] {
         assert_eq!(
-            resolve_listed("192.0.2.10", None, Some(Zeroizing::new(empty.to_string()))).unwrap_err(),
+            resolve_listed("192.0.2.10", None, Some(Zeroizing::new(empty.to_string())))
+                .unwrap_err(),
             CameraErrorKind::NoSnapshotUrl
         );
     }
     assert_eq!(
-        resolve_listed("192.0.2.10", None, Some(Zeroizing::new("/snap".to_string())))
-            .unwrap()
-            .as_str(),
+        resolve_listed(
+            "192.0.2.10",
+            None,
+            Some(Zeroizing::new("/snap".to_string()))
+        )
+        .unwrap()
+        .as_str(),
         "http://192.0.2.10/snap"
     );
     assert_eq!(
-        resolve_listed("192.0.2.10", None, Some(Zeroizing::new("http://192.0.2.99/snap".to_string())))
-            .unwrap_err(),
+        resolve_listed(
+            "192.0.2.10",
+            None,
+            Some(Zeroizing::new("http://192.0.2.99/snap".to_string()))
+        )
+        .unwrap_err(),
         CameraErrorKind::HostMismatch
     );
 }
@@ -234,17 +273,29 @@ const SEED_HOST: &str = "192.0.2.77";
 /// Fails when `text` names any part of the corpus or any of `endpoints`
 /// (loopback hosts and ports in play), or any URL at all.
 fn assert_clean(text: &str, endpoints: &[String]) {
-    for needle in [SEED_PASS, SEED_QUERY_TOKEN, SEED_WEBCAM_TOKEN, SEED_HOST, "http://", "https://", "127.0.0.1", "snapshot?"]
-        .iter()
-        .map(|needle| needle.to_string())
-        .chain(endpoints.iter().cloned())
+    for needle in [
+        SEED_PASS,
+        SEED_QUERY_TOKEN,
+        SEED_WEBCAM_TOKEN,
+        SEED_HOST,
+        "http://",
+        "https://",
+        "127.0.0.1",
+        "snapshot?",
+    ]
+    .iter()
+    .map(|needle| needle.to_string())
+    .chain(endpoints.iter().cloned())
     {
         assert!(!text.contains(&needle), "{needle:?} leaked into: {text}");
     }
 }
 
 fn camera_error_text(error: &CameraError) -> String {
-    format!("{error} | {error:?} | {}", serde_json::to_string(error).unwrap())
+    format!(
+        "{error} | {error:?} | {}",
+        serde_json::to_string(error).unwrap()
+    )
 }
 
 fn production_fetcher() -> FrameFetcher {
@@ -252,7 +303,10 @@ fn production_fetcher() -> FrameFetcher {
 }
 
 async fn fetch_error(fetcher: &FrameFetcher, camera: &FakeCamera, path: &str) -> CameraError {
-    let error = fetcher.fetch(&camera.url(path)).await.expect_err("the fetch must fail");
+    let error = fetcher
+        .fetch(&camera.url(path))
+        .await
+        .expect_err("the fetch must fail");
     assert_clean(&camera_error_text(&error), &[camera.port.to_string()]);
     error
 }
@@ -261,7 +315,13 @@ async fn fetch_error(fetcher: &FrameFetcher, camera: &FakeCamera, path: &str) ->
 fn magic_bytes_decide_the_type_and_the_frame_encoding_is_length_prefixed() {
     assert_eq!(sniff(JPEG), Some(CameraContentType::Jpeg));
     assert_eq!(sniff(PNG), Some(CameraContentType::Png));
-    for other in [&b""[..], b"\xFF\xD8", b"<html>", b"--boundarydonotcross", b"\x89PNG\r\n\x1a"] {
+    for other in [
+        &b""[..],
+        b"\xFF\xD8",
+        b"<html>",
+        b"--boundarydonotcross",
+        b"\x89PNG\r\n\x1a",
+    ] {
         assert_eq!(sniff(other), None, "{other:?}");
     }
     let header = farm3d_lib::cameras::FrameHeader {
@@ -289,7 +349,10 @@ fn magic_bytes_decide_the_type_and_the_frame_encoding_is_length_prefixed() {
 #[test]
 fn the_production_budget_is_five_seconds_and_ten_mib() {
     assert_eq!(CameraTimings::default().fetch, Duration::from_secs(5));
-    assert_eq!(CameraTimings::default().preview_min_interval, Duration::from_secs(1));
+    assert_eq!(
+        CameraTimings::default().preview_min_interval,
+        Duration::from_secs(1)
+    );
     assert_eq!(MAX_FRAME_BYTES, 10_485_760);
 }
 
@@ -298,7 +361,10 @@ async fn a_jpeg_and_a_png_pass_with_no_credential_sent() {
     let camera = FakeCamera::start(Answer::Jpeg);
     let fetcher = production_fetcher();
     let before = chrono::Utc::now();
-    let frame = fetcher.fetch(&camera.url("/snapshot?token=abc")).await.unwrap();
+    let frame = fetcher
+        .fetch(&camera.url("/snapshot?token=abc"))
+        .await
+        .unwrap();
     assert_eq!(frame.content_type, CameraContentType::Jpeg);
     assert_eq!(frame.bytes, JPEG);
     assert!(frame.captured_at >= before);
@@ -312,7 +378,10 @@ async fn a_jpeg_and_a_png_pass_with_no_credential_sent() {
     assert_eq!(requests[0].target, "/snapshot?token=abc");
     for request in &requests {
         for credential in ["x-api-key", "authorization", "cookie"] {
-            assert!(request.header(credential).is_none(), "{credential} was sent");
+            assert!(
+                request.header(credential).is_none(),
+                "{credential} was sent"
+            );
         }
     }
 }
@@ -321,9 +390,15 @@ async fn a_jpeg_and_a_png_pass_with_no_credential_sent() {
 async fn html_sent_as_a_jpeg_or_an_mjpeg_stream_is_not_an_image() {
     let camera = FakeCamera::start(Answer::HtmlAsJpeg);
     let fetcher = production_fetcher();
-    assert_eq!(fetch_error(&fetcher, &camera, "/snap").await.kind(), CameraErrorKind::NotAnImage);
+    assert_eq!(
+        fetch_error(&fetcher, &camera, "/snap").await.kind(),
+        CameraErrorKind::NotAnImage
+    );
     camera.answer(Answer::Mjpeg);
-    assert_eq!(fetch_error(&fetcher, &camera, "/stream").await.kind(), CameraErrorKind::NotAnImage);
+    assert_eq!(
+        fetch_error(&fetcher, &camera, "/stream").await.kind(),
+        CameraErrorKind::NotAnImage
+    );
 }
 
 #[tokio::test]
@@ -337,7 +412,10 @@ async fn more_than_ten_mib_is_too_large_and_the_stream_is_cut_off() {
         if let Some(written) = camera.huge_written() {
             break written;
         }
-        assert!(Instant::now() < deadline, "the camera never saw the client hang up");
+        assert!(
+            Instant::now() < deadline,
+            "the camera never saw the client hang up"
+        );
         // Yield to the runtime: the client's connection task is what closes
         // the dropped response's socket.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -347,7 +425,10 @@ async fn more_than_ten_mib_is_too_large_and_the_stream_is_cut_off() {
         "the client read the whole {written}-byte body instead of cutting it off"
     );
     camera.answer(Answer::HugeDeclared);
-    assert_eq!(fetch_error(&fetcher, &camera, "/declared").await.kind(), CameraErrorKind::TooLarge);
+    assert_eq!(
+        fetch_error(&fetcher, &camera, "/declared").await.kind(),
+        CameraErrorKind::TooLarge
+    );
 }
 
 #[tokio::test]
@@ -360,7 +441,10 @@ async fn a_six_second_answer_times_out_at_five() {
     let error = fetch_error(&fetcher, &camera, "/slow").await;
     assert_eq!(error.kind(), CameraErrorKind::Timeout);
     let took = started.elapsed();
-    assert!(took >= Duration::from_millis(4900) && took < Duration::from_millis(5900), "{took:?}");
+    assert!(
+        took >= Duration::from_millis(4900) && took < Duration::from_millis(5900),
+        "{took:?}"
+    );
 }
 
 #[tokio::test]
@@ -373,7 +457,10 @@ async fn a_redirect_is_an_http_status_and_is_never_followed() {
     assert_eq!(camera.requests().len(), 1, "the redirect was followed");
     camera.answer(Answer::Status(404));
     let error = fetch_error(&fetcher, &camera, "/missing").await;
-    assert_eq!((error.kind(), error.status()), (CameraErrorKind::HttpStatus, Some(404)));
+    assert_eq!(
+        (error.kind(), error.status()),
+        (CameraErrorKind::HttpStatus, Some(404))
+    );
 }
 
 #[tokio::test]
@@ -383,7 +470,9 @@ async fn a_closed_port_is_unreachable() {
         listener.local_addr().unwrap().port()
     };
     let error = production_fetcher()
-        .fetch(&format!("http://127.0.0.1:{port}/snap?token={SEED_QUERY_TOKEN}"))
+        .fetch(&format!(
+            "http://127.0.0.1:{port}/snap?token={SEED_QUERY_TOKEN}"
+        ))
         .await
         .unwrap_err();
     assert_eq!(error.kind(), CameraErrorKind::Unreachable);
@@ -402,7 +491,8 @@ fn no_camera_error_or_its_command_error_names_an_endpoint() {
         };
         assert_clean(&camera_error_text(&error), &[]);
         for printer in [Some("prn-cam"), None] {
-            let command: CommandError = farm3d_lib::cameras::commands::camera_command_error(printer, &error);
+            let command: CommandError =
+                farm3d_lib::cameras::commands::camera_command_error(printer, &error);
             assert_clean(&serde_json::to_string(&command).unwrap(), &[]);
         }
     }
@@ -580,7 +670,8 @@ impl Rig {
         if let Some(url) = snapshot_url {
             entry["snapshot_url"] = json!(url);
         }
-        self.moonraker.with_state(|state| state.webcams = vec![entry]);
+        self.moonraker
+            .with_state(|state| state.webcams = vec![entry]);
     }
 
     fn connection(&self, credential: &str) -> Value {
@@ -594,7 +685,9 @@ impl Rig {
             .unwrap()
             .iter()
             .map(|text| serde_json::from_str::<Value>(text).unwrap())
-            .filter(|event| event["type"] == "camera.health.changed" && event["subject"]["id"] == printer)
+            .filter(|event| {
+                event["type"] == "camera.health.changed" && event["subject"]["id"] == printer
+            })
             .map(|event| {
                 assert_eq!(event["subject"]["kind"], "printer");
                 event["payload"]["health"].clone()
@@ -607,7 +700,9 @@ impl Rig {
     }
 
     fn count(&self, sql: &str) -> i64 {
-        self.storage.read(|connection| connection.query_row(sql, [], |row| row.get(0))).unwrap()
+        self.storage
+            .read(|connection| connection.query_row(sql, [], |row| row.get(0)))
+            .unwrap()
     }
 
     /// The endpoints in play (loopback), for [`assert_clean`]. The bare
@@ -690,8 +785,13 @@ fn files_under(root: &Path) -> Vec<String> {
 #[test]
 fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
     let rig = Rig::eager();
-    assert_eq!(rig.ok("get_printer_camera", json!({"printerId": MOON})), Value::Null);
-    let token_url = rig.camera.url(&format!("/snapshot?token={SEED_QUERY_TOKEN}"));
+    assert_eq!(
+        rig.ok("get_printer_camera", json!({"printerId": MOON})),
+        Value::Null
+    );
+    let token_url = rig
+        .camera
+        .url(&format!("/snapshot?token={SEED_QUERY_TOKEN}"));
     let source = json!({"kind": "snapshotUrl", "snapshotUrl": token_url});
 
     let summary = rig.set("op-set", MOON, source.clone()).unwrap();
@@ -718,11 +818,20 @@ fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
     // A replay returns the current summary and publishes nothing; a reused
     // id with another request is VALIDATION on operationId.
     assert_eq!(rig.set("op-set", MOON, source.clone()).unwrap(), summary);
-    let reused = rig.set("op-set", MOON, rig.snapshot_source("/other.jpg")).unwrap_err();
+    let reused = rig
+        .set("op-set", MOON, rig.snapshot_source("/other.jpg"))
+        .unwrap_err();
     assert_eq!(reused["details"]["fieldPath"], "operationId");
     // The same source under a new id changes nothing.
-    assert_eq!(rig.set("op-set-same", MOON, source.clone()).unwrap()["revision"], 1);
-    assert_eq!(rig.health_events(MOON).len(), 1, "a replay or no-op publishes nothing");
+    assert_eq!(
+        rig.set("op-set-same", MOON, source.clone()).unwrap()["revision"],
+        1
+    );
+    assert_eq!(
+        rig.health_events(MOON).len(),
+        1,
+        "a replay or no-op publishes nothing"
+    );
 
     // A rejected request never burns its id.
     let userinfo = json!({"kind": "snapshotUrl", "snapshotUrl": format!("http://user:{SEED_PASS}@{SEED_HOST}/snap")});
@@ -737,18 +846,40 @@ fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
     assert_eq!(summary["webcamService"], "mjpegstreamer-adaptive");
     assert_eq!(summary["webPort"], rig.camera.port);
     assert_eq!(summary["hasSnapshotUrl"], false);
-    assert_eq!(rig.health_events(MOON).last().unwrap()["sourceKind"], "hostWebcam");
+    assert_eq!(
+        rig.health_events(MOON).last().unwrap()["sourceKind"],
+        "hostWebcam"
+    );
 
     // hostWebcam needs a Connection; a missing Printer is NOT_FOUND.
     let bare = rig.set("op-bare", BARE, rig.webcam_source()).unwrap_err();
-    assert_eq!((bare["code"].as_str(), bare["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("source.kind")));
-    assert_eq!(rig.set("op-missing", "prn-missing", source.clone()).unwrap_err()["code"], "NOT_FOUND");
-    assert_eq!(rig.err("get_printer_camera", json!({"printerId": "prn-missing"}))["code"], "NOT_FOUND");
-    assert_eq!(rig.err("clear_printer_camera", json!({"operationId": "op-c-missing", "printerId": "prn-missing"}))["code"], "NOT_FOUND");
+    assert_eq!(
+        (bare["code"].as_str(), bare["details"]["fieldPath"].as_str()),
+        (Some("VALIDATION"), Some("source.kind"))
+    );
+    assert_eq!(
+        rig.set("op-missing", "prn-missing", source.clone())
+            .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        rig.err("get_printer_camera", json!({"printerId": "prn-missing"}))["code"],
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        rig.err(
+            "clear_printer_camera",
+            json!({"operationId": "op-c-missing", "printerId": "prn-missing"})
+        )["code"],
+        "NOT_FOUND"
+    );
 
     // clear: once for real, then a replay and a no-op publish nothing.
     let events = rig.health_events(MOON).len();
-    let cleared = rig.ok("clear_printer_camera", json!({"operationId": "op-clear", "printerId": MOON}));
+    let cleared = rig.ok(
+        "clear_printer_camera",
+        json!({"operationId": "op-clear", "printerId": MOON}),
+    );
     assert_eq!(cleared, json!({"printerId": MOON, "cleared": true}));
     let health = rig.health_events(MOON);
     assert_eq!(health.len(), events + 1);
@@ -757,13 +888,22 @@ fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
         &json!({"printerId": MOON, "state": "notConfigured", "sourceKind": null,
                 "lastSuccessAt": null, "lastFailureAt": null, "lastFailureKind": null})
     );
-    assert_eq!(rig.ok("get_printer_camera", json!({"printerId": MOON})), Value::Null);
     assert_eq!(
-        rig.ok("clear_printer_camera", json!({"operationId": "op-clear", "printerId": MOON})),
+        rig.ok("get_printer_camera", json!({"printerId": MOON})),
+        Value::Null
+    );
+    assert_eq!(
+        rig.ok(
+            "clear_printer_camera",
+            json!({"operationId": "op-clear", "printerId": MOON})
+        ),
         json!({"printerId": MOON, "cleared": true})
     );
     assert_eq!(
-        rig.ok("clear_printer_camera", json!({"operationId": "op-clear-again", "printerId": MOON})),
+        rig.ok(
+            "clear_printer_camera",
+            json!({"operationId": "op-clear-again", "printerId": MOON})
+        ),
         json!({"printerId": MOON, "cleared": false})
     );
     assert_eq!(rig.health_events(MOON).len(), events + 1);
@@ -772,7 +912,11 @@ fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
     let digests: String = rig
         .storage
         .read(|connection| {
-            connection.query_row("SELECT group_concat(id || kind || request_digest) FROM operations", [], |row| row.get(0))
+            connection.query_row(
+                "SELECT group_concat(id || kind || request_digest) FROM operations",
+                [],
+                |row| row.get(0),
+            )
         })
         .unwrap();
     rig.assert_clean(&digests);
@@ -782,13 +926,18 @@ fn set_get_and_clear_round_trip_and_only_get_returns_the_url() {
 #[test]
 fn list_host_webcams_returns_names_and_services_only() {
     let rig = Rig::eager();
-    rig.webcams(Some(&format!("http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}")));
+    rig.webcams(Some(&format!(
+        "http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}"
+    )));
     let expected = json!([{"name": "front", "service": "mjpegstreamer-adaptive"}]);
     let listed = rig.ok("list_host_webcams", json!({"printerId": MOON}));
     assert_eq!(listed, expected);
     rig.assert_clean(&listed.to_string());
     // The Setup wizard: an unsaved Connection, used and never stored.
-    let listed = rig.ok("list_host_webcams", json!({"connection": rig.connection(SECRET)}));
+    let listed = rig.ok(
+        "list_host_webcams",
+        json!({"connection": rig.connection(SECRET)}),
+    );
     assert_eq!(listed, expected);
     // The list is read with the API key, like every Moonraker read.
     let reads: Vec<_> = rig
@@ -800,14 +949,29 @@ fn list_host_webcams_returns_names_and_services_only() {
     assert_eq!(reads.len(), 2);
     for (body, field) in [
         (json!({}), "printerId"),
-        (json!({"printerId": MOON, "connection": rig.connection(SECRET)}), "printerId"),
+        (
+            json!({"printerId": MOON, "connection": rig.connection(SECRET)}),
+            "printerId",
+        ),
         (json!({"printerId": BARE}), "printerId"),
     ] {
         let error = rig.err("list_host_webcams", body);
-        assert_eq!((error["code"].as_str(), error["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some(field)));
+        assert_eq!(
+            (
+                error["code"].as_str(),
+                error["details"]["fieldPath"].as_str()
+            ),
+            (Some("VALIDATION"), Some(field))
+        );
     }
-    assert_eq!(rig.err("list_host_webcams", json!({"printerId": "prn-missing"}))["code"], "NOT_FOUND");
-    let wrong_key = rig.err("list_host_webcams", json!({"connection": rig.connection("not-the-key")}));
+    assert_eq!(
+        rig.err("list_host_webcams", json!({"printerId": "prn-missing"}))["code"],
+        "NOT_FOUND"
+    );
+    let wrong_key = rig.err(
+        "list_host_webcams",
+        json!({"connection": rig.connection("not-the-key")}),
+    );
     assert_eq!(wrong_key["code"], "CAMERA_FAILED");
     assert_eq!(wrong_key["details"]["kind"], "webcamListFailed");
     rig.assert_clean(&wrong_key.to_string());
@@ -821,7 +985,9 @@ fn list_host_webcams_returns_names_and_services_only() {
 #[test]
 fn test_camera_returns_a_frame_and_writes_nothing() {
     let rig = Rig::eager();
-    rig.webcams(Some(&format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}")));
+    rig.webcams(Some(&format!(
+        "/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}"
+    )));
     let tables = |rig: &Rig| {
         [
             "SELECT COUNT(*) FROM camera_snapshots",
@@ -835,7 +1001,10 @@ fn test_camera_returns_a_frame_and_writes_nothing() {
     let before = (tables(&rig), files_under(&rig.root));
 
     let (header, image) = rig
-        .frame("test_camera", json!({"source": rig.snapshot_source("/snapshot.jpg")}))
+        .frame(
+            "test_camera",
+            json!({"source": rig.snapshot_source("/snapshot.jpg")}),
+        )
         .unwrap();
     assert_eq!(image, JPEG);
     assert_eq!(header["contentType"], "image/jpeg");
@@ -846,12 +1015,24 @@ fn test_camera_returns_a_frame_and_writes_nothing() {
     // The Setup wizard: a host webcam through an unsaved Connection.
     rig.camera.answer(Answer::Png);
     let (header, image) = rig
-        .frame("test_camera", json!({"connection": rig.connection(SECRET), "source": rig.webcam_source()}))
+        .frame(
+            "test_camera",
+            json!({"connection": rig.connection(SECRET), "source": rig.webcam_source()}),
+        )
         .unwrap();
-    assert_eq!((header["contentType"].as_str(), image.as_slice()), (Some("image/png"), PNG));
+    assert_eq!(
+        (header["contentType"].as_str(), image.as_slice()),
+        (Some("image/png"), PNG)
+    );
     let fetched = rig.camera.requests().last().unwrap().clone();
-    assert_eq!(fetched.target, format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}"));
-    assert!(fetched.header("x-api-key").is_none(), "the camera never gets the API key");
+    assert_eq!(
+        fetched.target,
+        format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}")
+    );
+    assert!(
+        fetched.header("x-api-key").is_none(),
+        "the camera never gets the API key"
+    );
 
     // A host webcam needs exactly one of printerId and connection.
     for body in [
@@ -862,10 +1043,25 @@ fn test_camera_returns_a_frame_and_writes_nothing() {
         assert_eq!(error["details"]["fieldPath"], "printerId");
     }
     // A Printer without a saved camera can test one; nothing is stored.
-    rig.frame("test_camera", json!({"printerId": BARE, "source": rig.snapshot_source("/x.png")})).unwrap();
-    assert_eq!(rig.frame("test_camera", json!({"printerId": "prn-missing", "source": rig.snapshot_source("/x.png")})).unwrap_err()["code"], "NOT_FOUND");
+    rig.frame(
+        "test_camera",
+        json!({"printerId": BARE, "source": rig.snapshot_source("/x.png")}),
+    )
+    .unwrap();
+    assert_eq!(
+        rig.frame(
+            "test_camera",
+            json!({"printerId": "prn-missing", "source": rig.snapshot_source("/x.png")})
+        )
+        .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
 
-    assert_eq!((tables(&rig), files_under(&rig.root)), before, "test_camera wrote something");
+    assert_eq!(
+        (tables(&rig), files_under(&rig.root)),
+        before,
+        "test_camera wrote something"
+    );
     assert!(rig.health_events(BARE).is_empty() && rig.health_events(MOON).is_empty());
     assert!(rig.services.cameras.health(BARE).is_none());
 }
@@ -873,24 +1069,44 @@ fn test_camera_returns_a_frame_and_writes_nothing() {
 #[test]
 fn a_draft_test_never_touches_the_saved_sources_health() {
     let rig = Rig::eager();
-    rig.set("op-set", MOON, rig.snapshot_source("/saved.jpg")).unwrap();
+    rig.set("op-set", MOON, rig.snapshot_source("/saved.jpg"))
+        .unwrap();
     rig.preview(MOON).unwrap();
     assert_eq!(rig.health_events(MOON).last().unwrap()["state"], "ok");
     let published = rig.health_events(MOON).len();
 
     rig.camera.answer(Answer::Status(404));
     let error = rig
-        .frame("test_camera", json!({"printerId": MOON, "source": rig.snapshot_source("/draft.jpg")}))
+        .frame(
+            "test_camera",
+            json!({"printerId": MOON, "source": rig.snapshot_source("/draft.jpg")}),
+        )
         .unwrap_err();
-    assert_eq!((error["code"].as_str(), error["details"]["httpStatus"].as_u64()), (Some("CAMERA_FAILED"), Some(404)));
-    assert_eq!(rig.health_events(MOON).len(), published, "a draft test changed the saved health");
-    assert_eq!(rig.services.cameras.health(MOON).unwrap().state, farm3d_lib::cameras::CameraHealthState::Ok);
+    assert_eq!(
+        (
+            error["code"].as_str(),
+            error["details"]["httpStatus"].as_u64()
+        ),
+        (Some("CAMERA_FAILED"), Some(404))
+    );
+    assert_eq!(
+        rig.health_events(MOON).len(),
+        published,
+        "a draft test changed the saved health"
+    );
+    assert_eq!(
+        rig.services.cameras.health(MOON).unwrap().state,
+        farm3d_lib::cameras::CameraHealthState::Ok
+    );
     let listed = rig.ok("list_attention", json!({}));
     assert_eq!(listed["cameraHealth"][0]["state"], "ok");
 
     // Testing the saved source itself does update the health.
-    rig.frame("test_camera", json!({"printerId": MOON, "source": rig.snapshot_source("/saved.jpg")}))
-        .unwrap_err();
+    rig.frame(
+        "test_camera",
+        json!({"printerId": MOON, "source": rig.snapshot_source("/saved.jpg")}),
+    )
+    .unwrap_err();
     let health = rig.health_events(MOON);
     assert_eq!(health.len(), published + 1);
     assert_eq!(health.last().unwrap()["state"], "failing");
@@ -906,28 +1122,53 @@ fn a_preview_updates_health_and_publishes_only_on_a_change() {
     assert_eq!(not_configured["details"]["printerId"], MOON);
     assert_eq!(rig.preview("prn-missing").unwrap_err()["code"], "NOT_FOUND");
 
-    rig.set("op-set", MOON, rig.snapshot_source("/snap.jpg")).unwrap();
+    rig.set("op-set", MOON, rig.snapshot_source("/snap.jpg"))
+        .unwrap();
     let (header, image) = rig.preview(MOON).unwrap();
-    assert_eq!((header["contentType"].as_str(), image.as_slice()), (Some("image/jpeg"), JPEG));
+    assert_eq!(
+        (header["contentType"].as_str(), image.as_slice()),
+        (Some("image/jpeg"), JPEG)
+    );
     let states = |rig: &Rig| -> Vec<(String, Value)> {
         rig.health_events(MOON)
             .into_iter()
-            .map(|health| (health["state"].as_str().unwrap().to_string(), health["lastFailureKind"].clone()))
+            .map(|health| {
+                (
+                    health["state"].as_str().unwrap().to_string(),
+                    health["lastFailureKind"].clone(),
+                )
+            })
             .collect()
     };
-    assert_eq!(states(&rig), [("unknown".to_string(), Value::Null), ("ok".to_string(), Value::Null)]);
+    assert_eq!(
+        states(&rig),
+        [
+            ("unknown".to_string(), Value::Null),
+            ("ok".to_string(), Value::Null)
+        ]
+    );
     rig.preview(MOON).unwrap();
-    assert_eq!(states(&rig).len(), 2, "an unchanged health publishes nothing");
+    assert_eq!(
+        states(&rig).len(),
+        2,
+        "an unchanged health publishes nothing"
+    );
 
     rig.camera.answer(Answer::Status(404));
     let failed = rig.preview(MOON).unwrap_err();
     assert_eq!(failed["code"], "CAMERA_FAILED");
-    assert_eq!(failed["details"], json!({"printerId": MOON, "kind": "httpStatus", "httpStatus": 404}));
+    assert_eq!(
+        failed["details"],
+        json!({"printerId": MOON, "kind": "httpStatus", "httpStatus": 404})
+    );
     assert_eq!(failed["recovery"], json!(["RETRY"]));
     assert_eq!(failed["retryable"], true);
     rig.preview(MOON).unwrap_err();
     rig.camera.answer(Answer::HtmlAsJpeg);
-    assert_eq!(rig.preview(MOON).unwrap_err()["details"]["kind"], "notAnImage");
+    assert_eq!(
+        rig.preview(MOON).unwrap_err()["details"]["kind"],
+        "notAnImage"
+    );
     rig.camera.answer(Answer::Jpeg);
     rig.preview(MOON).unwrap();
     assert_eq!(
@@ -957,15 +1198,23 @@ fn a_preview_within_the_interval_reuses_the_last_frame_until_the_source_changes(
         preview_min_interval: Duration::from_secs(3600),
         ..CameraTimings::default()
     });
-    rig.set("op-set", MOON, rig.snapshot_source("/a.jpg")).unwrap();
+    rig.set("op-set", MOON, rig.snapshot_source("/a.jpg"))
+        .unwrap();
     let (first, _) = rig.preview(MOON).unwrap();
     let (again, _) = rig.preview(MOON).unwrap();
-    assert_eq!(first["capturedAt"], again["capturedAt"], "the same frame, with its own time");
+    assert_eq!(
+        first["capturedAt"], again["capturedAt"],
+        "the same frame, with its own time"
+    );
     assert_eq!(rig.camera.requests().len(), 1);
     assert!(rig.services.cameras.has_preview_frame(MOON));
 
-    rig.set("op-set-b", MOON, rig.snapshot_source("/b.png")).unwrap();
-    assert!(!rig.services.cameras.has_preview_frame(MOON), "a new source drops the last frame");
+    rig.set("op-set-b", MOON, rig.snapshot_source("/b.png"))
+        .unwrap();
+    assert!(
+        !rig.services.cameras.has_preview_frame(MOON),
+        "a new source drops the last frame"
+    );
     rig.camera.answer(Answer::Png);
     let (header, _) = rig.preview(MOON).unwrap();
     assert_eq!(header["contentType"], "image/png");
@@ -976,34 +1225,56 @@ fn a_preview_within_the_interval_reuses_the_last_frame_until_the_source_changes(
 #[test]
 fn concurrent_previews_wait_for_one_fetch_and_share_it() {
     let rig = Rig::eager();
-    rig.set("op-set", MOON, rig.snapshot_source("/held.jpg")).unwrap();
+    rig.set("op-set", MOON, rig.snapshot_source("/held.jpg"))
+        .unwrap();
     rig.camera.answer(Answer::Held);
     let callers: Vec<_> = (0..5)
         .map(|_| {
             let webview = rig.webview.clone();
-            std::thread::spawn(move || binary(&webview, "camera_preview_frame", json!({"printerId": MOON})))
+            std::thread::spawn(move || {
+                binary(&webview, "camera_preview_frame", json!({"printerId": MOON}))
+            })
         })
         .collect();
-    rig.wait_until("all five previews are in and one fetch reached the camera", || {
-        rig.services.cameras.in_flight(MOON) == 5 && !rig.camera.requests().is_empty()
-    });
-    assert_eq!(rig.camera.requests().len(), 1, "one fetch per Printer at a time");
+    rig.wait_until(
+        "all five previews are in and one fetch reached the camera",
+        || rig.services.cameras.in_flight(MOON) == 5 && !rig.camera.requests().is_empty(),
+    );
+    assert_eq!(
+        rig.camera.requests().len(),
+        1,
+        "one fetch per Printer at a time"
+    );
     rig.camera.release();
-    let frames: Vec<_> = callers.into_iter().map(|caller| caller.join().unwrap().unwrap()).collect();
-    assert_eq!(rig.camera.requests().len(), 1, "the waiting previews shared the one fetch");
-    assert!(frames.iter().all(|(header, image)| image == JPEG && header["capturedAt"] == frames[0].0["capturedAt"]));
+    let frames: Vec<_> = callers
+        .into_iter()
+        .map(|caller| caller.join().unwrap().unwrap())
+        .collect();
+    assert_eq!(
+        rig.camera.requests().len(),
+        1,
+        "the waiting previews shared the one fetch"
+    );
+    assert!(frames
+        .iter()
+        .all(|(header, image)| image == JPEG && header["capturedAt"] == frames[0].0["capturedAt"]));
     assert_eq!(rig.services.cameras.in_flight(MOON), 0);
 }
 
 #[test]
 fn a_host_webcam_resolves_through_the_connection_and_fails_typed() {
     let rig = Rig::eager();
-    rig.webcams(Some(&format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}")));
+    rig.webcams(Some(&format!(
+        "/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}"
+    )));
     rig.set("op-set", MOON, rig.webcam_source()).unwrap();
     let (_, image) = rig.preview(MOON).unwrap();
     assert_eq!(image, JPEG);
     let fetched = rig.camera.requests().pop().unwrap();
-    assert_eq!(fetched.target, format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}"));
+    assert_eq!(
+        fetched.target,
+        format!("/webcam/?action=snapshot&token={SEED_WEBCAM_TOKEN}")
+    );
     assert!(fetched.header("x-api-key").is_none());
 
     let failure = |rig: &Rig| {
@@ -1011,12 +1282,17 @@ fn a_host_webcam_resolves_through_the_connection_and_fails_typed() {
         rig.assert_clean(&error.to_string());
         error
     };
-    rig.webcams(Some(&format!("http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}")));
+    rig.webcams(Some(&format!(
+        "http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}"
+    )));
     let mismatch = failure(&rig);
     assert_eq!(mismatch["code"], "CAMERA_HOST_MISMATCH");
     assert_eq!(mismatch["details"], json!({"printerId": MOON}));
     assert_eq!(mismatch["recovery"], json!(["OPEN_PRINTER_SETUP"]));
-    assert_eq!(rig.health_events(MOON).last().unwrap()["lastFailureKind"], "hostMismatch");
+    assert_eq!(
+        rig.health_events(MOON).last().unwrap()["lastFailureKind"],
+        "hostMismatch"
+    );
 
     rig.moonraker.with_state(|state| state.webcams = Vec::new());
     let missing = failure(&rig);
@@ -1032,20 +1308,30 @@ fn a_host_webcam_resolves_through_the_connection_and_fails_typed() {
     rig.webcams(Some("/webcam/?action=snapshot"));
     rig.camera.answer(Answer::Status(503));
     let unavailable = failure(&rig);
-    assert_eq!(unavailable["details"], json!({"printerId": MOON, "kind": "httpStatus", "httpStatus": 503}));
+    assert_eq!(
+        unavailable["details"],
+        json!({"printerId": MOON, "kind": "httpStatus", "httpStatus": 503})
+    );
     rig.assert_clean(&rig.all_events());
 }
 
 #[test]
 fn octoprint_has_no_host_webcams_but_a_manual_url_works() {
     let rig = Rig::eager();
-    let refused = rig.set("op-octo-webcam", OCTO, rig.webcam_source()).unwrap_err();
+    let refused = rig
+        .set("op-octo-webcam", OCTO, rig.webcam_source())
+        .unwrap_err();
     assert_eq!(refused["code"], "CAPABILITY_UNSUPPORTED");
     assert_eq!(
         refused["details"],
         json!({"printerId": OCTO, "capability": "camera", "reason": "adapter", "detail": refused["message"]})
     );
-    let tested = rig.frame("test_camera", json!({"printerId": OCTO, "source": rig.webcam_source()})).unwrap_err();
+    let tested = rig
+        .frame(
+            "test_camera",
+            json!({"printerId": OCTO, "source": rig.webcam_source()}),
+        )
+        .unwrap_err();
     assert_eq!(tested["code"], "CAPABILITY_UNSUPPORTED");
     let draft = rig
         .frame(
@@ -1053,9 +1339,13 @@ fn octoprint_has_no_host_webcams_but_a_manual_url_works() {
             json!({"connection": {"kind": "octoprint", "host": "127.0.0.1", "port": 9}, "source": rig.webcam_source()}),
         )
         .unwrap_err();
-    assert_eq!((draft["code"].as_str(), &draft["details"]["printerId"]), (Some("CAPABILITY_UNSUPPORTED"), &Value::Null));
+    assert_eq!(
+        (draft["code"].as_str(), &draft["details"]["printerId"]),
+        (Some("CAPABILITY_UNSUPPORTED"), &Value::Null)
+    );
 
-    rig.set("op-octo-url", OCTO, rig.snapshot_source("/octo.jpg")).unwrap();
+    rig.set("op-octo-url", OCTO, rig.snapshot_source("/octo.jpg"))
+        .unwrap();
     assert_eq!(rig.preview(OCTO).unwrap().1, JPEG);
 
     // A saved host webcam on an adapter without the lookup (its Connection
@@ -1070,14 +1360,21 @@ fn octoprint_has_no_host_webcams_but_a_manual_url_works() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(rig.preview(OCTO).unwrap_err()["code"], "CAPABILITY_UNSUPPORTED");
-    assert_eq!(rig.health_events(OCTO).last().unwrap()["state"], "unsupported");
+    assert_eq!(
+        rig.preview(OCTO).unwrap_err()["code"],
+        "CAPABILITY_UNSUPPORTED"
+    );
+    assert_eq!(
+        rig.health_events(OCTO).last().unwrap()["state"],
+        "unsupported"
+    );
 }
 
 #[test]
 fn deleting_a_printer_drops_its_camera_health_and_last_frame() {
     let rig = Rig::new(CameraTimings::default());
-    rig.set("op-set", BARE, rig.snapshot_source("/bare.jpg")).unwrap();
+    rig.set("op-set", BARE, rig.snapshot_source("/bare.jpg"))
+        .unwrap();
     rig.preview(BARE).unwrap();
     assert!(rig.services.cameras.health(BARE).is_some());
     assert!(rig.services.cameras.has_preview_frame(BARE));
@@ -1089,7 +1386,10 @@ fn deleting_a_printer_drops_its_camera_health_and_last_frame() {
     assert!(rig.services.cameras.health(BARE).is_none());
     assert!(!rig.services.cameras.has_preview_frame(BARE));
     assert_eq!(rig.count("SELECT COUNT(*) FROM printer_cameras"), 0);
-    assert_eq!(rig.ok("list_attention", json!({}))["cameraHealth"], json!([]));
+    assert_eq!(
+        rig.ok("list_attention", json!({}))["cameraHealth"],
+        json!([])
+    );
 }
 
 /// Global constraint 3, fed through every input that builds a payload:
@@ -1110,25 +1410,45 @@ fn the_seeded_corpus_never_leaves_the_camera_module() {
     let userinfo = json!({"kind": "snapshotUrl", "snapshotUrl": format!("http://user:{SEED_PASS}@{SEED_HOST}:8080/snap?token={SEED_QUERY_TOKEN}")});
     let token = json!({"kind": "snapshotUrl", "snapshotUrl": rig.camera.url(&format!("/snapshot?token={SEED_QUERY_TOKEN}"))});
     record(rig.set("op-userinfo", MOON, userinfo.clone()));
-    record(rig.frame("test_camera", json!({"source": userinfo})).map(|(header, _)| header));
+    record(
+        rig.frame("test_camera", json!({"source": userinfo}))
+            .map(|(header, _)| header),
+    );
     record(rig.set("op-token", MOON, token.clone()));
     record(rig.preview(MOON).map(|(header, _)| header));
     rig.camera.answer(Answer::Status(404));
     record(rig.preview(MOON).map(|(header, _)| header));
-    record(rig.frame("test_camera", json!({"printerId": MOON, "source": token})).map(|(header, _)| header));
+    record(
+        rig.frame("test_camera", json!({"printerId": MOON, "source": token}))
+            .map(|(header, _)| header),
+    );
     // The single exception, checked and deliberately left out of the scan.
-    assert!(rig.ok("get_printer_camera", json!({"printerId": MOON})).to_string().contains(SEED_QUERY_TOKEN));
+    assert!(rig
+        .ok("get_printer_camera", json!({"printerId": MOON}))
+        .to_string()
+        .contains(SEED_QUERY_TOKEN));
 
-    rig.webcams(Some(&format!("http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}")));
+    rig.webcams(Some(&format!(
+        "http://{SEED_HOST}:8080/snap?token={SEED_WEBCAM_TOKEN}"
+    )));
     record(rig.call("list_host_webcams", json!({"printerId": MOON})));
     record(rig.set("op-webcam", MOON, rig.webcam_source()));
     record(rig.preview(MOON).map(|(header, _)| header));
-    record(rig.frame("test_camera", json!({"connection": rig.connection(SECRET), "source": rig.webcam_source()})).map(|(header, _)| header));
+    record(
+        rig.frame(
+            "test_camera",
+            json!({"connection": rig.connection(SECRET), "source": rig.webcam_source()}),
+        )
+        .map(|(header, _)| header),
+    );
     rig.webcams(Some(&format!("/webcam/snap?token={SEED_WEBCAM_TOKEN}")));
     record(rig.preview(MOON).map(|(header, _)| header));
     rig.camera.answer(Answer::Jpeg);
     record(rig.preview(MOON).map(|(header, _)| header));
-    record(rig.call("clear_printer_camera", json!({"operationId": "op-clear", "printerId": MOON})));
+    record(rig.call(
+        "clear_printer_camera",
+        json!({"operationId": "op-clear", "printerId": MOON}),
+    ));
     record(rig.call("list_attention", json!({})));
     record(rig.set("op-token-again", MOON, json!({"kind": "snapshotUrl", "snapshotUrl": rig.camera.url(&format!("/snapshot?token={SEED_QUERY_TOKEN}"))})));
     record(rig.call("list_attention", json!({})));
@@ -1159,8 +1479,9 @@ fn the_seeded_corpus_never_leaves_the_camera_module() {
                     if table == "printer_cameras" && column == "snapshot_url" {
                         continue;
                     }
-                    let mut statement =
-                        connection.prepare(&format!("SELECT CAST(\"{column}\" AS TEXT) FROM \"{table}\""))?;
+                    let mut statement = connection.prepare(&format!(
+                        "SELECT CAST(\"{column}\" AS TEXT) FROM \"{table}\""
+                    ))?;
                     for value in statement.query_map([], |row| row.get::<_, Option<String>>(0))? {
                         text.push_str(&value?.unwrap_or_default());
                         text.push('\n');
@@ -1184,9 +1505,16 @@ fn the_seeded_corpus_never_leaves_the_camera_module() {
     }
     let stored: String = rig
         .storage
-        .read(|connection| connection.query_row("SELECT snapshot_url FROM printer_cameras", [], |row| row.get(0)))
+        .read(|connection| {
+            connection.query_row("SELECT snapshot_url FROM printer_cameras", [], |row| {
+                row.get(0)
+            })
+        })
         .unwrap();
-    assert!(stored.contains(SEED_QUERY_TOKEN), "the manual URL lives in its own column");
+    assert!(
+        stored.contains(SEED_QUERY_TOKEN),
+        "the manual URL lives in its own column"
+    );
 }
 
 // --- Task 8 carries: saved-source host webcams without a Connection, and the
@@ -1203,26 +1531,60 @@ fn a_saved_host_webcam_whose_printer_lost_its_connection_fails_webcam_list_faile
     rig.set("op-set", MOON, rig.webcam_source()).unwrap();
     rig.storage
         .write(|tx| {
-            tx.execute("UPDATE printers SET connection_json = NULL WHERE id = ?1", [MOON])?;
+            tx.execute(
+                "UPDATE printers SET connection_json = NULL WHERE id = ?1",
+                [MOON],
+            )?;
             Ok(())
         })
         .unwrap();
     let error = rig.preview(MOON).unwrap_err();
-    assert_eq!((error["code"].as_str(), error["details"]["kind"].as_str()), (Some("CAMERA_FAILED"), Some("webcamListFailed")));
+    assert_eq!(
+        (error["code"].as_str(), error["details"]["kind"].as_str()),
+        (Some("CAMERA_FAILED"), Some("webcamListFailed"))
+    );
     let health = rig.services.cameras.health(MOON).unwrap();
-    assert_eq!(health.state, farm3d_lib::cameras::CameraHealthState::Failing);
-    assert_eq!(health.last_failure_kind, Some(CameraErrorKind::WebcamListFailed));
-    assert_eq!(rig.health_events(MOON).last().unwrap()["lastFailureKind"], "webcamListFailed");
+    assert_eq!(
+        health.state,
+        farm3d_lib::cameras::CameraHealthState::Failing
+    );
+    assert_eq!(
+        health.last_failure_kind,
+        Some(CameraErrorKind::WebcamListFailed)
+    );
+    assert_eq!(
+        rig.health_events(MOON).last().unwrap()["lastFailureKind"],
+        "webcamListFailed"
+    );
 
     // A test of the saved source is a saved-source fetch too.
-    let tested = rig.frame("test_camera", json!({"printerId": MOON, "source": rig.webcam_source()})).unwrap_err();
+    let tested = rig
+        .frame(
+            "test_camera",
+            json!({"printerId": MOON, "source": rig.webcam_source()}),
+        )
+        .unwrap_err();
     assert_eq!(tested["details"]["kind"], "webcamListFailed");
     // A draft host webcam on the Printer, and a new save, stay VALIDATION.
     let draft = json!({"kind": "hostWebcam", "webcamName": "other", "webcamService": null, "webPort": null});
-    let tested = rig.frame("test_camera", json!({"printerId": MOON, "source": draft})).unwrap_err();
-    assert_eq!((tested["code"].as_str(), tested["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("source.kind")));
+    let tested = rig
+        .frame("test_camera", json!({"printerId": MOON, "source": draft}))
+        .unwrap_err();
+    assert_eq!(
+        (
+            tested["code"].as_str(),
+            tested["details"]["fieldPath"].as_str()
+        ),
+        (Some("VALIDATION"), Some("source.kind"))
+    );
     let saved = rig.set("op-set-again", MOON, draft).unwrap_err();
-    assert_eq!((saved["code"].as_str(), saved["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("source.kind")));
+    assert_eq!(
+        (
+            saved["code"].as_str(),
+            saved["details"]["fieldPath"].as_str()
+        ),
+        (Some("VALIDATION"), Some("source.kind"))
+    );
 }
 
 /// The resolved URL's host is compared with the parsed base URL's host, so
@@ -1298,7 +1660,10 @@ fn hang_a_capture(
     let capture = std::thread::spawn(move || common::invoke(&webview, "capture_snapshot", body));
     let deadline = Instant::now() + Duration::from_secs(15);
     while camera.requests().is_empty() {
-        assert!(Instant::now() < deadline, "the capture never reached the camera");
+        assert!(
+            Instant::now() < deadline,
+            "the capture never reached the camera"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     capture
@@ -1337,7 +1702,10 @@ fn timed<T>(flow: impl FnOnce() -> T) -> (T, Duration) {
 /// Releases the camera and checks the capture it held then finished.
 fn finish(capture: std::thread::JoinHandle<Result<Value, Value>>, camera: &FakeCamera) {
     camera.release();
-    let snapshot = capture.join().unwrap().expect("the held capture finishes once released");
+    let snapshot = capture
+        .join()
+        .unwrap()
+        .expect("the held capture finishes once released");
     assert_eq!(snapshot["data"]["trigger"], "manual");
 }
 
@@ -1348,11 +1716,18 @@ fn printer_statuses_and_the_projector_never_wait_for_a_hanging_camera() {
 
     let (statuses, took) = timed(|| app.ok("printer_statuses", json!({})));
     assert!(took < STATUS_BOUND, "printer_statuses took {took:?}");
-    assert!(statuses.to_string().contains(p7_dispatch_rig::PRINTER), "{statuses}");
+    assert!(
+        statuses.to_string().contains(p7_dispatch_rig::PRINTER),
+        "{statuses}"
+    );
     // Monitoring goes on: a whole projector pass completes.
     let (_, took) = timed(|| app.attention_pass());
     assert!(took < FLOW_BOUND, "an attention pass took {took:?}");
-    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    assert_eq!(
+        app.services.cameras.in_flight(p7_dispatch_rig::PRINTER),
+        1,
+        "the capture still hangs"
+    );
     finish(capture, &camera);
 }
 
@@ -1367,7 +1742,11 @@ fn assign_queue_entry_succeeds_while_a_camera_hangs() {
     assert!(took < FLOW_BOUND, "assign_queue_entry took {took:?}");
     assert!(job.starts_with("job-"), "{job}");
     app.wait_job(&job, "awaitingStart");
-    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    assert_eq!(
+        app.services.cameras.in_flight(p7_dispatch_rig::PRINTER),
+        1,
+        "the capture still hangs"
+    );
     finish(capture, &camera);
 }
 
@@ -1381,7 +1760,11 @@ fn start_job_succeeds_while_a_camera_hangs() {
     assert!(took < FLOW_BOUND, "start_job took {took:?}");
     started.expect("start_job");
     app.wait_job(&job, "printing");
-    assert_eq!(app.services.cameras.in_flight(p7_dispatch_rig::PRINTER), 1, "the capture still hangs");
+    assert_eq!(
+        app.services.cameras.in_flight(p7_dispatch_rig::PRINTER),
+        1,
+        "the capture still hangs"
+    );
     finish(capture, &camera);
 }
 
@@ -1408,6 +1791,10 @@ fn a_slice_starts_while_a_camera_hangs() {
     assert!(took < FLOW_BOUND, "start_slice took {took:?}");
     let id = p5_harness::ids(&operations).remove(0);
     running.wait_state(&id, "succeeded");
-    assert_eq!(running.services.cameras.in_flight("prn-slice-cam"), 1, "the capture still hangs");
+    assert_eq!(
+        running.services.cameras.in_flight("prn-slice-cam"),
+        1,
+        "the capture still hangs"
+    );
     finish(capture, &camera);
 }

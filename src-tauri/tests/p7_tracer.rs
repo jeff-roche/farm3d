@@ -58,10 +58,10 @@ mod sim;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
+use farm3d_lib::connections::moonraker::control::MoonrakerTimings;
 use farm3d_lib::connections::ConnectionConfig;
 use farm3d_lib::host_ops::HostOpsTimings;
 use farm3d_lib::jobs::JobTimings;
-use farm3d_lib::connections::moonraker::control::MoonrakerTimings;
 use farm3d_lib::printers::StartSafety;
 use farm3d_lib::spools::repository as spools_repository;
 use p7_dispatch_rig::{
@@ -256,7 +256,8 @@ impl Backend for SimBackend<'_> {
     }
 
     fn host_starts(&self, _roots: &Roots) -> usize {
-        self.sim.history(&format!("limit=200&since={}", self.since_epoch_s))["result"]["jobs"]
+        self.sim
+            .history(&format!("limit=200&since={}", self.since_epoch_s))["result"]["jobs"]
             .as_array()
             .map(|jobs| {
                 jobs.iter()
@@ -293,7 +294,10 @@ impl Backend for SimBackend<'_> {
     /// Never starts a print with a heater target set.
     fn before_start(&self) {
         for (heater, target) in self.sim.heater_targets() {
-            assert!(target == 0.0, "refusing to start: {heater} has target {target}");
+            assert!(
+                target == 0.0,
+                "refusing to start: {heater} has target {target}"
+            );
         }
     }
 }
@@ -420,8 +424,16 @@ impl<'b, B: Backend> Tracer<'b, B> {
     /// farm3d sent them and as the host saw them.
     fn assert_writes(&self, app: &Running, uploads: usize, starts: usize, at: &str) {
         app.quiesce();
-        assert_eq!(self.roots.writes.uploads(), uploads, "{at}: uploads farm3d sent");
-        assert_eq!(self.roots.writes.starts(), starts, "{at}: starts farm3d sent");
+        assert_eq!(
+            self.roots.writes.uploads(),
+            uploads,
+            "{at}: uploads farm3d sent"
+        );
+        assert_eq!(
+            self.roots.writes.starts(),
+            starts,
+            "{at}: starts farm3d sent"
+        );
         if let Some(seen) = self.backend.host_uploads(&self.roots) {
             assert_eq!(seen, uploads, "{at}: uploads the host saw");
         }
@@ -480,8 +492,7 @@ impl<'b, B: Backend> Tracer<'b, B> {
         let host = self.host();
         if host.print_state == "printing" {
             assert!(
-                job["maxProgressPct"].as_i64().unwrap()
-                    <= (host.progress * 100.0).floor() as i64,
+                job["maxProgressPct"].as_i64().unwrap() <= (host.progress * 100.0).floor() as i64,
                 "the Job took another run's progress: {job}"
             );
         }
@@ -554,7 +565,9 @@ impl<'b, B: Backend> Tracer<'b, B> {
     }
 
     fn printer_revision(&self, app: &Running) -> i64 {
-        app.scalar(&format!("SELECT revision FROM printers WHERE id = '{PRINTER}'"))
+        app.scalar(&format!(
+            "SELECT revision FROM printers WHERE id = '{PRINTER}'"
+        ))
     }
 
     fn archive(
@@ -642,9 +655,19 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     // 3. Copy 1's explanation names the Printer, with the loaded Spool.
     let explained = app.ok("explain_queue_entry", json!({ "entryId": copy1 }));
     assert_eq!(explained["verdict"], "awaitingOperator", "{explained}");
-    assert_eq!(explained["candidates"][0]["printerId"], PRINTER, "{explained}");
-    assert_eq!(explained["candidates"][0]["spool"]["spoolId"], json!(spool), "{explained}");
-    assert_eq!(explained["candidates"][0]["loadedMatch"], true, "{explained}");
+    assert_eq!(
+        explained["candidates"][0]["printerId"], PRINTER,
+        "{explained}"
+    );
+    assert_eq!(
+        explained["candidates"][0]["spool"]["spoolId"],
+        json!(spool),
+        "{explained}"
+    );
+    assert_eq!(
+        explained["candidates"][0]["loadedMatch"], true,
+        "{explained}"
+    );
 
     // 4. Assign copy 1: one Job, one active reservation, nothing sent yet.
     let change = app.ok(
@@ -658,7 +681,10 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     assert_eq!(change["jobs"][0]["state"], "assigned", "{change}");
     assert_eq!(change["jobs"][0]["assignedBy"], "operator", "{change}");
     assert_eq!(change["entries"][0]["state"], "assigned", "{change}");
-    let reservation1 = change["jobs"][0]["reservationId"].as_str().unwrap().to_string();
+    let reservation1 = change["jobs"][0]["reservationId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(app.scalar("SELECT COUNT(*) FROM jobs"), 1);
     assert_eq!(
         app.scalar(&format!(
@@ -720,7 +746,10 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
         )
         .unwrap_err();
     assert_eq!(refused["code"], "VALIDATION", "{refused}");
-    assert_eq!(refused["details"]["fieldPath"], "acknowledgement", "{refused}");
+    assert_eq!(
+        refused["details"]["fieldPath"], "acknowledgement",
+        "{refused}"
+    );
     assert_eq!(app.job(&job1)["state"], "awaitingStart");
     t.assert_writes(&app, 1, 0, "after the refused starts");
 
@@ -753,7 +782,11 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
 
     let before = (app.job(&job1), entry, app.amount_events(&spool));
     let app = t.restart(app);
-    let after = (app.job(&job1), t.entry(&app, &job1), app.amount_events(&spool));
+    let after = (
+        app.job(&job1),
+        t.entry(&app, &job1),
+        app.amount_events(&spool),
+    );
     assert_eq!(after, before, "a restart after completion changes nothing");
     t.assert_writes(&app, 1, 1, "after the restart past completion");
 
@@ -797,7 +830,11 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     assert_eq!(deferred["jobs"][0]["settlement"], "deferred", "{deferred}");
     let available = t.available_mg(&app, &spool);
     let current = app.spool_current_mg(&spool);
-    assert_eq!(available, current - ESTIMATE_MG, "the deferred amount is held");
+    assert_eq!(
+        available,
+        current - ESTIMATE_MG,
+        "the deferred amount is held"
+    );
     let app = t.restart(app);
     assert_eq!(app.job(&job2)["settlement"], "deferred");
     assert_eq!(t.requirement(&app, &job2)["status"], "deferred");
@@ -812,13 +849,19 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
         .settle("trc-settle-2", &job2, settle.clone())
         .unwrap_or_else(|error| panic!("settle measured: {error}"));
     assert_eq!(settled["jobs"][0]["settlement"], "settled", "{settled}");
-    assert_eq!(settled["jobs"][0]["settlementMethod"], "measured", "{settled}");
+    assert_eq!(
+        settled["jobs"][0]["settlementMethod"], "measured",
+        "{settled}"
+    );
     let replayed = app
         .settle("trc-settle-2", &job2, settle)
         .unwrap_or_else(|error| panic!("settle replay: {error}"));
     assert_eq!(replayed["jobs"][0]["settlement"], "settled");
     assert_eq!(app.count_events(&job2, "materialSettled"), 1);
-    assert_eq!(t.ledger(&app, &spool, "measurement", &reservation2).len(), 1);
+    assert_eq!(
+        t.ledger(&app, &spool, "measurement", &reservation2).len(),
+        1
+    );
     assert_eq!(app.reservation_state(&reservation2), "consumed");
     assert_eq!(t.requirement(&app, &job2)["status"], "resolved");
     assert_eq!(app.spool_current_mg(&spool), measured_mg);
@@ -850,7 +893,10 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     let settled = app
         .settle("trc-settle-3", &job3, json!({"kind": "estimated"}))
         .unwrap_or_else(|error| panic!("settle estimated: {error}"));
-    assert_eq!(settled["jobs"][0]["settlementMethod"], "estimated", "{settled}");
+    assert_eq!(
+        settled["jobs"][0]["settlementMethod"], "estimated",
+        "{settled}"
+    );
     let consumed = t.ledger(&app, &spool, "consumption", &reservation3);
     assert_eq!(consumed.len(), 1, "{consumed:?}");
     assert_eq!(app.spool_current_mg(&spool), current - estimated_use);
@@ -903,17 +949,26 @@ fn run_queue_tracer<B: Backend>(backend: &B) {
     t.archive(&app, "trc-archive", to_storage)
         .unwrap_or_else(|error| panic!("archive_printer: {error}"));
     assert!(
-        app.text(&format!("SELECT archived_at FROM printers WHERE id = '{PRINTER}'"))
-            .is_some(),
+        app.text(&format!(
+            "SELECT archived_at FROM printers WHERE id = '{PRINTER}'"
+        ))
+        .is_some(),
         "archived"
     );
 
     let revision = t.printer_revision(&app);
     let refused = app
-        .call("delete_printer", json!({ "id": PRINTER, "expectedRevision": revision }))
+        .call(
+            "delete_printer",
+            json!({ "id": PRINTER, "expectedRevision": revision }),
+        )
         .unwrap_err();
     assert_eq!(refused["code"], "LIFECYCLE_BLOCKED", "{refused}");
-    assert_eq!(blocker_codes(&refused), vec!["JOB_HISTORY_EXISTS"], "{refused}");
+    assert_eq!(
+        blocker_codes(&refused),
+        vec!["JOB_HISTORY_EXISTS"],
+        "{refused}"
+    );
 
     // 13. Four stages and three starts in all, each start confirmed.
     t.assert_writes(&app, 4, 3, "at the end");

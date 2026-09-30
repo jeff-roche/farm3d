@@ -304,7 +304,9 @@ fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, Com
         return Err(CommandError::unsupported_schema(version));
     }
     if !(1..=i64::from(SETTINGS_SCHEMA_VERSION)).contains(&version) {
-        return Err(CommandError::validation("schemaVersion must be 1, 2, or 3."));
+        return Err(CommandError::validation(
+            "schemaVersion must be 1, 2, or 3.",
+        ));
     }
     let document: ImportedSettingsDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Settings document has an invalid shape.")
@@ -603,7 +605,10 @@ mod tests {
             br#"{"schemaVersion":2,"exportedAt":"x","settings":{"themeMode":"system"}}"#,
         )
         .unwrap();
-        assert_eq!(document.settings.classes(), NotificationClassSettings::default());
+        assert_eq!(
+            document.settings.classes(),
+            NotificationClassSettings::default()
+        );
         assert_eq!(document.settings.retention(), SnapshotRetention::default());
         // Schema 2 can't carry the schema 3 fields; unknown fields stay out.
         for bad in [

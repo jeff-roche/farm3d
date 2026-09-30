@@ -401,7 +401,10 @@ impl<R: tauri::Runtime> Driver<R> {
     }
 
     async fn next(&mut self) -> Wake {
-        let poll = self.poll.as_mut().expect("the poll interval exists once running");
+        let poll = self
+            .poll
+            .as_mut()
+            .expect("the poll interval exists once running");
         let stage_requests = &mut self.stage_requests;
         let next_stage = async {
             match stage_requests {
@@ -551,7 +554,11 @@ fn has_handed_off(
 
 /// Re-applies the Job-linked op `op_id`'s current state to its Job, under
 /// the Printer lock, and publishes what changed.
-async fn apply_linked<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id: &str, op_id: &str) {
+async fn apply_linked<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    printer_id: &str,
+    op_id: &str,
+) {
     apply_linked_job(services, printer_id, op_id).await;
 }
 
@@ -619,7 +626,11 @@ async fn on_host_operation<R: tauri::Runtime>(services: &RuntimeServices<R>, op:
 async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id: &str) {
     let job = services
         .storage
-        .read(|connection| Ok(jobs_repository::active_job_for_printer(connection, printer_id)))
+        .read(|connection| {
+            Ok(jobs_repository::active_job_for_printer(
+                connection, printer_id,
+            ))
+        })
         .ok()
         .and_then(Result::ok)
         .flatten();
@@ -774,8 +785,14 @@ async fn maybe_start_unattended<R: tauri::Runtime>(
         Ok(_) => {}
         Err(error) if is_not_yet(&error) => {}
         Err(error) => {
-            record_refusal(services, &job.id, JobState::AwaitingStart, HostOperationKind::Start, &error)
-                .await
+            record_refusal(
+                services,
+                &job.id,
+                JobState::AwaitingStart,
+                HostOperationKind::Start,
+                &error,
+            )
+            .await
         }
     }
     lock(&services.jobs.starting).remove(&job.id);
@@ -798,8 +815,14 @@ async fn stage_by_driver<R: tauri::Runtime>(services: &RuntimeServices<R>, job_i
         Ok(_) => {}
         Err(error) if is_not_yet(&error) => {}
         Err(error) => {
-            record_refusal(services, job_id, JobState::Assigned, HostOperationKind::Upload, &error)
-                .await
+            record_refusal(
+                services,
+                job_id,
+                JobState::Assigned,
+                HostOperationKind::Upload,
+                &error,
+            )
+            .await
         }
     }
 }

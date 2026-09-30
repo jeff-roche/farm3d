@@ -18,9 +18,9 @@ use serde::Serialize;
 use super::about::{version_token, AboutInfo};
 use super::bundle::DiagnosticsSection;
 use super::egress::EntryFormat;
-use super::storage::{usage_in, StorageUsage};
 use super::log::{is_valid_code, LOG_FILE, MAX_ENTRIES, MAX_FILES};
 use super::pseudonym::{AssignedPseudonyms, BundlePseudonyms};
+use super::storage::{usage_in, StorageUsage};
 use crate::catalog::Catalog;
 use crate::connections::capabilities::{
     CapabilityKey, CapabilityState, PrinterCapabilities, UnsupportedReason,
@@ -268,12 +268,7 @@ fn collect_storage(
     context: &CollectContext<'_>,
 ) -> rusqlite::Result<StorageSection> {
     Ok(StorageSection {
-        usage: usage_in(
-            tx,
-            context.storage_paths,
-            context.slicer_cache,
-            context.now,
-        )?,
+        usage: usage_in(tx, context.storage_paths, context.slicer_cache, context.now)?,
         integrity: report
             .findings
             .iter()
@@ -635,7 +630,8 @@ pub fn collect(
                 let report = report
                     .as_ref()
                     .ok_or(RepositoryError::Storage(StorageError::OperationFailed))?;
-                collected.storage = Some(collect_storage(tx, report, context).map_err(storage_error)?);
+                collected.storage =
+                    Some(collect_storage(tx, report, context).map_err(storage_error)?);
             }
             S::Configuration => {
                 let report = report

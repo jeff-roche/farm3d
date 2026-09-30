@@ -51,7 +51,11 @@ impl CameraSourceKind {
 /// constraint 3: it never enters an event, error, log, or persisted
 /// payload other than this column and the Printers export file).
 #[derive(Serialize, Deserialize, Clone, PartialEq, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",

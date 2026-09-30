@@ -161,7 +161,11 @@ impl AttentionStream {
     }
 
     /// `camera.health.changed` for one Printer's camera.
-    pub fn publish_camera_health<R: tauri::Runtime>(&self, app: &AppHandle<R>, health: &CameraHealth) {
+    pub fn publish_camera_health<R: tauri::Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        health: &CameraHealth,
+    ) {
         let _ordered = self.lock();
         self.emit(
             app,

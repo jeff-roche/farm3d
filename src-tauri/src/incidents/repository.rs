@@ -54,9 +54,13 @@ fn rfc3339(now: DateTime<Utc>) -> String {
     now.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
-fn decode_text_enum<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    decode_enum(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+fn decode_text_enum<T: serde::de::DeserializeOwned>(
+    index: usize,
+    text: &str,
+) -> rusqlite::Result<T> {
+    decode_enum(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 fn to_json(value: &impl serde::Serialize) -> String {
@@ -64,8 +68,9 @@ fn to_json(value: &impl serde::Serialize) -> String {
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+    serde_json::from_str(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 const INCIDENT_COLUMNS: &str =
@@ -439,7 +444,13 @@ pub fn list(
     )?;
     let mut rows: Vec<(String, String)> = statement
         .query_map(
-            params![printer_id, closed_filter, opened_before, id_before, limit + 1],
+            params![
+                printer_id,
+                closed_filter,
+                opened_before,
+                id_before,
+                limit + 1
+            ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -559,11 +570,15 @@ fn instant(text: &str) -> Option<DateTime<Utc>> {
 /// entries with its Job's `job_events` at read time (never copied),
 /// ordered by `at`, then Incident entries before Job events at the same
 /// instant, then sequence. `None` when there is no such Incident.
-pub fn detail(conn: &Connection, incident_id: &str) -> Result<Option<IncidentDetail>, StorageError> {
+pub fn detail(
+    conn: &Connection,
+    incident_id: &str,
+) -> Result<Option<IncidentDetail>, StorageError> {
     let Some(incident) = load_incident(conn, incident_id)? else {
         return Ok(None);
     };
-    let mut timeline: Vec<(Option<DateTime<Utc>>, String, u8, i64, IncidentTimelineItem)> = Vec::new();
+    let mut timeline: Vec<(Option<DateTime<Utc>>, String, u8, i64, IncidentTimelineItem)> =
+        Vec::new();
     for entry in entries(conn, incident_id)? {
         timeline.push((
             instant(&entry.at),
@@ -795,7 +810,10 @@ mod tests {
                 assert_eq!(incident.open_linked_event_count, 1);
 
                 let linked_event = attention::repository::load_event(tx, &event.id)?.unwrap();
-                assert_eq!(linked_event.incident_id.as_deref(), Some(incident.id.as_str()));
+                assert_eq!(
+                    linked_event.incident_id.as_deref(),
+                    Some(incident.id.as_str())
+                );
                 Ok(())
             })
             .unwrap();
@@ -870,7 +888,12 @@ mod tests {
                 assert_eq!(incident.revision, 1);
 
                 // Resolve e1 and close the Incident.
-                attention::repository::resolve(tx, &e1.id, AttentionResolution::OperatorResolved, t0)?;
+                attention::repository::resolve(
+                    tx,
+                    &e1.id,
+                    AttentionResolution::OperatorResolved,
+                    t0,
+                )?;
                 let closed = close_if_settled(tx, &incident.id, t0)?;
                 assert_eq!(closed.state, IncidentState::Closed);
                 assert_eq!(closed.revision, 2, "closing bumps once");
@@ -982,12 +1005,22 @@ mod tests {
                 link_event(tx, &incident.id, &e2.id, now())?;
 
                 // Only e1 resolved: still open.
-                attention::repository::resolve(tx, &e1.id, AttentionResolution::OperatorResolved, now())?;
+                attention::repository::resolve(
+                    tx,
+                    &e1.id,
+                    AttentionResolution::OperatorResolved,
+                    now(),
+                )?;
                 let still_open = close_if_settled(tx, &incident.id, now())?;
                 assert_eq!(still_open.state, IncidentState::Open);
 
                 // Both resolved: closes.
-                attention::repository::resolve(tx, &e2.id, AttentionResolution::ActionCompleted, now())?;
+                attention::repository::resolve(
+                    tx,
+                    &e2.id,
+                    AttentionResolution::ActionCompleted,
+                    now(),
+                )?;
                 let closed = close_if_settled(tx, &incident.id, now())?;
                 assert_eq!(closed.state, IncidentState::Closed);
                 assert!(closed.closed_at.is_some());
@@ -1047,21 +1080,37 @@ mod tests {
 
                 let all = list(tx, None, None, None, 200)?;
                 assert_eq!(
-                    all.incidents.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+                    all.incidents
+                        .iter()
+                        .map(|i| i.id.clone())
+                        .collect::<Vec<_>>(),
                     [newer.id.clone(), older.id.clone()]
                 );
 
-                attention::repository::resolve(tx, &e1.id, AttentionResolution::ConditionCleared, t0)?;
+                attention::repository::resolve(
+                    tx,
+                    &e1.id,
+                    AttentionResolution::ConditionCleared,
+                    t0,
+                )?;
                 close_if_settled(tx, &older.id, t0)?;
 
                 let open_only = list(tx, Some(IncidentState::Open), None, None, 200)?;
                 assert_eq!(
-                    open_only.incidents.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+                    open_only
+                        .incidents
+                        .iter()
+                        .map(|i| i.id.clone())
+                        .collect::<Vec<_>>(),
                     [newer.id.clone()]
                 );
                 let closed_only = list(tx, Some(IncidentState::Closed), None, None, 200)?;
                 assert_eq!(
-                    closed_only.incidents.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+                    closed_only
+                        .incidents
+                        .iter()
+                        .map(|i| i.id.clone())
+                        .collect::<Vec<_>>(),
                     [older.id.clone()]
                 );
                 Ok(())

@@ -49,9 +49,13 @@ fn rfc3339(now: DateTime<Utc>) -> String {
     now.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
-fn decode_text_enum<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    decode_enum(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+fn decode_text_enum<T: serde::de::DeserializeOwned>(
+    index: usize,
+    text: &str,
+) -> rusqlite::Result<T> {
+    decode_enum(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 fn to_json(value: &impl serde::Serialize) -> String {
@@ -59,8 +63,9 @@ fn to_json(value: &impl serde::Serialize) -> String {
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+    serde_json::from_str(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 const ATTENTION_COLUMNS: &str = "id, revision, dedup_key, condition, severity, requires_action, \
@@ -229,7 +234,13 @@ pub fn amend(
                  last_observed_at = ?2, observation_count = observation_count + 1,
                  detail_json = ?3, severity = ?4, summary = ?5, revision = revision + 1
              WHERE id = ?1",
-            params![event_id, now_text, to_json(detail), encode_enum(severity), summary],
+            params![
+                event_id,
+                now_text,
+                to_json(detail),
+                encode_enum(severity),
+                summary
+            ],
         )?;
     } else {
         tx.execute(
@@ -368,8 +379,9 @@ pub fn record_evidence(
 /// Every open (`resolved_at IS NULL`) Event, id order — the pass's read of
 /// the durable `FarmView`'s open Events (D2 "The pass").
 pub fn open_events(conn: &Connection) -> Result<Vec<AttentionEvent>, StorageError> {
-    let mut statement =
-        conn.prepare(&format!("SELECT {ATTENTION_COLUMNS} FROM attention_events WHERE resolved_at IS NULL ORDER BY id"))?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT {ATTENTION_COLUMNS} FROM attention_events WHERE resolved_at IS NULL ORDER BY id"
+    ))?;
     let rows = statement
         .query_map([], decode_event_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -473,7 +485,10 @@ pub fn events_for_incident(
 
 /// Every Event whose `job_id` is `job_id`, `first_observed_at` then id
 /// (`get_job_timeline`'s `attention` items).
-pub fn events_for_job(conn: &Connection, job_id: &str) -> Result<Vec<AttentionEvent>, StorageError> {
+pub fn events_for_job(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Vec<AttentionEvent>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {ATTENTION_COLUMNS} FROM attention_events WHERE job_id = ?1
          ORDER BY first_observed_at, id"
@@ -510,7 +525,10 @@ pub fn list_resolved(
     // Fetch one extra row to tell "exactly `limit` remain" from "more
     // follow", without a second COUNT query.
     let mut rows = statement
-        .query_map(params![resolved_before, id_before, limit + 1], decode_event_row)?
+        .query_map(
+            params![resolved_before, id_before, limit + 1],
+            decode_event_row,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let has_more = rows.len() as i64 > limit;
     if has_more {
@@ -519,7 +537,9 @@ pub fn list_resolved(
     let next_cursor = has_more.then(|| {
         let last = rows.last().expect("has_more implies at least one row");
         encode_cursor(
-            last.resolved_at.as_deref().expect("resolved_at IS NOT NULL"),
+            last.resolved_at
+                .as_deref()
+                .expect("resolved_at IS NOT NULL"),
             &last.id,
         )
     });
@@ -724,17 +744,28 @@ mod tests {
                 assert!(amended2.evidence.is_none());
 
                 // Resolve (auto, system reason): revision bumps once more.
-                let (resolved, changed) =
-                    resolve(tx, &inserted.id, AttentionResolution::ConditionCleared, later)?;
+                let (resolved, changed) = resolve(
+                    tx,
+                    &inserted.id,
+                    AttentionResolution::ConditionCleared,
+                    later,
+                )?;
                 assert!(changed);
                 assert_eq!(resolved.revision, 3);
                 assert!(resolved.resolved_at.is_some());
-                assert_eq!(resolved.resolution, Some(AttentionResolution::ConditionCleared));
+                assert_eq!(
+                    resolved.resolution,
+                    Some(AttentionResolution::ConditionCleared)
+                );
                 assert!(resolved.read_at.is_some(), "resolving implies read");
 
                 // A second resolve is a no-op: no revision bump, changed=false.
-                let (resolved_again, changed_again) =
-                    resolve(tx, &inserted.id, AttentionResolution::ConditionCleared, later)?;
+                let (resolved_again, changed_again) = resolve(
+                    tx,
+                    &inserted.id,
+                    AttentionResolution::ConditionCleared,
+                    later,
+                )?;
                 assert!(!changed_again);
                 assert_eq!(resolved_again.revision, 3);
                 Ok(())
@@ -750,11 +781,19 @@ mod tests {
                 seed_printer(tx, "prn-a");
                 let condition = printer_offline("prn-a"); // auto resolution mode
                 let inserted = insert(tx, &condition, None, false, AttentionOrigin::Live, now())?;
-                let error = resolve(tx, &inserted.id, AttentionResolution::OperatorResolved, now())
-                    .expect_err("printer.offline is auto, never operator-resolved");
+                let error = resolve(
+                    tx,
+                    &inserted.id,
+                    AttentionResolution::OperatorResolved,
+                    now(),
+                )
+                .expect_err("printer.offline is auto, never operator-resolved");
                 assert!(matches!(
                     error,
-                    RepositoryError::AttentionNotManual { resolution_mode: ResolutionMode::Auto, .. }
+                    RepositoryError::AttentionNotManual {
+                        resolution_mode: ResolutionMode::Auto,
+                        ..
+                    }
                 ));
                 Ok(())
             })
@@ -889,10 +928,22 @@ mod tests {
                     later,
                 )?;
                 let even_later = later + chrono::Duration::minutes(10);
-                resolve(tx, &second.id, AttentionResolution::ConditionCleared, even_later)?;
+                resolve(
+                    tx,
+                    &second.id,
+                    AttentionResolution::ConditionCleared,
+                    even_later,
+                )?;
 
                 // A resolved Event for a key nobody asks about stays out.
-                let other = insert(tx, &printer_offline("prn-b"), None, false, AttentionOrigin::Live, now())?;
+                let other = insert(
+                    tx,
+                    &printer_offline("prn-b"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
                 resolve(tx, &other.id, AttentionResolution::ConditionCleared, now())?;
 
                 let map = latest_resolved_for_keys(
@@ -901,9 +952,15 @@ mod tests {
                 )?;
                 assert_eq!(
                     map,
-                    HashMap::from([("printer.offline:printer:prn-a".to_string(), second.id.clone())])
+                    HashMap::from([(
+                        "printer.offline:printer:prn-a".to_string(),
+                        second.id.clone()
+                    )])
                 );
-                assert!(latest_resolved_for_keys(tx, [])?.is_empty(), "no keys, nothing");
+                assert!(
+                    latest_resolved_for_keys(tx, [])?.is_empty(),
+                    "no keys, nothing"
+                );
 
                 // More keys than one `IN (…)` binds: the chunks still find it.
                 let many: Vec<String> = (0..2 * KEY_CHUNK + 7)
@@ -931,8 +988,14 @@ mod tests {
 
                 // Two warnings (offline) at different times, one fatal
                 // (hostFailed): fatal must sort first regardless of time.
-                let warn_old =
-                    insert(tx, &printer_offline("prn-a"), None, false, AttentionOrigin::Live, t0)?;
+                let warn_old = insert(
+                    tx,
+                    &printer_offline("prn-a"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    t0,
+                )?;
                 let warn_new = insert(
                     tx,
                     &printer_offline("prn-b"),
@@ -941,12 +1004,21 @@ mod tests {
                     AttentionOrigin::Live,
                     t1,
                 )?;
-                let fatal =
-                    insert(tx, &host_failed("prn-a"), None, false, AttentionOrigin::Live, t0)?;
+                let fatal = insert(
+                    tx,
+                    &host_failed("prn-a"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    t0,
+                )?;
 
                 let page = list_attention(tx, None, 200)?;
                 let open_ids: Vec<_> = page.open.iter().map(|e| e.id.clone()).collect();
-                assert_eq!(open_ids, [fatal.id.clone(), warn_new.id.clone(), warn_old.id.clone()]);
+                assert_eq!(
+                    open_ids,
+                    [fatal.id.clone(), warn_new.id.clone(), warn_old.id.clone()]
+                );
 
                 // Resolve both warnings at different times; resolved order is
                 // resolvedAt desc, then id desc.
@@ -998,7 +1070,10 @@ mod tests {
                 let cursor2 = cursor2.expect("one more remains");
 
                 let (page3, cursor3) = list_resolved(tx, Some(&cursor2), 2)?;
-                assert_eq!(page3.iter().map(|e| e.id.clone()).collect::<Vec<_>>(), [ids[0].clone()]);
+                assert_eq!(
+                    page3.iter().map(|e| e.id.clone()).collect::<Vec<_>>(),
+                    [ids[0].clone()]
+                );
                 assert!(cursor3.is_none(), "the last page has no next cursor");
                 Ok(())
             })
@@ -1018,8 +1093,14 @@ mod tests {
                              'measured', 'active', '{NOW_TEXT}', '{NOW_TEXT}');"
                 ))
                 .unwrap();
-                let inserted =
-                    insert(tx, &spool_low("spl-a"), None, false, AttentionOrigin::Live, now())?;
+                let inserted = insert(
+                    tx,
+                    &spool_low("spl-a"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
                 assert!(inserted.printer_id.is_none());
                 assert_eq!(inserted.spool_id.as_deref(), Some("spl-a"));
                 assert_eq!(inserted.source.kind, AttentionSourceKind::Spool);
@@ -1035,9 +1116,30 @@ mod tests {
             .write_repo(|tx| -> Result<(), RepositoryError> {
                 seed_printer(tx, "prn-a");
                 seed_printer(tx, "prn-b");
-                let a1 = insert(tx, &printer_offline("prn-a"), None, false, AttentionOrigin::Live, now())?;
-                let a2 = insert(tx, &host_failed("prn-a"), None, false, AttentionOrigin::Live, now())?;
-                let b1 = insert(tx, &printer_offline("prn-b"), None, false, AttentionOrigin::Live, now())?;
+                let a1 = insert(
+                    tx,
+                    &printer_offline("prn-a"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
+                let a2 = insert(
+                    tx,
+                    &host_failed("prn-a"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
+                let b1 = insert(
+                    tx,
+                    &printer_offline("prn-b"),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
 
                 let changed = resolve_for_printer(tx, "prn-a", now())?;
                 let changed_ids: std::collections::BTreeSet<_> =
@@ -1051,7 +1153,10 @@ mod tests {
                 }
 
                 let b1_after = load_event(tx, &b1.id)?.unwrap();
-                assert!(b1_after.resolved_at.is_none(), "another Printer's Event is untouched");
+                assert!(
+                    b1_after.resolved_at.is_none(),
+                    "another Printer's Event is untouched"
+                );
                 Ok(())
             })
             .unwrap();

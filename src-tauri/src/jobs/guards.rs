@@ -147,7 +147,8 @@ pub fn check_import(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let mut printer_ids = std::collections::BTreeSet::new();
     let mut job_ids = Vec::new();
     {
-        let mut statement = tx.prepare("SELECT id, printer_id FROM jobs ORDER BY created_at, id")?;
+        let mut statement =
+            tx.prepare("SELECT id, printer_id FROM jobs ORDER BY created_at, id")?;
         let rows = statement.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;

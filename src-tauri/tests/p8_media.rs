@@ -78,7 +78,10 @@ fn over_the_cap_the_oldest_unpinned_rows_go_for_the_disk_cap_until_usage_fits() 
     let plan = plan_prune(&rows, policy(30, 120), now(), 30);
     assert_eq!(
         plan.prune,
-        vec![action("snp-a", PruneReason::DiskCap), action("snp-b", PruneReason::DiskCap)]
+        vec![
+            action("snp-a", PruneReason::DiskCap),
+            action("snp-b", PruneReason::DiskCap)
+        ]
     );
     assert!(plan.fits);
     // Exactly at the cap fits.
@@ -96,7 +99,10 @@ fn age_goes_first_and_counts_toward_the_cap() {
     let plan = plan_prune(&rows, policy(30, 100), now(), 50);
     assert_eq!(
         plan.prune,
-        vec![action("snp-ancient", PruneReason::Age), action("snp-mid", PruneReason::DiskCap)]
+        vec![
+            action("snp-ancient", PruneReason::Age),
+            action("snp-mid", PruneReason::DiskCap)
+        ]
     );
     assert!(plan.fits);
 }
@@ -128,7 +134,15 @@ fn when_only_pinned_rows_remain_the_disk_cap_actions_are_dropped_and_age_stays()
         "evidence is never removed for nothing"
     );
     // The janitor's own pass (nothing incoming) over pinned-only usage.
-    let plan = plan_prune(&[row("snp-pinned", 2, 200, true), row("snp-free", 1, 5, false)], policy(30, 120), now(), 0);
+    let plan = plan_prune(
+        &[
+            row("snp-pinned", 2, 200, true),
+            row("snp-free", 1, 5, false),
+        ],
+        policy(30, 120),
+        now(),
+        0,
+    );
     assert!(!plan.fits);
     assert!(plan.prune.is_empty());
     // Nothing at all fits trivially.
@@ -147,9 +161,7 @@ use farm3d_lib::attention::{
     ConditionKind,
 };
 use farm3d_lib::cameras::fetch::Frame;
-use farm3d_lib::cameras::media::{
-    self, CaptureLink, MediaStore, NewSnapshot, StoreOutcome,
-};
+use farm3d_lib::cameras::media::{self, CaptureLink, MediaStore, NewSnapshot, StoreOutcome};
 use farm3d_lib::cameras::retention::{CaptureFault, MediaJanitor};
 use farm3d_lib::cameras::{CameraContentType, CameraSnapshot};
 use farm3d_lib::catalog::{BedShape, PrinterProfile};
@@ -208,7 +220,12 @@ impl Store {
         MediaStore::for_storage(&self.storage)
     }
 
-    async fn manual(&self, operation_id: &str, frame: &Frame, policy: RetentionPolicy) -> Result<StoreOutcome, RepositoryError> {
+    async fn manual(
+        &self,
+        operation_id: &str,
+        frame: &Frame,
+        policy: RetentionPolicy,
+    ) -> Result<StoreOutcome, RepositoryError> {
         let digest = format!("digest-{operation_id}");
         media::store_frame(
             &self.storage,
@@ -227,7 +244,12 @@ impl Store {
         .await
     }
 
-    async fn stored(&self, operation_id: &str, frame: &Frame, policy: RetentionPolicy) -> CameraSnapshot {
+    async fn stored(
+        &self,
+        operation_id: &str,
+        frame: &Frame,
+        policy: RetentionPolicy,
+    ) -> CameraSnapshot {
         match self.manual(operation_id, frame, policy).await.unwrap() {
             StoreOutcome::Stored { snapshot, .. } => snapshot,
             other => panic!("not stored: {other:?}"),
@@ -238,7 +260,14 @@ impl Store {
     fn incident(&self) -> String {
         self.storage
             .write_repo(|tx| {
-                let event = attention_repo::insert(tx, &host_failed(), None, false, AttentionOrigin::Live, now())?;
+                let event = attention_repo::insert(
+                    tx,
+                    &host_failed(),
+                    None,
+                    false,
+                    AttentionOrigin::Live,
+                    now(),
+                )?;
                 let incident = incidents_repo::open(
                     tx,
                     IncidentKind::PrinterHostFailed,
@@ -255,7 +284,13 @@ impl Store {
 
     fn rel_path(&self, id: &str) -> String {
         self.storage
-            .read(|conn| conn.query_row("SELECT rel_path FROM camera_snapshots WHERE id = ?1", [id], |row| row.get(0)))
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT rel_path FROM camera_snapshots WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+            })
             .unwrap()
     }
 
@@ -268,19 +303,28 @@ impl Store {
     }
 
     fn scalar(&self, sql: &str) -> i64 {
-        self.storage.read(|conn| conn.query_row(sql, [], |row| row.get(0))).unwrap()
+        self.storage
+            .read(|conn| conn.query_row(sql, [], |row| row.get(0)))
+            .unwrap()
     }
 
     /// Every file under the media root, relative, `/`-separated.
     fn files(&self) -> BTreeSet<String> {
         fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
                     walk(root, &path, out);
                 } else {
-                    out.insert(path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+                    out.insert(
+                        path.strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
                 }
             }
         }
@@ -293,8 +337,11 @@ impl Store {
     fn unpruned_paths(&self) -> BTreeSet<String> {
         self.storage
             .read(|conn| {
-                let mut statement = conn.prepare("SELECT rel_path FROM camera_snapshots WHERE pruned_at IS NULL")?;
-                let paths = statement.query_map([], |row| row.get::<_, String>(0))?.collect();
+                let mut statement =
+                    conn.prepare("SELECT rel_path FROM camera_snapshots WHERE pruned_at IS NULL")?;
+                let paths = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect();
                 paths
             })
             .unwrap()
@@ -370,16 +417,29 @@ async fn a_capture_writes_the_image_under_the_media_root_then_inserts_its_row() 
     let frame = jpeg(100, "2026-09-28T08:59:58.250Z".parse().unwrap());
     let snapshot = store.stored("op-1", &frame, ROOMY).await;
     assert!(snapshot.id.starts_with("snp-"));
-    assert_eq!(snapshot.trigger, farm3d_lib::cameras::SnapshotTrigger::Manual);
+    assert_eq!(
+        snapshot.trigger,
+        farm3d_lib::cameras::SnapshotTrigger::Manual
+    );
     assert_eq!(snapshot.byte_len, 100);
     assert_eq!(snapshot.captured_at, "2026-09-28T08:59:58.250Z");
     assert_eq!(snapshot.sha256.len(), 64);
     let rel_path = store.rel_path(&snapshot.id);
     assert_eq!(rel_path, format!("snapshots/2026/09/{}.jpg", snapshot.id));
-    assert_eq!(store.files(), BTreeSet::from([rel_path.clone()]), "tmp/ is empty");
-    assert_eq!(std::fs::read(store.root().join(&rel_path)).unwrap(), frame.bytes);
+    assert_eq!(
+        store.files(),
+        BTreeSet::from([rel_path.clone()]),
+        "tmp/ is empty"
+    );
+    assert_eq!(
+        std::fs::read(store.root().join(&rel_path)).unwrap(),
+        frame.bytes
+    );
     let wire = serde_json::to_string(&snapshot).unwrap();
-    assert!(!wire.contains("snapshots/") && !wire.contains("relPath"), "{wire}");
+    assert!(
+        !wire.contains("snapshots/") && !wire.contains("relPath"),
+        "{wire}"
+    );
 
     // A failure before commit (a reused operation id) unlinks the renamed
     // file and writes no row.
@@ -396,7 +456,10 @@ async fn a_capture_writes_the_image_under_the_media_root_then_inserts_its_row() 
         })
         .unwrap();
     let error = store.manual("op-taken", &frame, ROOMY).await.unwrap_err();
-    assert!(matches!(error, RepositoryError::OperationIdReused), "{error:?}");
+    assert!(
+        matches!(error, RepositoryError::OperationIdReused),
+        "{error:?}"
+    );
     assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 1);
     assert_eq!(store.files(), BTreeSet::from([rel_path]));
 }
@@ -408,7 +471,10 @@ async fn the_sweep_deletes_an_orphan_from_a_crash_after_the_rename() {
     // The crash: the image was renamed into place, the row never written.
     let orphan_id = media::new_snapshot_id();
     let orphan = MediaStore::rel_path(&orphan_id, now(), CameraContentType::Jpeg);
-    store.media().write_image(&orphan_id, &orphan, &jpeg(50, now()).bytes).unwrap();
+    store
+        .media()
+        .write_image(&orphan_id, &orphan, &jpeg(50, now()).bytes)
+        .unwrap();
     // And a write interrupted before its rename.
     std::fs::write(store.root().join("tmp/snp-interrupted.part"), b"partial").unwrap();
     assert_eq!(store.files().len(), 3);
@@ -422,7 +488,9 @@ async fn the_sweep_deletes_an_orphan_from_a_crash_after_the_rename() {
 #[tokio::test]
 async fn the_sweep_deletes_a_pruned_file_whose_unlink_never_ran_and_the_row_stays_pruned() {
     let store = Store::new();
-    let old = store.stored("op-old", &jpeg(60, now() - ChronoDuration::days(1)), ROOMY).await;
+    let old = store
+        .stored("op-old", &jpeg(60, now() - ChronoDuration::days(1)), ROOMY)
+        .await;
     let new = store.stored("op-new", &jpeg(60, now()), ROOMY).await;
     let tight = RetentionPolicy {
         retention_days: 30,
@@ -441,7 +509,11 @@ async fn the_sweep_deletes_a_pruned_file_whose_unlink_never_ran_and_the_row_stay
     assert_eq!(store.files(), BTreeSet::from([store.rel_path(&new.id)]));
     let after = store.snapshot(&old.id);
     assert_eq!(after, pruned, "the row stays pruned, reason unchanged");
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 2, "a pruned row stays");
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM camera_snapshots"),
+        2,
+        "a pruned row stays"
+    );
 }
 
 #[tokio::test]
@@ -484,7 +556,10 @@ async fn a_missing_file_becomes_pruned_missing_file_even_when_pinned() {
     assert_eq!(linked_after.prune_reason, Some(PruneReason::MissingFile));
     let pinned_after = store.snapshot(&pinned.id);
     assert_eq!(pinned_after.prune_reason, Some(PruneReason::MissingFile));
-    assert!(pinned_after.pinned_at.is_some(), "the pin stays; the image is gone either way");
+    assert!(
+        pinned_after.pinned_at.is_some(),
+        "the pin stays; the image is gone either way"
+    );
     let entries = store.entry_kinds(&incident);
     assert_eq!(
         entries.last().unwrap(),
@@ -494,7 +569,9 @@ async fn a_missing_file_becomes_pruned_missing_file_even_when_pinned() {
         }
     );
     // A second sweep changes nothing.
-    assert!(media::startup_sweep(&store.storage, now()).unwrap().is_empty());
+    assert!(media::startup_sweep(&store.storage, now())
+        .unwrap()
+        .is_empty());
 }
 
 /// D5 "Capture order", pinned by crashes injected inside `store_frame`
@@ -508,37 +585,73 @@ async fn a_crash_on_either_side_of_the_rename_leaves_what_the_sweep_repairs() {
     let kept = store.stored("op-kept", &jpeg(50, now()), ROOMY).await;
     let kept_path = store.rel_path(&kept.id);
 
-    store.janitor.inject_capture_fault_once(CaptureFault::BeforeRename);
-    assert!(store.manual("op-crash-before", &jpeg(60, now()), ROOMY).await.is_err());
+    store
+        .janitor
+        .inject_capture_fault_once(CaptureFault::BeforeRename);
+    assert!(store
+        .manual("op-crash-before", &jpeg(60, now()), ROOMY)
+        .await
+        .is_err());
     let files = store.files();
-    let parts: Vec<&String> = files.iter().filter(|path| path.starts_with("tmp/")).collect();
+    let parts: Vec<&String> = files
+        .iter()
+        .filter(|path| path.starts_with("tmp/"))
+        .collect();
     assert_eq!(parts.len(), 1, "the fsynced part is left: {files:?}");
     assert!(parts[0].ends_with(".part"));
     assert_eq!(
-        files.iter().filter(|path| path.starts_with("snapshots/")).collect::<Vec<_>>(),
+        files
+            .iter()
+            .filter(|path| path.starts_with("snapshots/"))
+            .collect::<Vec<_>>(),
         vec![&kept_path],
         "nothing was renamed"
     );
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 1, "no row");
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-before'"), 0);
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM camera_snapshots"),
+        1,
+        "no row"
+    );
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-before'"),
+        0
+    );
 
-    store.janitor.inject_capture_fault_once(CaptureFault::AfterRename);
-    assert!(store.manual("op-crash-after", &jpeg(70, now()), ROOMY).await.is_err());
+    store
+        .janitor
+        .inject_capture_fault_once(CaptureFault::AfterRename);
+    assert!(store
+        .manual("op-crash-after", &jpeg(70, now()), ROOMY)
+        .await
+        .is_err());
     let files = store.files();
     let renamed: Vec<&String> = files
         .iter()
         .filter(|path| path.starts_with("snapshots/") && **path != kept_path)
         .collect();
     assert_eq!(renamed.len(), 1, "the image is in place: {files:?}");
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 1, "but it has no row");
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-after'"), 0);
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM camera_snapshots"),
+        1,
+        "but it has no row"
+    );
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM operations WHERE id = 'op-crash-after'"),
+        0
+    );
 
     let changes = media::startup_sweep(&store.storage, now()).unwrap();
     assert!(changes.is_empty(), "no row changed: {changes:?}");
-    assert_eq!(store.files(), BTreeSet::from([kept_path]), "the part and the orphan are gone");
+    assert_eq!(
+        store.files(),
+        BTreeSet::from([kept_path]),
+        "the part and the orphan are gone"
+    );
     assert_eq!(store.files(), store.unpruned_paths());
     // The ids were never claimed: a retry stores normally.
-    store.stored("op-crash-after", &jpeg(70, now()), ROOMY).await;
+    store
+        .stored("op-crash-after", &jpeg(70, now()), ROOMY)
+        .await;
     assert_eq!(store.files(), store.unpruned_paths());
 }
 
@@ -554,7 +667,13 @@ async fn twenty_concurrent_captures_against_a_pruning_pass_keep_usage_under_the_
         cap_bytes: 5 * 100,
     };
     // Something already over the retention age, for the pass to find.
-    store.stored("op-ancient", &jpeg(100, now() - ChronoDuration::days(40)), ROOMY).await;
+    store
+        .stored(
+            "op-ancient",
+            &jpeg(100, now() - ChronoDuration::days(40)),
+            ROOMY,
+        )
+        .await;
     for round in 0..5_i64 {
         let barrier = Arc::new(tokio::sync::Barrier::new(21));
         let mut tasks = Vec::new();
@@ -562,26 +681,47 @@ async fn twenty_concurrent_captures_against_a_pruning_pass_keep_usage_under_the_
             let capturing = Arc::clone(&store);
             let barrier = Arc::clone(&barrier);
             tasks.push(tokio::spawn(async move {
-                let frame = jpeg(100, now() - ChronoDuration::seconds(200 - round * 20 - index));
+                let frame = jpeg(
+                    100,
+                    now() - ChronoDuration::seconds(200 - round * 20 - index),
+                );
                 barrier.wait().await;
-                capturing.stored(&format!("op-{round}-{index}"), &frame, cap).await;
+                capturing
+                    .stored(&format!("op-{round}-{index}"), &frame, cap)
+                    .await;
             }));
         }
         let pruning = Arc::clone(&store);
         let prune_barrier = Arc::clone(&barrier);
         tasks.push(tokio::spawn(async move {
             prune_barrier.wait().await;
-            media::prune_pass(&pruning.storage, &pruning.janitor, cap, now()).await.unwrap();
+            media::prune_pass(&pruning.storage, &pruning.janitor, cap, now())
+                .await
+                .unwrap();
         }));
         for task in tasks {
             task.await.unwrap();
         }
-        let used = store.scalar("SELECT COALESCE(SUM(byte_len), 0) FROM camera_snapshots WHERE pruned_at IS NULL");
-        assert!(used <= cap.cap_bytes, "round {round}: {used} > {}", cap.cap_bytes);
+        let used = store.scalar(
+            "SELECT COALESCE(SUM(byte_len), 0) FROM camera_snapshots WHERE pruned_at IS NULL",
+        );
+        assert!(
+            used <= cap.cap_bytes,
+            "round {round}: {used} > {}",
+            cap.cap_bytes
+        );
         assert_eq!(used, 500, "round {round}: the cap is used, not starved");
-        assert_eq!(store.files(), store.unpruned_paths(), "round {round}: no orphan and no dangling row");
+        assert_eq!(
+            store.files(),
+            store.unpruned_paths(),
+            "round {round}: no orphan and no dangling row"
+        );
     }
-    assert_eq!(store.scalar("SELECT COUNT(*) FROM camera_snapshots"), 101, "every row stays");
+    assert_eq!(
+        store.scalar("SELECT COUNT(*) FROM camera_snapshots"),
+        101,
+        "every row stays"
+    );
 }
 
 // --- Step 3: the capture triggers and the snapshot commands --------------------------
@@ -597,7 +737,9 @@ use farm3d_lib::connections::supervisor::PrinterSetupFacts;
 use farm3d_lib::jobs::JobTimings;
 use farm3d_lib::printers::operational::OperationalState;
 use farm3d_lib::printers::StartSafety;
-use p7_dispatch_rig::{boot_with_attention, status_of, AttentionBoot, Roots, Running, PRINTER as RIG_PRINTER};
+use p7_dispatch_rig::{
+    boot_with_attention, status_of, AttentionBoot, Roots, Running, PRINTER as RIG_PRINTER,
+};
 use serde_json::{json, Value};
 
 /// A query token in the camera's URL: it must never leave
@@ -695,10 +837,14 @@ impl CaptureRig {
             self.app
                 .attention_rows()
                 .into_iter()
-                .find(|event| event.condition == ConditionKind::JobFailed && event.job_id.as_deref() == Some(job.as_str()))
+                .find(|event| {
+                    event.condition == ConditionKind::JobFailed
+                        && event.job_id.as_deref() == Some(job.as_str())
+                })
                 .and_then(|event| event.incident_id)
         };
-        self.app.wait_until("the failure's Incident opens", || incident().is_some());
+        self.app
+            .wait_until("the failure's Incident opens", || incident().is_some());
         let incident = incident().unwrap();
         (job, incident)
     }
@@ -719,10 +865,9 @@ impl CaptureRig {
     }
 
     fn completed_event(&self, job: &str) -> Option<AttentionEvent> {
-        self.app
-            .attention_rows()
-            .into_iter()
-            .find(|event| event.condition == ConditionKind::JobCompleted && event.job_id.as_deref() == Some(job))
+        self.app.attention_rows().into_iter().find(|event| {
+            event.condition == ConditionKind::JobCompleted && event.job_id.as_deref() == Some(job)
+        })
     }
 
     fn entries(&self, incident_id: &str) -> Vec<IncidentEntryDetail> {
@@ -741,7 +886,8 @@ impl CaptureRig {
             .app
             .storage
             .read(|conn| {
-                let mut statement = conn.prepare("SELECT id FROM camera_snapshots ORDER BY captured_at, id")?;
+                let mut statement =
+                    conn.prepare("SELECT id FROM camera_snapshots ORDER BY captured_at, id")?;
                 let ids = statement.query_map([], |row| row.get(0))?.collect();
                 ids
             })
@@ -813,7 +959,12 @@ impl CaptureRig {
     fn assert_clean(&self) {
         let endpoint = format!("127.0.0.1:{}", self.camera.port);
         let events = self.app.events.lock().unwrap().join("\n");
-        for needle in [CAMERA_TOKEN, endpoint.as_str(), "snapshots/", "farm3d-media"] {
+        for needle in [
+            CAMERA_TOKEN,
+            endpoint.as_str(),
+            "snapshots/",
+            "farm3d-media",
+        ] {
             assert!(!events.contains(needle), "{needle:?} reached an event");
         }
         let rows: String = self
@@ -844,7 +995,12 @@ impl CaptureRig {
 fn timeline_kinds(entries: &[IncidentEntryDetail]) -> Vec<String> {
     entries
         .iter()
-        .map(|detail| serde_json::to_value(detail).unwrap()["kind"].as_str().unwrap().to_string())
+        .map(|detail| {
+            serde_json::to_value(detail).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect()
 }
 
@@ -870,20 +1026,28 @@ fn an_incident_opening_captures_one_incident_snapshot_and_records_it() {
         }
     );
     assert_eq!(
-        entries.iter().filter(|entry| matches!(entry, IncidentEntryDetail::EvidenceCaptured { .. })).count(),
+        entries
+            .iter()
+            .filter(|entry| matches!(entry, IncidentEntryDetail::EvidenceCaptured { .. }))
+            .count(),
         1
     );
     let incident = rig.incident_row(&incident_id);
     assert_eq!(incident.snapshot_count, 1);
     // Published after commit: the snapshot, and the Incident's final row.
     let published = rig.stream("attention.snapshot.changed");
-    assert!(published.iter().any(|event| event["payload"]["snapshot"]["id"] == json!(snapshot.id)));
+    assert!(published
+        .iter()
+        .any(|event| event["payload"]["snapshot"]["id"] == json!(snapshot.id)));
     let last_incident = rig
         .stream("attention.incident.changed")
         .into_iter()
         .rfind(|event| event["subject"]["id"] == json!(incident_id))
         .unwrap();
-    assert_eq!(last_incident["payload"]["incident"]["revision"], json!(incident.revision));
+    assert_eq!(
+        last_incident["payload"]["incident"]["revision"],
+        json!(incident.revision)
+    );
     assert_eq!(last_incident["payload"]["incident"]["snapshotCount"], 1);
     // The capture was a saved-source fetch: the health is ok.
     assert_eq!(
@@ -891,11 +1055,16 @@ fn an_incident_opening_captures_one_incident_snapshot_and_records_it() {
         farm3d_lib::cameras::CameraHealthState::Ok
     );
     // The image is served back through snapshot_image.
-    let (header, image) = rig.binary("snapshot_image", json!({"snapshotId": snapshot.id})).unwrap();
+    let (header, image) = rig
+        .binary("snapshot_image", json!({"snapshotId": snapshot.id}))
+        .unwrap();
     assert_eq!(image, JPEG);
     assert_eq!(header["snapshotId"], json!(snapshot.id));
     assert_eq!(header["contentType"], "image/jpeg");
-    assert_eq!(timeline_kinds(&entries[..entries.len() - 1]), ["opened", "eventLinked"]);
+    assert_eq!(
+        timeline_kinds(&entries[..entries.len() - 1]),
+        ["opened", "eventLinked"]
+    );
     rig.assert_clean();
 }
 
@@ -914,13 +1083,21 @@ fn a_failing_camera_records_evidence_skipped_and_the_incident_is_otherwise_ident
         }
     );
     // The same timeline as a captured one, but for the outcome.
-    assert_eq!(timeline_kinds(&entries[..entries.len() - 1]), ["opened", "eventLinked"]);
+    assert_eq!(
+        timeline_kinds(&entries[..entries.len() - 1]),
+        ["opened", "eventLinked"]
+    );
     let incident = rig.incident_row(&incident_id);
     assert_eq!(incident.snapshot_count, 0);
     assert_eq!(incident.linked_event_ids.len(), 2);
     assert_eq!(incident.state, farm3d_lib::incidents::IncidentState::Open);
     assert_eq!(
-        rig.app.services.cameras.health(RIG_PRINTER).unwrap().last_failure_kind,
+        rig.app
+            .services
+            .cameras
+            .health(RIG_PRINTER)
+            .unwrap()
+            .last_failure_kind,
         Some(CameraErrorKind::HttpStatus)
     );
     rig.assert_clean();
@@ -934,8 +1111,14 @@ fn with_snapshot_on_incident_off_nothing_is_captured_or_recorded() {
     rig.app.attention_pass();
     rig.settle();
     assert!(rig.snapshots().is_empty());
-    assert_eq!(timeline_kinds(&rig.entries(&incident_id)), ["opened", "eventLinked"]);
-    assert!(rig.camera.requests().is_empty(), "the camera was never asked");
+    assert_eq!(
+        timeline_kinds(&rig.entries(&incident_id)),
+        ["opened", "eventLinked"]
+    );
+    assert!(
+        rig.camera.requests().is_empty(),
+        "the camera was never asked"
+    );
 }
 
 #[test]
@@ -957,11 +1140,17 @@ fn a_job_completion_captures_a_completion_snapshot_recorded_on_its_event() {
         })
     );
     // Evidence is its own field, never the planner-owned detail.
-    assert_eq!(serde_json::to_value(&completed.detail).unwrap()["kind"], "jobCompleted");
+    assert_eq!(
+        serde_json::to_value(&completed.detail).unwrap()["kind"],
+        "jobCompleted"
+    );
     // No new job_events kinds.
     let kinds: Vec<String> = rig.app.event_kinds(&job);
     assert!(
-        kinds.iter().all(|kind| !kind.to_lowercase().contains("snapshot") && !kind.to_lowercase().contains("evidence")),
+        kinds
+            .iter()
+            .all(|kind| !kind.to_lowercase().contains("snapshot")
+                && !kind.to_lowercase().contains("evidence")),
         "{kinds:?}"
     );
     // The Event was published with its evidence.
@@ -970,7 +1159,10 @@ fn a_job_completion_captures_a_completion_snapshot_recorded_on_its_event() {
         .into_iter()
         .rfind(|event| event["subject"]["id"] == json!(completed.id))
         .unwrap();
-    assert_eq!(published["payload"]["event"]["evidence"]["status"], "captured");
+    assert_eq!(
+        published["payload"]["event"]["evidence"]["status"],
+        "captured"
+    );
     // A later pass leaves the evidence in place.
     rig.app.attention_pass();
     rig.app.attention_pass();
@@ -1003,10 +1195,16 @@ fn a_lagged_capture_consumer_rederives_the_captures_it_missed() {
     let lags = services.cameras.capture_lags();
     services.cameras.release_captures();
     rig.settle();
-    assert!(services.cameras.capture_lags() > lags, "the consumer lagged");
+    assert!(
+        services.cameras.capture_lags() > lags,
+        "the consumer lagged"
+    );
     let entries = rig.entries(&incident_id);
     assert_eq!(
-        entries.iter().filter(|entry| matches!(entry, IncidentEntryDetail::EvidenceCaptured { .. })).count(),
+        entries
+            .iter()
+            .filter(|entry| matches!(entry, IncidentEntryDetail::EvidenceCaptured { .. }))
+            .count(),
         1,
         "{entries:?}"
     );
@@ -1021,24 +1219,56 @@ fn the_snapshot_commands_capture_pin_serve_and_count() {
     let incident_snapshot = rig.snapshots().remove(0);
 
     // capture_snapshot: a manual snapshot; a replay never touches the camera.
-    let manual = rig.call("capture_snapshot", json!({"operationId": "op-cap", "printerId": RIG_PRINTER})).unwrap();
+    let manual = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-cap", "printerId": RIG_PRINTER}),
+        )
+        .unwrap();
     assert_eq!(manual["trigger"], "manual");
     assert_eq!(manual["incidentId"], Value::Null);
     assert!(manual.get("relPath").is_none());
     let requests = rig.camera.requests().len();
-    let replay = rig.call("capture_snapshot", json!({"operationId": "op-cap", "printerId": RIG_PRINTER})).unwrap();
+    let replay = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-cap", "printerId": RIG_PRINTER}),
+        )
+        .unwrap();
     assert_eq!(replay, manual);
-    assert_eq!(rig.camera.requests().len(), requests, "a replay fetches nothing");
-    let reused = rig.call("capture_snapshot", json!({"operationId": "op-cap", "printerId": "prn-other"})).unwrap_err();
-    assert_eq!((reused["code"].as_str(), reused["details"]["fieldPath"].as_str()), (Some("VALIDATION"), Some("operationId")));
     assert_eq!(
-        rig.call("capture_snapshot", json!({"operationId": "op-missing", "printerId": "prn-missing"})).unwrap_err()["code"],
+        rig.camera.requests().len(),
+        requests,
+        "a replay fetches nothing"
+    );
+    let reused = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-cap", "printerId": "prn-other"}),
+        )
+        .unwrap_err();
+    assert_eq!(
+        (
+            reused["code"].as_str(),
+            reused["details"]["fieldPath"].as_str()
+        ),
+        (Some("VALIDATION"), Some("operationId"))
+    );
+    assert_eq!(
+        rig.call(
+            "capture_snapshot",
+            json!({"operationId": "op-missing", "printerId": "prn-missing"})
+        )
+        .unwrap_err()["code"],
         "NOT_FOUND"
     );
 
     // set_snapshot_pinned: idempotent, and a timeline row when linked.
     let pin = |operation: &str, id: &str, pinned: bool| {
-        rig.call("set_snapshot_pinned", json!({"operationId": operation, "snapshotId": id, "pinned": pinned}))
+        rig.call(
+            "set_snapshot_pinned",
+            json!({"operationId": operation, "snapshotId": id, "pinned": pinned}),
+        )
     };
     let before = rig.entries(&incident_id).len();
     let pinned = pin("op-pin", &incident_snapshot.id, true).unwrap();
@@ -1051,27 +1281,59 @@ fn the_snapshot_commands_capture_pin_serve_and_count() {
         }
     );
     let published = rig.stream("attention.snapshot.changed").len();
-    assert_eq!(pin("op-pin", &incident_snapshot.id, true).unwrap(), pinned, "a replay");
-    assert_eq!(pin("op-pin-again", &incident_snapshot.id, true).unwrap(), pinned, "the same state is a no-op");
+    assert_eq!(
+        pin("op-pin", &incident_snapshot.id, true).unwrap(),
+        pinned,
+        "a replay"
+    );
+    assert_eq!(
+        pin("op-pin-again", &incident_snapshot.id, true).unwrap(),
+        pinned,
+        "the same state is a no-op"
+    );
     assert_eq!(rig.entries(&incident_id).len(), before + 1);
-    assert_eq!(rig.stream("attention.snapshot.changed").len(), published, "nothing published");
+    assert_eq!(
+        rig.stream("attention.snapshot.changed").len(),
+        published,
+        "nothing published"
+    );
     // An unlinked (manual) snapshot pins with no timeline row anywhere.
     let manual_id = manual["id"].as_str().unwrap();
     assert!(pin("op-pin-manual", manual_id, true).unwrap()["pinnedAt"].is_string());
     assert_eq!(rig.entries(&incident_id).len(), before + 1);
 
     // list_snapshots and media_usage.
-    let listed = rig.call("list_snapshots", json!({"printerId": RIG_PRINTER})).unwrap();
+    let listed = rig
+        .call("list_snapshots", json!({"printerId": RIG_PRINTER}))
+        .unwrap();
     assert_eq!(listed["snapshots"].as_array().unwrap().len(), 2);
     assert_eq!(listed["nextCursor"], Value::Null);
     let page = rig.call("list_snapshots", json!({"limit": 1})).unwrap();
     assert_eq!(page["snapshots"].as_array().unwrap().len(), 1);
-    let next = rig.call("list_snapshots", json!({"limit": 1, "before": page["nextCursor"]})).unwrap();
+    let next = rig
+        .call(
+            "list_snapshots",
+            json!({"limit": 1, "before": page["nextCursor"]}),
+        )
+        .unwrap();
     assert_ne!(next["snapshots"][0]["id"], page["snapshots"][0]["id"]);
-    let by_incident = rig.call("list_snapshots", json!({"incidentId": incident_id})).unwrap();
-    assert_eq!(by_incident["snapshots"][0]["id"], json!(incident_snapshot.id));
-    assert_eq!(rig.call("list_snapshots", json!({"incidentId": "inc-missing"})).unwrap_err()["code"], "NOT_FOUND");
-    assert_eq!(rig.call("list_snapshots", json!({"before": "nonsense"})).unwrap_err()["code"], "VALIDATION");
+    let by_incident = rig
+        .call("list_snapshots", json!({"incidentId": incident_id}))
+        .unwrap();
+    assert_eq!(
+        by_incident["snapshots"][0]["id"],
+        json!(incident_snapshot.id)
+    );
+    assert_eq!(
+        rig.call("list_snapshots", json!({"incidentId": "inc-missing"}))
+            .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        rig.call("list_snapshots", json!({"before": "nonsense"}))
+            .unwrap_err()["code"],
+        "VALIDATION"
+    );
     let usage = rig.call("media_usage", json!({})).unwrap();
     assert_eq!(usage["usedBytes"], json!(2 * JPEG.len()));
     assert_eq!(usage["pinnedBytes"], json!(2 * JPEG.len()));
@@ -1085,12 +1347,26 @@ fn the_snapshot_commands_capture_pin_serve_and_count() {
     let rel_path: String = rig
         .app
         .storage
-        .read(|conn| conn.query_row("SELECT rel_path FROM camera_snapshots WHERE id = ?1", [&incident_snapshot.id], |row| row.get(0)))
+        .read(|conn| {
+            conn.query_row(
+                "SELECT rel_path FROM camera_snapshots WHERE id = ?1",
+                [&incident_snapshot.id],
+                |row| row.get(0),
+            )
+        })
         .unwrap();
     std::fs::remove_file(rig.app.storage.paths().media_root().join(rel_path)).unwrap();
-    let missing = rig.binary("snapshot_image", json!({"snapshotId": incident_snapshot.id})).unwrap_err();
+    let missing = rig
+        .binary(
+            "snapshot_image",
+            json!({"snapshotId": incident_snapshot.id}),
+        )
+        .unwrap_err();
     assert_eq!(missing["code"], "EVIDENCE_PRUNED");
-    assert_eq!(missing["details"], json!({"snapshotId": incident_snapshot.id, "reason": "missingFile"}));
+    assert_eq!(
+        missing["details"],
+        json!({"snapshotId": incident_snapshot.id, "reason": "missingFile"})
+    );
     assert_eq!(
         rig.entries(&incident_id).last().unwrap(),
         &IncidentEntryDetail::EvidencePruned {
@@ -1098,7 +1374,12 @@ fn the_snapshot_commands_capture_pin_serve_and_count() {
             reason: PruneReason::MissingFile
         }
     );
-    let again = rig.binary("snapshot_image", json!({"snapshotId": incident_snapshot.id})).unwrap_err();
+    let again = rig
+        .binary(
+            "snapshot_image",
+            json!({"snapshotId": incident_snapshot.id}),
+        )
+        .unwrap_err();
     assert_eq!(again["code"], "EVIDENCE_PRUNED");
     // Pinning a pruned row is refused (and burns no id); unpinning it works.
     let refused = pin("op-pin-pruned", &incident_snapshot.id, true).unwrap_err();
@@ -1112,8 +1393,16 @@ fn the_snapshot_commands_capture_pin_serve_and_count() {
             snapshot_id: incident_snapshot.id.clone()
         }
     );
-    assert_eq!(pin("op-unpin-again", &incident_snapshot.id, false).unwrap(), unpinned, "unpinning twice is a no-op");
-    assert_eq!(rig.binary("snapshot_image", json!({"snapshotId": "snp-missing"})).unwrap_err()["code"], "NOT_FOUND");
+    assert_eq!(
+        pin("op-unpin-again", &incident_snapshot.id, false).unwrap(),
+        unpinned,
+        "unpinning twice is a no-op"
+    );
+    assert_eq!(
+        rig.binary("snapshot_image", json!({"snapshotId": "snp-missing"}))
+            .unwrap_err()["code"],
+        "NOT_FOUND"
+    );
     let usage = rig.call("media_usage", json!({})).unwrap();
     assert_eq!(usage["usedBytes"], json!(JPEG.len()));
     assert_eq!(usage["prunedCount"], 1);
@@ -1153,7 +1442,12 @@ fn a_full_cap_of_pinned_evidence_refuses_a_capture() {
             Ok(())
         })
         .unwrap();
-    let refused = rig.call("capture_snapshot", json!({"operationId": "op-full", "printerId": RIG_PRINTER})).unwrap_err();
+    let refused = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-full", "printerId": RIG_PRINTER}),
+        )
+        .unwrap_err();
     assert_eq!(refused["code"], "SNAPSHOT_DISK_CAP");
     assert_eq!(
         refused["details"],
@@ -1163,11 +1457,24 @@ fn a_full_cap_of_pinned_evidence_refuses_a_capture() {
     let unclaimed: i64 = rig
         .app
         .storage
-        .read(|conn| conn.query_row("SELECT COUNT(*) FROM operations WHERE id = 'op-full'", [], |row| row.get(0)))
+        .read(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM operations WHERE id = 'op-full'",
+                [],
+                |row| row.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(unclaimed, 0);
     assert_eq!(rig.snapshots().len(), 10);
-    assert!(rig.app.storage.paths().media_root().join("snapshots").read_dir().map_or(true, |mut dir| dir.next().is_none()));
+    assert!(rig
+        .app
+        .storage
+        .paths()
+        .media_root()
+        .join("snapshots")
+        .read_dir()
+        .map_or(true, |mut dir| dir.next().is_none()));
 
     let (_, incident_id) = rig.fail_job();
     rig.settle();
@@ -1187,8 +1494,15 @@ fn a_full_cap_of_pinned_evidence_refuses_a_capture() {
 #[test]
 fn a_janitor_poke_prunes_under_the_stored_retention() {
     let rig = CaptureRig::new(Answer::Jpeg);
-    rig.app.wait_until("the janitor's first pass", || rig.app.services.cameras.janitor().passes() >= 1);
-    let manual = rig.call("capture_snapshot", json!({"operationId": "op-old", "printerId": RIG_PRINTER})).unwrap();
+    rig.app.wait_until("the janitor's first pass", || {
+        rig.app.services.cameras.janitor().passes() >= 1
+    });
+    let manual = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-old", "printerId": RIG_PRINTER}),
+        )
+        .unwrap();
     let id = manual["id"].as_str().unwrap().to_string();
     // Three days old, then a one-day retention.
     farm3d_lib::settings::repository::SettingsRepository::new(Arc::clone(&rig.app.storage))
@@ -1199,7 +1513,11 @@ fn a_janitor_poke_prunes_under_the_stored_retention() {
         .write(|tx| {
             tx.execute(
                 "UPDATE camera_snapshots SET captured_at = ?2 WHERE id = ?1",
-                rusqlite::params![id, (Utc::now() - ChronoDuration::days(3)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+                rusqlite::params![
+                    id,
+                    (Utc::now() - ChronoDuration::days(3))
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                ],
             )?;
             tx.execute("UPDATE settings SET snapshot_retention_days = 1", [])?;
             Ok(())
@@ -1208,22 +1526,39 @@ fn a_janitor_poke_prunes_under_the_stored_retention() {
     let rel_path: String = rig
         .app
         .storage
-        .read(|conn| conn.query_row("SELECT rel_path FROM camera_snapshots WHERE id = ?1", [&id], |row| row.get(0)))
+        .read(|conn| {
+            conn.query_row(
+                "SELECT rel_path FROM camera_snapshots WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+        })
         .unwrap();
     let file = rig.app.storage.paths().media_root().join(rel_path);
     assert!(file.exists());
 
     let passes = rig.app.services.cameras.janitor().passes();
     rig.app.services.cameras.janitor().poke();
-    rig.app.wait_until("the poked pass", || rig.app.services.cameras.janitor().passes() > passes);
-    let pruned = rig.snapshots().into_iter().find(|snapshot| snapshot.id == id).unwrap();
+    rig.app.wait_until("the poked pass", || {
+        rig.app.services.cameras.janitor().passes() > passes
+    });
+    let pruned = rig
+        .snapshots()
+        .into_iter()
+        .find(|snapshot| snapshot.id == id)
+        .unwrap();
     assert_eq!(pruned.prune_reason, Some(PruneReason::Age));
     assert!(!file.exists(), "the file was unlinked after commit");
     assert!(rig
         .stream("attention.snapshot.changed")
         .iter()
-        .any(|event| event["payload"]["snapshot"]["id"] == json!(id) && event["payload"]["snapshot"]["pruneReason"] == "age"));
-    assert_eq!(rig.binary("snapshot_image", json!({"snapshotId": id})).unwrap_err()["details"]["reason"], "age");
+        .any(|event| event["payload"]["snapshot"]["id"] == json!(id)
+            && event["payload"]["snapshot"]["pruneReason"] == "age"));
+    assert_eq!(
+        rig.binary("snapshot_image", json!({"snapshotId": id}))
+            .unwrap_err()["details"]["reason"],
+        "age"
+    );
 }
 
 /// Global constraint 5: a media root the startup sweep can't clean (here
@@ -1242,10 +1577,18 @@ fn a_failed_media_sweep_degrades_capture_instead_of_blocking_startup() {
     // The app is up and serving: the core flows work.
     rig.app.ok("printer_statuses", json!({}));
 
-    let refused = rig.call("capture_snapshot", json!({"operationId": "op-down", "printerId": RIG_PRINTER})).unwrap_err();
+    let refused = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-down", "printerId": RIG_PRINTER}),
+        )
+        .unwrap_err();
     assert_eq!(refused["code"], "PERSISTENCE_UNAVAILABLE");
     let refused_text = refused.to_string();
-    assert!(!refused_text.contains("farm3d-media") && !refused_text.contains("tmp"), "{refused_text}");
+    assert!(
+        !refused_text.contains("farm3d-media") && !refused_text.contains("tmp"),
+        "{refused_text}"
+    );
 
     let (_, incident_id) = rig.fail_job();
     rig.settle();
@@ -1263,9 +1606,16 @@ fn a_failed_media_sweep_degrades_capture_instead_of_blocking_startup() {
     std::fs::remove_file(rig.app.storage.paths().media_root().join("tmp")).unwrap();
     let passes = services.cameras.janitor().passes();
     services.cameras.janitor().poke();
-    rig.app.wait_until("the janitor retries the sweep", || services.cameras.janitor().passes() > passes);
+    rig.app.wait_until("the janitor retries the sweep", || {
+        services.cameras.janitor().passes() > passes
+    });
     assert!(services.cameras.media_available());
-    let stored = rig.call("capture_snapshot", json!({"operationId": "op-up", "printerId": RIG_PRINTER})).unwrap();
+    let stored = rig
+        .call(
+            "capture_snapshot",
+            json!({"operationId": "op-up", "printerId": RIG_PRINTER}),
+        )
+        .unwrap();
     assert_eq!(stored["trigger"], "manual");
     rig.assert_clean();
 }

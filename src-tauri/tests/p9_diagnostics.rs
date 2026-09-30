@@ -714,7 +714,10 @@ fn storage_holds_integrity_findings_warning_codes_and_cleanup_counts_only() {
             .map(|row| row["bytes"].as_u64().unwrap())
             .sum::<u64>()
     );
-    assert!(storage["usage"]["measuredAt"].as_str().unwrap().ends_with('Z'));
+    assert!(storage["usage"]["measuredAt"]
+        .as_str()
+        .unwrap()
+        .ends_with('Z'));
     secrets::assert_none_of(&every_needle(), &bytes, "storage");
 }
 

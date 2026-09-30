@@ -447,8 +447,10 @@ fn for_holder_lists_every_state() {
     })
     .unwrap();
 
-    let held = call(&storage, |tx| reservations::for_holder(tx, &holder).map_err(Into::into))
-        .unwrap();
+    let held = call(&storage, |tx| {
+        reservations::for_holder(tx, &holder).map_err(Into::into)
+    })
+    .unwrap();
     assert_eq!(held.len(), 4);
     let state_of = |id: &str| held.iter().find(|r| r.id == id).unwrap().state;
     assert_eq!(state_of(&active_id), ReservationState::Active);
@@ -550,7 +552,11 @@ fn consume_measured_with_an_out_of_range_net_amount_is_a_validation_error() {
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].state, ReservationState::Active);
     let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
-    assert_eq!(history.len(), 1, "a rejected entry must write no ledger row");
+    assert_eq!(
+        history.len(),
+        1,
+        "a rejected entry must write no ledger row"
+    );
 }
 
 /// Controller ruling R8: an unknown `entry.tareId` is the same kind of
@@ -593,7 +599,11 @@ fn consume_measured_with_an_unknown_tare_id_is_a_validation_error() {
     .unwrap();
     assert_eq!(held[0].state, ReservationState::Active);
     let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
-    assert_eq!(history.len(), 1, "a rejected entry must write no ledger row");
+    assert_eq!(
+        history.len(),
+        1,
+        "a rejected entry must write no ledger row"
+    );
 }
 
 /// A `Scale` entry resolved against a real tare (the happy path Task 4's
@@ -712,7 +722,11 @@ fn consume_measured_twice_is_invalid_transition() {
         }
     ));
     let history = storage.write(|tx| ledger::history(tx, &spool_id)).unwrap();
-    assert_eq!(history.len(), 2, "a rejected second settle must write nothing");
+    assert_eq!(
+        history.len(),
+        2,
+        "a rejected second settle must write nothing"
+    );
 }
 
 /// D9's `reconciliation` facet: true exactly when the Spool has an

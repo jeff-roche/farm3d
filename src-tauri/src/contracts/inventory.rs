@@ -389,16 +389,8 @@ contracts![
         "AbandonHostOperationRequest",
         "AbandonHostOperationResult"
     ),
-    (
-        "list_queue",
-        "ListQueueRequest",
-        "ListQueueResult"
-    ),
-    (
-        "add_to_queue",
-        "AddToQueueRequest",
-        "AddToQueueResult"
-    ),
+    ("list_queue", "ListQueueRequest", "ListQueueResult"),
+    ("add_to_queue", "AddToQueueRequest", "AddToQueueResult"),
     (
         "update_queue_entry",
         "UpdateQueueEntryRequest",
@@ -424,21 +416,9 @@ contracts![
         "AssignQueueEntryRequest",
         "AssignQueueEntryResult"
     ),
-    (
-        "release_job",
-        "ReleaseJobRequest",
-        "ReleaseJobResult"
-    ),
-    (
-        "retry_job",
-        "RetryJobRequest",
-        "RetryJobResult"
-    ),
-    (
-        "cancel_job",
-        "CancelJobRequest",
-        "CancelJobResult"
-    ),
+    ("release_job", "ReleaseJobRequest", "ReleaseJobResult"),
+    ("retry_job", "RetryJobRequest", "RetryJobResult"),
+    ("cancel_job", "CancelJobRequest", "CancelJobResult"),
     (
         "get_job_history",
         "GetJobHistoryRequest",
@@ -488,11 +468,7 @@ contracts![
         "ListIncidentsRequest",
         "ListIncidentsResult"
     ),
-    (
-        "get_incident",
-        "GetIncidentRequest",
-        "GetIncidentResult"
-    ),
+    ("get_incident", "GetIncidentRequest", "GetIncidentResult"),
     (
         "add_incident_note",
         "AddIncidentNoteRequest",
@@ -580,17 +556,9 @@ contracts![
         "BackupInventoryRequest",
         "BackupInventoryResult"
     ),
-    (
-        "create_backup",
-        "CreateBackupRequest",
-        "CreateBackupResult"
-    ),
+    ("create_backup", "CreateBackupRequest", "CreateBackupResult"),
     ("list_backups", "ListBackupsRequest", "ListBackupsResult"),
-    (
-        "delete_backup",
-        "DeleteBackupRequest",
-        "DeleteBackupResult"
-    ),
+    ("delete_backup", "DeleteBackupRequest", "DeleteBackupResult"),
     (
         "preview_restore",
         "PreviewRestoreRequest",
@@ -601,11 +569,7 @@ contracts![
         "DiscardRestorePreviewRequest",
         "DiscardRestorePreviewResult"
     ),
-    (
-        "apply_restore",
-        "ApplyRestoreRequest",
-        "ApplyRestoreResult"
-    ),
+    ("apply_restore", "ApplyRestoreRequest", "ApplyRestoreResult"),
     (
         "restore_status",
         "RestoreStatusRequest",

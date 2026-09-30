@@ -40,7 +40,12 @@ fn attention() -> AttentionBoot {
 }
 
 fn boot_attention(roots: &Roots) -> (Running, farm3d_lib::attention::projector::AppliedChanges) {
-    boot_with_attention(roots, status_of(OperationalState::Ready), quiet(), attention())
+    boot_with_attention(
+        roots,
+        status_of(OperationalState::Ready),
+        quiet(),
+        attention(),
+    )
 }
 
 /// No driver poll during the test: nothing moves a Job but the test.
@@ -58,7 +63,9 @@ fn failed_job(app: &Running, roots: &Roots) -> String {
     roots.fake.finish_print("klippy_shutdown");
     app.wait_job(&job, "failed");
     // The operator clears the host for the next print.
-    roots.fake.with_state(|state| state.print_state = "standby".to_string());
+    roots
+        .fake
+        .with_state(|state| state.print_state = "standby".to_string());
     app.status(OperationalState::Ready);
     job
 }
@@ -125,7 +132,10 @@ fn backfill_projects_every_requirement_once_and_resolving_one_keeps_both_histori
             applied.event.condition,
             ConditionKind::RequirementMaterialReconciliation
         );
-        assert_eq!(applied.event.printer_id.as_deref(), Some(p7_dispatch_rig::PRINTER));
+        assert_eq!(
+            applied.event.printer_id.as_deref(),
+            Some(p7_dispatch_rig::PRINTER)
+        );
         let deferred = applied.event.job_id.as_deref() == Some(jobs[1].as_str());
         assert_eq!(
             applied.event.acknowledged_at.is_some(),
@@ -134,14 +144,21 @@ fn backfill_projects_every_requirement_once_and_resolving_one_keeps_both_histori
         );
     }
     assert_eq!(
-        count(&storage, "SELECT COUNT(*) FROM attention_events WHERE resolved_at IS NULL"),
+        count(
+            &storage,
+            "SELECT COUNT(*) FROM attention_events WHERE resolved_at IS NULL"
+        ),
         3
     );
 
     // --- five more backfills change nothing.
     for _ in 0..5 {
         let again = backfill(&storage, chrono::Utc::now()).expect("backfill");
-        assert!(again.events.is_empty(), "only unchanged amendments: {:?}", again.events);
+        assert!(
+            again.events.is_empty(),
+            "only unchanged amendments: {:?}",
+            again.events
+        );
         assert!(again.notify.is_empty());
     }
     assert_eq!(count(&storage, "SELECT COUNT(*) FROM attention_events"), 3);
@@ -176,9 +193,9 @@ fn backfill_projects_every_requirement_once_and_resolving_one_keeps_both_histori
     let before = requirement_and_history(&app, &jobs[0]);
 
     app.wait_until("the settled requirement's Event resolves", || {
-        app.attention_rows()
-            .iter()
-            .any(|event| event.job_id.as_deref() == Some(jobs[0].as_str()) && event.resolved_at.is_some())
+        app.attention_rows().iter().any(|event| {
+            event.job_id.as_deref() == Some(jobs[0].as_str()) && event.resolved_at.is_some()
+        })
     });
     app.attention_pass();
     let rows = app.attention_rows();
@@ -197,7 +214,8 @@ fn backfill_projects_every_requirement_once_and_resolving_one_keeps_both_histori
         "the projector never touches the requirement or the Job's own timeline"
     );
     assert_eq!(
-        app.attention_stream("attention.event.changed", &rows_for(&rows, &jobs[0])).len(),
+        app.attention_stream("attention.event.changed", &rows_for(&rows, &jobs[0]))
+            .len(),
         1,
         "the resolution was published once"
     );

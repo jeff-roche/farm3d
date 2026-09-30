@@ -278,7 +278,13 @@ pub fn run_pass<R: tauri::Runtime>(
     };
     let outcome = {
         let mut watch = lock(&attention.watch);
-        projector::run(&services.storage, &live, &mut watch, AttentionOrigin::Live, now)?
+        projector::run(
+            &services.storage,
+            &live,
+            &mut watch,
+            AttentionOrigin::Live,
+            now,
+        )?
     };
     *lock(&attention.next_deadline) = outcome.next_deadline;
     attention.passes.fetch_add(1, Ordering::SeqCst);
@@ -400,10 +406,12 @@ impl<R: tauri::Runtime> Projector<R> {
             let backfilled = lock(&services.attention.backfilled).take();
             if let Some(changes) = backfilled {
                 if let Some(app) = services.attention.app() {
-                    services
-                        .attention
-                        .stream
-                        .publish_change(app, &changes.event_rows(), &changes.incidents, &[]);
+                    services.attention.stream.publish_change(
+                        app,
+                        &changes.event_rows(),
+                        &changes.incidents,
+                        &[],
+                    );
                 }
             }
         }
@@ -418,7 +426,10 @@ impl<R: tauri::Runtime> Projector<R> {
                 return;
             };
             if lagged > 0 {
-                services.attention.lagged.fetch_add(lagged, Ordering::SeqCst);
+                services
+                    .attention
+                    .lagged
+                    .fetch_add(lagged, Ordering::SeqCst);
             }
             let waiting = std::mem::take(&mut *lock(&services.attention.barriers));
             last_pass = Some(tokio::time::Instant::now());
@@ -554,6 +565,9 @@ mod tests {
         log.succeeded();
         assert_eq!(log.failed(at(62)), Some(0));
         assert_eq!(held_back_note(0), "");
-        assert_eq!(held_back_note(59), " (and 59 more failures since the last report)");
+        assert_eq!(
+            held_back_note(59),
+            " (and 59 more failures since the last report)"
+        );
     }
 }

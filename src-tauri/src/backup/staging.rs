@@ -36,9 +36,9 @@ use rusqlite::{Connection, OpenFlags};
 use super::archive::{self, ArchiveError, DATABASE_PATH, MANIFEST_PATH};
 use super::lease::LeaseGuard;
 use super::manifest::{Manifest, MIN_SCHEMA_VERSION};
-use crate::diagnostics::storage::available_bytes;
 use super::BackupInvalidReason;
 use crate::contracts::command::CommandError;
+use crate::diagnostics::storage::available_bytes;
 use crate::persistence::integrity;
 use crate::persistence::{
     apply_migrations, create_contained_directory, embedded_migrations, has_foreign_key_violation,

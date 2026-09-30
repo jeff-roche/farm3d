@@ -28,10 +28,6 @@ use backup::commands::{
     acknowledge_restore_status, apply_restore, backup_inventory, create_backup, delete_backup,
     discard_restore_preview, list_backups, preview_restore, restore_status,
 };
-use diagnostics::commands::{
-    about_farm3d, clear_storage, diagnostics_preview, export_diagnostics, reset_farm,
-    reset_preview, storage_usage,
-};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -45,6 +41,10 @@ use connections::commands::{
     printer_capabilities, printer_statuses, set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use diagnostics::commands::{
+    about_farm3d, clear_storage, diagnostics_preview, export_diagnostics, reset_farm,
+    reset_preview, storage_usage,
+};
 use history::commands::{get_job_timeline, list_job_history};
 use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
@@ -735,13 +735,15 @@ fn build_runtime_services<R: tauri::Runtime>(
         attention::services::AttentionTimings::default(),
     ));
     attention.set_backfilled(backfilled);
-    let backup = Arc::new(backup::BackupServices::new(
-        backup_lease.clone(),
-        &storage,
-        &content,
-        Arc::new(backup::dialogs::NativePortabilityDialogs::new(app.clone())),
-    )
-    .with_restarter(Arc::new(backup::restart::AppRestarter::new(app.clone()))));
+    let backup = Arc::new(
+        backup::BackupServices::new(
+            backup_lease.clone(),
+            &storage,
+            &content,
+            Arc::new(backup::dialogs::NativePortabilityDialogs::new(app.clone())),
+        )
+        .with_restarter(Arc::new(backup::restart::AppRestarter::new(app.clone()))),
+    );
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,

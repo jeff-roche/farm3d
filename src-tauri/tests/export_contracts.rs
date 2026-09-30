@@ -12,6 +12,15 @@ use farm3d_lib::attention::{
     AttentionSourceKind, AttentionSubject, ConditionKind, EvidenceOutcome,
     MaterialReconciliationStatus, NotificationClass, PrinterConnectionErrorCause, ResolutionMode,
 };
+use farm3d_lib::backup::{
+    ApplyRestoreOutcome, BackupContentTotals, BackupExcludedClass, BackupInvalidReason,
+    BackupInventory, BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupPlatform,
+    BackupSummary, CreateBackupOutcome, DeleteBackupOutcome, DesktopRequiredReason,
+    DiscardRestorePreviewOutcome, InstallerStep, PreviewRestoreOutcome, RestartingStatus,
+    RestoreBackupInfo, RestoreBlocker, RestoreBlockerKind, RestoreConflict, RestoreConflictClass,
+    RestoreConflictGroup, RestoreCount, RestoreDomain, RestoreJournalKind, RestoreNotice,
+    RestorePreview, RestorePreviewSource, RestoreSource, RestoreStatus, TableCount,
+};
 use farm3d_lib::cameras::{
     CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
     CameraSource, CameraSourceInput, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam,
@@ -48,15 +57,6 @@ use farm3d_lib::contracts::inventory::CommandContracts;
 use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
-use farm3d_lib::backup::{
-    BackupContentTotals, BackupExcludedClass, BackupInvalidReason, BackupInventory,
-    BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupPlatform, BackupSummary,
-    CreateBackupOutcome, DeleteBackupOutcome, DesktopRequiredReason, DiscardRestorePreviewOutcome,
-    PreviewRestoreOutcome, RestoreBackupInfo, RestoreBlocker, RestoreBlockerKind,
-    RestoreConflict, RestoreConflictClass, RestoreConflictGroup, RestoreCount, RestoreDomain,
-    RestoreNotice, RestorePreview, RestorePreviewSource, RestoreSource, TableCount,
-    ApplyRestoreOutcome, InstallerStep, RestartingStatus, RestoreJournalKind, RestoreStatus,
-};
 use farm3d_lib::contracts::ContractVersion;
 use farm3d_lib::diagnostics::about::{
     AboutCatalog, AboutCredentialStore, AboutInfo, AboutPlatform, AboutSlicer,
@@ -69,7 +69,7 @@ use farm3d_lib::diagnostics::reset::{
     ResetResult, ResetTier, ResetWarning,
 };
 use farm3d_lib::diagnostics::storage::{
-    ClearStorageOutcome, StorageCleanupTarget, StorageClass, StorageClassUsage, StorageUsage,
+    ClearStorageOutcome, StorageClass, StorageClassUsage, StorageCleanupTarget, StorageUsage,
 };
 use farm3d_lib::history::{
     JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
@@ -86,7 +86,7 @@ use farm3d_lib::incidents::{
     IncidentPage, IncidentState, IncidentTimelineItem,
 };
 use farm3d_lib::jobs::{
-    AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
+    AssignedBy, CancelReason, DeclaredOutcome, Job, JobAction, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
     RequirementResolution, RequirementStatus, SettleChoice, Settlement, SettlementMethod,
     SettlementPreview, StartConfirmation,
@@ -121,6 +121,7 @@ use farm3d_lib::notifications::commands::TestNotificationSent;
 use farm3d_lib::notifications::{
     NavigateRequest, NotificationClassSettings, NotifierStatus, NotifierUnavailableReason,
 };
+use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -140,14 +141,13 @@ use farm3d_lib::printers::operational::{
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
-use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
     Blocker, BlockerCode, Candidate, CloseReason, DispatchPolicy, DispatchPreference,
-    EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, OriginKind,
-    PrinterEligibility, QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryEligibility,
-    QueueEntryState, SpoolOption, NextAutomaticAction, QueueChange, QueueSnapshot,
+    EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, NextAutomaticAction,
+    OriginKind, PrinterEligibility, QueueChange, QueueEntry, QueueEntryAction, QueueEntryDisplay,
+    QueueEntryEligibility, QueueEntryState, QueueSnapshot, SpoolOption,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,

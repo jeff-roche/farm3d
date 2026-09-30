@@ -213,11 +213,17 @@ pub enum RepositoryError {
     },
     /// P7 D4: assignment to a Printer that already has the active Job
     /// `job_id`. Nothing was written. `JOB_ACTIVE`.
-    JobActive { printer_id: String, job_id: String },
+    JobActive {
+        printer_id: String,
+        job_id: String,
+    },
     /// P7 D7: a pause, resume, or cancel handoff found the host printing a
     /// file other than the Job's own (`host_path`). The write-ahead rolled
     /// back; nothing was sent. `JOB_NOT_ON_PRINTER`.
-    JobNotOnPrinter { job_id: String, printer_id: String },
+    JobNotOnPrinter {
+        job_id: String,
+        printer_id: String,
+    },
     /// P7 D7, ruling R13(a): the start link found a start blocker the
     /// pre-checks didn't (the Spool left the Printer in between). The
     /// write-ahead rolled back; nothing was sent. `JOB_START_BLOCKED`.
@@ -228,7 +234,10 @@ pub enum RepositoryError {
     /// P7 D7, ruling R13(a): an unattended start's link found the Printer
     /// no longer `unattended`. The write-ahead rolled back; nothing was
     /// sent. `START_PRECONDITION_CHANGED`.
-    StartSafetyChanged { job_id: String, printer_id: String },
+    StartSafetyChanged {
+        job_id: String,
+        printer_id: String,
+    },
     /// P7 D5: the assign transaction's in-transaction `check_assignment`
     /// refused the pair. Nothing was written. `ASSIGNMENT_BLOCKED`.
     AssignmentBlocked {
