@@ -35,6 +35,7 @@ vi.mock("../../printers/printer-store", () => ({
 }));
 vi.mock("../../diagnostics/diagnostics-store", async () =>
   (await import("../../diagnostics/diagnostics-store-mock")).diagnosticsStoreMock);
+vi.mock("../../backup/backup-store", async () => (await import("../../backup/backup-store-mock")).backupStoreMock);
 vi.mock("../../slicing/slicing-store", async () => (await import("../../slicing/slicing-store-mock")).slicingStoreMock);
 
 beforeEach(async () => {
@@ -84,7 +85,9 @@ describe("SettingsWorkspace", () => {
     ["appearance", "Appearance"],
     ["slicing", "Slicer"],
     ["notifications", "Notifications and retention"],
+    ["storage", "Storage and backup"],
     ["connections", "Connections"],
+    ["diagnostics", "Diagnostics"],
     ["about", "About"],
   ])("shows the %s category for its slug", async (slug, heading) => {
     renderWorkspace(slug);

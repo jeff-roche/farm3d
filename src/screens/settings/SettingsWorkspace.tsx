@@ -11,6 +11,8 @@ const AppearanceSettings = lazy(() => import("./AppearanceSettings").then((m) =>
 const SlicerSettingsForm = lazy(() => import("./SlicerSettingsForm").then((m) => ({ default: m.SlicerSettingsForm })));
 const NotificationSettingsForm = lazy(() => import("./NotificationSettingsForm").then((m) => ({ default: m.NotificationSettingsForm })));
 const ConnectionsSettings = lazy(() => import("./ConnectionsSettings").then((m) => ({ default: m.ConnectionsSettings })));
+const StorageSettings = lazy(() => import("./StorageSettings").then((m) => ({ default: m.StorageSettings })));
+const DiagnosticsSettings = lazy(() => import("./DiagnosticsSettings").then((m) => ({ default: m.DiagnosticsSettings })));
 const AboutSettings = lazy(() => import("./AboutSettings").then((m) => ({ default: m.AboutSettings })));
 
 export interface SettingsWorkspaceProps {
@@ -22,6 +24,8 @@ export interface SettingsWorkspaceProps {
   monitor?: MonitorStore;
   /** Forwarded to Connections after a Printers import. */
   onPrintersImported?: () => void;
+  /** Opens the Queue, for a restore that active work blocks. */
+  onOpenQueue?: () => void;
 }
 
 /** The Settings destination (D16): the categories as vertical tabs, the
@@ -34,6 +38,8 @@ export function SettingsWorkspace(props: SettingsWorkspaceProps) {
     slicing: () => <SlicerSettingsForm />,
     notifications: () => <NotificationSettingsForm />,
     connections: () => <ConnectionsSettings onPrintersImported={props.onPrintersImported} />,
+    storage: () => <StorageSettings onOpenQueue={props.onOpenQueue} />,
+    diagnostics: () => <DiagnosticsSettings />,
     about: () => <AboutSettings />,
   };
   const items = (): TabItem[] =>

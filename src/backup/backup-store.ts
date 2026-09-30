@@ -128,14 +128,31 @@ function fail(error: unknown): void {
   setState({ phase: "failed", error: normalized });
 }
 
+/** What `startRestore` reports: Rust's outcome, or how the flow ended
+ *  otherwise. It always matches the phase the flow finished in. */
+export type StartRestoreResult = PreviewRestoreOutcome | { status: "failed" } | { status: "abandoned" };
+
 /** idle -> choosing (the backend's open dialog, or a safety-backup read)
- *  -> previewing, or `cancelled`/`failed`. */
-export async function startRestore(source: RestoreSource): Promise<PreviewRestoreOutcome> {
+ *  -> previewing, or `cancelled`/`failed`. Starting again discards a staged
+ *  preview first; a result that lands after the operator left the panel
+ *  (the phase is no longer `choosing`) is discarded, not shown. */
+export async function startRestore(source: RestoreSource): Promise<StartRestoreResult> {
   if (source.kind === "file" && !desktopAvailable()) return { ...UNSUPPORTED };
+  await discardPreview();
   setState({ phase: "choosing", preview: null, error: null, safetyBackupId: null });
   try {
     if (!desktopAvailable()) throw needsDesktopError("Restoring a backup");
     const outcome = await retryOnTransportFailure(() => command("preview_restore", { source }));
+    if (state.phase !== "choosing") {
+      if (outcome.status === "previewed" && desktopAvailable()) {
+        try {
+          await command("discard_restore_preview", { stagingId: outcome.preview.stagingId });
+        } catch {
+          // The staging expires on its own (D6).
+        }
+      }
+      return { status: "abandoned" };
+    }
     if (outcome.status === "previewed") {
       setState({ phase: "previewing", preview: outcome.preview });
     } else if (outcome.status === "cancelled") {
@@ -145,8 +162,9 @@ export async function startRestore(source: RestoreSource): Promise<PreviewRestor
     }
     return outcome;
   } catch (error) {
+    if (state.phase !== "choosing") return { status: "abandoned" };
     fail(error);
-    return { status: "cancelled" };
+    return { status: "failed" };
   }
 }
 
@@ -196,6 +214,7 @@ async function discardPreview(): Promise<void> {
 
 /** failed / cancelled -> idle, discarding any staged preview. */
 export async function dismissRestore(): Promise<void> {
+  if (state.phase === "restarting") return;
   await discardPreview();
   setState({ phase: "idle", error: null });
 }

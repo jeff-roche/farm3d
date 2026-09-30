@@ -1,13 +1,14 @@
 /** The Settings workspace's categories, in umbrella order (D16). A slug is
  *  the `settingsCategory` selection id, so a deep link reads
- *  `#nav=v1/settings/settingsCategory/<slug>`. Storage and backup and
- *  Diagnostics join this list with their panels. */
+ *  `#nav=v1/settings/settingsCategory/<slug>`. */
 export const SETTINGS_CATEGORIES = [
   { slug: "general", label: "General" },
   { slug: "appearance", label: "Appearance" },
   { slug: "slicing", label: "Slicing" },
   { slug: "notifications", label: "Notifications and retention" },
+  { slug: "storage", label: "Storage and backup" },
   { slug: "connections", label: "Connections" },
+  { slug: "diagnostics", label: "Diagnostics" },
   { slug: "about", label: "About" },
 ] as const;
 

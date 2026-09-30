@@ -482,6 +482,7 @@ function App() {
                     selection: { kind: "settingsCategory", id: slug },
                   })}
                   monitor={monitorStore()}
+                  onOpenQueue={() => navigate({ version: 1, destination: "queue" })}
                   onPrintersImported={() => {
                     setIsFirstRun(false);
                     reconcileNavigation();

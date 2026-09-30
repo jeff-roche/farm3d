@@ -109,6 +109,62 @@ describe("restore flow", () => {
     expect(store.backup.restore.phase()).toBe("restarting");
   });
 
+  it("dismissRestore does nothing while restarting", async () => {
+    const store = await load();
+    tauriMock.invoke.mockResolvedValueOnce(ok({ status: "previewed", preview }));
+    await store.startRestore({ kind: "file" });
+    store.beginRestoreConfirm();
+    tauriMock.invoke.mockResolvedValueOnce(ok({ status: "restarting", safetyBackupId: "b" }));
+    await store.applyRestore("restore");
+    tauriMock.invoke.mockClear();
+    await store.dismissRestore();
+    expect(tauriMock.invoke).not.toHaveBeenCalled();
+    expect(store.backup.restore.phase()).toBe("restarting");
+    expect(store.backup.restore.preview()?.stagingId).toBe("stg-web-1");
+  });
+
+  it("startRestore discards an already-staged preview before starting another", async () => {
+    const store = await load();
+    tauriMock.invoke.mockResolvedValueOnce(ok({ status: "previewed", preview }));
+    await store.startRestore({ kind: "file" });
+    tauriMock.invoke
+      .mockResolvedValueOnce(ok({ discarded: true }))
+      .mockResolvedValueOnce(ok({ status: "previewed", preview: { ...preview, stagingId: "stg-2" } }));
+    await store.startRestore({ kind: "file" });
+    expect(tauriMock.invoke.mock.calls[1][0]).toBe("discard_restore_preview");
+    expect(tauriMock.invoke.mock.calls[1][1]).toMatchObject({ stagingId: "stg-web-1" });
+    expect(tauriMock.invoke.mock.calls[2][0]).toBe("preview_restore");
+    expect(store.backup.restore.preview()?.stagingId).toBe("stg-2");
+  });
+
+  it("discards a dialog result that arrives after leaving the panel", async () => {
+    const store = await load();
+    let finish: (value: unknown) => void = () => {};
+    tauriMock.invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const started = store.startRestore({ kind: "file" });
+    await store.leaveRestorePanel();
+    expect(store.backup.restore.phase()).toBe("idle");
+    tauriMock.invoke.mockResolvedValueOnce(ok({ discarded: true }));
+    finish(ok({ status: "previewed", preview }));
+    const result = await started;
+    expect(result.status).not.toBe("previewed");
+    expect(store.backup.restore.phase()).toBe("idle");
+    expect(store.backup.restore.preview()).toBeNull();
+    expect(tauriMock.invoke).toHaveBeenLastCalledWith("discard_restore_preview", { contractVersion: 1, stagingId: "stg-web-1" });
+  });
+
+  it("startRestore returns what the phase says", async () => {
+    const store = await load();
+    tauriMock.invoke.mockRejectedValueOnce(failure("BACKUP_INVALID"));
+    const failed = await store.startRestore({ kind: "file" });
+    expect(store.backup.restore.phase()).toBe("failed");
+    expect(failed.status).toBe("failed");
+    await store.dismissRestore();
+    tauriMock.invoke.mockResolvedValueOnce(ok({ status: "cancelled" }));
+    expect((await store.startRestore({ kind: "file" })).status).toBe("cancelled");
+    expect(store.backup.restore.phase()).toBe("cancelled");
+  });
+
   it("reuses the operationId on one transport retry", async () => {
     const store = await load();
     tauriMock.invoke.mockResolvedValueOnce(ok({ status: "previewed", preview }));
