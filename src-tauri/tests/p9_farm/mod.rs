@@ -369,14 +369,17 @@ impl Farm {
             )
             .unwrap();
             // The telemetry cache: excluded from a backup (D5), so the
-            // corpus header seeded here must not survive into the copy.
+            // corpus header seeded here must not survive into the copy. A
+            // well-formed snapshot (the header as its job name), so
+            // hydrating it logs no `cacheHydrateFailed` warning.
             tx.execute(
                 "INSERT INTO printer_status_snapshots(printer_id, telemetry_json,
                    last_observed_at, persisted_at)
                  VALUES (?1, ?2, ?3, ?3)",
                 params![
                     ids::PRINTER_A,
-                    serde_json::json!({ "note": secrets::HEADER_LINE }).to_string(),
+                    serde_json::json!({ "hostActivity": "idle", "jobName": secrets::HEADER_LINE })
+                        .to_string(),
                     NOW
                 ],
             )

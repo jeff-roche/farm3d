@@ -352,6 +352,11 @@ fn no_backup_forbidden_secret_reaches_the_archive_its_entries_or_the_copys_free_
     let live = farm.paths().database();
     assert!(p9_farm::file_contains(live, secrets::HEADER_LINE));
     assert!(p9_farm::file_contains(live, secrets::USERINFO_URL));
+    // The seeded cache row is a well-formed snapshot, so hydrating it logs
+    // no `cacheHydrateFailed` noise.
+    farm3d_lib::connections::status_repository::StatusRepository::new(Arc::clone(&farm.storage))
+        .list()
+        .expect("the seeded telemetry cache decodes");
     let store = secrets::find_any(
         secrets::BACKUP_FORBIDDEN,
         &fs::read(farm3d_lib::connections::credentials::credentials_file_path(
