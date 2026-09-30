@@ -1270,7 +1270,7 @@ matrix. Its reads run in one deferred read transaction.**
 | `jobCorrectionEvent` | a non-NULL `jobs.correction_event_id` names a `spool_amount_events` row of the Job's Spool | violation |
 | `amountEventReservation` | a non-NULL `spool_amount_events.reservation_id` names a `spool_reservations` row | violation |
 | `reservationHolder` | `spool_reservations.holder_kind` is `job` and `holder_id` names a Job | violation |
-| `attentionSource` | `attention_events(source_kind, source_id)` names a row of `printers`, `jobs`, `reconciliation_requirements`, or `spools`; a Printer source may be missing only when the Event is resolved `sourceRemoved` | violation |
+| `attentionSource` | `attention_events(source_kind, source_id)` names a row of `printers`, `jobs`, `reconciliation_requirements`, or `spools`; a Printer source may be missing only when the Event is resolved (Printer delete resolves open Events `sourceRemoved`; one resolved earlier keeps its resolution; Task 11) | violation |
 | `completionEvidence` | a `job.completed` Event whose `evidence_json` has `status: "captured"` names a `camera_snapshots` row | violation |
 | `hostOperationGcode` | an unresolved (`dispatching`, `uncertain`, `reconciling`) `upload` or `start` Host Operation's `gcode_sha256` has a `content_blobs` row | violation |
 | `blobFile` | every `content_blobs` row has `blobs/sha256/<hh>/<hex>` with its `size_bytes` length (roots only) | violation |

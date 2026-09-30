@@ -277,8 +277,9 @@ fn reservation_holder(connection: &Connection) -> Result<Option<IntegrityFinding
 }
 
 /// Rule `attentionSource`: an Attention Event's source row exists; a
-/// Printer source may be missing only when the Event resolved
-/// `sourceRemoved`.
+/// Printer source may be missing only when the Event is resolved. Printer
+/// delete resolves the Printer's open Events `sourceRemoved` (P8 D8); one
+/// resolved before the delete keeps its own resolution.
 fn attention_source(connection: &Connection) -> Result<Option<IntegrityFinding>, StorageError> {
     from_query(
         connection,
@@ -286,7 +287,7 @@ fn attention_source(connection: &Connection) -> Result<Option<IntegrityFinding>,
         "SELECT a.id FROM attention_events a
           WHERE NOT CASE a.source_kind
             WHEN 'printer' THEN EXISTS (SELECT 1 FROM printers p WHERE p.id = a.source_id)
-                                OR COALESCE(a.resolution, '') = 'sourceRemoved'
+                                OR a.resolved_at IS NOT NULL
             WHEN 'job' THEN EXISTS (SELECT 1 FROM jobs j WHERE j.id = a.source_id)
             WHEN 'reconciliationRequirement'
               THEN EXISTS (SELECT 1 FROM reconciliation_requirements r WHERE r.id = a.source_id)

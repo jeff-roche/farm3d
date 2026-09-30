@@ -244,6 +244,22 @@ fn attention_source_tolerates_a_missing_printer_when_resolved_source_removed() {
     assert_clean(&run(&farm));
 }
 
+/// Printer delete resolves only the Printer's *open* Events
+/// `sourceRemoved` (P8 D8); one resolved earlier keeps its resolution and
+/// loses only `printer_id`. Its missing source is history, not a dangling
+/// reference (Task 11's matrix: deleting Printer B with a resolved
+/// `printer.connectionError`).
+#[test]
+fn attention_source_tolerates_a_missing_printer_for_an_event_resolved_before_the_delete() {
+    let farm = farm();
+    seed_printer_event(&farm.connection, "att-gone", "prn-gone", true);
+    exec(
+        &farm.connection,
+        "UPDATE attention_events SET resolution = 'conditionCleared' WHERE id = 'att-gone';",
+    );
+    assert_clean(&run(&farm));
+}
+
 #[test]
 fn attention_source_fires_for_a_job_source_with_no_job_row() {
     // Without the foreign key a Job source can dangle too (a restore that
