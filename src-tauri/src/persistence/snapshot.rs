@@ -309,9 +309,11 @@ fn retain_newest_snapshots(
 }
 
 /// P9 D14: every accepted pre-import snapshot in `root` (a regular file
-/// named `.farm3d-pre-import-*.sqlite3`), oldest first. A name whose
-/// timestamp can't be read sorts first, so it is never taken for the
-/// newest.
+/// named `.farm3d-pre-import-*.sqlite3` with a readable timestamp that
+/// opens as a valid database), oldest first. Like
+/// `retain_newest_snapshots`, a damaged file is not counted: it can't be
+/// a restore source, so cleanup neither keeps it as "the newest" nor
+/// deletes it.
 pub fn accepted_snapshots(root: &Path) -> Vec<PathBuf> {
     let mut snapshots: Vec<(u128, PathBuf)> = fs::read_dir(root)
         .into_iter()
@@ -326,7 +328,8 @@ pub fn accepted_snapshots(root: &Path) -> Vec<PathBuf> {
                     name.starts_with(SNAPSHOT_PREFIX) && name.ends_with(".sqlite3")
                 })
         })
-        .map(|path| (snapshot_timestamp(&path).unwrap_or(0), path))
+        .filter_map(|path| Some((snapshot_timestamp(&path)?, path)))
+        .filter(|(_, path)| validate_database(path).is_ok())
         .collect();
     snapshots.sort_unstable();
     snapshots.into_iter().map(|(_, path)| path).collect()

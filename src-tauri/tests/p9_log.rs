@@ -78,6 +78,7 @@ fn exactly_the_documented_types_are_log_safe() {
     assert!(is_log_safe!(StatusCacheWarningOperation));
     assert!(is_log_safe!(farm3d_lib::backup::InstallerStep));
     assert!(is_log_safe!(farm3d_lib::diagnostics::bundle::DiagnosticsSection));
+    assert!(is_log_safe!(farm3d_lib::diagnostics::storage::StorageCleanupTarget));
     assert!(is_log_safe!(StorageError));
     assert!(is_log_safe!(RepositoryError));
     assert!(is_log_safe!(u8) && is_log_safe!(u16) && is_log_safe!(u32) && is_log_safe!(u64));
@@ -87,7 +88,7 @@ fn exactly_the_documented_types_are_log_safe() {
     assert!(is_log_safe!(chrono::DateTime<chrono::Utc>));
     assert_eq!(
         LOG_SAFE_IMPLEMENTORS.len(),
-        22,
+        23,
         "update this list with the impls"
     );
 }

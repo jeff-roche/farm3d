@@ -182,6 +182,17 @@ fn names_in(directory: &Path) -> Vec<String> {
     names
 }
 
+/// The bytes of a real, valid pre-import snapshot database.
+fn valid_snapshot_bytes(farm: &Farm) -> Vec<u8> {
+    let snapshot = farm
+        .storage
+        .create_snapshot(farm3d_lib::persistence::SnapshotKind::Settings)
+        .unwrap();
+    let bytes = fs::read(snapshot.path()).unwrap();
+    fs::remove_file(snapshot.path()).unwrap();
+    bytes
+}
+
 /// Rows and files for every class: an unreferenced blob row, a pending
 /// blob, a slicer log, a safety backup, three pre-import snapshots, the
 /// log files, and an Orca cache.
@@ -217,12 +228,13 @@ fn stocked_farm() -> (Farm, Rig) {
         &paths.backup_root().join("safety/sfb-two.farm3d-backup"),
         &[2; 150],
     );
-    for (timestamp, length) in [(100, 40), (200, 50), (300, 60)] {
+    let valid = valid_snapshot_bytes(&farm);
+    for timestamp in [100, 200, 300] {
         write_file(
             &paths
                 .snapshot_root()
                 .join(snapshot_name(timestamp, &format!("t{timestamp}"))),
-            &vec![9; length],
+            &valid,
         );
     }
     write_file(&paths.log_root().join("farm3d.log"), &[b'a'; 500]);
@@ -327,7 +339,8 @@ fn usage_reports_every_class_in_order_and_equals_the_bytes_on_disk() {
     );
 
     assert_eq!(class(&usage, "safetyBackups"), (450, 2));
-    assert_eq!(class(&usage, "preImportSnapshots"), (150, 3));
+    let snapshot_len = valid_snapshot_bytes(&farm).len() as u64;
+    assert_eq!(class(&usage, "preImportSnapshots"), (3 * snapshot_len, 3));
     assert_eq!(class(&usage, "logs"), (1500, 5));
     assert_eq!(class(&usage, "slicerProfileCache"), (100, 2));
 
@@ -403,19 +416,51 @@ fn clearing_pre_import_snapshots_keeps_the_newest_one() {
     write_file(&root.join("notes.txt"), b"keep");
     let result = rig.clear("op-snapshots", "preImportSnapshots").unwrap();
     assert_eq!(result["removedCount"], 2);
-    assert_eq!(result["freedBytes"], 40 + 50);
+    let snapshot_len = valid_snapshot_bytes(&farm).len() as u64;
+    assert_eq!(result["freedBytes"].as_u64().unwrap(), 2 * snapshot_len);
     assert_eq!(
         names_in(&root)
             .into_iter()
-            .filter(|name| name != "legacy" && name != ".restore-staging")
+            .filter(|name| name.ends_with(".sqlite3") || name == "notes.txt")
             .collect::<Vec<_>>(),
         vec![snapshot_name(300, "t300"), "notes.txt".to_string()]
     );
-    assert_eq!(class(&result["usage"], "preImportSnapshots"), (60, 1));
+    assert_eq!(
+        class(&result["usage"], "preImportSnapshots"),
+        (snapshot_len, 1)
+    );
     // Nothing more to remove.
     let again = rig.clear("op-snapshots-2", "preImportSnapshots").unwrap();
     assert_eq!(again["removedCount"], 0);
     assert_eq!(again["freedBytes"], 0);
+    assert_integrity_clean(&farm);
+}
+
+#[test]
+fn a_damaged_newest_snapshot_is_not_taken_for_the_newest_valid_one() {
+    let (farm, rig) = stocked_farm();
+    let root = farm.paths().snapshot_root().to_path_buf();
+    // Newer than every valid snapshot, but truncated; and one whose name
+    // has no readable timestamp. Neither is a restore source.
+    write_file(&root.join(snapshot_name(400, "t400")), b"truncated");
+    write_file(
+        &root.join(".farm3d-pre-import-settings-nope.sqlite3"),
+        b"unnamed",
+    );
+    let result = rig.clear("op-damaged", "preImportSnapshots").unwrap();
+    assert_eq!(result["removedCount"], 2);
+    let kept: Vec<String> = names_in(&root)
+        .into_iter()
+        .filter(|name| name.starts_with(".farm3d-pre-import-") && name.ends_with(".sqlite3"))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            snapshot_name(300, "t300"),
+            snapshot_name(400, "t400"),
+            ".farm3d-pre-import-settings-nope.sqlite3".to_string(),
+        ]
+    );
     assert_integrity_clean(&farm);
 }
 

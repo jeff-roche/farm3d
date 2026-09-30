@@ -379,6 +379,7 @@ pub fn clear(
             crate::f3d_log!(
                 info,
                 "storage.contentCleared",
+                target = target,
                 released = done.released as u64,
                 orphans = done.orphans_removed as u64,
                 failed = done.orphans_failed as u64,
@@ -389,10 +390,25 @@ pub fn clear(
             }
         }
         StorageCleanupTarget::PreImportSnapshots => {
+            // Only usable snapshots count, as in F1's retention: the newest
+            // valid one stays, and a damaged file (which can't be a restore
+            // source) is left alone, never taken for the newest.
             let mut snapshots = accepted_snapshots(paths.snapshot_root());
             // The newest one stays.
             snapshots.pop();
-            remove_files(&snapshots)
+            let cleared = remove_files(&snapshots);
+            // Opening a snapshot to validate it can leave WAL sidecars;
+            // they go with their database (not counted).
+            for path in &snapshots {
+                if file_len(path).is_none() {
+                    for suffix in ["-wal", "-shm"] {
+                        let mut name = path.file_name().unwrap_or_default().to_os_string();
+                        name.push(suffix);
+                        let _ = fs::remove_file(path.with_file_name(name));
+                    }
+                }
+            }
+            cleared
         }
         StorageCleanupTarget::RotatedLogs => {
             let rotated: Vec<_> = (1..MAX_FILES)
@@ -430,6 +446,7 @@ pub fn clear(
     crate::f3d_log!(
         info,
         "storage.cleared",
+        target = target,
         removed = cleared.removed_count,
         freed = cleared.freed_bytes,
     );
