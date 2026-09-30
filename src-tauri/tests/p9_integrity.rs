@@ -231,7 +231,7 @@ fn reservation_holder_is_quiet_for_a_job_holder() {
 }
 
 #[test]
-fn attention_source_fires_on_a_missing_printer_unless_resolved_source_removed() {
+fn attention_source_fires_on_a_missing_printer_for_an_open_event() {
     let farm = farm();
     seed_printer_event(&farm.connection, "att-gone", "prn-gone", false);
     assert_only(&run(&farm), IntegrityRule::AttentionSource, V, 1);

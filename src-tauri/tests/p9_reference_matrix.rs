@@ -41,7 +41,7 @@ use farm3d_lib::connections::credentials::CredentialStore;
 use farm3d_lib::connections::{ConnectionConfig, PrinterConnection};
 use farm3d_lib::contracts::command::CommandError;
 use farm3d_lib::persistence::integrity::{self, IntegrityRoots, IntegrityRule};
-use farm3d_lib::persistence::{RepositoryError, SnapshotKind, Storage};
+use farm3d_lib::persistence::{RepositoryError, SnapshotKind, Storage, StoragePaths};
 use farm3d_lib::printers::repository::PrinterRepository;
 use farm3d_lib::RuntimeServices;
 
@@ -550,10 +550,10 @@ struct Row {
     tolerated: &'static [(IntegrityRule, &'static [&'static str])],
     /// The row's own effect, checked on the Farm afterwards (proof the
     /// action did what the row names).
-    effect: fn(&Connection, &Site),
+    effect: fn(&Connection, &Site, &Value),
 }
 
-fn nothing(_: &Connection, _: &Site) {}
+fn nothing(_: &Connection, _: &Site, _: &Value) {}
 
 fn one<T: rusqlite::types::FromSql>(connection: &Connection, statement: &str) -> T {
     connection
@@ -566,6 +566,21 @@ fn exists(connection: &Connection, table: &str, id: &str) -> bool {
         connection,
         &format!("SELECT count(*) FROM {table} WHERE id = '{id}'"),
     ) == 1
+}
+
+/// The pre-import settings snapshot databases (not their `-wal`/`-shm`).
+fn pre_import_snapshots(paths: &StoragePaths) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(paths.snapshot_root()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.starts_with(".farm3d-pre-import-settings-") && name.ends_with(".sqlite3")
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 fn blob_file(site: &Site, sha256: &str) -> PathBuf {
@@ -649,7 +664,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(one::<Option<String>>(
                     connection,
                     &format!(
@@ -682,7 +697,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -721,7 +736,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[(SliceTargetPrinter, &[ids::SLICE_REVISION_FARM3D])],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 printer_deleted(connection, ids::PRINTER_ARCHIVED);
                 assert!(exists(connection, "spools", ids::SPOOL_ARCHIVED));
             },
@@ -742,7 +757,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 printer_deleted(connection, ids::PRINTER_B);
                 // The Event resolved before the delete keeps its resolution.
                 assert_eq!(
@@ -772,6 +787,23 @@ fn rows() -> Vec<Row> {
                     ids::HOST_OPERATION_FAILED
                 ));
             },
+        },
+        Row {
+            name: "printer delete, blocked (an open Queue Entry is pinned to it)",
+            act: |farm| {
+                live(
+                    farm,
+                    None,
+                    |farm, rig| {
+                        archive(rig, farm, ids::PRINTER_B, b_dispositions(farm))
+                            .expect("archive Printer B");
+                    },
+                    |farm, rig| delete_printer(rig, farm, ids::PRINTER_B),
+                )
+            },
+            expect: Expect::Blocked(&["QUEUE_ENTRY_PINNED"]),
+            tolerated: &[],
+            effect: nothing,
         },
         Row {
             name: "printer delete, blocked (active, with history)",
@@ -834,7 +866,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -867,7 +899,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -901,7 +933,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 // Soft-removed: the row stays for the movement history.
                 assert!(one::<Option<String>>(
                     connection,
@@ -957,7 +989,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -984,7 +1016,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1022,7 +1054,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1047,7 +1079,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1080,7 +1112,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(!exists(connection, "spool_tares", ids::TARE));
                 assert_eq!(
                     one::<Option<String>>(
@@ -1115,7 +1147,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(!exists(connection, "library_projects", ids::PROJECT));
                 assert_eq!(
                     one::<i64>(connection, "SELECT count(*) FROM project_models"),
@@ -1136,7 +1168,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site| {
+            effect: |connection, site, _| {
                 assert!(!exists(connection, "library_models", ids::MODEL_3MF));
                 assert_eq!(
                     one::<i64>(
@@ -1165,7 +1197,7 @@ fn rows() -> Vec<Row> {
             },
         },
         Row {
-            name: "model delete, blocked (Slice Revisions and a Preparation)",
+            name: "model delete, blocked (its Slice Revisions)",
             act: |farm| {
                 live(
                     farm,
@@ -1174,7 +1206,7 @@ fn rows() -> Vec<Row> {
                     |farm, rig| delete_model(rig, farm, ids::MODEL_GCODE),
                 )
             },
-            expect: Expect::Refused("LIFECYCLE_BLOCKED"),
+            expect: Expect::Blocked(&["SLICE_REVISIONS_EXIST"]),
             tolerated: &[],
             effect: nothing,
         },
@@ -1188,7 +1220,7 @@ fn rows() -> Vec<Row> {
                     |farm, rig| delete_model(rig, farm, ids::MODEL_LINKED),
                 )
             },
-            expect: Expect::Refused("LIFECYCLE_BLOCKED"),
+            expect: Expect::Blocked(&["SLICE_REVISIONS_EXIST"]),
             tolerated: &[],
             effect: nothing,
         },
@@ -1212,7 +1244,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(!exists(connection, "slice_preparations", ids::PREPARATION));
             },
         },
@@ -1229,7 +1261,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(!exists(
                     connection,
                     "slice_revisions",
@@ -1259,7 +1291,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(!exists(
                     connection,
                     "slice_revisions",
@@ -1278,7 +1310,7 @@ fn rows() -> Vec<Row> {
             },
         },
         Row {
-            name: "slice revision delete, blocked (Queue Entries, Jobs, Host Operations)",
+            name: "slice revision delete, blocked (Queue Entries and Jobs)",
             act: |farm| {
                 live(
                     farm,
@@ -1287,7 +1319,7 @@ fn rows() -> Vec<Row> {
                     |_, rig| delete_slice_revision(rig, ids::SLICE_REVISION),
                 )
             },
-            expect: Expect::Refused("LIFECYCLE_BLOCKED"),
+            expect: Expect::Blocked(&["QUEUE_REFERENCES_REVISION"]),
             tolerated: &[],
             effect: nothing,
         },
@@ -1304,7 +1336,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1329,7 +1361,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<String>(
                         connection,
@@ -1369,7 +1401,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site| {
+            effect: |connection, site, _| {
                 for id in [ids::SNAPSHOT_INCIDENT, ids::SNAPSHOT_MANUAL] {
                     assert_eq!(
                         one::<Option<String>>(
@@ -1409,7 +1441,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(one::<Option<String>>(
                     connection,
                     &format!(
@@ -1432,7 +1464,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -1470,7 +1502,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site| {
+            effect: |connection, site, _| {
                 assert_eq!(
                     one::<Option<String>>(
                         connection,
@@ -1502,7 +1534,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, site| {
+            effect: |connection, site, _| {
                 assert_eq!(
                     one::<i64>(connection, "SELECT count(*) FROM pending_blob_cleanup"),
                     0
@@ -1517,18 +1549,34 @@ fn rows() -> Vec<Row> {
                     farm,
                     None,
                     |farm, _| {
+                        // Two, a few milliseconds apart, so the newer one's
+                        // name (which leads with its time) sorts last.
                         for _ in 0..2 {
                             farm.storage
                                 .create_snapshot(SnapshotKind::Settings)
                                 .unwrap();
+                            std::thread::sleep(Duration::from_millis(5));
                         }
+                        assert_eq!(pre_import_snapshots(farm.paths()).len(), 2);
                     },
-                    |_, rig| clear(rig, "preImportSnapshots"),
+                    |farm, rig| {
+                        let newest = pre_import_snapshots(farm.paths()).pop().unwrap();
+                        clear(rig, "preImportSnapshots").map(|mut outcome| {
+                            outcome["newest"] = json!(newest);
+                            outcome
+                        })
+                    },
                 )
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: nothing,
+            effect: |_, site, result| {
+                assert_eq!(result["removedCount"], 1, "{result}");
+                // The newest valid snapshot stays.
+                let left = pre_import_snapshots(site.storage.paths());
+                assert_eq!(left.len(), 1, "{left:?}");
+                assert_eq!(result["newest"], left[0].as_str(), "the newest stays");
+            },
         },
         Row {
             name: "clear storage: rotated logs",
@@ -1547,7 +1595,15 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: nothing,
+            effect: |_, site, result| {
+                assert_eq!(result["removedCount"], 1, "{result}");
+                let logs = site.storage.paths().log_root();
+                assert!(
+                    !logs.join("farm3d.1.log").exists(),
+                    "the rotated log is gone"
+                );
+                assert!(logs.join("farm3d.log").is_file(), "the active log stays");
+            },
         },
         Row {
             name: "clear storage: OrcaSlicer profile cache",
@@ -1560,12 +1616,24 @@ fn rows() -> Vec<Row> {
                         fs::create_dir_all(&cache).unwrap();
                         fs::write(cache.join("profile.json"), b"{}").unwrap();
                     },
-                    |_, rig| clear(rig, "orcaCache"),
+                    |_, rig| {
+                        let cache = rig.services.slicing.cache_dir().join("orca-profiles");
+                        clear(rig, "orcaCache").map(|mut outcome| {
+                            // The cache lives outside the Farm's roots; report
+                            // whether it survived for the effect check.
+                            outcome["cacheLeft"] = json!(cache.exists());
+                            outcome
+                        })
+                    },
                 )
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: nothing,
+            effect: |_, _, result| {
+                assert_eq!(result["removedCount"], 1, "{result}");
+                assert_eq!(result["freedBytes"], 2, "{result}");
+                assert_eq!(result["cacheLeft"], false, "the cache is gone");
+            },
         },
         // --- Resets -----------------------------------------------------------------
         Row {
@@ -1574,7 +1642,13 @@ fn rows() -> Vec<Row> {
                 live(
                     farm,
                     None,
-                    |_, _| {},
+                    |farm, _| {
+                        sql(
+                            farm,
+                            "UPDATE settings SET revision = revision + 1,
+                                    theme_mode = 'farm3d-dark', snapshot_retention_days = 7;",
+                        );
+                    },
                     |farm, rig| {
                         let revision: i64 = farm
                             .storage
@@ -1592,7 +1666,41 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: nothing,
+            effect: |connection, _, _| {
+                // The settings are the defaults again.
+                assert_eq!(
+                    one::<String>(connection, "SELECT theme_mode FROM settings"),
+                    "system"
+                );
+                assert_eq!(
+                    one::<i64>(connection, "SELECT snapshot_retention_days FROM settings"),
+                    30
+                );
+                // Tier (a) leaves the Slicer runtime and alert defaults alone.
+                assert!(one::<Option<String>>(
+                    connection,
+                    "SELECT engine_path FROM slicer_runtime_config"
+                )
+                .is_some());
+                assert_eq!(
+                    connection
+                        .query_row(
+                            &format!(
+                                "SELECT offline_after_minutes, notifications
+                                   FROM printer_alert_defaults WHERE printer_id = '{}'",
+                                ids::PRINTER_B
+                            ),
+                            [],
+                            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                        )
+                        .unwrap(),
+                    (5, "follow".to_string())
+                );
+                assert_eq!(
+                    one::<i64>(connection, "SELECT count(*) FROM printer_alert_defaults"),
+                    2
+                );
+            },
         },
         Row {
             name: "reset (b): camera media, unpinned",
@@ -1612,7 +1720,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -1645,7 +1753,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert_eq!(
                     one::<i64>(
                         connection,
@@ -1681,7 +1789,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 for table in [
                     "printers",
                     "spools",
@@ -1747,7 +1855,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 for (table, count) in [
                     ("printers", 3),
                     ("jobs", 3),
@@ -1802,7 +1910,7 @@ fn rows() -> Vec<Row> {
             },
             expect: Expect::Ok,
             tolerated: &[(SliceTargetPrinter, &[ids::SLICE_REVISION_FARM3D])],
-            effect: |connection, _| {
+            effect: |connection, _, _| {
                 assert!(exists(connection, "library_projects", "prj-remote"));
                 assert!(!exists(connection, "library_projects", "prj-local"));
                 assert!(!exists(connection, "printers", ids::PRINTER_ARCHIVED));
@@ -1879,7 +1987,11 @@ fn check_row(row: &Row, done: &Done) {
         .collect();
     assert_eq!(tolerated, expected, "{name}: tolerated findings");
 
-    (row.effect)(&connection, &done.site);
+    (row.effect)(
+        &connection,
+        &done.site,
+        done.result.as_ref().unwrap_or(&Value::Null),
+    );
 
     // Decision 20: the named allowed loss, and no other.
     let after = movements(&connection);
@@ -1914,6 +2026,13 @@ fn no_archive_delete_prune_cleanup_reset_or_restore_leaves_a_dangling_reference(
             continue;
         }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if matches!(row.expect, Expect::Ok) {
+                assert!(
+                    row.effect as usize != nothing as usize,
+                    "{}: a success row checks its own effect",
+                    row.name
+                );
+            }
             let done = (row.act)(Farm::with_every_domain());
             check_row(&row, &done);
         }));
