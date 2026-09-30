@@ -362,10 +362,17 @@ pub fn parse(bytes: &[u8]) -> Result<RestoreJournal, JournalError> {
 }
 
 /// Writes `journal` atomically: a temporary file, `fsync`, rename over
-/// `journal.json`, `fsync` the directory.
+/// `journal.json`, `fsync` the directory. Creating `restore/` on the first
+/// write also syncs the metadata root, so the directory itself is durable.
 pub fn write(paths: &StoragePaths, journal: &RestoreJournal) -> io::Result<()> {
-    let directory = create_contained_directory(paths.metadata_root(), Path::new(RESTORE_DIRECTORY))
-        .map_err(|_| io::Error::other("restore directory"))?;
+    write_reporting(paths, journal).map(|_| ())
+}
+
+/// [`write`], returning the parent directories it synced for a directory it
+/// created.
+fn write_reporting(paths: &StoragePaths, journal: &RestoreJournal) -> io::Result<Vec<PathBuf>> {
+    let (directory, synced) =
+        create_synced_dir(paths.metadata_root(), Path::new(RESTORE_DIRECTORY))?;
     let bytes = serde_json::to_vec_pretty(journal).map_err(io::Error::other)?;
     let temporary = directory.join(JOURNAL_TEMP_FILE);
     let _ = fs::remove_file(&temporary);
@@ -377,7 +384,61 @@ pub fn write(paths: &StoragePaths, journal: &RestoreJournal) -> io::Result<()> {
     file.sync_all()?;
     drop(file);
     fs::rename(&temporary, directory.join(JOURNAL_FILE))?;
-    sync_directory(&directory)
+    sync_directory(&directory)?;
+    Ok(synced)
+}
+
+/// Writes a new journal with `write` (production: [`write`]). A write that
+/// fails after its rename (on the directory `fsync`) has still left the
+/// journal the next start acts on, so an on-disk journal with the same id
+/// counts as written: the caller must not report a failure the next start
+/// contradicts.
+pub fn write_confirmed(
+    paths: &StoragePaths,
+    journal: &RestoreJournal,
+    write: impl FnOnce(&StoragePaths, &RestoreJournal) -> io::Result<()>,
+) -> io::Result<()> {
+    match write(paths, journal) {
+        Ok(()) => Ok(()),
+        Err(error) => match read(paths) {
+            Ok(Some(on_disk)) if on_disk.id == journal.id => Ok(()),
+            _ => Err(error),
+        },
+    }
+}
+
+/// Creates `base/relative` (contained, private), making each directory it
+/// creates durable with an `fsync` of its parent. Returns the directory
+/// and the parents it synced. I/O errors keep their kind (out of space
+/// stays `StorageFull`).
+pub(crate) fn create_synced_dir(
+    base: &Path,
+    relative: &Path,
+) -> io::Result<(PathBuf, Vec<PathBuf>)> {
+    let mut current = base.to_path_buf();
+    let mut synced = Vec::new();
+    for component in relative.components() {
+        let parent = current.clone();
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match fs::create_dir(&current) {
+                    Ok(()) => {
+                        sync_directory(&parent)?;
+                        synced.push(parent);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // The containment, symlink, and permission checks.
+    let directory = create_contained_directory(base, relative)
+        .map_err(|_| io::Error::other("contained directory"))?;
+    Ok((directory, synced))
 }
 
 /// Deletes the journal `journal_id`'s directory, then the journal file.
@@ -409,4 +470,50 @@ pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every directory created is made durable by an `fsync` of its parent;
+    /// one that already existed is not synced again.
+    #[test]
+    fn created_directories_sync_their_parents() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let (created, synced) = create_synced_dir(&base, Path::new("a/b/c")).unwrap();
+        assert_eq!(created, base.join("a/b/c"));
+        assert_eq!(synced, vec![base.clone(), base.join("a"), base.join("a/b")]);
+        let (_, synced) = create_synced_dir(&base, Path::new("a/b/d")).unwrap();
+        assert_eq!(synced, vec![base.join("a/b")]);
+        let (_, synced) = create_synced_dir(&base, Path::new("a/b/d")).unwrap();
+        assert!(synced.is_empty());
+    }
+
+    /// The journal's own directory is durable once the journal is written.
+    #[test]
+    fn the_first_journal_write_syncs_the_metadata_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = StoragePaths::new(temp.path().join("m"), temp.path().join("d")).unwrap();
+        let synced = write_reporting(&paths, &sample()).unwrap();
+        assert!(synced.contains(&paths.metadata_root().to_path_buf()));
+        let synced = write_reporting(&paths, &sample()).unwrap();
+        assert!(!synced.contains(&paths.metadata_root().to_path_buf()));
+    }
+
+    fn sample() -> RestoreJournal {
+        RestoreJournal::new_restore(
+            new_restore_id(),
+            "2026-09-29T12:00:00.000Z".to_string(),
+            "stg-00000000-0000-4000-8000-000000000000".to_string(),
+            "sfb-test".to_string(),
+            BTreeMap::new(),
+            Carry {
+                slicer_runtime: None,
+                pending_credential_cleanup: vec![],
+            },
+            vec![],
+        )
+    }
 }

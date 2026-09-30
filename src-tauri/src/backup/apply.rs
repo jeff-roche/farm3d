@@ -123,6 +123,18 @@ pub fn write_pending_journal(
     safety_backup_id: &str,
     now: DateTime<Utc>,
 ) -> Result<RestoreJournal, CommandError> {
+    write_pending_journal_with(storage, candidate, safety_backup_id, now, journal::write)
+}
+
+/// [`write_pending_journal`] with the journal write injected (tests fail
+/// it after its rename). See [`journal::write_confirmed`].
+pub fn write_pending_journal_with(
+    storage: &Storage,
+    candidate: &StagedCandidate,
+    safety_backup_id: &str,
+    now: DateTime<Utc>,
+    write: impl FnOnce(&StoragePaths, &RestoreJournal) -> std::io::Result<()>,
+) -> Result<RestoreJournal, CommandError> {
     let local = local_state(storage)?;
     let (candidate_refs, expected_counts) = candidate_facts(candidate)?;
     // A local row whose ref the restored Printers use again is dropped: an
@@ -150,7 +162,7 @@ pub fn write_pending_journal(
         orphans,
     );
     debug_assert_eq!(restore.phase, JournalPhase::Pending);
-    journal::write(storage.paths(), &restore)
+    journal::write_confirmed(storage.paths(), &restore, write)
         .map_err(|_| CommandError::persistence_unavailable())?;
     Ok(restore)
 }

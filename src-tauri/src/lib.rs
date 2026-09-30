@@ -520,6 +520,7 @@ pub fn startup_command_error(
         persistence::StorageError::PathCollision
         | persistence::StorageError::PersistenceUnavailable
         | persistence::StorageError::Filesystem
+        | persistence::StorageError::StorageFull
         | persistence::StorageError::OperationFailed => Ok(CommandError::persistence_unavailable()),
         // Startup only ever reads through storage (restoring persisted
         // Connections); this write-path variant cannot occur here.

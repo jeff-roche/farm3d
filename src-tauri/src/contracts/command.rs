@@ -2126,6 +2126,7 @@ impl CommandError {
             RepositoryError::Storage(StorageError::CorruptData { .. }) => Self::database_corrupt(),
             RepositoryError::Storage(StorageError::PersistenceUnavailable)
             | RepositoryError::Storage(StorageError::Filesystem)
+            | RepositoryError::Storage(StorageError::StorageFull)
             | RepositoryError::Storage(StorageError::Database) => Self::persistence_unavailable(),
             RepositoryError::Storage(_) => Self::internal(),
         }

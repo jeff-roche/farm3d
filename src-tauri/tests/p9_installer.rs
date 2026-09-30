@@ -728,6 +728,47 @@ fn the_journal_is_written_atomically_and_holds_no_credential_value() {
 }
 
 /// f22: the journal file is corrupt.
+/// A journal write that fails after its rename (on the directory `fsync`)
+/// has still left the `pending` journal the next start installs, so
+/// `apply_restore` must not report a failure: the on-disk journal with the
+/// same id counts as written. A failure before the rename leaves no
+/// journal and is reported.
+#[test]
+fn a_journal_write_that_fails_after_its_rename_counts_as_written() {
+    let remote = remote_farm();
+    let archive = write_archive(&remote, BackupMediaChoice::All);
+    let local = local_farm();
+    let candidate = stage(local.paths(), &archive);
+    let written = apply::write_pending_journal_with(
+        &local.storage,
+        &candidate,
+        "sfb-test",
+        created_at(),
+        |paths, pending| {
+            journal::write(paths, pending)?;
+            Err(std::io::Error::other("the directory fsync failed"))
+        },
+    )
+    .expect("the journal on disk is the one written");
+    assert_eq!(journal::read(local.paths()).unwrap(), Some(written));
+
+    let path = journal::journal_path(local.paths());
+    fs::remove_file(&path).unwrap();
+    let error = apply::write_pending_journal_with(
+        &local.storage,
+        &candidate,
+        "sfb-test",
+        created_at(),
+        |_, _| Err(std::io::Error::from(std::io::ErrorKind::StorageFull)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(error).unwrap()["code"],
+        "PERSISTENCE_UNAVAILABLE"
+    );
+    assert!(!path.exists());
+}
+
 #[test]
 fn f22_a_corrupt_journal_stops_startup_and_touches_nothing() {
     let site = site();

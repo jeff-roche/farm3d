@@ -105,9 +105,17 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StorageError> {
     if has_foreign_key_violation(&transaction).map_err(|_| StorageError::MigrationFailed)? {
         return Err(StorageError::MigrationFailed);
     }
-    transaction
-        .commit()
-        .map_err(|_| StorageError::MigrationFailed)
+    transaction.commit().map_err(migration_failed)
+}
+
+/// A failed migration statement is `MigrationFailed`, except that running
+/// out of disk space stays `StorageFull` (P9 D8: the restore installer
+/// retries it rather than calling the database invalid).
+fn migration_failed(error: rusqlite::Error) -> StorageError {
+    match StorageError::from(error) {
+        StorageError::StorageFull => StorageError::StorageFull,
+        _ => StorageError::MigrationFailed,
+    }
 }
 
 /// Runs one migration's SQL, its optional Rust post-step, and records it in
@@ -119,9 +127,12 @@ fn apply_migration_step(
 ) -> Result<(), StorageError> {
     transaction
         .execute_batch(migration.sql)
-        .map_err(|_| StorageError::MigrationFailed)?;
+        .map_err(migration_failed)?;
     if let Some(post) = migration.post {
-        post(transaction).map_err(|_| StorageError::MigrationFailed)?;
+        post(transaction).map_err(|error| match error {
+            StorageError::StorageFull => StorageError::StorageFull,
+            _ => StorageError::MigrationFailed,
+        })?;
     }
     transaction
         .execute(
@@ -133,10 +144,10 @@ fn apply_migration_step(
                 migration_checksum(migration),
             ),
         )
-        .map_err(|_| StorageError::MigrationFailed)?;
+        .map_err(migration_failed)?;
     transaction
         .execute_batch(&format!("PRAGMA user_version = {}", migration.version))
-        .map_err(|_| StorageError::MigrationFailed)
+        .map_err(migration_failed)
 }
 
 /// Applies migrations up to (and including) `max_version`, adding whichever

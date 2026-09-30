@@ -30,7 +30,6 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
@@ -38,7 +37,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use super::inventory::{hash_file, table_counts};
 use super::journal::{
-    self, sync_directory, Failure, JournalPhase, Outcome, RestoreJournal, RollbackMarker, SwapMedia,
+    self, sync_directory, Failure, JournalPhase, Outcome, RestoreJournal, SwapMedia,
 };
 use super::manifest::{is_sha256_hex, Manifest};
 use super::staging::{self, StagingLayout};
@@ -47,9 +46,14 @@ use crate::connections::credentials::CredentialStore;
 use crate::contracts::command::{CommandError, ErrorCode};
 use crate::persistence::integrity::{self, IntegrityRoots};
 use crate::persistence::{
-    apply_migrations, create_contained_directory, has_foreign_key_violation, MetadataRootLease,
-    StorageError, StoragePaths,
+    apply_migrations, has_foreign_key_violation, MetadataRootLease, StorageError, StoragePaths,
 };
+
+mod fault;
+mod rollback;
+
+#[doc(hidden)]
+pub use fault::{Fault, FaultEffect, FaultPoint, Faults, RollbackPoint};
 
 /// The live database set, in the order it always moves.
 const DATABASE_FILES: [&str; 3] = ["farm3d.sqlite3", "farm3d.sqlite3-wal", "farm3d.sqlite3-shm"];
@@ -190,91 +194,6 @@ pub fn log_error(error: &InstallerError) {
     }
 }
 
-// --- faults (test-only) ----------------------------------------------------------------
-
-/// A point inside a rollback.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RollbackPoint {
-    /// `journal.rollback` is written; phase (a) hasn't started.
-    MarkerWritten,
-    /// Phase (a) is durable (`mediaRestored`).
-    MediaRestored,
-    /// Phase (b) is about to delete the candidate set.
-    BeforeClear,
-    /// Phase (b) is durable (`candidateCleared`).
-    CandidateCleared,
-    /// Phase (c) handled the first `n` of `farm3d.sqlite3`, `-wal`, `-shm`.
-    MovedBack(u8),
-}
-
-/// Where in a step a fault fires.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FaultPoint {
-    /// The step is recorded in the journal; nothing of it is done.
-    Start,
-    /// A named point inside the step: `moveDatabaseAside` 0 (the main file
-    /// moved), `placeCandidate` 0 (the `.partial` half-written),
-    /// `carryLocalState` 0 (before the commit), `extractContent` 0 (after
-    /// an attempt's first blob rename), `swapMedia` 0 (`liveExisted`
-    /// recorded) and 1 (between the renames), `validate` 0 (the database
-    /// open), `removePrevious` 0 (`previous/` deleted).
-    Within(u8),
-    /// The step is done; the next isn't recorded.
-    End,
-    /// Inside a rollback whose `from` is the fault's step.
-    Rollback(RollbackPoint),
-}
-
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FaultEffect {
-    /// The process dies: the run returns [`InstallerError::Crashed`] at
-    /// once, with nothing cleaned up.
-    Crash,
-    /// An I/O error of this kind, handled in-run.
-    Error(io::ErrorKind),
-}
-
-/// `installer::Fault { step, point }`: fires `times` times.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault {
-    pub step: InstallerStep,
-    pub point: FaultPoint,
-    pub effect: FaultEffect,
-    pub times: u32,
-}
-
-#[doc(hidden)]
-#[derive(Default)]
-pub struct Faults(Mutex<Vec<Fault>>);
-
-impl Faults {
-    pub fn new(faults: impl IntoIterator<Item = Fault>) -> Self {
-        Self(Mutex::new(faults.into_iter().collect()))
-    }
-
-    fn hit(&self, step: InstallerStep, point: FaultPoint) -> Result<(), StepError> {
-        let mut faults = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(fault) = faults
-            .iter_mut()
-            .find(|fault| fault.step == step && fault.point == point && fault.times > 0)
-        else {
-            return Ok(());
-        };
-        fault.times -= 1;
-        Err(match fault.effect {
-            FaultEffect::Crash => StepError::Crash,
-            FaultEffect::Error(kind) => StepError::Io(kind),
-        })
-    }
-}
-
 // --- the lease --------------------------------------------------------------------------
 
 /// Startup step 2: the metadata-root lease. While `restore/journal.json`
@@ -364,8 +283,45 @@ impl From<rusqlite::Error> for StepError {
 }
 
 impl From<StorageError> for StepError {
-    fn from(_: StorageError) -> Self {
-        StepError::Io(io::ErrorKind::Other)
+    fn from(error: StorageError) -> Self {
+        match error {
+            StorageError::StorageFull => StepError::Io(io::ErrorKind::StorageFull),
+            _ => StepError::Io(io::ErrorKind::Other),
+        }
+    }
+}
+
+/// `validate`'s reading of a SQLite error: running out of space or an I/O
+/// failure rolls back and retries (D8); anything else means the placed
+/// database is invalid (`BACKUP_INVALID`), which a retry can't fix.
+fn validate_error(error: rusqlite::Error) -> StepError {
+    use rusqlite::ErrorCode as Code;
+    match error.sqlite_error_code() {
+        Some(Code::DiskFull) => StepError::Io(io::ErrorKind::StorageFull),
+        Some(
+            Code::SystemIoFailure
+            | Code::CannotOpen
+            | Code::DatabaseBusy
+            | Code::DatabaseLocked
+            | Code::OutOfMemory
+            | Code::ReadOnly
+            | Code::FileLockingProtocolFailed
+            | Code::NoLargeFileSupport
+            | Code::OperationInterrupted,
+        ) => StepError::Io(io::ErrorKind::Other),
+        _ => database_invalid(),
+    }
+}
+
+/// [`validate_error`] for what the migrations and the integrity catalogue
+/// return.
+fn validate_storage_error(error: StorageError) -> StepError {
+    match error {
+        StorageError::StorageFull => StepError::Io(io::ErrorKind::StorageFull),
+        StorageError::Filesystem | StorageError::PersistenceUnavailable => {
+            StepError::Io(io::ErrorKind::Other)
+        }
+        _ => database_invalid(),
     }
 }
 
@@ -684,11 +640,11 @@ impl<'a> Restore<'a> {
     /// Step 3: Moves `farm3d.sqlite3`, `-wal`, and `-shm` (each only if present)
     /// into `restore/<id>/previous/`, in that order.
     fn move_database_aside(&mut self) -> Result<(), StepError> {
-        let previous = create_contained_directory(
+        // Each directory created here is made durable (its parent synced).
+        let (previous, _) = journal::create_synced_dir(
             self.paths.metadata_root(),
             &Path::new("restore").join(&self.journal.id).join("previous"),
         )?;
-        sync_directory(&journal::restore_root(self.paths))?;
         for (index, name) in DATABASE_FILES.iter().enumerate() {
             let live = self.root(name);
             if exists(&live) {
@@ -877,8 +833,9 @@ impl<'a> Restore<'a> {
                 Some((length, hash)) if length == bytes && hash == sha256 => {}
                 _ => return Err(checksum_mismatch()),
             }
-            let directory =
-                create_contained_directory(&content_root, &Path::new("blobs/sha256").join(prefix))?;
+            // A new prefix directory is made durable before the rename.
+            let (directory, _) =
+                journal::create_synced_dir(&content_root, &Path::new("blobs/sha256").join(prefix))?;
             fs::rename(&staged, &target)?;
             sync_directory(&directory)?;
             if renamed == 0 {
@@ -941,21 +898,19 @@ impl<'a> Restore<'a> {
     fn validate(&mut self) -> Result<(), StepError> {
         let mut connection = self.open_placed()?;
         self.fault(InstallerStep::Validate, FaultPoint::Within(0))?;
-        apply_migrations(&mut connection).map_err(|_| database_invalid())?;
+        apply_migrations(&mut connection).map_err(validate_storage_error)?;
         let check: String = connection
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(|_| database_invalid())?;
-        if check != "ok"
-            || has_foreign_key_violation(&connection).map_err(|_| database_invalid())?
-        {
+            .map_err(validate_error)?;
+        if check != "ok" || has_foreign_key_violation(&connection).map_err(validate_error)? {
             return Err(database_invalid());
         }
         let report = integrity::check(&connection, Some(&IntegrityRoots::from_paths(self.paths)))
-            .map_err(|_| database_invalid())?;
+            .map_err(validate_storage_error)?;
         if !report.violations().is_empty() {
             return Err(database_invalid());
         }
-        let counts = table_counts(&connection).map_err(|_| database_invalid())?;
+        let counts = table_counts(&connection).map_err(validate_error)?;
         let expected = self.journal.expected_counts.clone().unwrap_or_default();
         let tables: BTreeSet<&String> = counts.keys().chain(expected.keys()).collect();
         for table in tables {
@@ -967,9 +922,13 @@ impl<'a> Restore<'a> {
             }
         }
         let queued: BTreeSet<String> = connection
-            .prepare("SELECT credential_ref FROM pending_credential_cleanup")?
-            .query_map([], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
+            .prepare("SELECT credential_ref FROM pending_credential_cleanup")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<_>>()
+            })
+            .map_err(validate_error)?;
         let carry = self.journal.carry.as_ref();
         let carried = carry
             .into_iter()
@@ -989,7 +948,8 @@ impl<'a> Restore<'a> {
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
-                .optional()?;
+                .optional()
+                .map_err(validate_error)?;
             if paths
                 != Some((
                     slicer.engine_path.clone(),
@@ -1029,148 +989,80 @@ impl<'a> Restore<'a> {
         self.save()?;
         self.fault(InstallerStep::MarkDone, FaultPoint::End)
     }
+}
 
-    fn rollback_fault(&self, from: InstallerStep, point: RollbackPoint) -> Result<(), StepError> {
-        self.fault(from, FaultPoint::Rollback(point))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sqlite(code: std::os::raw::c_int) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
     }
 
-    fn save_marker(&mut self, marker: RollbackMarker) -> Result<(), StepError> {
-        self.journal.rollback = Some(marker);
-        self.save()
+    /// Out of space keeps its kind through `StorageError`, so a failed
+    /// directory create maps to `INSUFFICIENT_SPACE` after the last attempt.
+    #[test]
+    fn a_storage_error_keeps_out_of_space() {
+        let full = StorageError::from(io::Error::from(io::ErrorKind::StorageFull));
+        assert_eq!(
+            StepError::from(full),
+            StepError::Io(io::ErrorKind::StorageFull)
+        );
+        let full = StorageError::from(sqlite(rusqlite::ffi::SQLITE_FULL));
+        assert_eq!(
+            StepError::from(full),
+            StepError::Io(io::ErrorKind::StorageFull)
+        );
+        let other = StorageError::from(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert_eq!(StepError::from(other), StepError::Io(io::ErrorKind::Other));
     }
 
-    /// D8's two-phase rollback, resumable at the first phase not yet
-    /// marked done. `journal.step` is never changed here.
-    fn roll_back(&mut self, from: InstallerStep) -> Result<(), StepError> {
-        let mut marker = match self.journal.rollback {
-            Some(marker) => marker,
-            None => {
-                let marker = RollbackMarker {
-                    from,
-                    media_restored: false,
-                    candidate_cleared: false,
-                };
-                self.save_marker(marker)?;
-                marker
-            }
-        };
-        let from = marker.from;
-        self.rollback_fault(from, RollbackPoint::MarkerWritten)?;
-
-        // (a) Media.
-        if !marker.media_restored {
-            self.restore_media()?;
-            marker.media_restored = true;
-            self.journal.swap_media = None;
-            self.save_marker(marker)?;
-            self.rollback_fault(from, RollbackPoint::MediaRestored)?;
+    /// `validate`: an I/O error or `SQLITE_FULL` rolls back and retries; only
+    /// a database that is genuinely invalid is `BACKUP_INVALID`.
+    #[test]
+    fn validate_tells_io_from_an_invalid_database() {
+        use rusqlite::ffi;
+        assert_eq!(
+            validate_error(sqlite(ffi::SQLITE_FULL)),
+            StepError::Io(io::ErrorKind::StorageFull)
+        );
+        for code in [
+            ffi::SQLITE_IOERR,
+            ffi::SQLITE_CANTOPEN,
+            ffi::SQLITE_BUSY,
+            ffi::SQLITE_NOMEM,
+        ] {
+            assert!(
+                matches!(validate_error(sqlite(code)), StepError::Io(_)),
+                "{code}"
+            );
         }
-
-        // (b) Clear the candidate: from `placeCandidate` on, every original
-        // file is already in `previous/` (the step after `moveDatabaseAside`
-        // is recorded only once it completed), so what is in the root is
-        // the candidate. Before that, whatever is in the root is original.
-        if !marker.candidate_cleared {
-            self.rollback_fault(from, RollbackPoint::BeforeClear)?;
-            if from >= InstallerStep::PlaceCandidate {
-                for name in DATABASE_FILES
-                    .iter()
-                    .chain([ROLLBACK_JOURNAL_FILE, PARTIAL_FILE].iter())
-                {
-                    remove_file_if_present(&self.root(name))?;
-                }
-                sync_directory(self.paths.metadata_root())?;
-            }
-            marker.candidate_cleared = true;
-            self.save_marker(marker)?;
-            self.rollback_fault(from, RollbackPoint::CandidateCleared)?;
+        for code in [
+            ffi::SQLITE_CORRUPT,
+            ffi::SQLITE_NOTADB,
+            ffi::SQLITE_CONSTRAINT,
+            ffi::SQLITE_ERROR,
+        ] {
+            assert_eq!(validate_error(sqlite(code)), database_invalid(), "{code}");
         }
-
-        // (c) Move back, in order; a rename is atomic, so each file is in
-        // exactly one of the two places.
-        let previous = self.previous_dir();
-        for (index, name) in DATABASE_FILES.iter().enumerate() {
-            let aside = previous.join(name);
-            if exists(&aside) {
-                fs::rename(&aside, self.root(name))?;
-            }
-            self.rollback_fault(from, RollbackPoint::MovedBack(index as u8 + 1))?;
-        }
-        sync_directory(self.paths.metadata_root())?;
-        if previous.is_dir() {
-            sync_directory(&previous)?;
-        }
-        // Content: nothing. A blob the install added has no row, and P4's
-        // startup sweep removes it.
-        Ok(())
-    }
-
-    /// Rollback phase (a).
-    fn restore_media(&self) -> Result<(), StepError> {
-        let Some(swap) = self.journal.swap_media else {
-            // `swapMedia` never renamed anything.
-            return Ok(());
-        };
-        let live = self.paths.media_root().join(SNAPSHOTS);
-        let staged = self.layout.media_snapshots_dir();
-        let previous = self.layout.media_dir.join(PREVIOUS_SNAPSHOTS);
-        if swap.live_existed {
-            if exists(&previous) {
-                // With `previous-snapshots` present, a `snapshots` can only
-                // be the staged tree.
-                if exists(&live) {
-                    fs::rename(&live, &staged)?;
-                }
-                fs::rename(&previous, &live)?;
-            }
-        } else if exists(&live) {
-            // It can only be the staged tree.
-            fs::rename(&live, &staged)?;
-        }
-        sync_directory(self.paths.media_root())?;
-        if self.layout.media_dir.is_dir() {
-            sync_directory(&self.layout.media_dir)?;
-        }
-        Ok(())
-    }
-
-    /// The one journal write that ends a rollback: `pending` for a retry,
-    /// or `failed`. Returns the outcome when the restore failed.
-    fn finish_rollback(
-        &mut self,
-        from: InstallerStep,
-        cause: StepError,
-    ) -> Result<Option<InstallOutcome>, StepError> {
-        let code = match cause {
-            StepError::Invalid(reason) => {
-                self.invalid_reason = Some(reason);
-                Some(ErrorCode::BackupInvalid)
-            }
-            _ if self.journal.attempts < MAX_ATTEMPTS => None,
-            StepError::Io(io::ErrorKind::StorageFull) => Some(ErrorCode::InsufficientSpace),
-            _ => Some(ErrorCode::RestoreFailed),
-        };
-        self.journal.rollback = None;
-        match code {
-            None => {
-                self.set_phase(JournalPhase::Pending)?;
-                self.save()?;
-                Ok(None)
-            }
-            Some(code) => {
-                self.set_phase(JournalPhase::Failed)?;
-                self.journal.failure = Some(Failure {
-                    code,
-                    step: Some(from),
-                    finished_at: now(),
-                });
-                self.save()?;
-                self.layout.remove();
-                Ok(Some(InstallOutcome::Failed {
-                    code,
-                    step: Some(from),
-                }))
-            }
+        assert_eq!(
+            validate_storage_error(StorageError::from(sqlite(ffi::SQLITE_FULL))),
+            StepError::Io(io::ErrorKind::StorageFull)
+        );
+        assert!(matches!(
+            validate_storage_error(StorageError::Filesystem),
+            StepError::Io(_)
+        ));
+        assert!(matches!(
+            validate_storage_error(StorageError::PersistenceUnavailable),
+            StepError::Io(_)
+        ));
+        for invalid in [
+            StorageError::MigrationFailed,
+            StorageError::UnsupportedSchemaVersion,
+            StorageError::Database,
+        ] {
+            assert_eq!(validate_storage_error(invalid), database_invalid());
         }
     }
 }

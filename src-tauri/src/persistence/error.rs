@@ -16,6 +16,10 @@ pub enum StorageError {
     InvalidSnapshot,
     Database,
     Filesystem,
+    /// P9 D8: out of disk space (`ENOSPC`, `SQLITE_FULL`). Kept apart from
+    /// `Filesystem` so the restore installer can fail `INSUFFICIENT_SPACE`;
+    /// every other caller treats it as `Filesystem`.
+    StorageFull,
     OperationFailed,
     /// Another active Printer already owns this host identity (D3). Carries
     /// the conflicting Printer's id, or an empty string when it's raised by
@@ -36,6 +40,7 @@ impl fmt::Display for StorageError {
             Self::InvalidSnapshot => "database snapshot validation failed",
             Self::Database => "database operation failed",
             Self::Filesystem => "storage filesystem operation failed",
+            Self::StorageFull => "there isn't enough free disk space",
             Self::OperationFailed => "storage operation was cancelled",
             Self::DuplicateHost(_) => "another active printer already uses this host and port",
         })
@@ -54,6 +59,11 @@ impl From<rusqlite::Error> for StorageError {
                 ) =>
             {
                 Self::PersistenceUnavailable
+            }
+            rusqlite::Error::SqliteFailure(code, _)
+                if code.code == rusqlite::ErrorCode::DiskFull =>
+            {
+                Self::StorageFull
             }
             rusqlite::Error::SqliteFailure(code, _)
                 if matches!(
@@ -310,8 +320,12 @@ impl From<rusqlite::Error> for RepositoryError {
 }
 
 impl From<std::io::Error> for StorageError {
-    fn from(_: std::io::Error) -> Self {
-        Self::Filesystem
+    fn from(error: std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::StorageFull {
+            Self::StorageFull
+        } else {
+            Self::Filesystem
+        }
     }
 }
 
