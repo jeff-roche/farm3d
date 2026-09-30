@@ -7,8 +7,8 @@
 //! silently fold a duplicate into one entry. Rules 5–8 then read and check
 //! the manifest against the archive, and [`ArchiveReader::copy_entry`]
 //! applies rule 10 to one entry. [`verify`] runs rules 1–8 and 10 over a
-//! whole file (the safety-backup verifier, D9); restore staging (Task 6)
-//! adds rules 9 and 11.
+//! whole file (the safety-backup verifier, D9); restore staging
+//! (`backup::staging`) adds rules 9 and 11.
 //!
 //! No error carries an entry's bytes or an unsafe name: a rule-3 failure
 //! is reported as `entries[<central-directory index>]`.
@@ -403,6 +403,15 @@ fn is_supported(entry: &DirectoryEntry) -> bool {
 
 /// Opens `path` and applies D3 rules 1–8.
 pub fn open(path: &Path) -> Result<ArchiveReader, ArchiveError> {
+    open_from_schema(path, super::manifest::MIN_SCHEMA_VERSION)
+}
+
+/// [`open`] with the compatibility window starting at
+/// `min_schema_version` ([`Manifest::parse_from_schema`]).
+pub fn open_from_schema(
+    path: &Path,
+    min_schema_version: i64,
+) -> Result<ArchiveReader, ArchiveError> {
     let mut file = File::open(path).map_err(|_| not_a_zip())?;
     let directory = central_directory(&mut file)?;
 
@@ -455,7 +464,7 @@ pub fn open(path: &Path) -> Result<ArchiveReader, ArchiveError> {
         if bytes.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(too_large());
         }
-        Manifest::parse(&bytes)?
+        Manifest::parse_from_schema(&bytes, min_schema_version)?
     };
 
     // Rule 7.

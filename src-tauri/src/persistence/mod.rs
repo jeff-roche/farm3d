@@ -13,6 +13,11 @@ pub use database::{
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
 pub use migrations::CURRENT_SCHEMA_VERSION;
+/// P9 restore staging migrates and checks a staged copy with the same code
+/// the live database uses (D4).
+pub(crate) use migrations::{
+    apply as apply_migrations, embedded as embedded_migrations, has_foreign_key_violation,
+};
 pub use snapshot::{SnapshotKind, ValidationSummary};
 
 /// Migration internals integration tests need to build a fixture database
@@ -1012,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn open_removes_incomplete_restore_staging_but_keeps_valid_candidates() {
+    fn open_removes_every_restore_staging_no_pending_journal_names() {
         let (temp, paths, lease, storage) = open_storage();
         let snapshot = storage
             .create_snapshot(SnapshotKind::Settings)
@@ -1028,10 +1033,31 @@ mod tests {
         fs::create_dir_all(&incomplete).expect("incomplete staging");
         drop(storage);
 
-        let reopened = Storage::open(paths, &lease).expect("reopen storage");
-
-        assert!(valid_directory.exists());
+        // P9 D8: a valid candidate is no longer kept for being valid...
+        let reopened = Storage::open(paths.clone(), &lease).expect("reopen storage");
+        assert!(!valid_directory.exists());
         assert!(!incomplete.exists());
+
+        // ...only for being named by a pending restore journal.
+        let staged = reopened
+            .stage_restore(snapshot.path())
+            .expect("staged restore");
+        let named = paths
+            .snapshot_root()
+            .join(".restore-staging")
+            .join(staged.staging_id());
+        fs::create_dir_all(paths.metadata_root().join("restore")).expect("restore directory");
+        fs::write(
+            paths.metadata_root().join("restore/journal.json"),
+            format!(
+                r#"{{"journalVersion":1,"phase":"pending","stagingId":"{}"}}"#,
+                staged.staging_id()
+            ),
+        )
+        .expect("journal");
+        drop(reopened);
+        let reopened = Storage::open(paths, &lease).expect("reopen storage");
+        assert!(named.join("candidate.sqlite3").exists());
         drop((reopened, temp));
     }
 

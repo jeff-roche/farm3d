@@ -216,6 +216,24 @@ pub fn list(paths: &StoragePaths) -> Result<Vec<BackupSummary>, StorageError> {
         .collect())
 }
 
+/// The file of safety backup `backup_id`, when it exists (a restore
+/// source). `None` for an unknown or unsafe id.
+pub fn existing_path(
+    paths: &StoragePaths,
+    backup_id: &str,
+) -> Result<Option<PathBuf>, StorageError> {
+    if !is_safe_backup_id(backup_id) {
+        return Ok(None);
+    }
+    let path = safety_root(paths)?.join(file_name(backup_id));
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(path)),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// `delete_backup`: removes `safety/<backup_id>.farm3d-backup`. `false`
 /// when there is no such file.
 pub fn delete(paths: &StoragePaths, backup_id: &str) -> Result<bool, StorageError> {

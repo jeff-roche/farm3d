@@ -24,7 +24,10 @@ pub mod spools;
 use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
-use backup::commands::{backup_inventory, create_backup, delete_backup, list_backups};
+use backup::commands::{
+    backup_inventory, create_backup, delete_backup, discard_restore_preview, list_backups,
+    preview_restore,
+};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -202,7 +205,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 135] = [
+pub const COMMAND_NAMES: [&str; 137] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -338,6 +341,8 @@ pub const COMMAND_NAMES: [&str; 135] = [
     "create_backup",
     "list_backups",
     "delete_backup",
+    "preview_restore",
+    "discard_restore_preview",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -1025,6 +1030,8 @@ pub fn run() {
             create_backup,
             list_backups,
             delete_backup,
+            preview_restore,
+            discard_restore_preview,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

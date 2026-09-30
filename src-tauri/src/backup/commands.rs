@@ -1,6 +1,6 @@
 //! The backup commands (spec "Commands"): `backup_inventory`,
-//! `create_backup`, `list_backups`, and `delete_backup`. Restore staging,
-//! apply, and status are Tasks 6 and 7.
+//! `create_backup`, `list_backups`, `delete_backup`, `preview_restore`, and
+//! `discard_restore_preview`. Apply and status are Task 7.
 //!
 //! `create_backup` and `delete_backup` hold the lease for their whole run
 //! (`BACKUP_IN_PROGRESS` names another holder) and claim their
@@ -24,8 +24,9 @@ use super::lease::{LeaseActivity, LeaseGuard};
 use super::process_ops::ProcessOperationKind;
 use super::writer::{write_backup, BackupRequest};
 use super::{
-    inventory, safety, BackupInventory, BackupMediaChoice, BackupOrigin, BackupSummary,
-    CreateBackupOutcome, DeleteBackupOutcome,
+    inventory, preview, safety, staging, BackupInventory, BackupMediaChoice, BackupOrigin,
+    BackupSummary, CreateBackupOutcome, DeleteBackupOutcome, DiscardRestorePreviewOutcome,
+    PreviewRestoreOutcome, RestorePreviewSource, RestoreSource,
 };
 
 type Services<'a, R> = tauri::State<'a, BootstrapState<RuntimeServices<R>>>;
@@ -234,4 +235,91 @@ pub async fn delete_backup<R: tauri::Runtime>(
         &result,
     );
     Ok(CommandSuccess::new(result))
+}
+
+/// `preview_restore`: stages the chosen backup (a file the native open
+/// dialog picks, or a safety backup by id), verifies and migrates it, and
+/// previews restoring it. A closed dialog is `cancelled` with no side
+/// effect. Replaces any earlier staging.
+#[tauri::command]
+pub async fn preview_restore<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    source: RestoreSource,
+) -> Result<CommandSuccess<PreviewRestoreOutcome>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let outcome = blocking(move || run_preview_restore(&services, source)).await?;
+    Ok(CommandSuccess::new(outcome))
+}
+
+fn run_preview_restore<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    source: RestoreSource,
+) -> Result<PreviewRestoreOutcome, CommandError> {
+    let guard = lease(services, LeaseActivity::RestorePreview)?;
+    let paths = services.storage.paths();
+    let (archive, preview_source) = match source {
+        RestoreSource::File => {
+            let Some(path) = services.backup.dialogs.open_backup()? else {
+                return Ok(PreviewRestoreOutcome::Cancelled);
+            };
+            let file_name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or_else(|| CommandError::validation("Select a local farm3d backup."))?;
+            (path, RestorePreviewSource::File { file_name })
+        }
+        RestoreSource::SafetyBackup { backup_id } => {
+            let Some(path) = safety::existing_path(paths, &backup_id).map_err(storage_error)?
+            else {
+                let entity = if safety::is_safe_backup_id(&backup_id) {
+                    backup_id.as_str()
+                } else {
+                    "backupId"
+                };
+                return Err(CommandError::not_found(entity));
+            };
+            (path, RestorePreviewSource::SafetyBackup { backup_id })
+        }
+    };
+
+    // At most one staging per process: the earlier one goes first.
+    services.backup.stagings.clear();
+    let candidate = staging::stage(paths, &guard, &archive, &services.backup.staging_options)?;
+    let preview = match preview::compute(
+        &services.storage,
+        &candidate,
+        preview_source,
+        &services.credentials,
+    ) {
+        Ok(preview) => preview,
+        Err(error) => {
+            candidate.layout.remove();
+            return Err(error.into());
+        }
+    };
+    services.backup.stagings.replace(candidate);
+    drop(guard);
+    crate::f3d_log!(
+        info,
+        "restore.previewed",
+        conflict_groups = preview.conflicts.len() as u64,
+        blockers = preview.blocker_total,
+    );
+    Ok(PreviewRestoreOutcome::Previewed { preview })
+}
+
+/// `discard_restore_preview`: removes the staging `staging_id` (all three
+/// directories). `false` when nothing was staged under that id.
+#[tauri::command]
+pub async fn discard_restore_preview<R: tauri::Runtime>(
+    _app: AppHandle<R>,
+    bootstrap: Services<'_, R>,
+    contract_version: IncomingContractVersion,
+    staging_id: String,
+) -> Result<CommandSuccess<DiscardRestorePreviewOutcome>, CommandError> {
+    let services = ready(&bootstrap, contract_version)?;
+    let discarded = blocking(move || Ok(services.backup.stagings.discard(&staging_id))).await?;
+    Ok(CommandSuccess::new(DiscardRestorePreviewOutcome { discarded }))
 }

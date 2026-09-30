@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 135] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 137] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -591,9 +591,19 @@ contracts![
         "DeleteBackupRequest",
         "DeleteBackupResult"
     ),
+    (
+        "preview_restore",
+        "PreviewRestoreRequest",
+        "PreviewRestoreResult"
+    ),
+    (
+        "discard_restore_preview",
+        "DiscardRestorePreviewRequest",
+        "DiscardRestorePreviewResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 135] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 137] {
     &COMMAND_CONTRACTS
 }
 
@@ -885,7 +895,11 @@ export type CreateBackupResult = CommandSuccess<CreateBackupOutcome>;
 export type ListBackupsRequest = NoArgsRequest;
 export type ListBackupsResult = CommandSuccess<BackupSummary[]>;
 export type DeleteBackupRequest = ContractRequest & { operationId: string; backupId: string };
-export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;"#.to_string()
+export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;
+export type PreviewRestoreRequest = ContractRequest & { source: RestoreSource };
+export type PreviewRestoreResult = CommandSuccess<PreviewRestoreOutcome>;
+export type DiscardRestorePreviewRequest = ContractRequest & { stagingId: string };
+export type DiscardRestorePreviewResult = CommandSuccess<DiscardRestorePreviewOutcome>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -1014,6 +1028,9 @@ export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;"#.to_strin
         visitor.visit::<crate::backup::CreateBackupOutcome>();
         visitor.visit::<crate::backup::BackupSummary>();
         visitor.visit::<crate::backup::DeleteBackupOutcome>();
+        visitor.visit::<crate::backup::RestoreSource>();
+        visitor.visit::<crate::backup::PreviewRestoreOutcome>();
+        visitor.visit::<crate::backup::DiscardRestorePreviewOutcome>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

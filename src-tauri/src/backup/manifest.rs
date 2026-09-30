@@ -118,6 +118,17 @@ impl Manifest {
 
     /// D3 rules 5 (the closed schema) and 6 (the compatibility window).
     pub fn parse(bytes: &[u8]) -> Result<Manifest, ManifestError> {
+        Self::parse_from_schema(bytes, MIN_SCHEMA_VERSION)
+    }
+
+    /// [`parse`](Self::parse) with the window starting at
+    /// `min_schema_version` instead of [`MIN_SCHEMA_VERSION`]. Only tests
+    /// open it wider: this binary's window starts at its own schema, so an
+    /// older-schema backup exists only once a later schema ships.
+    pub fn parse_from_schema(
+        bytes: &[u8],
+        min_schema_version: i64,
+    ) -> Result<Manifest, ManifestError> {
         let value: Value = serde_json::from_slice(bytes).map_err(|_| invalid("manifest"))?;
         let root = object(&value, "manifest")?;
 
@@ -234,7 +245,7 @@ impl Manifest {
                 received: schema_version,
             });
         }
-        if schema_version < MIN_SCHEMA_VERSION {
+        if schema_version < min_schema_version {
             return Err(invalid("manifest.schemaVersion"));
         }
 

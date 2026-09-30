@@ -450,6 +450,21 @@ fn validate_applied_migrations(
     }
 }
 
+/// Every embedded migration as `(version, name, checksum)`, ascending: what
+/// a backup's `schema_migrations` rows must equal (P9 D4).
+pub(crate) fn embedded() -> Vec<(i64, &'static str, String)> {
+    MIGRATIONS
+        .iter()
+        .map(|migration| {
+            (
+                migration.version,
+                migration.name,
+                migration_checksum(migration),
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn has_foreign_key_violation(connection: &Connection) -> rusqlite::Result<bool> {
     let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
     let mut rows = statement.query([])?;

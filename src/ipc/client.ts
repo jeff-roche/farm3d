@@ -188,6 +188,8 @@ type CommandMap = {
   create_backup: [Contracts.CreateBackupRequest, Contracts.CreateBackupResult];
   list_backups: [Contracts.ListBackupsRequest, Contracts.ListBackupsResult];
   delete_backup: [Contracts.DeleteBackupRequest, Contracts.DeleteBackupResult];
+  preview_restore: [Contracts.PreviewRestoreRequest, Contracts.PreviewRestoreResult];
+  discard_restore_preview: [Contracts.DiscardRestorePreviewRequest, Contracts.DiscardRestorePreviewResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

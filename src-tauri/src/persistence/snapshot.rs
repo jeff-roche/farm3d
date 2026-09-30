@@ -11,7 +11,7 @@ use super::error::StorageError;
 use super::migrations;
 
 const SNAPSHOT_PREFIX: &str = ".farm3d-pre-import-";
-const RESTORE_STAGING_DIRECTORY: &str = ".restore-staging";
+const RESTORE_STAGING_DIRECTORY: &str = crate::backup::staging::DATABASE_STAGING_DIRECTORY;
 const RETAINED_SNAPSHOTS: usize = 5;
 
 #[derive(Clone, Copy)]
@@ -139,7 +139,7 @@ impl Storage {
             accepted_snapshot_path(self.paths.snapshot_root(), selected_snapshot)?;
         validate_database(&selected_snapshot)?;
 
-        let staging_id = Uuid::new_v4().to_string();
+        let staging_id = crate::backup::staging::new_staging_id();
         let staging_directory = self
             .paths
             .snapshot_root()
@@ -168,24 +168,13 @@ impl Storage {
     }
 }
 
+/// Startup: removes partial pre-import snapshots, then every restore
+/// staging directory (all three kinds, P9 D8) except the one a `pending` or
+/// `installing` restore journal names. A staged candidate is never kept
+/// only for being valid: the process that staged it is gone.
 pub(super) fn cleanup_restore_staging(paths: &StoragePaths) -> Result<(), StorageError> {
     cleanup_partial_snapshots(paths.snapshot_root())?;
-    let root = paths.snapshot_root().join(RESTORE_STAGING_DIRECTORY);
-    create_private_directory(&root)?;
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let candidate = path.join("candidate.sqlite3");
-        let keep = path.is_dir() && validate_database(&candidate).is_ok();
-        if !keep {
-            if path.is_dir() {
-                fs::remove_dir_all(path)?;
-            } else {
-                fs::remove_file(path)?;
-            }
-        }
-    }
-    Ok(())
+    crate::backup::staging::cleanup(paths)
 }
 
 fn backup_database(source: &Connection, destination: &Path) -> Result<(), StorageError> {

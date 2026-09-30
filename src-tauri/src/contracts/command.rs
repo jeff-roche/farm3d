@@ -409,6 +409,12 @@ pub enum ErrorCode {
     BackupSourceDamaged,
     /// P9 D5/D9/D8: the destination hasn't room for the estimate plus 10 %.
     InsufficientSpace,
+    /// P9 D3/D4: the file is damaged or isn't a farm3d backup.
+    BackupInvalid,
+    /// P9 D4: the backup's `formatVersion` is newer than this binary's.
+    UnsupportedBackupFormat,
+    /// P9 D8: the restore staging is unknown or older than 24 hours.
+    RestoreStagingExpired,
 }
 
 /// Actions the frontend can offer in response to a command failure.
@@ -735,6 +741,84 @@ impl CommandError {
             ("target".to_string(), JsonValue::String(target.to_string())),
         ]));
         error
+    }
+
+    /// P9 D3/D4 `BACKUP_INVALID`: `field_path` is a safe path into the
+    /// archive or its manifest (never an entry's bytes or an unsafe name).
+    pub fn backup_invalid(reason: crate::backup::BackupInvalidReason, field_path: &str) -> Self {
+        let reason = JsonValue::from_serde_value(
+            serde_json::to_value(reason).expect("a reason serializes"),
+        )
+        .expect("a reason is a string");
+        let mut error = Self::typed(
+            ErrorCode::BackupInvalid,
+            "This file is damaged or isn't a farm3d backup.",
+            vec![],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            ("reason".to_string(), reason),
+            (
+                "fieldPath".to_string(),
+                JsonValue::String(field_path.to_string()),
+            ),
+        ]));
+        error
+    }
+
+    /// P9 D4 `UNSUPPORTED_BACKUP_FORMAT`.
+    pub fn unsupported_backup_format(received_format_version: i64) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::UnsupportedBackupFormat,
+            "This backup was made by a newer version of farm3d.",
+            vec![RecoveryCode::UpgradeFarm3d],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            (
+                "supportedFormatVersion".to_string(),
+                safe_number(crate::backup::manifest::FORMAT_VERSION),
+            ),
+            (
+                "receivedFormatVersion".to_string(),
+                safe_number(received_format_version),
+            ),
+        ]));
+        error
+    }
+
+    /// P9 D4: a backup whose `schemaVersion` is newer than this binary's
+    /// (`UNSUPPORTED_SCHEMA_VERSION`, `supportedVersion` the current one).
+    pub fn unsupported_backup_schema(received_version: i64) -> Self {
+        let mut error = Self::typed(
+            ErrorCode::UnsupportedSchemaVersion,
+            "This backup was made by a newer version of farm3d.",
+            vec![RecoveryCode::UpgradeFarm3d],
+            false,
+        );
+        error.details = Some(BTreeMap::from([
+            (
+                "supportedVersion".to_string(),
+                safe_number(crate::persistence::CURRENT_SCHEMA_VERSION),
+            ),
+            (
+                "receivedVersion".to_string(),
+                safe_number(received_version),
+            ),
+        ]));
+        error
+    }
+
+    /// P9 D8 `RESTORE_STAGING_EXPIRED`: `staging_id` is echoed only when it
+    /// is a staging id.
+    pub fn restore_staging_expired(staging_id: &str) -> Self {
+        Self::typed(
+            ErrorCode::RestoreStagingExpired,
+            "This restore preview expired. Preview the backup again.",
+            vec![],
+            false,
+        )
+        .with_string_details(&[("stagingId", staging_id)])
     }
 
     pub fn persistence_unavailable() -> Self {
@@ -2083,6 +2167,14 @@ impl From<crate::spools::reservations::ReservationError> for CommandError {
             }
         }
     }
+}
+
+/// A JSON number clamped to the JS-safe range (a version read from a file
+/// can be anything).
+fn safe_number(value: i64) -> JsonValue {
+    let limit = JS_MAX_SAFE_INTEGER as i64;
+    let clamped = value.clamp(-limit, limit);
+    JsonValue::Number(JsonNumber::try_from(clamped).expect("clamped to the JS-safe range"))
 }
 
 #[cfg(test)]

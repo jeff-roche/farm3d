@@ -50,8 +50,11 @@ use farm3d_lib::contracts::navigation::{
 };
 use farm3d_lib::backup::{
     BackupContentTotals, BackupExcludedClass, BackupInvalidReason, BackupInventory,
-    BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupSummary, CreateBackupOutcome,
-    DeleteBackupOutcome, DesktopRequiredReason, TableCount,
+    BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupPlatform, BackupSummary,
+    CreateBackupOutcome, DeleteBackupOutcome, DesktopRequiredReason, DiscardRestorePreviewOutcome,
+    PreviewRestoreOutcome, RestoreBackupInfo, RestoreBlocker, RestoreBlockerKind,
+    RestoreConflict, RestoreConflictClass, RestoreConflictGroup, RestoreCount, RestoreDomain,
+    RestoreNotice, RestorePreview, RestorePreviewSource, RestoreSource, TableCount,
 };
 use farm3d_lib::contracts::ContractVersion;
 use farm3d_lib::history::{
@@ -693,6 +696,21 @@ fn export_registry() -> Vec<Export> {
         export::<BackupSummary>(),
         export::<DeleteBackupOutcome>(),
         export::<BackupInvalidReason>(),
+        export::<RestoreSource>(),
+        export::<RestorePreviewSource>(),
+        export::<RestoreCount>(),
+        export::<RestoreConflictClass>(),
+        export::<RestoreDomain>(),
+        export::<RestoreConflict>(),
+        export::<RestoreConflictGroup>(),
+        export::<RestoreNotice>(),
+        export::<RestoreBlockerKind>(),
+        export::<RestoreBlocker>(),
+        export::<BackupPlatform>(),
+        export::<RestoreBackupInfo>(),
+        export::<RestorePreview>(),
+        export::<PreviewRestoreOutcome>(),
+        export::<DiscardRestorePreviewOutcome>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -968,6 +986,9 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::BackupInProgress,
         ErrorCode::BackupSourceDamaged,
         ErrorCode::InsufficientSpace,
+        ErrorCode::BackupInvalid,
+        ErrorCode::UnsupportedBackupFormat,
+        ErrorCode::RestoreStagingExpired,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -1014,7 +1035,8 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
                 "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
                 "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS", "BACKUP_IN_PROGRESS",
-                "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE"
+                "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE", "BACKUP_INVALID",
+                "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
