@@ -4,6 +4,7 @@
  *  Web mode: reads are fixtures, `export_diagnostics` answers
  *  `unsupported`, other writes throw `needsDesktopError`. */
 import { createStore, reconcile } from "solid-js/store";
+import { about, loadAbout, resetAboutStore } from "./about-store";
 import { command, desktopAvailable, needsDesktopError, retryOnTransportFailure } from "../ipc/client";
 import type {
   AboutInfo,
@@ -36,24 +37,25 @@ export type ResetSummary =
 interface DiagnosticsState {
   preview: DiagnosticsPreview | null;
   usage: StorageUsage | null;
-  about: AboutInfo | null;
   lastExport: ExportedDiagnostics | null;
   lastReset: ResetSummary | null;
   resetPreviews: Partial<Record<ResetTier, ResetPreview>>;
 }
 
 const [state, setState] = createStore<DiagnosticsState>({
-  preview: null, usage: null, about: null, lastExport: null, lastReset: null, resetPreviews: {},
+  preview: null, usage: null, lastExport: null, lastReset: null, resetPreviews: {},
 });
 
 export const diagnostics = {
   preview: (): DiagnosticsPreview | null => state.preview,
   usage: (): StorageUsage | null => state.usage,
-  about: (): AboutInfo | null => state.about,
+  about: (): AboutInfo | null => about(),
   lastExport: (): ExportedDiagnostics | null => state.lastExport,
   lastReset: (): ResetSummary | null => state.lastReset,
   resetPreview: (tier: ResetTier): ResetPreview | undefined => state.resetPreviews[tier],
 };
+
+export { loadAbout };
 
 const UNSUPPORTED = { status: "unsupported", reason: "desktopRequired" } as const;
 
@@ -83,15 +85,6 @@ export async function loadStorageUsage(): Promise<StorageUsage> {
   );
   setState("usage", reconcile(usage));
   return usage;
-}
-
-export async function loadAbout(): Promise<AboutInfo> {
-  const about = await read(
-    () => command("about_farm3d"),
-    () => import("./web-fixtures").then(({ webAboutInfo }) => webAboutInfo()),
-  );
-  setState("about", reconcile(about));
-  return about;
 }
 
 export async function loadResetPreview(tier: ResetTier): Promise<ResetPreview> {
@@ -142,5 +135,6 @@ export async function resetFarm(request: ResetRequest, confirmation: string): Pr
 
 /** Test seam. */
 export function resetDiagnosticsStore(): void {
-  setState({ preview: null, usage: null, about: null, lastExport: null, lastReset: null, resetPreviews: {} });
+  resetAboutStore();
+  setState({ preview: null, usage: null, lastExport: null, lastReset: null, resetPreviews: {} });
 }

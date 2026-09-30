@@ -105,7 +105,7 @@ describe("reset", () => {
   });
 
   it("shows a failed reset in the dialog", async () => {
-    diagnosticsStoreMock.resetFarm.mockRejectedValueOnce(new Error("Reset was refused."));
+    diagnosticsStoreMock.resetFarm.mockRejectedValueOnce({ contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "Reset was refused.", recovery: [], retryable: false });
     render(() => <DiagnosticsSettings />);
     const region = await screen.findByRole("region", { name: "Reset settings" });
     fireEvent.click(within(region).getByRole("button", { name: "Reset settings…" }));

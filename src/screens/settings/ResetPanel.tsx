@@ -5,10 +5,9 @@ import { formatBytes, resetClassLabel, resetEffectLabel, resetSummaryText } from
 import type { ResetMediaScope, ResetPreview, ResetRequest, ResetTier } from "../../diagnostics/types";
 import type { ResetWarning } from "../../generated/contracts/domain/ResetWarning";
 import { loadSettings, settings } from "../../settings/settings-store";
+import { errorText } from "./error-text";
 import styles from "./Settings.module.css";
 import portability from "./Portability.module.css";
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : (error as { message?: string })?.message ?? String(error));
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
 
@@ -62,7 +61,7 @@ function Tier(props: TierProps) {
       setResult(resetSummaryText(await resetFarm(request, phrase)));
       setOpen(false);
     } catch (failure) {
-      setError(messageOf(failure));
+      setError(errorText(failure));
     }
     setPending(false);
   }

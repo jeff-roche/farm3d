@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
-import { diagnostics, loadAbout } from "../diagnostics/diagnostics-store";
+import { about, loadAbout } from "../diagnostics/about-store";
 import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
@@ -74,7 +74,7 @@ export function AppShell(props: AppShellProps) {
     void loadAbout().catch(() => {});
   });
   const version = () => {
-    const appVersion = diagnostics.about()?.appVersion;
+    const appVersion = about()?.appVersion;
     return appVersion ? `farm3d ${appVersion}` : "farm3d";
   };
 

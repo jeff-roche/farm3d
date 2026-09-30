@@ -6,6 +6,7 @@ import {
 } from "../../diagnostics/presentation";
 import type { DiagnosticsSection } from "../../diagnostics/types";
 import { isCommandError } from "../../ipc/client";
+import { errorText } from "./error-text";
 import { OperationStatus } from "./OperationStatus";
 import { ResetPanel } from "./ResetPanel";
 import styles from "./Settings.module.css";
@@ -17,7 +18,7 @@ function exportErrorText(error: unknown): string {
     const where = typeof section === "string" ? ` in ${diagnosticsSectionLabel(section as DiagnosticsSection)}` : "";
     return `Redaction failed${where}, so nothing was written.`;
   }
-  return error instanceof Error ? error.message : (error as { message?: string })?.message ?? String(error);
+  return errorText(error);
 }
 
 /** Diagnostics category: the diagnostics bundle, then Reset. */

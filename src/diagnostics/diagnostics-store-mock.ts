@@ -43,6 +43,9 @@ export const diagnosticsStoreMock = {
   resetDiagnosticsStore: vi.fn(),
 };
 
+/** The shell's `about-store`, backed by the same state so tests set `about` once. */
+export const aboutStoreMock = { about: () => state.about, loadAbout: diagnosticsStoreMock.loadAbout };
+
 export function setDiagnosticsStoreState(patch: Partial<MockDiagnosticsState>): void {
   setState(patch);
 }

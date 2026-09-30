@@ -39,11 +39,19 @@ describe("storage usage and cleanup", () => {
   });
 
   it("shows a cleanup failure as an alert", async () => {
-    diagnosticsStoreMock.clearStorage.mockRejectedValueOnce(new Error("Storage is busy"));
+    diagnosticsStoreMock.clearStorage.mockRejectedValueOnce({ contractVersion: 1, code: "PERSISTENCE_UNAVAILABLE", message: "Storage is busy", recovery: [], retryable: false });
     render(() => <StorageSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove rotated logs" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Storage is busy");
   });
+});
+
+it("shows a generic line, not internals, for an unstructured cleanup failure", async () => {
+  diagnosticsStoreMock.clearStorage.mockRejectedValueOnce(new Error("/home/x/secret path"));
+  render(() => <StorageSettings />);
+  fireEvent.click(await screen.findByRole("button", { name: "Remove rotated logs" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).not.toContain("secret");
 });
 
 describe("create backup", () => {
@@ -102,6 +110,13 @@ describe("restore", () => {
     render(() => <StorageSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Restore from file…" }));
     expect(backupStoreMock.startRestore).toHaveBeenCalledWith({ kind: "file" });
+  });
+
+  it("says a file restore needs the desktop app when the store answers unsupported", async () => {
+    backupStoreMock.startRestore.mockResolvedValueOnce({ status: "unsupported", reason: "desktopRequired" } as never);
+    render(() => <StorageSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Restore from file…" }));
+    expect(await screen.findByText(/Restoring a backup needs the desktop app/)).toBeTruthy();
   });
 
   it("shows the preview panel while previewing and leaves the panel on unmount", async () => {

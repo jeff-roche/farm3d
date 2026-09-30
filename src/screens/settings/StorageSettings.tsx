@@ -10,6 +10,7 @@ import { clearStorage, diagnostics, loadStorageUsage } from "../../diagnostics/d
 import { formatBytes, STORAGE_CLEANUP_CLASS, storageCleanupLabel, storageClassLabel } from "../../diagnostics/presentation";
 import type { StorageCleanupTarget } from "../../diagnostics/types";
 import type { StorageClassUsage } from "../../generated/contracts/domain/StorageClassUsage";
+import { errorText } from "./error-text";
 import { OperationStatus } from "./OperationStatus";
 import { RestorePreviewPanel } from "./RestorePreviewPanel";
 import styles from "./Settings.module.css";
@@ -27,7 +28,6 @@ const MEDIA_LABEL: Record<BackupMediaChoice, string> = {
 };
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : (error as { message?: string })?.message ?? String(error));
 
 /** Storage and backup category: usage and cleanup, Create backup, Restore
  *  from file, and the safety backups. */
@@ -39,6 +39,7 @@ export function StorageSettings(props: StorageSettingsProps) {
   const [created, setCreated] = createSignal<{ message: string | null; error: boolean }>({ message: null, error: false });
   const [deleting, setDeleting] = createSignal<BackupSummary | null>(null);
   const [listError, setListError] = createSignal<string | null>(null);
+  const [restoreNote, setRestoreNote] = createSignal<string | null>(null);
   const [applying, setApplying] = createSignal(false);
 
   onMount(() => {
@@ -62,7 +63,7 @@ export function StorageSettings(props: StorageSettingsProps) {
         error: false,
       });
     } catch (error) {
-      setCleanup({ message: messageOf(error), error: true });
+      setCleanup({ message: errorText(error), error: true });
     }
     setCleaning(null);
   }
@@ -96,7 +97,7 @@ export function StorageSettings(props: StorageSettingsProps) {
         setCreated({ message: "Creating a backup needs the desktop app.", error: false });
       }
     } catch (error) {
-      setCreated({ message: messageOf(error), error: true });
+      setCreated({ message: errorText(error), error: true });
     }
     setCreating(false);
   }
@@ -109,8 +110,14 @@ export function StorageSettings(props: StorageSettingsProps) {
     try {
       await deleteBackup(target.backupId);
     } catch (error) {
-      setListError(messageOf(error));
+      setListError(errorText(error));
     }
+  }
+
+  async function runRestoreFromFile() {
+    setRestoreNote(null);
+    const outcome = await startRestore({ kind: "file" });
+    if (outcome.status === "unsupported") setRestoreNote("Restoring a backup needs the desktop app.");
   }
 
   async function confirmRestore(confirmation: string) {
@@ -180,8 +187,9 @@ export function StorageSettings(props: StorageSettingsProps) {
         <span class={styles.sectionTitle}>Restore</span>
         <p class={styles.note}>Restore replaces this Farm with a backup. You see what changes before anything does.</p>
         <div class={styles.actions}>
-          <Button disabled={busy()} onClick={() => void startRestore({ kind: "file" })}>Restore from file…</Button>
+          <Button disabled={busy()} onClick={() => void runRestoreFromFile()}>Restore from file…</Button>
         </div>
+        <OperationStatus message={restoreNote()} />
         <Show when={phase() === "choosing"}><p class={styles.note}>Waiting for the file to open…</p></Show>
         <Show when={phase() === "cancelled"}>
           <p class={styles.note}>No file was chosen.</p>

@@ -7,8 +7,8 @@ import { webAboutInfo } from "../diagnostics/web-fixtures";
 import { AppShell } from "./AppShell";
 
 vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
-vi.mock("../diagnostics/diagnostics-store", async () =>
-  (await import("../diagnostics/diagnostics-store-mock")).diagnosticsStoreMock);
+vi.mock("../diagnostics/about-store", async () =>
+  (await import("../diagnostics/diagnostics-store-mock")).aboutStoreMock);
 
 function printer(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {

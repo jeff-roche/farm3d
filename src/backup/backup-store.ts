@@ -124,7 +124,7 @@ export async function deleteBackup(backupId: string): Promise<void> {
 function fail(error: unknown): void {
   const normalized = isCommandError(error)
     ? error
-    : commandError("PERSISTENCE_UNAVAILABLE", error instanceof Error ? error.message : "The restore failed.");
+    : commandError("PERSISTENCE_UNAVAILABLE", "The restore failed.");
   setState({ phase: "failed", error: normalized });
 }
 
