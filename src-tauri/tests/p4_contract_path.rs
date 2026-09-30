@@ -48,6 +48,10 @@ const P7_COMMAND_COUNT: usize = 11 + 4 + 1 + 2;
 /// (`tests/p8_notifications.rs`).
 const P8_COMMAND_COUNT: usize = 7 + 6 + 5 + 4;
 
+/// Commands P9 added so far: Task 4's `list_job_history` and
+/// `get_job_timeline` (`tests/p9_history.rs`).
+const P9_COMMAND_COUNT: usize = 2;
+
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
     "inspect_import_selection",
@@ -80,6 +84,7 @@ fn every_p4_command_is_registered_with_a_contract() {
             + P6_COMMAND_COUNT
             + P7_COMMAND_COUNT
             + P8_COMMAND_COUNT
+            + P9_COMMAND_COUNT
     );
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     assert_eq!(manifest.len(), farm3d_lib::COMMAND_NAMES.len());

@@ -182,6 +182,8 @@ type CommandMap = {
   set_printer_alert_defaults: [Contracts.SetPrinterAlertDefaultsRequest, Contracts.SetPrinterAlertDefaultsResult];
   notification_status: [Contracts.NotificationStatusRequest, Contracts.NotificationStatusResult];
   send_test_notification: [Contracts.SendTestNotificationRequest, Contracts.SendTestNotificationResult];
+  list_job_history: [Contracts.ListJobHistoryRequest, Contracts.ListJobHistoryResult];
+  get_job_timeline: [Contracts.GetJobTimelineRequest, Contracts.GetJobTimelineResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

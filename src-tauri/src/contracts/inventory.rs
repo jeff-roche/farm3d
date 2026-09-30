@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 129] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 131] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -565,9 +565,19 @@ contracts![
         "SendTestNotificationRequest",
         "SendTestNotificationResult"
     ),
+    (
+        "list_job_history",
+        "ListJobHistoryRequest",
+        "ListJobHistoryResult"
+    ),
+    (
+        "get_job_timeline",
+        "GetJobTimelineRequest",
+        "GetJobTimelineResult"
+    ),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 129] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 131] {
     &COMMAND_CONTRACTS
 }
 
@@ -847,7 +857,11 @@ export type SetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>
 export type NotificationStatusRequest = NoArgsRequest;
 export type NotificationStatusResult = CommandSuccess<NotifierStatus>;
 export type SendTestNotificationRequest = NoArgsRequest;
-export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#.to_string()
+export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;
+export type ListJobHistoryRequest = ContractRequest & { query: JobHistoryQuery };
+export type ListJobHistoryResult = CommandSuccess<JobHistoryPage>;
+export type GetJobTimelineRequest = ContractRequest & { jobId: string };
+export type GetJobTimelineResult = CommandSuccess<JobTimeline>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -968,6 +982,9 @@ export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#
         visitor.visit::<crate::printers::alerts::PrinterAlertDefaults>();
         visitor.visit::<crate::notifications::NotifierStatus>();
         visitor.visit::<crate::notifications::commands::TestNotificationSent>();
+        visitor.visit::<crate::history::JobHistoryQuery>();
+        visitor.visit::<crate::history::JobHistoryPage>();
+        visitor.visit::<crate::history::JobTimeline>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

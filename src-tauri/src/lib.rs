@@ -7,6 +7,7 @@ pub mod contracts;
 pub mod diagnostics;
 pub mod document_io;
 mod file_links;
+pub mod history;
 pub mod host_ops;
 pub mod incidents;
 pub mod jobs;
@@ -35,6 +36,7 @@ use connections::commands::{
     printer_capabilities, printer_statuses, set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use history::commands::{get_job_timeline, list_job_history};
 use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
@@ -183,7 +185,7 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
     }
 }
 
-pub const COMMAND_NAMES: [&str; 129] = [
+pub const COMMAND_NAMES: [&str; 131] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -313,6 +315,8 @@ pub const COMMAND_NAMES: [&str; 129] = [
     "set_printer_alert_defaults",
     "notification_status",
     "send_test_notification",
+    "list_job_history",
+    "get_job_timeline",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -980,6 +984,8 @@ pub fn run() {
             set_printer_alert_defaults,
             notification_status,
             send_test_notification,
+            list_job_history,
+            get_job_timeline,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])

@@ -471,6 +471,19 @@ pub fn events_for_incident(
     Ok(rows)
 }
 
+/// Every Event whose `job_id` is `job_id`, `first_observed_at` then id
+/// (`get_job_timeline`'s `attention` items).
+pub fn events_for_job(conn: &Connection, job_id: &str) -> Result<Vec<AttentionEvent>, StorageError> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {ATTENTION_COLUMNS} FROM attention_events WHERE job_id = ?1
+         ORDER BY first_observed_at, id"
+    ))?;
+    let rows = statement
+        .query_map([job_id], decode_event_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// `list_attention`/`AttentionBackfill.resolved`: up to `limit`,
 /// `resolvedAt` descending then id descending, strictly before `before`
 /// (exclusive) when given. Returns the page and the cursor for the next

@@ -499,13 +499,31 @@ pub fn snapshots_for_incident(
     conn: &Connection,
     incident_id: &str,
 ) -> Result<Vec<crate::cameras::CameraSnapshot>, StorageError> {
-    let mut statement = conn.prepare(
+    snapshots_where(conn, "incident_id", incident_id)
+}
+
+/// The Job's camera evidence (`camera_snapshots.job_id`), pruned rows
+/// included, `capturedAt` then id. Never `rel_path`.
+pub fn snapshots_for_job(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Vec<crate::cameras::CameraSnapshot>, StorageError> {
+    snapshots_where(conn, "job_id", job_id)
+}
+
+/// `column` is one of this module's two literal column names, never input.
+fn snapshots_where(
+    conn: &Connection,
+    column: &'static str,
+    value: &str,
+) -> Result<Vec<crate::cameras::CameraSnapshot>, StorageError> {
+    let mut statement = conn.prepare(&format!(
         "SELECT id, revision, printer_id, incident_id, job_id, trigger, captured_at, content_type,
                 byte_len, sha256, pinned_at, pruned_at, prune_reason
-         FROM camera_snapshots WHERE incident_id = ?1 ORDER BY captured_at, id",
-    )?;
+         FROM camera_snapshots WHERE {column} = ?1 ORDER BY captured_at, id"
+    ))?;
     let rows = statement
-        .query_map([incident_id], |row| {
+        .query_map([value], |row| {
             let trigger: String = row.get(5)?;
             let content_type: String = row.get(7)?;
             let prune_reason: Option<String> = row.get(12)?;

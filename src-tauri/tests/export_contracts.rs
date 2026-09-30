@@ -49,6 +49,10 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::history::{
+    JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
+    JobTimelineSliceRevision, PrinterLifecycleFilter,
+};
 use farm3d_lib::host_ops::events::{HostOperationsEvent, HostOperationsEventType};
 use farm3d_lib::host_ops::{
     HostOperation, HostOperationEndpoint, HostOperationFailure, HostOperationKind,
@@ -664,6 +668,14 @@ fn export_registry() -> Vec<Export> {
         export::<IncidentTimelineItem>(),
         export::<IncidentDetail>(),
         export::<IncidentPage>(),
+        export::<JobHistoryState>(),
+        export::<PrinterLifecycleFilter>(),
+        export::<JobHistoryQuery>(),
+        export::<JobHistoryRow>(),
+        export::<JobHistoryPage>(),
+        export::<JobTimelineSliceRevision>(),
+        export::<JobTimelineItem>(),
+        export::<JobTimeline>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -1260,8 +1272,10 @@ fn generated_contracts_use_safe_precise_types() {
     let generated = String::from_utf8(generated).expect("generated contracts should be UTF-8");
     let lower = generated.to_lowercase();
 
+    // The `any` type, not the quoted `"any"` literal of P9's
+    // `PrinterLifecycleFilter` (a spec-mandated value).
     assert!(
-        !generated.contains("any"),
+        !generated.replace("\"any\"", "").contains("any"),
         "generated contracts contain `any`"
     );
     assert!(generated.contains("contractVersion: 1"));
