@@ -30,6 +30,17 @@ export function supportedKind(kind: string | null | undefined): string | undefin
 
 const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
 
+/** The port to pre-fill for `kind`: the catalog's `suggestedPort` when `kind`
+ *  is the host type it suggests (a Neptune 4's Moonraker sits behind nginx on
+ *  80, #26), otherwise the kind's usual port. */
+export function defaultPort(
+  kind: string,
+  suggestedKind?: string | null,
+  suggestedPort?: number,
+): number | undefined {
+  return (kind === supportedKind(suggestedKind) ? suggestedPort : undefined) ?? DEFAULT_PORTS[kind];
+}
+
 /** "name — host software / firmware", skipping what the host does not
  *  report: OctoPrint exposes no firmware version, and an unnamed host has
  *  no name to lead with. */
@@ -134,6 +145,9 @@ export interface ConnectionFieldsProps {
    *  themselves, so a later Identify-step change doesn't clobber a
    *  deliberate choice. */
   suggestedKind?: string;
+  /** The catalog variant's `suggestedPort`, seeded with `suggestedKind`
+   *  until the user edits the Port themselves. */
+  suggestedPort?: number;
   /** wizard: `probeCandidate`; dock: `testConnection(id, …)`. */
   onTest: () => Promise<ProbeResult>;
   /** Enables the capability-mismatch list; omitted where there is no
@@ -152,19 +166,25 @@ export interface ConnectionFieldsProps {
  *  result and the discovery list are local to this component. */
 export function ConnectionFields(props: ConnectionFieldsProps) {
   const [kindTouched, setKindTouched] = createSignal(false);
+  const [portTouched, setPortTouched] = createSignal(false);
+  const portFor = (kind: string) => defaultPort(kind, props.suggestedKind, props.suggestedPort);
   const [probe, setProbe] = createSignal<ProbeResult | null>(null);
   const [probeError, setProbeError] = createSignal<string | null>(null);
   const [testing, setTesting] = createSignal(false);
 
   const [discovered, { refetch: rediscover }] = createResource(discoverPrinters);
 
-  // Seeds `kind` from the suggested host type once, without clobbering a
-  // deliberate pick the user already made (e.g. after opening the Kind
-  // Select themselves).
+  // Seeds `kind` and `port` from the suggested host type, without
+  // clobbering a deliberate pick the user already made (e.g. after opening
+  // the Kind Select, or typing a Port). Compares the port too: the wizard's
+  // draft already starts as Moonraker, so a kind-only check would never
+  // apply a suggested port.
   createEffect(() => {
     const suggested = supportedKind(props.suggestedKind);
-    if (!suggested || kindTouched() || props.value.kind === suggested) return;
-    props.onChange({ ...props.value, kind: suggested, port: DEFAULT_PORTS[suggested] ?? props.value.port });
+    if (!suggested || kindTouched()) return;
+    const port = portTouched() ? props.value.port : portFor(suggested) ?? props.value.port;
+    if (props.value.kind === suggested && props.value.port === port) return;
+    props.onChange({ ...props.value, kind: suggested, port });
   });
 
   // A verified `probe`/`probeError` describes the *specific* submission it
@@ -212,7 +232,7 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
         value={KINDS.find((k) => k.value === props.value.kind)}
         onChange={(k: (typeof KINDS)[number]) => {
           setKindTouched(true);
-          props.onChange({ ...props.value, kind: k.value, port: DEFAULT_PORTS[k.value] ?? props.value.port });
+          props.onChange({ ...props.value, kind: k.value, port: portFor(k.value) ?? props.value.port });
         }}
       />
 
@@ -225,12 +245,13 @@ export function ConnectionFields(props: ConnectionFieldsProps) {
       <TextField
         label="Port"
         value={String(props.value.port)}
-        onChange={(v) =>
+        onChange={(v) => {
+          setPortTouched(true);
           props.onChange({
             ...props.value,
-            port: Number(v) || DEFAULT_PORTS[props.value.kind] || 7125,
-          })
-        }
+            port: Number(v) || portFor(props.value.kind) || 7125,
+          });
+        }}
       />
       <TextField
         label="API key"

@@ -132,6 +132,22 @@ describe("PrinterConnectionPanel", () => {
     );
   });
 
+  it("defaults a Neptune 4 to Moonraker on the catalog's suggested port 80", async () => {
+    const neptune = {
+      ...printer,
+      profile: { ...PROFILE, suggestedHostType: "moonraker", suggestedPort: 80 },
+    } as unknown as ResolvedPrinter;
+    render(() => <PrinterConnectionPanel printer={neptune} />);
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "neptune.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
+    expect(setConnection).toHaveBeenCalledWith(
+      "prn-1",
+      expect.objectContaining({ kind: "moonraker", host: "neptune.local", port: 80 }),
+    );
+  });
+
   it("submits host and port without echoing an unset API key", async () => {
     render(() => <PrinterConnectionPanel printer={printer} />);
     fireEvent.input(screen.getByLabelText("Host"), { target: { value: "voron.local" } });

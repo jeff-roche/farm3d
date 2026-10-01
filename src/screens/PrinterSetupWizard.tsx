@@ -341,6 +341,7 @@ export function PrinterSetupWizard(props: PrinterSetupWizardProps) {
               value={connectionDraft()}
               onChange={setConnectionDraft}
               suggestedKind={preview()?.suggestedHostType ?? undefined}
+              suggestedPort={preview()?.suggestedPort}
               onTest={handleTest}
               profile={preview() ?? undefined}
             />

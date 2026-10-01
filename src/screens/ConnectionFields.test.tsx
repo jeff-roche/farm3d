@@ -125,6 +125,71 @@ describe("ConnectionFields", () => {
     expect(screen.getByText("Default — 1.11.8")).toBeInTheDocument();
   });
 
+  // #26: a Neptune 4's Moonraker sits behind nginx on port 80, and the
+  // wizard's draft already starts as Moonraker on 7125.
+  it("seeds a catalog-suggested port even when the kind already matches", () => {
+    const onChange = vi.fn();
+    render(() => (
+      <ConnectionFields
+        value={DEFAULT_DRAFT}
+        onChange={onChange}
+        suggestedKind="moonraker"
+        suggestedPort={80}
+        onTest={vi.fn()}
+      />
+    ));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ kind: "moonraker", port: 80 }));
+  });
+
+  it("keeps a port the user typed over the suggested one", () => {
+    function Suggesting() {
+      const [value, setValue] = createSignal<ConnectionDraft>(DEFAULT_DRAFT);
+      return (
+        <ConnectionFields value={value()} onChange={setValue} suggestedKind="moonraker" suggestedPort={80} onTest={vi.fn()} />
+      );
+    }
+    render(() => <Suggesting />);
+    const port = screen.getByLabelText("Port") as HTMLInputElement;
+    expect(port.value).toBe("80");
+
+    fireEvent.input(port, { target: { value: "7125" } });
+
+    expect(port.value).toBe("7125");
+  });
+
+  it("returns to the kind's usual port when a later model suggests none", () => {
+    const [suggestedPort, setSuggestedPort] = createSignal<number | undefined>(80);
+    function Remodelling() {
+      const [value, setValue] = createSignal<ConnectionDraft>(DEFAULT_DRAFT);
+      return (
+        <ConnectionFields
+          value={value()}
+          onChange={setValue}
+          suggestedKind="moonraker"
+          suggestedPort={suggestedPort()}
+          onTest={vi.fn()}
+        />
+      );
+    }
+    render(() => <Remodelling />);
+    const port = screen.getByLabelText("Port") as HTMLInputElement;
+    expect(port.value).toBe("80");
+
+    setSuggestedPort(undefined);
+
+    expect(port.value).toBe("7125");
+  });
+
+  it.each(["prusalink", "elegoolink"])("ignores a catalog-suggested %s, which this build can't connect to", (kind) => {
+    const onChange = vi.fn();
+    render(() => (
+      <ConnectionFields value={DEFAULT_DRAFT} onChange={onChange} suggestedKind={kind} suggestedPort={80} onTest={vi.fn()} />
+    ));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("ignores a catalog-suggested kind this build can't connect to", () => {
     const onChange = vi.fn();
     render(() => (

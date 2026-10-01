@@ -4,6 +4,7 @@ import {
   buildMismatches,
   ConnectionFields,
   connectionDraftChanged,
+  defaultPort,
   supportedKind,
   toSubmission,
   type ConnectionDraft,
@@ -22,8 +23,6 @@ import { RemoveCredentialsDialog } from "./RemoveCredentialsDialog";
 import styles from "./PrinterConnectionPanel.module.css";
 
 export { buildMismatches };
-
-const DEFAULT_PORTS: Record<string, number> = { moonraker: 7125, octoprint: 80 };
 
 /** The error codes a replacement probe (D8) can fail with -- the only
  *  failures "Save anyway" (`acceptUnverified`) can actually get past. */
@@ -44,7 +43,10 @@ export function PrinterConnectionPanel(props: PrinterConnectionPanelProps) {
   const [draft, setDraft] = createSignal<ConnectionDraft>({
     kind: initialKind,
     host: existing()?.host ?? "",
-    port: existing()?.port ?? DEFAULT_PORTS[initialKind] ?? 7125,
+    port:
+      existing()?.port ??
+      defaultPort(initialKind, props.printer.profile.suggestedHostType, props.printer.profile.suggestedPort) ??
+      7125,
     useTls: existing()?.useTls ?? false,
     // Never seeded from storage — a stored secret is never echoed back. Empty
     // therefore means "leave it alone", which is why `toSubmission` sends
