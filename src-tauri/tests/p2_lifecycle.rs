@@ -79,6 +79,7 @@ fn a_catalog() -> Catalog {
                 supports_air_filtration: true,
                 supports_multi_filament: false,
                 suggested_host_type: None,
+                suggested_port: None,
             }],
         }],
     }

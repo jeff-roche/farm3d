@@ -438,6 +438,7 @@ mod tests {
             supports_air_filtration: true,
             supports_multi_filament: false,
             suggested_host_type: Some("moonraker".to_string()),
+            suggested_port: None,
         }
     }
 

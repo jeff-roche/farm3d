@@ -8,4 +8,9 @@ import type { PointMm } from "./PointMm";
  * `CatalogVariant`, which additionally carries `variant`/`printer_variant`
  * identity fields that describe the catalog entry, not a resolved instance.
  */
-export type PrinterProfile = { bedShape: BedShape, printableHeightMm: number, bedExcludeAreas: Array<PointMm>, defaultBedType: string, nozzleDiameterMm: Array<number>, nozzleType: string, gcodeFlavor: string, hasAuxiliaryFan: boolean, supportsAirFiltration: boolean, supportsMultiFilament: boolean, suggestedHostType: string | null, };
+export type PrinterProfile = { bedShape: BedShape, printableHeightMm: number, bedExcludeAreas: Array<PointMm>, defaultBedType: string, nozzleDiameterMm: Array<number>, nozzleType: string, gcodeFlavor: string, hasAuxiliaryFan: boolean, supportsAirFiltration: boolean, supportsMultiFilament: boolean, suggestedHostType: string | null,
+/**
+ * Pre-filled in Setup instead of the Connection kind's usual port.
+ * Absent from Last-known-good profiles recorded before it existed.
+ */
+suggestedPort?: number, };

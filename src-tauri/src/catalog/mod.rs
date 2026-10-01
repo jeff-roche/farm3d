@@ -55,6 +55,10 @@ pub struct CatalogVariant {
     pub supports_air_filtration: bool,
     pub supports_multi_filament: bool,
     pub suggested_host_type: Option<String>,
+    /// Set only by a farm3d correction (`ingest::overrides`), for hosts not on
+    /// their Connection kind's usual port. Omitted from the snapshot when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_port: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -99,6 +103,11 @@ pub struct PrinterProfile {
     pub supports_air_filtration: bool,
     pub supports_multi_filament: bool,
     pub suggested_host_type: Option<String>,
+    /// Pre-filled in Setup instead of the Connection kind's usual port.
+    /// Absent from Last-known-good profiles recorded before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub suggested_port: Option<u16>,
 }
 
 impl From<&CatalogVariant> for PrinterProfile {
@@ -115,6 +124,7 @@ impl From<&CatalogVariant> for PrinterProfile {
             supports_air_filtration: v.supports_air_filtration,
             supports_multi_filament: v.supports_multi_filament,
             suggested_host_type: v.suggested_host_type.clone(),
+            suggested_port: v.suggested_port,
         }
     }
 }

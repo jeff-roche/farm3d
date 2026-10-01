@@ -179,6 +179,7 @@ mod tests {
             supports_air_filtration: true,
             supports_multi_filament: true,
             suggested_host_type: Some("elegoolink".to_string()),
+            suggested_port: None,
         }
     }
 

@@ -1,4 +1,5 @@
 pub mod inherits;
+pub mod overrides;
 pub mod shape;
 
 use crate::catalog::{CatalogModel, CatalogVariant, PointMm};
@@ -231,6 +232,8 @@ fn extract_variant(name: &str, resolved: &Value) -> Result<CatalogVariant, Inges
         supports_air_filtration: flag("support_air_filtration"),
         supports_multi_filament: flag("support_multi_filament"),
         suggested_host_type: resolved["host_type"].as_str().map(|s| s.to_string()),
+        // OrcaSlicer has no port hint; only `overrides` sets one.
+        suggested_port: None,
     })
 }
 

@@ -292,6 +292,7 @@ fn empty_profile() -> PrinterProfile {
         supports_air_filtration: false,
         supports_multi_filament: false,
         suggested_host_type: None,
+        suggested_port: None,
     }
 }
 
@@ -373,6 +374,7 @@ mod tests {
             supports_air_filtration: true,
             supports_multi_filament: true,
             suggested_host_type: Some("elegoolink".to_string()),
+            suggested_port: None,
         }
     }
 
@@ -686,6 +688,47 @@ mod tests {
             .profile_drift
             .iter()
             .any(|d| d.field == "printableHeightMm"));
+    }
+
+    #[test]
+    fn a_suggested_port_reaches_the_profile_without_drifting_an_older_last_known_good() {
+        let mut catalog = a_catalog();
+        for v in &mut catalog.models[0].variants {
+            v.suggested_host_type = Some("moonraker".to_string());
+            v.suggested_port = Some(80);
+        }
+        // Recorded before `suggestedPort` existed (and before #26 corrected
+        // the host type).
+        let mut old =
+            serde_json::to_value(PrinterProfile::from(&variant("v", "0.4", 256.0))).unwrap();
+        assert!(old
+            .as_object_mut()
+            .unwrap()
+            .remove("suggestedPort")
+            .is_none());
+        let old: PrinterProfile = serde_json::from_value(old).unwrap();
+        let stored = StoredPrinter {
+            id: "prn-1".to_string(),
+            name: "My Neptune".to_string(),
+            catalog_ref: a_ref(),
+            last_known_good: Some(LastKnownGood {
+                profile: old,
+                catalog_version: "02.04.00.06".to_string(),
+                resolved_at: "2026-08-01T00:00:00Z".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let resolved = resolve_printer(&catalog, &stored);
+
+        assert_eq!(resolved.profile_resolution.profile.suggested_port, Some(80));
+        let drifted: Vec<_> = resolved
+            .profile_resolution
+            .profile_drift
+            .iter()
+            .map(|d| d.field.as_str())
+            .collect();
+        assert_eq!(drifted, vec!["suggestedHostType"]);
     }
 
     #[test]

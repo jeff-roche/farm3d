@@ -1,4 +1,5 @@
 use farm3d_lib::catalog::ingest::ingest_profiles_dir;
+use farm3d_lib::catalog::ingest::overrides::{apply_host_overrides, HOST_OVERRIDES};
 use farm3d_lib::catalog::Catalog;
 use std::env;
 use std::fs;
@@ -39,11 +40,13 @@ fn main() {
 
     let profiles_dir = tmp.join("resources/profiles");
     println!("Ingesting {}...", profiles_dir.display());
-    let models = ingest_profiles_dir(&profiles_dir).expect("ingestion failed");
+    let mut models = ingest_profiles_dir(&profiles_dir).expect("ingestion failed");
+    apply_host_overrides(&mut models, HOST_OVERRIDES).expect("host overrides are stale");
     let variant_count: usize = models.iter().map(|m| m.variants.len()).sum();
     println!(
-        "Ingested {} models / {variant_count} variants",
-        models.len()
+        "Ingested {} models / {variant_count} variants; applied {} host overrides",
+        models.len(),
+        HOST_OVERRIDES.len()
     );
 
     let catalog = Catalog {

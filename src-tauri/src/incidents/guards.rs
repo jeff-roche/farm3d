@@ -270,6 +270,7 @@ mod tests {
                 supports_air_filtration: false,
                 supports_multi_filament: false,
                 suggested_host_type: None,
+                suggested_port: None,
             },
         }
     }
