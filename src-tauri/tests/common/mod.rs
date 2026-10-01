@@ -11,6 +11,7 @@
 pub mod fake_camera;
 pub mod fake_moonraker;
 pub mod octoprint;
+pub mod secrets;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

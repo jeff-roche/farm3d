@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use farm3d_lib::attention::projector::AppliedChanges;
 use farm3d_lib::attention::services::{AttentionServices, AttentionTimings};
 use farm3d_lib::connections::capabilities::{
@@ -32,13 +33,12 @@ use farm3d_lib::connections::supervisor::{build_connection, ConnectionManager, S
 use farm3d_lib::connections::{
     ConnectionConfig, ConnectionState, PrinterConnection, PrinterStatus, MOONRAKER_KIND,
 };
-use chrono::{DateTime, Utc};
 use farm3d_lib::host_ops::repository as host_ops_repo;
-use farm3d_lib::jobs::{JobServices, JobTimings};
 use farm3d_lib::host_ops::{
     self, CapabilityFactory, Clock, HostOperation, HostOperationServices, HostOperationState,
     HostOpsTimings, SystemClock,
 };
+use farm3d_lib::jobs::{JobServices, JobTimings};
 use farm3d_lib::library::content::ContentStore;
 use farm3d_lib::persistence::{MetadataRootLease, RepositoryError, Storage, StoragePaths};
 use farm3d_lib::printers::operational::{OperationalState, TelemetryFreshness};
@@ -194,7 +194,9 @@ impl CapabilityFactory for SimFactory {
             adapter_kind: Some(MOONRAKER_KIND.to_string()),
             capabilities: CapabilityMap::complete(|key| {
                 if key == CapabilityKey::Upload
-                    && self.upload_unsupported.load(std::sync::atomic::Ordering::SeqCst)
+                    && self
+                        .upload_unsupported
+                        .load(std::sync::atomic::Ordering::SeqCst)
                 {
                     return CapabilityState::Unsupported {
                         reason: UnsupportedReason::NotVerified,
@@ -671,9 +673,12 @@ fn boot_inner(
         };
     let camera_timings = attention.as_ref().and_then(|boot| boot.cameras);
     let notification_boot = attention.as_ref().and_then(|boot| {
-        boot.notifications
-            .as_ref()
-            .map(|notifications| (Arc::clone(&notifications.sink), Arc::clone(&notifications.control)))
+        boot.notifications.as_ref().map(|notifications| {
+            (
+                Arc::clone(&notifications.sink),
+                Arc::clone(&notifications.control),
+            )
+        })
     });
     let attention_services = attention.as_ref().map(|boot| {
         Arc::new(AttentionServices::with_clock(
@@ -748,7 +753,8 @@ fn boot_inner(
                 services.attention = attention;
             }
             if let Some(timings) = camera_timings {
-                services.cameras = Arc::new(farm3d_lib::cameras::services::CameraServices::new(timings));
+                services.cameras =
+                    Arc::new(farm3d_lib::cameras::services::CameraServices::new(timings));
             }
         },
     );
@@ -853,8 +859,16 @@ impl Running {
             .unwrap_or_else(|error| panic!("{command} failed: {error}"))
     }
 
-    pub fn job_command(&self, command: &str, operation_id: &str, job_id: &str) -> Result<Value, Value> {
-        self.call(command, json!({"operationId": operation_id, "jobId": job_id}))
+    pub fn job_command(
+        &self,
+        command: &str,
+        operation_id: &str,
+        job_id: &str,
+    ) -> Result<Value, Value> {
+        self.call(
+            command,
+            json!({"operationId": operation_id, "jobId": job_id}),
+        )
     }
 
     pub fn start(&self, operation_id: &str, job_id: &str, prior: &str) -> Result<Value, Value> {
@@ -878,7 +892,10 @@ impl Running {
     pub fn wait_first_pass(&self) {
         let deadline = Instant::now() + self.wait;
         while self.services.jobs.resyncs() == 0 {
-            assert!(Instant::now() < deadline, "the driver's first pass never ran");
+            assert!(
+                Instant::now() < deadline,
+                "the driver's first pass never ran"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -912,7 +929,10 @@ impl Running {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
-            assert!(Instant::now() < deadline, "the driver never reached the barrier");
+            assert!(
+                Instant::now() < deadline,
+                "the driver never reached the barrier"
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -930,7 +950,10 @@ impl Running {
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
             }
-            assert!(Instant::now() < deadline, "the projector never finished a pass");
+            assert!(
+                Instant::now() < deadline,
+                "the projector never finished a pass"
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -940,8 +963,8 @@ impl Running {
     pub fn attention_rows(&self) -> Vec<farm3d_lib::attention::AttentionEvent> {
         self.storage
             .read(|connection| {
-                let mut statement =
-                    connection.prepare("SELECT id FROM attention_events ORDER BY first_observed_at, rowid")?;
+                let mut statement = connection
+                    .prepare("SELECT id FROM attention_events ORDER BY first_observed_at, rowid")?;
                 let ids = statement
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -951,7 +974,11 @@ impl Running {
             .iter()
             .map(|id| {
                 self.storage
-                    .read(|connection| Ok(farm3d_lib::attention::repository::load_event(connection, id)))
+                    .read(|connection| {
+                        Ok(farm3d_lib::attention::repository::load_event(
+                            connection, id,
+                        ))
+                    })
                     .unwrap()
                     .unwrap()
                     .expect("row exists")
@@ -991,7 +1018,9 @@ impl Running {
             // An op resolving wakes the driver again, and whatever it did
             // may have poked the evaluator.
             self.driver_barrier();
-            self.wait_until("the evaluator is idle", || self.services.evaluator.is_idle());
+            self.wait_until("the evaluator is idle", || {
+                self.services.evaluator.is_idle()
+            });
         }
     }
 
@@ -1013,7 +1042,10 @@ impl Running {
         let target = self.services.jobs.resyncs() + count + 1;
         let deadline = Instant::now() + self.wait;
         while self.services.jobs.resyncs() < target {
-            assert!(Instant::now() < deadline, "the driver never ran {count} more passes");
+            assert!(
+                Instant::now() < deadline,
+                "the driver never ran {count} more passes"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -1116,11 +1148,13 @@ impl Running {
                         |row| row.get(0),
                     )?,
                     slot_id.clone(),
-                    connection.query_row(
-                        "SELECT id FROM spools WHERE slot_id = ?1",
-                        [&slot_id],
-                        |row| row.get(0),
-                    ).optional()?,
+                    connection
+                        .query_row(
+                            "SELECT id FROM spools WHERE slot_id = ?1",
+                            [&slot_id],
+                            |row| row.get(0),
+                        )
+                        .optional()?,
                 ))
             })
             .unwrap();
@@ -1299,7 +1333,9 @@ impl Running {
             .unwrap()
             .iter()
             .map(|text| serde_json::from_str::<Value>(text).unwrap())
-            .filter(|event| event["type"] == "queue.job.changed" && event["subject"]["id"] == job_id)
+            .filter(|event| {
+                event["type"] == "queue.job.changed" && event["subject"]["id"] == job_id
+            })
             .map(|event| event["payload"]["job"].clone())
             .collect()
     }
@@ -1363,7 +1399,9 @@ impl Running {
 
     /// A Spool's stored `current_mg`.
     pub fn spool_current_mg(&self, spool_id: &str) -> i64 {
-        self.scalar(&format!("SELECT current_mg FROM spools WHERE id = '{spool_id}'"))
+        self.scalar(&format!(
+            "SELECT current_mg FROM spools WHERE id = '{spool_id}'"
+        ))
     }
 
     /// `spool_history`'s ledger rows (Task 9: to check `isCorrection`).

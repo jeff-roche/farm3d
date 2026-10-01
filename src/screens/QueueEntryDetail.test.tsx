@@ -6,6 +6,8 @@ import {
   resetQueueStoreMock,
   setQueueStoreState,
 } from "../queue/queue-store-mock";
+import { historyStoreMock, resetHistoryStoreMock } from "../history/history-store-mock";
+import { webJobTimeline } from "../history/web-fixtures";
 import { eligibilitySummary, job, jobHistory, queueEntry, queueEntryEligibility } from "../queue/test-records";
 import {
   WEB_QUEUE_ENTRY_BRACKET_IDS,
@@ -15,6 +17,7 @@ import {
 import { loadWebSlicingFixture, resetSlicingStoreMock } from "../slicing/slicing-store-mock";
 import { QueueEntryDetail } from "./QueueEntryDetail";
 
+vi.mock("../history/history-store", async () => (await import("../history/history-store-mock")).historyStoreMock);
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 vi.mock("../spools/spool-store", () => ({
@@ -31,6 +34,7 @@ vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
 
 beforeEach(() => {
   resetQueueStoreMock();
+  resetHistoryStoreMock();
   resetSlicingStoreMock();
   loadWebSlicingFixture();
   window.location.hash = "";
@@ -170,10 +174,16 @@ describe("QueueEntryDetail", () => {
     });
     // Twice: the Dispatch tab's JobPanel reads the same history first.
     queueStoreMock.getJobHistory.mockResolvedValueOnce(history).mockResolvedValueOnce(history);
+    // A closed entry's Job is settled: its timeline is `get_job_timeline`.
+    historyStoreMock.getJobTimeline.mockResolvedValue({
+      ...webJobTimeline(WEB_QUEUE_JOB_DEFERRED)!,
+      items: [{ source: "job", at: "2026-09-24T09:09:00Z", event: history.events[0] }],
+    });
     renderDetail(WEB_QUEUE_ENTRY_HISTORY_DEFERRED);
     fireEvent.click(screen.getByRole("tab", { name: "History" }));
     const timeline = await screen.findByRole("list", { name: /^Job timeline/ });
     expect(within(timeline).getByText("Failed")).toBeInTheDocument();
+    expect(historyStoreMock.getJobTimeline).toHaveBeenCalledWith(WEB_QUEUE_JOB_DEFERRED);
     fireEvent.click(screen.getByRole("button", { name: "Copy 2 of 2" }));
     expect(window.location.hash).toBe("#nav=v1/queue/job/qen-sibling");
   });

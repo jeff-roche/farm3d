@@ -278,7 +278,13 @@ pub fn run_pass<R: tauri::Runtime>(
     };
     let outcome = {
         let mut watch = lock(&attention.watch);
-        projector::run(&services.storage, &live, &mut watch, AttentionOrigin::Live, now)?
+        projector::run(
+            &services.storage,
+            &live,
+            &mut watch,
+            AttentionOrigin::Live,
+            now,
+        )?
     };
     *lock(&attention.next_deadline) = outcome.next_deadline;
     attention.passes.fetch_add(1, Ordering::SeqCst);
@@ -347,14 +353,6 @@ impl FailureLog {
     }
 }
 
-fn held_back_note(held_back: u64) -> String {
-    match held_back {
-        0 => String::new(),
-        1 => " (and 1 more failure since the last report)".to_string(),
-        n => format!(" (and {n} more failures since the last report)"),
-    }
-}
-
 struct Projector<R: tauri::Runtime> {
     _task: TaskGuard,
     services: Weak<RuntimeServices<R>>,
@@ -400,10 +398,12 @@ impl<R: tauri::Runtime> Projector<R> {
             let backfilled = lock(&services.attention.backfilled).take();
             if let Some(changes) = backfilled {
                 if let Some(app) = services.attention.app() {
-                    services
-                        .attention
-                        .stream
-                        .publish_change(app, &changes.event_rows(), &changes.incidents, &[]);
+                    services.attention.stream.publish_change(
+                        app,
+                        &changes.event_rows(),
+                        &changes.incidents,
+                        &[],
+                    );
                 }
             }
         }
@@ -418,7 +418,10 @@ impl<R: tauri::Runtime> Projector<R> {
                 return;
             };
             if lagged > 0 {
-                services.attention.lagged.fetch_add(lagged, Ordering::SeqCst);
+                services
+                    .attention
+                    .lagged
+                    .fetch_add(lagged, Ordering::SeqCst);
             }
             let waiting = std::mem::take(&mut *lock(&services.attention.barriers));
             last_pass = Some(tokio::time::Instant::now());
@@ -426,11 +429,11 @@ impl<R: tauri::Runtime> Projector<R> {
                 Ok(_) => failures.succeeded(),
                 Err(error) => {
                     if let Some(held_back) = failures.failed(std::time::Instant::now()) {
-                        // Repository errors carry no credential, so neither
-                        // does this.
-                        eprintln!(
-                            "farm3d: attention projector: a pass failed: {error:?}{}",
-                            held_back_note(held_back)
+                        crate::f3d_log!(
+                            warn,
+                            "attention.passFailed",
+                            error = error,
+                            held_back = held_back
                         );
                     }
                 }
@@ -553,7 +556,5 @@ mod tests {
         // A success starts over: the next failure is logged at once.
         log.succeeded();
         assert_eq!(log.failed(at(62)), Some(0));
-        assert_eq!(held_back_note(0), "");
-        assert_eq!(held_back_note(59), " (and 59 more failures since the last report)");
     }
 }

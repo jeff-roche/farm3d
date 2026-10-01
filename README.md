@@ -82,6 +82,41 @@ just sim-down
 Rust harness. Automated tests never write to a real printer; the optional
 real-hardware tests only probe, subscribe, and query.
 
+## Your data, backups, and logs
+
+farm3d keeps everything on this machine. On Linux, with the app
+identifier `farm3d` (Tauri's `app_config_dir`, `app_data_dir`, and
+`app_log_dir`; the XDG variables move them):
+
+| What | Where |
+| --- | --- |
+| Database, credential fallback file (used only when no Secret Service is running), restore journal | `~/.config/farm3d/` |
+| Managed Model content, camera images, backups | `~/.local/share/farm3d/` |
+| Safety backups | `~/.local/share/farm3d/farm3d-backups/v1/safety/` |
+| Log files (`farm3d.log`, rotated at 2 MiB, five files kept) | `~/.local/share/farm3d/logs/` |
+| Slicer profile cache | `~/.cache/farm3d/` |
+
+Windows and macOS use the platform's equivalent app directories. They are
+unverified.
+
+**Back up.** Settings, then Storage and backup, then **Create backup**.
+Choose whether the file carries no, pinned, or all camera images, then
+pick where to save it. The `.farm3d-backup` file holds your Printers,
+Spools, Models, Jobs, and settings. It never holds credentials, so
+restored Printers ask for their credentials again.
+
+**Restore.** Settings, then Storage and backup, then **Restore from
+file**. farm3d verifies the file, shows what would change, and asks you to
+type a confirmation. It writes a safety backup first, restarts, and
+installs the restore at startup. A banner reports the outcome; Dismiss
+clears it. If the install fails it rolls back, and a crash mid-install is
+recovered on the next launch. To undo a restore, restore its safety backup
+from the same page.
+
+**Diagnostics.** Settings, then Diagnostics, then **Export diagnostics**
+writes a zip you can attach to a bug report. It leaves out credentials,
+host names and addresses, URLs, file paths, and names.
+
 ## Packaging
 
 `just package` builds `.deb`, `.rpm` and AppImage bundles. On Arch Linux,

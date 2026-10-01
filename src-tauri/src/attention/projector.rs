@@ -31,7 +31,9 @@ use crate::connections::PrinterStatusFacts;
 use crate::incidents::repository as incidents_repository;
 use crate::incidents::{Incident, IncidentEntryDetail, IncidentKind};
 use crate::jobs::repository as jobs_repository;
-use crate::jobs::{CancelReason, Job, JobEventKind, JobState, PrinterSnapshot, ReconciliationRequirement};
+use crate::jobs::{
+    CancelReason, Job, JobEventKind, JobState, PrinterSnapshot, ReconciliationRequirement,
+};
 use crate::notifications::policy::NotifyCandidate;
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::printers::repository as printers_repository;
@@ -88,7 +90,10 @@ pub struct AppliedChanges {
 impl AppliedChanges {
     /// The committed Event rows, in publish order.
     pub fn event_rows(&self) -> Vec<AttentionEvent> {
-        self.events.iter().map(|applied| applied.event.clone()).collect()
+        self.events
+            .iter()
+            .map(|applied| applied.event.clone())
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -245,7 +250,11 @@ fn parse_time(text: &str) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-fn strings(conn: &Connection, sql: &str, args: impl rusqlite::Params) -> Result<Vec<String>, RepositoryError> {
+fn strings(
+    conn: &Connection,
+    sql: &str,
+    args: impl rusqlite::Params,
+) -> Result<Vec<String>, RepositoryError> {
     let mut statement = conn.prepare(sql).map_err(storage_error)?;
     let rows = statement
         .query_map(args, |row| row.get::<_, String>(0))
@@ -265,12 +274,12 @@ fn attention_epoch(conn: &Connection) -> Result<DateTime<Utc>, RepositoryError> 
         )
         .optional()
         .map_err(storage_error)?;
-    text.as_deref().and_then(epoch_from_applied_at).ok_or(RepositoryError::Storage(
-        StorageError::CorruptData {
+    text.as_deref()
+        .and_then(epoch_from_applied_at)
+        .ok_or(RepositoryError::Storage(StorageError::CorruptData {
             source_name: "database",
             source_sha256: None,
-        },
-    ))
+        }))
 }
 
 /// The epoch instant from migration 0009's `applied_at`, truncated to the
@@ -319,7 +328,10 @@ fn job_facts(tx: &Transaction<'_>, job: &Job) -> Result<JobFacts, RepositoryErro
 }
 
 /// D2 "Ended by": from the Job's terminal `job_events` row.
-fn terminal_ended_by(tx: &Transaction<'_>, job_id: &str) -> Result<Option<JobEndedBy>, RepositoryError> {
+fn terminal_ended_by(
+    tx: &Transaction<'_>,
+    job_id: &str,
+) -> Result<Option<JobEndedBy>, RepositoryError> {
     let kinds = strings(
         tx,
         "SELECT kind FROM job_events WHERE job_id = ?1 ORDER BY sequence DESC",
@@ -346,7 +358,10 @@ fn job_label(tx: &Transaction<'_>, job: &Job) -> Result<String, RepositoryError>
 /// D2: `spoolLabel` is "<manufacturer> <product or material>".
 fn spool_label(spool: &SpoolRecord) -> String {
     let material = match spool.material_family {
-        MaterialFamily::Other => spool.material_other.clone().unwrap_or_else(|| "Other".to_string()),
+        MaterialFamily::Other => spool
+            .material_other
+            .clone()
+            .unwrap_or_else(|| "Other".to_string()),
         family => encode_enum(family),
     };
     format!(
@@ -436,8 +451,10 @@ pub fn read_view<'a>(
 
     // Requirements: every open one, plus every one an open Event names.
     let mut requirements: Vec<ReconciliationRequirement> = jobs_repository::open_requirements(tx)?;
-    let mut requirement_ids: HashSet<String> =
-        requirements.iter().map(|requirement| requirement.id.clone()).collect();
+    let mut requirement_ids: HashSet<String> = requirements
+        .iter()
+        .map(|requirement| requirement.id.clone())
+        .collect();
     for event in open {
         if let (Some(requirement_id), Some(job_id)) = (&event.requirement_id, &event.job_id) {
             if requirement_ids.contains(requirement_id) {
@@ -459,7 +476,11 @@ pub fn read_view<'a>(
     // epoch that has no Event yet.
     job_ids.extend(active_jobs(tx)?);
     job_ids.extend(open.iter().filter_map(|event| event.job_id.clone()));
-    job_ids.extend(requirements.iter().map(|requirement| requirement.job_id.clone()));
+    job_ids.extend(
+        requirements
+            .iter()
+            .map(|requirement| requirement.job_id.clone()),
+    );
     job_ids.extend(unprojected_failures(tx, attention_epoch)?);
     let mut jobs = Vec::with_capacity(job_ids.len());
     for id in &job_ids {
@@ -470,9 +491,16 @@ pub fn read_view<'a>(
 
     // Spools: every active one, plus every one an open Event, a Job, or a
     // requirement in the view names (for subjects).
-    let mut spool_ids: HashSet<String> = open.iter().filter_map(|event| event.spool_id.clone()).collect();
+    let mut spool_ids: HashSet<String> = open
+        .iter()
+        .filter_map(|event| event.spool_id.clone())
+        .collect();
     spool_ids.extend(jobs.iter().map(|job| job.spool_id.clone()));
-    spool_ids.extend(requirements.iter().filter_map(|requirement| requirement.spool_id.clone()));
+    spool_ids.extend(
+        requirements
+            .iter()
+            .filter_map(|requirement| requirement.spool_id.clone()),
+    );
     let spools = spools_repository::list_spools(tx)?
         .iter()
         .filter(|spool| spool.lifecycle == SpoolLifecycle::Active || spool_ids.contains(&spool.id))
@@ -585,7 +613,9 @@ fn incident_kind(kind: ConditionKind) -> Option<IncidentKind> {
         ConditionKind::PrinterHostFailed => Some(IncidentKind::PrinterHostFailed),
         ConditionKind::JobFailed => Some(IncidentKind::JobFailed),
         ConditionKind::JobHostCancelled => Some(IncidentKind::JobHostCancelled),
-        ConditionKind::RequirementJobOutcomeUnknown => Some(IncidentKind::RequirementJobOutcomeUnknown),
+        ConditionKind::RequirementJobOutcomeUnknown => {
+            Some(IncidentKind::RequirementJobOutcomeUnknown)
+        }
         _ => None,
     }
 }
@@ -696,7 +726,8 @@ pub fn apply(
                 }
             }
             PlannedAction::Acknowledge { event_id } => {
-                let (event, did) = attention_repository::acknowledge(tx, event_id, AckBy::System, now)?;
+                let (event, did) =
+                    attention_repository::acknowledge(tx, event_id, AckBy::System, now)?;
                 if did {
                     if let Some(incident_id) = &event.incident_id {
                         incidents_repository::append_entry(
@@ -852,7 +883,8 @@ pub fn apply(
             if condition.kind != ConditionKind::JobCompleted {
                 continue;
             }
-            let (Some(printer_id), Some(job_id)) = (&condition.printer_id, &condition.job_id) else {
+            let (Some(printer_id), Some(job_id)) = (&condition.printer_id, &condition.job_id)
+            else {
                 continue;
             };
             if alerts_of(printer_id).is_some_and(|alerts| alerts.snapshot_on_completion) {
@@ -1051,7 +1083,11 @@ mod tests {
         ];
         // 59.999 s later: only the unchanged amendment of the recent Event
         // is dropped.
-        let kept = persisted_actions(actions.clone(), &open, at(60) - chrono::TimeDelta::milliseconds(1));
+        let kept = persisted_actions(
+            actions.clone(),
+            &open,
+            at(60) - chrono::TimeDelta::milliseconds(1),
+        );
         assert_eq!(kept, actions[1..].to_vec());
         // Exactly 60 s later: every action is written.
         assert_eq!(persisted_actions(actions.clone(), &open, at(60)), actions);
@@ -1059,7 +1095,8 @@ mod tests {
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let temp = tempfile::tempdir().unwrap();
-        let paths = StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
+        let paths =
+            StoragePaths::new(temp.path().join("metadata"), temp.path().join("data")).unwrap();
         let lease = MetadataRootLease::acquire(&paths).unwrap();
         let storage = Storage::open(paths, &lease).unwrap();
         (temp, storage)
@@ -1083,7 +1120,10 @@ mod tests {
     fn set_current_mg(storage: &Storage, current_mg: i64) {
         storage
             .write_repo(|tx| -> Result<(), RepositoryError> {
-                tx.execute("UPDATE spools SET current_mg = ?1 WHERE id = 'spl-a'", [current_mg])?;
+                tx.execute(
+                    "UPDATE spools SET current_mg = ?1 WHERE id = 'spl-a'",
+                    [current_mg],
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -1097,9 +1137,15 @@ mod tests {
             supervisors_started_at: None,
             catalog: None,
         };
-        run(storage, &live, &mut PrinterWatch::default(), AttentionOrigin::Live, now)
-            .unwrap()
-            .changes
+        run(
+            storage,
+            &live,
+            &mut PrinterWatch::default(),
+            AttentionOrigin::Live,
+            now,
+        )
+        .unwrap()
+        .changes
     }
 
     /// The total size of every `*-wal` file under `root`.
@@ -1145,21 +1191,39 @@ mod tests {
         for seconds in [1, 10, 59] {
             let changes = pass_at(&storage, at(seconds));
             assert!(changes.is_empty(), "{changes:?}");
-            assert_eq!(the_event(&storage), first, "no amendment written at +{seconds}s");
+            assert_eq!(
+                the_event(&storage),
+                first,
+                "no amendment written at +{seconds}s"
+            );
         }
-        assert_eq!(wal_bytes(temp.path()), wal_before, "a pass with nothing to write writes nothing");
+        assert_eq!(
+            wal_bytes(temp.path()),
+            wal_before,
+            "a pass with nothing to write writes nothing"
+        );
 
         // A minute on: one persisted observation, and still nothing published.
         let changes = pass_at(&storage, at(60));
-        assert!(changes.is_empty(), "an unchanged amendment emits nothing: {changes:?}");
-        assert!(wal_bytes(temp.path()) > wal_before, "the WAL measure sees a real write");
+        assert!(
+            changes.is_empty(),
+            "an unchanged amendment emits nothing: {changes:?}"
+        );
+        assert!(
+            wal_bytes(temp.path()) > wal_before,
+            "the WAL measure sees a real write"
+        );
         let observed = the_event(&storage);
         assert_eq!(observed.observation_count, 2);
         assert_eq!(observed.last_observed_at, "2026-09-28T12:01:00Z");
         assert_eq!(observed.revision, first.revision);
         let changes = pass_at(&storage, at(61));
         assert!(changes.is_empty());
-        assert_eq!(the_event(&storage), observed, "once, not on every later pass");
+        assert_eq!(
+            the_event(&storage),
+            observed,
+            "once, not on every later pass"
+        );
 
         // A changed amendment inside the minute writes and publishes.
         set_current_mg(&storage, 70_000);

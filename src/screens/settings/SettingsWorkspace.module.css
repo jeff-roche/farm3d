@@ -1,0 +1,18 @@
+.workspace {
+  height: 100%;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  background: var(--f3d-color-bg);
+  color: var(--f3d-color-text);
+}
+
+.tabs {
+  min-height: 100%;
+}
+
+.loading {
+  margin: 0;
+  color: var(--f3d-color-text-muted);
+  font-family: var(--f3d-type-body-font);
+  font-size: var(--f3d-type-body-size);
+}

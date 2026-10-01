@@ -51,7 +51,11 @@ impl CameraSourceKind {
 /// constraint 3: it never enters an event, error, log, or persisted
 /// payload other than this column and the Printers export file).
 #[derive(Serialize, Deserialize, Clone, PartialEq, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -303,11 +307,22 @@ pub enum PruneReason {
     Age,
     DiskCap,
     MissingFile,
+    /// P9 D5: a backup copy's snapshot the operator's media choice left
+    /// out. Written only into a backup's database copy, never the live
+    /// Farm; a restored Farm carries it.
+    NotInBackup,
+    /// P9 D15: a camera-media reset (tier b) pruned it, pinned or not.
+    Reset,
 }
 
 impl PruneReason {
-    pub const ALL: [PruneReason; 3] =
-        [PruneReason::Age, PruneReason::DiskCap, PruneReason::MissingFile];
+    pub const ALL: [PruneReason; 5] = [
+        PruneReason::Age,
+        PruneReason::DiskCap,
+        PruneReason::MissingFile,
+        PruneReason::NotInBackup,
+        PruneReason::Reset,
+    ];
 }
 
 /// A captured frame's image format — `camera_snapshots.content_type`

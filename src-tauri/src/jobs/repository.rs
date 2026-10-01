@@ -68,9 +68,13 @@ fn not_found(id: &str) -> RepositoryError {
     }
 }
 
-fn decode_text_enum<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    decode_enum(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+fn decode_text_enum<T: serde::de::DeserializeOwned>(
+    index: usize,
+    text: &str,
+) -> rusqlite::Result<T> {
+    decode_enum(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 fn to_json(value: &impl serde::Serialize) -> String {
@@ -78,8 +82,9 @@ fn to_json(value: &impl serde::Serialize) -> String {
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    serde_json::from_str(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+    serde_json::from_str(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 // --- jobs ------------------------------------------------------------------
@@ -110,9 +115,11 @@ fn decode_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     let correction_event_id: Option<String> = row.get(21)?;
 
     let settlement: Settlement = decode_text_enum(11, &settlement_text)?;
-    let settlement_preview = matches!(settlement, Settlement::Pending | Settlement::Deferred)
-        .then(|| SettlementPreview {
-            estimated_use_mg: estimated_use_mg(estimate_mg, max_progress_pct),
+    let settlement_preview =
+        matches!(settlement, Settlement::Pending | Settlement::Deferred).then(|| {
+            SettlementPreview {
+                estimated_use_mg: estimated_use_mg(estimate_mg, max_progress_pct),
+            }
         });
 
     let has_successor: bool = row.get(26)?;
@@ -182,7 +189,10 @@ pub fn load_job(conn: &Connection, id: &str) -> Result<Option<Job>, StorageError
 
 /// The Printer's one active (non-terminal) Job, if any — the partial
 /// unique index's own invariant, read back.
-pub fn active_job_for_printer(conn: &Connection, printer_id: &str) -> Result<Option<Job>, StorageError> {
+pub fn active_job_for_printer(
+    conn: &Connection,
+    printer_id: &str,
+) -> Result<Option<Job>, StorageError> {
     Ok(conn
         .query_row(
             &format!(
@@ -403,7 +413,16 @@ pub fn transition(
     // original print-end time with the settlement or correction time.
     let ended_at = (!current.state.is_terminal() && to.is_terminal()).then(|| now.to_string());
 
-    write_row(tx, job_id, to, settlement, &change, ended_at, clears_unreachable, now)?;
+    write_row(
+        tx,
+        job_id,
+        to,
+        settlement,
+        &change,
+        ended_at,
+        clears_unreachable,
+        now,
+    )?;
 
     let sequence = next_sequence(tx, job_id)?;
     write_event(
@@ -603,7 +622,10 @@ fn decode_requirement_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reconcili
     })
 }
 
-fn load_requirement(conn: &Connection, id: &str) -> Result<Option<ReconciliationRequirement>, StorageError> {
+fn load_requirement(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<ReconciliationRequirement>, StorageError> {
     Ok(conn
         .query_row(
             &format!("SELECT {REQUIREMENT_COLUMNS} FROM reconciliation_requirements WHERE id = ?1"),
@@ -613,7 +635,10 @@ fn load_requirement(conn: &Connection, id: &str) -> Result<Option<Reconciliation
         .optional()?)
 }
 
-pub fn requirements_for_job(conn: &Connection, job_id: &str) -> Result<Vec<ReconciliationRequirement>, StorageError> {
+pub fn requirements_for_job(
+    conn: &Connection,
+    job_id: &str,
+) -> Result<Vec<ReconciliationRequirement>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {REQUIREMENT_COLUMNS} FROM reconciliation_requirements WHERE job_id = ?1
          ORDER BY opened_at, id"
@@ -626,7 +651,9 @@ pub fn requirements_for_job(conn: &Connection, job_id: &str) -> Result<Vec<Recon
 
 /// Every `pending`/`deferred` Reconciliation Requirement (P8 will project
 /// these into Attention; P7 keeps them durable and unresolved).
-pub fn open_requirements(conn: &Connection) -> Result<Vec<ReconciliationRequirement>, StorageError> {
+pub fn open_requirements(
+    conn: &Connection,
+) -> Result<Vec<ReconciliationRequirement>, StorageError> {
     let mut statement = conn.prepare(&format!(
         "SELECT {REQUIREMENT_COLUMNS} FROM reconciliation_requirements WHERE status <> 'resolved'
          ORDER BY opened_at, id"
@@ -719,7 +746,10 @@ fn decode_reservation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reservati
 /// A Job's own reservation, read directly (not through
 /// `spools::reservations`, which takes `&Transaction` — `history` takes
 /// `&Connection`, spec's own signature).
-fn load_reservation(conn: &Connection, reservation_id: &str) -> Result<Option<Reservation>, StorageError> {
+fn load_reservation(
+    conn: &Connection,
+    reservation_id: &str,
+) -> Result<Option<Reservation>, StorageError> {
     Ok(conn
         .query_row(
             "SELECT id, spool_id, holder_kind, holder_id, amount_mg, state, operation_id, created_at, settled_at
@@ -731,8 +761,9 @@ fn load_reservation(conn: &Connection, reservation_id: &str) -> Result<Option<Re
 }
 
 fn lineage_entries(conn: &Connection, lineage_id: &str) -> Result<Vec<QueueEntry>, StorageError> {
-    let mut statement =
-        conn.prepare("SELECT id FROM queue_entries WHERE lineage_id = ?1 ORDER BY copy_index, created_at, id")?;
+    let mut statement = conn.prepare(
+        "SELECT id FROM queue_entries WHERE lineage_id = ?1 ORDER BY copy_index, created_at, id",
+    )?;
     let ids = statement
         .query_map([lineage_id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -747,8 +778,8 @@ fn host_operations_of(
     conn: &Connection,
     job_id: &str,
 ) -> Result<Vec<crate::host_ops::HostOperation>, StorageError> {
-    let mut statement =
-        conn.prepare("SELECT id FROM host_operations WHERE job_id = ?1 ORDER BY created_at, rowid")?;
+    let mut statement = conn
+        .prepare("SELECT id FROM host_operations WHERE job_id = ?1 ORDER BY created_at, rowid")?;
     let ids = statement
         .query_map([job_id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -772,7 +803,8 @@ fn host_operations_of(
 /// signature carries no `NotFound` variant of its own.
 pub fn history(conn: &Connection, job_id: &str) -> Result<JobHistory, StorageError> {
     let job = load_job(conn, job_id)?.ok_or(StorageError::OperationFailed)?;
-    let entry = queue_repository::load(conn, &job.queue_entry_id)?.ok_or(StorageError::OperationFailed)?;
+    let entry =
+        queue_repository::load(conn, &job.queue_entry_id)?.ok_or(StorageError::OperationFailed)?;
     let lineage = lineage_entries(conn, &entry.lineage_id)?;
     let events = list_events(conn, job_id)?;
     let reservations = load_reservation(conn, &job.reservation_id)?
@@ -976,7 +1008,13 @@ mod tests {
         let staged = rig
             .storage
             .write_repo(|tx| {
-                transition(tx, &job.id, JobEventKind::StageHandedOff, JobChange::default(), NOW)
+                transition(
+                    tx,
+                    &job.id,
+                    JobEventKind::StageHandedOff,
+                    JobChange::default(),
+                    NOW,
+                )
             })
             .expect("transition");
 
@@ -1007,7 +1045,13 @@ mod tests {
         // `StartHandedOff` is legal only from `awaitingStart` (D3); the
         // Job is still `assigned`.
         let result = rig.storage.write_repo(|tx| {
-            transition(tx, &job.id, JobEventKind::StartHandedOff, JobChange::default(), NOW)
+            transition(
+                tx,
+                &job.id,
+                JobEventKind::StartHandedOff,
+                JobChange::default(),
+                NOW,
+            )
         });
 
         match result {
@@ -1070,11 +1114,18 @@ mod tests {
             "a second requirement of the same (job, kind) violates the UNIQUE index"
         );
 
-        let resolution = serde_json::json!({ "kind": "settled", "method": "estimated", "usedMg": 100_000 });
+        let resolution =
+            serde_json::json!({ "kind": "settled", "method": "estimated", "usedMg": 100_000 });
         let resolved = rig
             .storage
             .write_repo(|tx| {
-                set_requirement_status(tx, &requirement.id, RequirementStatus::Resolved, Some(&resolution), NOW)
+                set_requirement_status(
+                    tx,
+                    &requirement.id,
+                    RequirementStatus::Resolved,
+                    Some(&resolution),
+                    NOW,
+                )
             })
             .expect("resolve");
         assert_eq!(resolved.status, RequirementStatus::Resolved);
@@ -1101,7 +1152,13 @@ mod tests {
         let job = insert_test_job(&rig);
         rig.storage
             .write_repo(|tx| {
-                transition(tx, &job.id, JobEventKind::StageHandedOff, JobChange::default(), NOW)
+                transition(
+                    tx,
+                    &job.id,
+                    JobEventKind::StageHandedOff,
+                    JobChange::default(),
+                    NOW,
+                )
             })
             .expect("stage");
         rig.storage
@@ -1127,7 +1184,11 @@ mod tests {
         assert_eq!(history.lineage.len(), 1);
         assert_eq!(history.events.len(), 3);
         assert_eq!(
-            history.events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            history
+                .events
+                .iter()
+                .map(|e| e.sequence)
+                .collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
         assert_eq!(history.events[0].kind, JobEventKind::Assigned);

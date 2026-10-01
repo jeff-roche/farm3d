@@ -48,3 +48,33 @@
   font-family: var(--f3d-type-body-font);
   font-size: var(--f3d-type-body-size);
 }
+
+.root[data-orientation="vertical"] {
+  flex-direction: row;
+  gap: 0.75rem;
+}
+
+.root[data-orientation="vertical"] .list {
+  flex-direction: column;
+  gap: 0.125rem;
+  border-bottom: none;
+  border-right: 1px solid var(--f3d-color-border);
+  min-width: 9rem;
+}
+
+.root[data-orientation="vertical"] .trigger {
+  text-align: left;
+}
+
+.root[data-orientation="vertical"] .indicator {
+  bottom: auto;
+  right: -1px;
+  width: 2px;
+  height: auto;
+}
+
+.root[data-orientation="vertical"] .content {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}

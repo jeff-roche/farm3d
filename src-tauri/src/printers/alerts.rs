@@ -213,7 +213,14 @@ pub fn get(conn: &Connection, printer_id: &str) -> Result<PrinterAlertDefaults, 
         .optional()?;
 
     Ok(match row {
-        Some((revision, offline_minutes, notifications_text, snapshot_on_incident, snapshot_on_completion, updated_at)) => {
+        Some((
+            revision,
+            offline_minutes,
+            notifications_text,
+            snapshot_on_incident,
+            snapshot_on_completion,
+            updated_at,
+        )) => {
             let offline_after_minutes = offline_minutes.map(|minutes| {
                 OfflineAlertMinutes::from_minutes(minutes)
                     .expect("printer_alert_defaults.offline_after_minutes satisfies its own CHECK")
@@ -263,7 +270,9 @@ pub fn set(
              updated_at = excluded.updated_at",
         params![
             printer_id,
-            defaults.offline_after_minutes.map(OfflineAlertMinutes::minutes),
+            defaults
+                .offline_after_minutes
+                .map(OfflineAlertMinutes::minutes),
             encode_enum(defaults.notifications),
             defaults.snapshot_on_incident,
             defaults.snapshot_on_completion,
@@ -275,7 +284,9 @@ pub fn set(
 
 fn printer_exists(conn: &Connection, printer_id: &str) -> Result<bool, StorageError> {
     Ok(conn
-        .query_row("SELECT 1 FROM printers WHERE id = ?1", [printer_id], |_| Ok(()))
+        .query_row("SELECT 1 FROM printers WHERE id = ?1", [printer_id], |_| {
+            Ok(())
+        })
         .optional()?
         .is_some())
 }

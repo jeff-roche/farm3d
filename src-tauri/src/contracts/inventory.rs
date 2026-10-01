@@ -9,7 +9,7 @@ pub struct CommandContract {
 
 macro_rules! contracts {
     ($(($command:literal, $request:literal, $result:literal)),+ $(,)?) => {
-        pub const COMMAND_CONTRACTS: [CommandContract; 129] = [
+        pub const COMMAND_CONTRACTS: [CommandContract; 147] = [
             $(CommandContract { command: $command, request: $request, result: $result }),+
         ];
     };
@@ -389,16 +389,8 @@ contracts![
         "AbandonHostOperationRequest",
         "AbandonHostOperationResult"
     ),
-    (
-        "list_queue",
-        "ListQueueRequest",
-        "ListQueueResult"
-    ),
-    (
-        "add_to_queue",
-        "AddToQueueRequest",
-        "AddToQueueResult"
-    ),
+    ("list_queue", "ListQueueRequest", "ListQueueResult"),
+    ("add_to_queue", "AddToQueueRequest", "AddToQueueResult"),
     (
         "update_queue_entry",
         "UpdateQueueEntryRequest",
@@ -424,21 +416,9 @@ contracts![
         "AssignQueueEntryRequest",
         "AssignQueueEntryResult"
     ),
-    (
-        "release_job",
-        "ReleaseJobRequest",
-        "ReleaseJobResult"
-    ),
-    (
-        "retry_job",
-        "RetryJobRequest",
-        "RetryJobResult"
-    ),
-    (
-        "cancel_job",
-        "CancelJobRequest",
-        "CancelJobResult"
-    ),
+    ("release_job", "ReleaseJobRequest", "ReleaseJobResult"),
+    ("retry_job", "RetryJobRequest", "RetryJobResult"),
+    ("cancel_job", "CancelJobRequest", "CancelJobResult"),
     (
         "get_job_history",
         "GetJobHistoryRequest",
@@ -488,11 +468,7 @@ contracts![
         "ListIncidentsRequest",
         "ListIncidentsResult"
     ),
-    (
-        "get_incident",
-        "GetIncidentRequest",
-        "GetIncidentResult"
-    ),
+    ("get_incident", "GetIncidentRequest", "GetIncidentResult"),
     (
         "add_incident_note",
         "AddIncidentNoteRequest",
@@ -565,9 +541,63 @@ contracts![
         "SendTestNotificationRequest",
         "SendTestNotificationResult"
     ),
+    (
+        "list_job_history",
+        "ListJobHistoryRequest",
+        "ListJobHistoryResult"
+    ),
+    (
+        "get_job_timeline",
+        "GetJobTimelineRequest",
+        "GetJobTimelineResult"
+    ),
+    (
+        "backup_inventory",
+        "BackupInventoryRequest",
+        "BackupInventoryResult"
+    ),
+    ("create_backup", "CreateBackupRequest", "CreateBackupResult"),
+    ("list_backups", "ListBackupsRequest", "ListBackupsResult"),
+    ("delete_backup", "DeleteBackupRequest", "DeleteBackupResult"),
+    (
+        "preview_restore",
+        "PreviewRestoreRequest",
+        "PreviewRestoreResult"
+    ),
+    (
+        "discard_restore_preview",
+        "DiscardRestorePreviewRequest",
+        "DiscardRestorePreviewResult"
+    ),
+    ("apply_restore", "ApplyRestoreRequest", "ApplyRestoreResult"),
+    (
+        "restore_status",
+        "RestoreStatusRequest",
+        "RestoreStatusResult"
+    ),
+    (
+        "acknowledge_restore_status",
+        "AcknowledgeRestoreStatusRequest",
+        "AcknowledgeRestoreStatusResult"
+    ),
+    ("reset_preview", "ResetPreviewRequest", "ResetPreviewResult"),
+    ("reset_farm", "ResetFarmRequest", "ResetFarmResult"),
+    (
+        "diagnostics_preview",
+        "DiagnosticsPreviewRequest",
+        "DiagnosticsPreviewResult"
+    ),
+    (
+        "export_diagnostics",
+        "ExportDiagnosticsRequest",
+        "ExportDiagnosticsResult"
+    ),
+    ("about_farm3d", "AboutFarm3dRequest", "AboutFarm3dResult"),
+    ("storage_usage", "StorageUsageRequest", "StorageUsageResult"),
+    ("clear_storage", "ClearStorageRequest", "ClearStorageResult"),
 ];
 
-pub fn command_contract_inventory() -> &'static [CommandContract; 129] {
+pub fn command_contract_inventory() -> &'static [CommandContract; 147] {
     &COMMAND_CONTRACTS
 }
 
@@ -847,7 +877,43 @@ export type SetPrinterAlertDefaultsResult = CommandSuccess<PrinterAlertDefaults>
 export type NotificationStatusRequest = NoArgsRequest;
 export type NotificationStatusResult = CommandSuccess<NotifierStatus>;
 export type SendTestNotificationRequest = NoArgsRequest;
-export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#.to_string()
+export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;
+export type ListJobHistoryRequest = ContractRequest & { query: JobHistoryQuery };
+export type ListJobHistoryResult = CommandSuccess<JobHistoryPage>;
+export type GetJobTimelineRequest = ContractRequest & { jobId: string };
+export type GetJobTimelineResult = CommandSuccess<JobTimeline>;
+export type BackupInventoryRequest = NoArgsRequest;
+export type BackupInventoryResult = CommandSuccess<BackupInventory>;
+export type CreateBackupRequest = ContractRequest & { operationId: string; media: BackupMediaChoice };
+export type CreateBackupResult = CommandSuccess<CreateBackupOutcome>;
+export type ListBackupsRequest = NoArgsRequest;
+export type ListBackupsResult = CommandSuccess<BackupSummary[]>;
+export type DeleteBackupRequest = ContractRequest & { operationId: string; backupId: string };
+export type DeleteBackupResult = CommandSuccess<DeleteBackupOutcome>;
+export type PreviewRestoreRequest = ContractRequest & { source: RestoreSource };
+export type PreviewRestoreResult = CommandSuccess<PreviewRestoreOutcome>;
+export type DiscardRestorePreviewRequest = ContractRequest & { stagingId: string };
+export type DiscardRestorePreviewResult = CommandSuccess<DiscardRestorePreviewOutcome>;
+export type ApplyRestoreRequest = ContractRequest & { operationId: string; stagingId: string; confirmation: string };
+export type ApplyRestoreResult = CommandSuccess<ApplyRestoreOutcome>;
+export type RestoreStatusRequest = NoArgsRequest;
+export type RestoreStatusResult = CommandSuccess<RestoreStatus>;
+export type AcknowledgeRestoreStatusRequest = ContractRequest & { journalId: string };
+export type AcknowledgeRestoreStatusResult = CommandSuccess<RestoreStatus>;
+export type ResetPreviewRequest = ContractRequest & { tier: ResetTier };
+export type ResetPreviewResult = CommandSuccess<ResetPreview>;
+export type ResetFarmRequest = ContractRequest & { operationId: string; request: ResetRequest; confirmation: string };
+export type ResetFarmResult = CommandSuccess<ResetResult>;
+export type DiagnosticsPreviewRequest = NoArgsRequest;
+export type DiagnosticsPreviewResult = CommandSuccess<DiagnosticsPreview>;
+export type ExportDiagnosticsRequest = ContractRequest & { operationId: string; sections: DiagnosticsSection[] };
+export type ExportDiagnosticsResult = CommandSuccess<ExportDiagnosticsOutcome>;
+export type AboutFarm3dRequest = NoArgsRequest;
+export type AboutFarm3dResult = CommandSuccess<AboutInfo>;
+export type StorageUsageRequest = NoArgsRequest;
+export type StorageUsageResult = CommandSuccess<StorageUsage>;
+export type ClearStorageRequest = ContractRequest & { operationId: string; target: StorageCleanupTarget };
+export type ClearStorageResult = CommandSuccess<ClearStorageOutcome>;"#.to_string()
     }
 
     fn visit_dependencies(visitor: &mut impl ts_rs::TypeVisitor)
@@ -968,6 +1034,30 @@ export type SendTestNotificationResult = CommandSuccess<TestNotificationSent>;"#
         visitor.visit::<crate::printers::alerts::PrinterAlertDefaults>();
         visitor.visit::<crate::notifications::NotifierStatus>();
         visitor.visit::<crate::notifications::commands::TestNotificationSent>();
+        visitor.visit::<crate::history::JobHistoryQuery>();
+        visitor.visit::<crate::history::JobHistoryPage>();
+        visitor.visit::<crate::history::JobTimeline>();
+        visitor.visit::<crate::backup::BackupInventory>();
+        visitor.visit::<crate::backup::BackupMediaChoice>();
+        visitor.visit::<crate::backup::CreateBackupOutcome>();
+        visitor.visit::<crate::backup::BackupSummary>();
+        visitor.visit::<crate::backup::DeleteBackupOutcome>();
+        visitor.visit::<crate::backup::RestoreSource>();
+        visitor.visit::<crate::backup::PreviewRestoreOutcome>();
+        visitor.visit::<crate::backup::DiscardRestorePreviewOutcome>();
+        visitor.visit::<crate::backup::ApplyRestoreOutcome>();
+        visitor.visit::<crate::backup::RestoreStatus>();
+        visitor.visit::<crate::diagnostics::reset::ResetTier>();
+        visitor.visit::<crate::diagnostics::reset::ResetPreview>();
+        visitor.visit::<crate::diagnostics::reset::ResetRequest>();
+        visitor.visit::<crate::diagnostics::reset::ResetResult>();
+        visitor.visit::<crate::diagnostics::bundle::DiagnosticsSection>();
+        visitor.visit::<crate::diagnostics::bundle::DiagnosticsPreview>();
+        visitor.visit::<crate::diagnostics::bundle::ExportDiagnosticsOutcome>();
+        visitor.visit::<crate::diagnostics::about::AboutInfo>();
+        visitor.visit::<crate::diagnostics::storage::StorageUsage>();
+        visitor.visit::<crate::diagnostics::storage::StorageCleanupTarget>();
+        visitor.visit::<crate::diagnostics::storage::ClearStorageOutcome>();
     }
 
     fn output_path() -> Option<std::path::PathBuf> {

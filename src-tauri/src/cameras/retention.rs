@@ -14,6 +14,12 @@
 //! Usage is the stored `byte_len` of every unpruned row, pinned or not;
 //! never a filesystem walk. Pinned rows count toward it and are never
 //! planned.
+//!
+//! P9 D15: the planner never plans [`PruneReason::Reset`]. A camera-media
+//! reset (`media::mark_reset`) prunes the rows the operator chose, pinned
+//! ones too for scope `all`, under the same janitor lock and in the same
+//! prune order (rows first, then the files, queued while the backup lease
+//! is held).
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -23,6 +29,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, MutexGuard, Notify};
 
 use super::PruneReason;
+use crate::backup::lease::BackupLease;
 
 /// The retention settings as bytes: `snapshotRetention.retentionDays` and
 /// `snapshotRetention.diskCapMb` (MiB).
@@ -128,24 +135,23 @@ pub fn plan_prune(
 /// [`poke`](Self::poke). Contract for callers: a command that changes the
 /// retention settings (`save_settings`, `import_settings`; wired by P8
 /// Task 9) must call `poke` after its commit.
+///
+/// P9 D5: the janitor honors the backup lease. While it is held a prune
+/// pass is skipped, and a capture that prunes for the disk cap queues its
+/// unlinks until the lease drops; dropping it pokes the janitor.
 pub struct MediaJanitor {
     lock: Mutex<()>,
     wake: Arc<Notify>,
     passes: AtomicU64,
-    pokes: AtomicU64,
+    pokes: Arc<AtomicU64>,
     /// A [`CaptureFault`] the next capture write simulates (test hook).
     fault: AtomicU8,
+    lease: BackupLease,
 }
 
 impl Default for MediaJanitor {
     fn default() -> Self {
-        Self {
-            lock: Mutex::new(()),
-            wake: Arc::new(Notify::new()),
-            passes: AtomicU64::new(0),
-            pokes: AtomicU64::new(0),
-            fault: AtomicU8::new(0),
-        }
+        Self::with_backup_lease(BackupLease::new())
     }
 }
 
@@ -162,6 +168,34 @@ pub enum CaptureFault {
 }
 
 impl MediaJanitor {
+    /// A janitor on the process-wide `lease` (`RuntimeServices` builds the
+    /// camera services with it). Every release of the lease pokes it.
+    pub fn with_backup_lease(lease: BackupLease) -> Self {
+        let wake = Arc::new(Notify::new());
+        let pokes = Arc::new(AtomicU64::new(0));
+        {
+            let wake = Arc::clone(&wake);
+            let pokes = Arc::clone(&pokes);
+            lease.on_release(move || {
+                pokes.fetch_add(1, Ordering::SeqCst);
+                wake.notify_one();
+            });
+        }
+        Self {
+            lock: Mutex::new(()),
+            wake,
+            passes: AtomicU64::new(0),
+            pokes,
+            fault: AtomicU8::new(0),
+            lease,
+        }
+    }
+
+    /// The lease this janitor honors.
+    pub fn backup_lease(&self) -> &BackupLease {
+        &self.lease
+    }
+
     /// Serializes a capture or a prune with every other one.
     pub async fn lock(&self) -> MutexGuard<'_, ()> {
         self.lock.lock().await

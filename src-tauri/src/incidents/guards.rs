@@ -181,7 +181,11 @@ pub fn resolve_printer_events(
     }
     let mut incidents = Vec::with_capacity(touched.len());
     for incident_id in &touched {
-        incidents.push(incidents_repository::close_if_settled(tx, incident_id, now)?);
+        incidents.push(incidents_repository::close_if_settled(
+            tx,
+            incident_id,
+            now,
+        )?);
     }
     Ok(ResolvedPrinterEvents { events, incidents })
 }

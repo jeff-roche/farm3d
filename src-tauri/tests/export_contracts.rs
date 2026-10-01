@@ -12,6 +12,15 @@ use farm3d_lib::attention::{
     AttentionSourceKind, AttentionSubject, ConditionKind, EvidenceOutcome,
     MaterialReconciliationStatus, NotificationClass, PrinterConnectionErrorCause, ResolutionMode,
 };
+use farm3d_lib::backup::{
+    ApplyRestoreOutcome, BackupContentTotals, BackupExcludedClass, BackupInvalidReason,
+    BackupInventory, BackupMediaChoice, BackupMediaTotals, BackupOrigin, BackupPlatform,
+    BackupSummary, CreateBackupOutcome, DeleteBackupOutcome, DesktopRequiredReason,
+    DiscardRestorePreviewOutcome, InstallerStep, PreviewRestoreOutcome, RestartingStatus,
+    RestoreBackupInfo, RestoreBlocker, RestoreBlockerKind, RestoreConflict, RestoreConflictClass,
+    RestoreConflictGroup, RestoreCount, RestoreDomain, RestoreJournalKind, RestoreNotice,
+    RestorePreview, RestorePreviewSource, RestoreSource, RestoreStatus, TableCount,
+};
 use farm3d_lib::cameras::{
     CameraContentType, CameraErrorKind, CameraHealth, CameraHealthState, CameraSnapshot,
     CameraSource, CameraSourceInput, CameraSourceKind, EvidenceSkipReason, FrameHeader, HostWebcam,
@@ -49,6 +58,23 @@ use farm3d_lib::contracts::navigation::{
     NavigationDestination, NavigationSelection, NavigationSelectionKind, NavigationTarget,
 };
 use farm3d_lib::contracts::ContractVersion;
+use farm3d_lib::diagnostics::about::{
+    AboutCatalog, AboutCredentialStore, AboutInfo, AboutPlatform, AboutSlicer,
+};
+use farm3d_lib::diagnostics::bundle::{
+    DiagnosticsPreview, DiagnosticsSection, DiagnosticsSectionEstimate, ExportDiagnosticsOutcome,
+};
+use farm3d_lib::diagnostics::reset::{
+    ResetClass, ResetDataClass, ResetEffect, ResetMediaScope, ResetPreview, ResetRequest,
+    ResetResult, ResetTier, ResetWarning,
+};
+use farm3d_lib::diagnostics::storage::{
+    ClearStorageOutcome, StorageClass, StorageClassUsage, StorageCleanupTarget, StorageUsage,
+};
+use farm3d_lib::history::{
+    JobHistoryPage, JobHistoryQuery, JobHistoryRow, JobHistoryState, JobTimeline, JobTimelineItem,
+    JobTimelineSliceRevision, PrinterLifecycleFilter,
+};
 use farm3d_lib::host_ops::events::{HostOperationsEvent, HostOperationsEventType};
 use farm3d_lib::host_ops::{
     HostOperation, HostOperationEndpoint, HostOperationFailure, HostOperationKind,
@@ -60,7 +86,7 @@ use farm3d_lib::incidents::{
     IncidentPage, IncidentState, IncidentTimelineItem,
 };
 use farm3d_lib::jobs::{
-    AssignedBy, JobAction, CancelReason, DeclaredOutcome, Job, JobEvent, JobEventKind, JobFailure,
+    AssignedBy, CancelReason, DeclaredOutcome, Job, JobAction, JobEvent, JobEventKind, JobFailure,
     JobHistory, JobState, PrinterSnapshot, ReconciliationRequirement, RequirementKind,
     RequirementResolution, RequirementStatus, SettleChoice, Settlement, SettlementMethod,
     SettlementPreview, StartConfirmation,
@@ -95,6 +121,7 @@ use farm3d_lib::notifications::commands::TestNotificationSent;
 use farm3d_lib::notifications::{
     NavigateRequest, NotificationClassSettings, NotifierStatus, NotifierUnavailableReason,
 };
+use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::batch::{
     BatchCredentialSource, BatchRowConnection, BatchRowError, BatchRowErrorCode, BatchRowInput,
     BatchRowOutcome, BatchRowResult, BatchRowWarning, BatchRowWarningCode, BatchShared,
@@ -114,14 +141,13 @@ use farm3d_lib::printers::operational::{
 };
 use farm3d_lib::printers::setup::SetupGap;
 use farm3d_lib::printers::LastKnownGood;
-use farm3d_lib::printers::alerts::{AlertDefaults, NotificationMode, PrinterAlertDefaults};
 use farm3d_lib::printers::{CatalogRef, PrinterPatch, StartSafety};
 use farm3d_lib::queue::events::{QueueEvent, QueueEventPayload, QueueEventType};
 use farm3d_lib::queue::{
     Blocker, BlockerCode, Candidate, CloseReason, DispatchPolicy, DispatchPreference,
-    EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, OriginKind,
-    PrinterEligibility, QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryEligibility,
-    QueueEntryState, SpoolOption, NextAutomaticAction, QueueChange, QueueSnapshot,
+    EligibilitySummary, EligibilityVerdict, EstimateSource, MaterialEstimate, NextAutomaticAction,
+    OriginKind, PrinterEligibility, QueueChange, QueueEntry, QueueEntryAction, QueueEntryDisplay,
+    QueueEntryEligibility, QueueEntryState, QueueSnapshot, SpoolOption,
 };
 use farm3d_lib::settings::commands::{
     ExportResult as SettingsExportResult, MonitorDensity, MonitorSection, SettingsImportResult,
@@ -647,6 +673,8 @@ fn export_registry() -> Vec<Export> {
         export::<PruneReason>(),
         export::<EvidenceSkipReason>(),
         export::<EvidenceOutcome>(),
+        export::<farm3d_lib::persistence::integrity::IntegrityRule>(),
+        export::<farm3d_lib::persistence::integrity::IntegrityOutcome>(),
         export::<CameraContentType>(),
         export::<CameraSnapshot>(),
         export::<MediaUsage>(),
@@ -662,6 +690,69 @@ fn export_registry() -> Vec<Export> {
         export::<IncidentTimelineItem>(),
         export::<IncidentDetail>(),
         export::<IncidentPage>(),
+        export::<JobHistoryState>(),
+        export::<PrinterLifecycleFilter>(),
+        export::<JobHistoryQuery>(),
+        export::<JobHistoryRow>(),
+        export::<JobHistoryPage>(),
+        export::<JobTimelineSliceRevision>(),
+        export::<JobTimelineItem>(),
+        export::<JobTimeline>(),
+        export::<BackupMediaChoice>(),
+        export::<BackupOrigin>(),
+        export::<BackupExcludedClass>(),
+        export::<TableCount>(),
+        export::<BackupContentTotals>(),
+        export::<BackupMediaTotals>(),
+        export::<BackupInventory>(),
+        export::<DesktopRequiredReason>(),
+        export::<CreateBackupOutcome>(),
+        export::<BackupSummary>(),
+        export::<DeleteBackupOutcome>(),
+        export::<BackupInvalidReason>(),
+        export::<RestoreSource>(),
+        export::<RestorePreviewSource>(),
+        export::<RestoreCount>(),
+        export::<RestoreConflictClass>(),
+        export::<RestoreDomain>(),
+        export::<RestoreConflict>(),
+        export::<RestoreConflictGroup>(),
+        export::<RestoreNotice>(),
+        export::<RestoreBlockerKind>(),
+        export::<RestoreBlocker>(),
+        export::<BackupPlatform>(),
+        export::<RestoreBackupInfo>(),
+        export::<RestorePreview>(),
+        export::<PreviewRestoreOutcome>(),
+        export::<DiscardRestorePreviewOutcome>(),
+        export::<InstallerStep>(),
+        export::<RestoreJournalKind>(),
+        export::<RestartingStatus>(),
+        export::<ApplyRestoreOutcome>(),
+        export::<RestoreStatus>(),
+        export::<ResetTier>(),
+        export::<ResetMediaScope>(),
+        export::<ResetRequest>(),
+        export::<ResetClass>(),
+        export::<ResetEffect>(),
+        export::<ResetDataClass>(),
+        export::<ResetWarning>(),
+        export::<ResetPreview>(),
+        export::<ResetResult>(),
+        export::<DiagnosticsSection>(),
+        export::<DiagnosticsSectionEstimate>(),
+        export::<DiagnosticsPreview>(),
+        export::<ExportDiagnosticsOutcome>(),
+        export::<AboutPlatform>(),
+        export::<AboutCatalog>(),
+        export::<AboutSlicer>(),
+        export::<AboutCredentialStore>(),
+        export::<AboutInfo>(),
+        export::<StorageClass>(),
+        export::<StorageClassUsage>(),
+        export::<StorageUsage>(),
+        export::<StorageCleanupTarget>(),
+        export::<ClearStorageOutcome>(),
         export::<NotifierUnavailableReason>(),
         export::<NotifierStatus>(),
         export::<NavigateRequest>(),
@@ -934,6 +1025,18 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         ErrorCode::SnapshotDiskCap,
         ErrorCode::NotificationsUnavailable,
         ErrorCode::EvidenceExists,
+        ErrorCode::BackupInProgress,
+        ErrorCode::BackupSourceDamaged,
+        ErrorCode::InsufficientSpace,
+        ErrorCode::BackupInvalid,
+        ErrorCode::UnsupportedBackupFormat,
+        ErrorCode::RestoreStagingExpired,
+        ErrorCode::RestoreBlocked,
+        ErrorCode::RestoreFailed,
+        ErrorCode::ConfirmationMismatch,
+        ErrorCode::RestartPending,
+        ErrorCode::DiagnosticsRedactionFailed,
+        ErrorCode::StorageInUse,
     ];
     let recoveries = [
         RecoveryCode::Retry,
@@ -955,6 +1058,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
         RecoveryCode::LoadSpool,
         RecoveryCode::AssignManually,
         RecoveryCode::SettleMaterial,
+        RecoveryCode::OpenQueue,
     ];
 
     assert_eq!(
@@ -979,7 +1083,11 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "JOB_ALREADY_SETTLED", "JOB_ALREADY_RETRIED", "JOBS_EXIST",
                 "ATTENTION_NOT_MANUAL", "CAMERA_NOT_CONFIGURED", "CAMERA_FAILED",
                 "CAMERA_HOST_MISMATCH", "EVIDENCE_PRUNED", "SNAPSHOT_DISK_CAP",
-                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS"
+                "NOTIFICATIONS_UNAVAILABLE", "EVIDENCE_EXISTS", "BACKUP_IN_PROGRESS",
+                "BACKUP_SOURCE_DAMAGED", "INSUFFICIENT_SPACE", "BACKUP_INVALID",
+                "UNSUPPORTED_BACKUP_FORMAT", "RESTORE_STAGING_EXPIRED", "RESTORE_BLOCKED",
+                "RESTORE_FAILED", "CONFIRMATION_MISMATCH", "RESTART_PENDING",
+                "DIAGNOSTICS_REDACTION_FAILED", "STORAGE_IN_USE"
             ],
             "recoveries": [
                 "RETRY", "EDIT_FIELDS", "RELOAD", "REENTER_CREDENTIAL",
@@ -987,7 +1095,7 @@ fn error_and_recovery_codes_serialize_with_exact_spellings() {
                 "RESTART_APPLICATION", "UPGRADE_FARM3D", "OPEN_SLICER_SETTINGS",
                 "RELOAD_PREPARATION", "EDIT_PREPARATION", "OPEN_PRINTER_JOB",
                 "OPEN_JOB", "OPEN_PRINTER_SETUP", "UNARCHIVE_PRINTER", "LOAD_SPOOL",
-                "ASSIGN_MANUALLY", "SETTLE_MATERIAL"
+                "ASSIGN_MANUALLY", "SETTLE_MATERIAL", "OPEN_QUEUE"
             ]
         })
     );
@@ -1258,8 +1366,14 @@ fn generated_contracts_use_safe_precise_types() {
     let generated = String::from_utf8(generated).expect("generated contracts should be UTF-8");
     let lower = generated.to_lowercase();
 
+    // The `any` type, not the quoted spec-mandated literals that contain
+    // the letters: P9's `PrinterLifecycleFilter` `"any"` and
+    // `BackupInvalidReason` `"tooManyEntries"`.
     assert!(
-        !generated.contains("any"),
+        !generated
+            .replace("\"any\"", "")
+            .replace("\"tooManyEntries\"", "")
+            .contains("any"),
         "generated contracts contain `any`"
     );
     assert!(generated.contains("contractVersion: 1"));

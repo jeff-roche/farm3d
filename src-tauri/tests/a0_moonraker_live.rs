@@ -1233,7 +1233,6 @@ fn live_lifecycle_drive() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // P8 Task 16: the read-only camera probe (`just moonraker-live camera`)
 // ---------------------------------------------------------------------------
@@ -1294,7 +1293,11 @@ fn live_camera() {
         .unwrap_or(DEFAULT_MOONRAKER_PORT);
     let web_port: Option<u16> = std::env::var("FARM3D_MOONRAKER_WEB_PORT")
         .ok()
-        .map(|value| value.parse().expect("FARM3D_MOONRAKER_WEB_PORT is not a port"));
+        .map(|value| {
+            value
+                .parse()
+                .expect("FARM3D_MOONRAKER_WEB_PORT is not a port")
+        });
     let api_key = std::env::var("FARM3D_MOONRAKER_API_KEY")
         .ok()
         .or_else(|| {
@@ -1316,7 +1319,8 @@ fn live_camera() {
 
     tauri::async_runtime::block_on(async {
         // 1. Names and services, through the production camera query.
-        let adapter = MoonrakerCapabilities::new(&config, api_key.clone(), MoonrakerTimings::default());
+        let adapter =
+            MoonrakerCapabilities::new(&config, api_key.clone(), MoonrakerTimings::default());
         let cameras = match adapter.cameras().await {
             Ok(cameras) => cameras,
             Err(error) => {

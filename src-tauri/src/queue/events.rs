@@ -195,7 +195,11 @@ impl QueueStream {
             );
         }
         let ids = QueueChangeIds {
-            entry_ids: change.entries.iter().map(|entry| entry.id.clone()).collect(),
+            entry_ids: change
+                .entries
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect(),
             job_ids: change.jobs.iter().map(|job| job.id.clone()).collect(),
             requirement_ids: change
                 .requirements

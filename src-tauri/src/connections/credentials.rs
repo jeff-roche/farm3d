@@ -19,6 +19,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::file_links::file_has_multiple_links;
 
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
@@ -182,6 +184,33 @@ impl CredentialStore {
         }
     }
 
+    /// P9 D10: whether the store holds a value for `key`. The value is read
+    /// into a `Zeroizing` buffer and dropped at once; it never leaves this
+    /// function. The file tier also wipes every other value it read.
+    pub fn contains(&self, key: &str) -> Result<bool, String> {
+        match self.kind {
+            CredentialStoreKind::Keychain => match keychain_entry(key)?.get_password() {
+                Ok(secret) => {
+                    drop(Zeroizing::new(secret));
+                    Ok(true)
+                }
+                Err(keyring::Error::NoEntry) => Ok(false),
+                Err(e) => Err(e.to_string()),
+            },
+            CredentialStoreKind::File => {
+                let _guard = fallback_lock()
+                    .lock()
+                    .map_err(|_| "credential store unavailable")?;
+                let mut map = self.read_file()?;
+                let found = map.remove(key).map(Zeroizing::new).is_some();
+                for value in map.values_mut() {
+                    value.zeroize();
+                }
+                Ok(found)
+            }
+        }
+    }
+
     pub fn delete(&self, key: &str) -> Result<(), String> {
         match self.kind {
             CredentialStoreKind::Keychain => match keychain_entry(key)?.delete_credential() {
@@ -209,7 +238,7 @@ impl CredentialStore {
         let Some(mut file) = open_credential_file(&path)? else {
             return Ok(BTreeMap::new());
         };
-        let mut contents = String::new();
+        let mut contents = Zeroizing::new(String::new());
         std::io::Read::read_to_string(&mut file, &mut contents).map_err(|e| e.to_string())?;
         serde_json::from_str(&contents).map_err(|e| {
             format!("{CREDENTIALS_FILE_NAME} is not readable ({e}); re-enter the credential to rewrite it")
@@ -346,6 +375,23 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         std::env::temp_dir().join(format!("farm3d-cred-test-{}-{}", std::process::id(), id))
+    }
+
+    #[test]
+    fn contains_reports_presence_without_returning_the_value() {
+        let dir = temp_dir();
+        let store = file_store(&dir);
+        assert_eq!(store.contains("farm3d/printer/a/apikey"), Ok(false));
+        store.set("farm3d/printer/a/apikey", "secret-a").unwrap();
+        store.set("farm3d/printer/b/apikey", "secret-b").unwrap();
+        assert_eq!(store.contains("farm3d/printer/a/apikey"), Ok(true));
+        assert_eq!(store.contains("farm3d/printer/c/apikey"), Ok(false));
+        // Reading presence changes nothing.
+        assert_eq!(
+            store.get("farm3d/printer/b/apikey").unwrap().as_deref(),
+            Some("secret-b")
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn file_store(dir: &Path) -> CredentialStore {

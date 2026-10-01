@@ -48,10 +48,7 @@ const CORPUS: [&str; 5] = [
 
 fn assert_no_corpus(what: &str, text: &str) {
     for secret in CORPUS {
-        assert!(
-            !text.contains(secret),
-            "{what} leaked {secret:?}: {text}"
-        );
+        assert!(!text.contains(secret), "{what} leaked {secret:?}: {text}");
     }
 }
 
@@ -261,8 +258,8 @@ fn decide_notifies_only_a_live_insert_of_an_enabled_unmuted_class_while_unfocuse
                                 now(),
                             );
                             // `spool.low` has no Printer, so it is never muted.
-                            let muted = mode == NotificationMode::Muted
-                                && kind != ConditionKind::SpoolLow;
+                            let muted =
+                                mode == NotificationMode::Muted && kind != ConditionKind::SpoolLow;
                             let expected = class_on
                                 && !muted
                                 && !focused
@@ -335,7 +332,11 @@ fn a_shown_event_carries_its_label_the_severity_word_and_the_decision_8_target()
     for (kind, label, body, urgency, destination, selection, selected) in cases {
         let mut limiter = RateLimiter::default();
         let shown = decide(
-            &candidate(kind, AttentionOrigin::Live, EventChange::Inserted { recurred: false }),
+            &candidate(
+                kind,
+                AttentionOrigin::Live,
+                EventChange::Inserted { recurred: false },
+            ),
             &all_on(),
             &alerts(NotificationMode::Follow),
             false,
@@ -372,7 +373,11 @@ fn every_condition_has_a_label_and_every_body_starts_with_its_severity_word() {
     for kind in ConditionKind::ALL {
         let mut limiter = RateLimiter::default();
         let shown = decide(
-            &candidate(kind, AttentionOrigin::Live, EventChange::Inserted { recurred: false }),
+            &candidate(
+                kind,
+                AttentionOrigin::Live,
+                EventChange::Inserted { recurred: false },
+            ),
             &all_on(),
             &alerts(NotificationMode::Follow),
             false,
@@ -431,7 +436,11 @@ fn the_same_key_notifies_at_most_once_in_ten_minutes() {
     assert!(show(&recur, &mut limiter, at(10), 3).is_some());
     // Another key is unaffected.
     let other = NotifyCandidate {
-        event: event_of(ConditionKind::PrinterOffline, AttentionOrigin::Live, "src-2"),
+        event: event_of(
+            ConditionKind::PrinterOffline,
+            AttentionOrigin::Live,
+            "src-2",
+        ),
         change: EventChange::Inserted { recurred: false },
     };
     assert!(show(&other, &mut limiter, at(10), 4).is_some());
@@ -443,7 +452,11 @@ fn a_notification_the_sink_never_showed_uses_up_neither_its_key_nor_a_burst_slot
     let classes = all_on();
     let follow = alerts(NotificationMode::Follow);
     let nth = |n: usize| NotifyCandidate {
-        event: event_of(ConditionKind::PrinterOffline, AttentionOrigin::Live, &format!("src-{n}")),
+        event: event_of(
+            ConditionKind::PrinterOffline,
+            AttentionOrigin::Live,
+            &format!("src-{n}"),
+        ),
         change: EventChange::Inserted { recurred: false },
     };
     // Five failed shows (decided, never recorded): no slot is used.
@@ -465,17 +478,36 @@ fn a_fourth_notification_within_ten_seconds_becomes_one_summary_that_opens_the_a
     };
     let at = |seconds: i64| now() + ChronoDuration::seconds(seconds);
     for n in 0..3 {
-        let shown = show(&nth(n, ConditionKind::PrinterOffline), &mut limiter, at(n as i64), n as u32 + 1).unwrap();
-        assert_eq!(shown.kind, NotificationKind::Event, "#{n} is shown by itself");
+        let shown = show(
+            &nth(n, ConditionKind::PrinterOffline),
+            &mut limiter,
+            at(n as i64),
+            n as u32 + 1,
+        )
+        .unwrap();
+        assert_eq!(
+            shown.kind,
+            NotificationKind::Event,
+            "#{n} is shown by itself"
+        );
     }
     // The 4th, 3 s after the first: one summary, a new notification; the
     // sink returns id 41 for it.
-    let summary = show(&nth(3, ConditionKind::JobCompleted), &mut limiter, at(3), 41).unwrap();
+    let summary = show(
+        &nth(3, ConditionKind::JobCompleted),
+        &mut limiter,
+        at(3),
+        41,
+    )
+    .unwrap();
     assert_eq!(summary.kind, NotificationKind::Summary { count: 1 });
     assert_eq!(summary.summary, "1 new Attention Event");
     assert!(summary.open_attention_center);
     assert_eq!(summary.event_id, None);
-    assert_eq!(summary.event_ids, vec!["att-job.completed-src-3".to_string()]);
+    assert_eq!(
+        summary.event_ids,
+        vec!["att-job.completed-src-3".to_string()]
+    );
     assert_eq!(summary.replaces_id, 0);
     assert_eq!(
         summary.target,
@@ -495,13 +527,25 @@ fn a_fourth_notification_within_ten_seconds_becomes_one_summary_that_opens_the_a
     assert_eq!(replaced.urgency, Urgency::Critical);
     assert!(replaced.body.starts_with("Fatal: "), "{}", replaced.body);
     // The 6th keeps the worst severity seen in the window.
-    let third = show(&nth(6, ConditionKind::JobCompleted), &mut limiter, at(9), 41).unwrap();
+    let third = show(
+        &nth(6, ConditionKind::JobCompleted),
+        &mut limiter,
+        at(9),
+        41,
+    )
+    .unwrap();
     assert_eq!(third.kind, NotificationKind::Summary { count: 3 });
     assert_eq!(third.urgency, Urgency::Critical);
     // A folded key counts as shown for the per-key rule.
     assert!(show(&nth(4, ConditionKind::JobFailed), &mut limiter, at(9), 41).is_none());
     // After the window, a candidate is shown by itself again.
-    let later = show(&nth(5, ConditionKind::PrinterOffline), &mut limiter, at(14), 50).unwrap();
+    let later = show(
+        &nth(5, ConditionKind::PrinterOffline),
+        &mut limiter,
+        at(14),
+        50,
+    )
+    .unwrap();
     assert_eq!(later.kind, NotificationKind::Event);
 }
 
@@ -551,7 +595,12 @@ fn the_body_is_the_severity_word_and_the_event_summary_verbatim() {
         };
         assert_eq!(shown.body, format!("{word}: {}", event.summary), "{kind:?}");
     }
-    let offline = event_with_subject(ConditionKind::PrinterOffline, AttentionOrigin::Live, "src-1", subject);
+    let offline = event_with_subject(
+        ConditionKind::PrinterOffline,
+        AttentionOrigin::Live,
+        "src-1",
+        subject,
+    );
     assert_eq!(
         event_notification_body(&offline),
         "Warning: PLA:Black rig@bay (shelf=2 (which?)) is offline."
@@ -580,8 +629,12 @@ use farm3d_lib::attention::Condition;
 use farm3d_lib::connections::supervisor::STATUS_EVENT;
 use farm3d_lib::notifications::activation::RaiseStep;
 use farm3d_lib::notifications::recording::{RecordingSink, RecordingWindowControl};
-use farm3d_lib::notifications::services::{NotificationService, NotificationTimings, OUTSTANDING_LIMIT};
-use farm3d_lib::notifications::{Notification, NotifierStatus, NotifierUnavailableReason, NAVIGATE_EVENT};
+use farm3d_lib::notifications::services::{
+    NotificationService, NotificationTimings, OUTSTANDING_LIMIT,
+};
+use farm3d_lib::notifications::{
+    Notification, NotifierStatus, NotifierUnavailableReason, NAVIGATE_EVENT,
+};
 use farm3d_lib::persistence::{RepositoryError, Storage};
 use farm3d_lib::RuntimeServices;
 use serde_json::{json, Value};
@@ -830,7 +883,10 @@ fn printer_target(id: &str) -> Value {
 #[test]
 fn nothing_is_shown_while_farm3d_has_focus_and_it_starts_focused() {
     let rig = rig();
-    assert!(rig.services.notifications.focus().is_focused(), "Focus seeds true");
+    assert!(
+        rig.services.notifications.focus().is_focused(),
+        "Focus seeds true"
+    );
     let event = rig.voron_failed();
     assert_eq!(rig.consider(&event), None);
     assert!(rig.sink.shown().is_empty());
@@ -848,7 +904,10 @@ fn unfocused_a_live_insert_is_shown_once_with_its_target_and_marked_notified() {
     let (shown_id, notification): &(u32, Notification) = &shown[0];
     assert_eq!(*shown_id, id);
     assert_eq!(notification.summary, "Printer reported a failed print");
-    assert_eq!(notification.body, "Fatal: Voron (Bay A) reported a failed print.");
+    assert_eq!(
+        notification.body,
+        "Fatal: Voron (Bay A) reported a failed print."
+    );
     assert_eq!(
         serde_json::to_value(&notification.target).unwrap(),
         printer_target(PRINTER)
@@ -997,7 +1056,10 @@ fn a_focus_gained_after_the_raise_stops_the_fallbacks() {
     wait_until("the raise", || !rig.control.steps().is_empty());
     rig.services.notifications.focus().set(true);
     std::thread::sleep(RAISE_WAIT * 4);
-    assert_eq!(rig.control.steps(), vec![RaiseStep::Present { token: None }]);
+    assert_eq!(
+        rig.control.steps(),
+        vec![RaiseStep::Present { token: None }]
+    );
 }
 
 #[test]
@@ -1069,12 +1131,19 @@ fn outstanding_notifications_are_bounded_at_256_oldest_first() {
             .expect("the test notification is shown");
         ids.push(id.id);
     }
-    assert_eq!(rig.services.notifications.outstanding_len(), OUTSTANDING_LIMIT);
+    assert_eq!(
+        rig.services.notifications.outstanding_len(),
+        OUTSTANDING_LIMIT
+    );
     for evicted in &ids[..4] {
         assert_eq!(rig.services.notifications.outstanding(*evicted), None);
     }
     assert!(rig.services.notifications.outstanding(ids[4]).is_some());
-    assert!(rig.services.notifications.outstanding(*ids.last().unwrap()).is_some());
+    assert!(rig
+        .services
+        .notifications
+        .outstanding(*ids.last().unwrap())
+        .is_some());
 }
 
 #[test]
@@ -1220,7 +1289,10 @@ fn an_unavailable_notifier_never_panics_and_the_commands_say_so() {
     assert_eq!(rig.consider(&event), None);
     // The next status call retries: the server came back.
     rig.sink.set_status(RecordingSink::available().status_now());
-    assert_eq!(rig.ok("notification_status", json!({}))["state"], "available");
+    assert_eq!(
+        rig.ok("notification_status", json!({}))["state"],
+        "available"
+    );
     // The failed show didn't use up the key's 10 minutes.
     assert!(rig.consider(&event).is_some());
     assert_eq!(rig.sink.shown().len(), 1);
@@ -1244,7 +1316,10 @@ fn send_test_notification_shows_one_whatever_the_focus_and_classes() {
             },
         }),
     );
-    assert_eq!(rig.ok("send_test_notification", json!({})), json!({"sent": true}));
+    assert_eq!(
+        rig.ok("send_test_notification", json!({})),
+        json!({"sent": true})
+    );
     let shown = rig.sink.shown();
     assert_eq!(shown.len(), 1);
     assert_eq!(shown[0].1.summary, "farm3d test notification");
@@ -1317,14 +1392,20 @@ fn settings_carry_the_class_and_retention_defaults_and_keep_them_when_absent() {
     )
     .unwrap();
     assert_eq!(saved["notifications"], classes);
-    assert_eq!(saved["snapshotRetention"], json!({"retentionDays": 7, "diskCapMb": 512}));
+    assert_eq!(
+        saved["snapshotRetention"],
+        json!({"retentionDays": 7, "diskCapMb": 512})
+    );
     assert_eq!(saved["revision"], loaded["revision"].as_i64().unwrap() + 1);
 
     // The theme and Monitor callers send neither object: both are kept.
     let themed = save(&rig, json!({"themeMode": "farm3d-dark"})).unwrap();
     assert_eq!(themed["themeMode"], "farm3d-dark");
     assert_eq!(themed["notifications"], classes);
-    assert_eq!(themed["snapshotRetention"], json!({"retentionDays": 7, "diskCapMb": 512}));
+    assert_eq!(
+        themed["snapshotRetention"],
+        json!({"retentionDays": 7, "diskCapMb": 512})
+    );
     assert_eq!(rig.ok("load_settings", json!({})), themed);
 }
 
@@ -1348,18 +1429,38 @@ fn a_stale_revision_conflicts_and_out_of_range_retention_is_a_field_validation()
     assert_eq!(stale["code"], "CONFLICT");
 
     for (retention, field) in [
-        (json!({"retentionDays": 0, "diskCapMb": 2048}), "snapshotRetention.retentionDays"),
-        (json!({"retentionDays": 366, "diskCapMb": 2048}), "snapshotRetention.retentionDays"),
-        (json!({"retentionDays": 30, "diskCapMb": 99}), "snapshotRetention.diskCapMb"),
-        (json!({"retentionDays": 30, "diskCapMb": 102401}), "snapshotRetention.diskCapMb"),
+        (
+            json!({"retentionDays": 0, "diskCapMb": 2048}),
+            "snapshotRetention.retentionDays",
+        ),
+        (
+            json!({"retentionDays": 366, "diskCapMb": 2048}),
+            "snapshotRetention.retentionDays",
+        ),
+        (
+            json!({"retentionDays": 30, "diskCapMb": 99}),
+            "snapshotRetention.diskCapMb",
+        ),
+        (
+            json!({"retentionDays": 30, "diskCapMb": 102401}),
+            "snapshotRetention.diskCapMb",
+        ),
     ] {
         let error = save(&rig, json!({"snapshotRetention": retention})).unwrap_err();
         assert_eq!(error["code"], "VALIDATION", "{retention}");
         assert_eq!(error["details"]["fieldPath"], field, "{error}");
     }
     // The boundaries are accepted.
-    save(&rig, json!({"snapshotRetention": {"retentionDays": 1, "diskCapMb": 100}})).unwrap();
-    save(&rig, json!({"snapshotRetention": {"retentionDays": 365, "diskCapMb": 102400}})).unwrap();
+    save(
+        &rig,
+        json!({"snapshotRetention": {"retentionDays": 1, "diskCapMb": 100}}),
+    )
+    .unwrap();
+    save(
+        &rig,
+        json!({"snapshotRetention": {"retentionDays": 365, "diskCapMb": 102400}}),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1371,10 +1472,18 @@ fn a_retention_change_by_save_or_import_pokes_the_media_janitor() {
     save(&rig, json!({"notifications": default_classes()})).unwrap();
     assert_eq!(janitor(), before);
     // The same retention again: no poke.
-    save(&rig, json!({"snapshotRetention": {"retentionDays": 30, "diskCapMb": 2048}})).unwrap();
+    save(
+        &rig,
+        json!({"snapshotRetention": {"retentionDays": 30, "diskCapMb": 2048}}),
+    )
+    .unwrap();
     assert_eq!(janitor(), before);
     // A change: one poke.
-    save(&rig, json!({"snapshotRetention": {"retentionDays": 3, "diskCapMb": 2048}})).unwrap();
+    save(
+        &rig,
+        json!({"snapshotRetention": {"retentionDays": 3, "diskCapMb": 2048}}),
+    )
+    .unwrap();
     assert_eq!(janitor(), before + 1);
 
     // import_settings: a v3 document with a new cap pokes.
@@ -1491,42 +1600,70 @@ fn alert_defaults_get_the_defaults_set_is_idempotent_and_a_change_pokes_the_proj
     );
     let pokes = || rig.services.attention.pokes();
     let before = pokes();
-    let set = rig.ok("set_printer_alert_defaults", alert_body("op-1", PRINTER, json!(15), "muted"));
+    let set = rig.ok(
+        "set_printer_alert_defaults",
+        alert_body("op-1", PRINTER, json!(15), "muted"),
+    );
     assert_eq!(set["revision"], 1);
     assert_eq!(set["alertDefaults"]["offlineAfterMinutes"], 15);
-    assert_eq!(pokes(), before + 1, "a new offline grace takes effect at once");
+    assert_eq!(
+        pokes(),
+        before + 1,
+        "a new offline grace takes effect at once"
+    );
     // A replay: the same row, no poke.
     assert_eq!(
-        rig.ok("set_printer_alert_defaults", alert_body("op-1", PRINTER, json!(15), "muted")),
+        rig.ok(
+            "set_printer_alert_defaults",
+            alert_body("op-1", PRINTER, json!(15), "muted")
+        ),
         set
     );
     assert_eq!(pokes(), before + 1);
     // The same values under a new id: a no-op, no revision bump, no poke.
     assert_eq!(
-        rig.ok("set_printer_alert_defaults", alert_body("op-2", PRINTER, json!(15), "muted")),
+        rig.ok(
+            "set_printer_alert_defaults",
+            alert_body("op-2", PRINTER, json!(15), "muted")
+        ),
         set
     );
     assert_eq!(pokes(), before + 1);
     // A reused id with another request.
     let reused = rig
-        .call("set_printer_alert_defaults", alert_body("op-1", PRINTER, json!(1), "muted"))
+        .call(
+            "set_printer_alert_defaults",
+            alert_body("op-1", PRINTER, json!(1), "muted"),
+        )
         .unwrap_err();
     assert_eq!(reused["code"], "VALIDATION");
     assert_eq!(reused["details"]["fieldPath"], "operationId", "{reused}");
     // Off, then a missing Printer.
-    let off = rig.ok("set_printer_alert_defaults", alert_body("op-3", PRINTER, Value::Null, "follow"));
+    let off = rig.ok(
+        "set_printer_alert_defaults",
+        alert_body("op-3", PRINTER, Value::Null, "follow"),
+    );
     assert_eq!(off["revision"], 2);
     assert_eq!(off["alertDefaults"]["offlineAfterMinutes"], Value::Null);
-    assert_eq!(rig.ok("get_printer_alert_defaults", json!({"printerId": PRINTER})), off);
+    assert_eq!(
+        rig.ok("get_printer_alert_defaults", json!({"printerId": PRINTER})),
+        off
+    );
     for command in ["get_printer_alert_defaults", "set_printer_alert_defaults"] {
         let error = rig
-            .call(command, alert_body("op-4", "prn-missing", json!(5), "follow"))
+            .call(
+                command,
+                alert_body("op-4", "prn-missing", json!(5), "follow"),
+            )
             .unwrap_err();
         assert_eq!(error["code"], "NOT_FOUND", "{command}");
     }
     // A bad grace is refused by the wire type.
-    rig.call("set_printer_alert_defaults", alert_body("op-5", PRINTER, json!(10), "follow"))
-        .unwrap_err();
+    rig.call(
+        "set_printer_alert_defaults",
+        alert_body("op-5", PRINTER, json!(10), "follow"),
+    )
+    .unwrap_err();
 }
 
 /// Global constraint 3: the corpus in the real secret-bearing inputs — the
@@ -1578,14 +1715,19 @@ fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_lin
     rig.signal(|sink| sink.token(id, "activation-token"));
     rig.signal(|sink| sink.click(id, "default"));
     wait_until("navigation", || !rig.navigations.lock().unwrap().is_empty());
-    wait_until("the read to be published", || !rig.stream.lock().unwrap().is_empty());
+    wait_until("the read to be published", || {
+        !rig.stream.lock().unwrap().is_empty()
+    });
 
     let shown = rig.sink.shown();
     assert!(!shown.is_empty());
     for (_, notification) in shown {
         assert_no_corpus("summary", &notification.summary);
         assert_no_corpus("body", &notification.body);
-        assert_no_corpus("target", &serde_json::to_string(&notification.target).unwrap());
+        assert_no_corpus(
+            "target",
+            &serde_json::to_string(&notification.target).unwrap(),
+        );
     }
     for navigation in rig.navigations.lock().unwrap().iter() {
         assert_no_corpus("navigate event", &navigation.to_string());
@@ -1597,7 +1739,10 @@ fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_lin
         rig.ok("notification_status", json!({})),
         rig.ok("send_test_notification", json!({})),
         rig.ok("get_printer_alert_defaults", json!({"printerId": PRINTER})),
-        rig.ok("set_printer_alert_defaults", alert_body("op-secret", PRINTER, json!(5), "follow")),
+        rig.ok(
+            "set_printer_alert_defaults",
+            alert_body("op-secret", PRINTER, json!(5), "follow"),
+        ),
         rig.ok("load_settings", json!({})),
     ] {
         assert_no_corpus("command response", &response.to_string());
@@ -1621,7 +1766,9 @@ fn the_seeded_secret_never_reaches_a_notification_navigation_response_or_log_lin
             });
     }
     rig.services.notifications.release();
-    wait_until("the lagged hand-off", || rig.services.notifications.lagged() > 0);
+    wait_until("the lagged hand-off", || {
+        rig.services.notifications.lagged() > 0
+    });
     let lines = rig.services.notifications.log_lines();
     assert!(lines.len() >= 2, "{lines:?}");
     for line in lines {

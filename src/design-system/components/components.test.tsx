@@ -359,6 +359,30 @@ describe("Tabs", () => {
   });
 });
 
+const verticalTabItems = [
+  { value: "a", label: "Alpha", content: "Alpha body" },
+  { value: "b", label: "Beta", content: "Beta body" },
+  { value: "c", label: "Gamma", content: "Gamma body" },
+];
+
+describe("vertical Tabs", () => {
+  it("exposes aria-orientation and moves with ArrowDown / ArrowUp", () => {
+    render(() => <Tabs items={verticalTabItems} orientation="vertical" defaultValue="a" />);
+    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "vertical");
+    const alpha = screen.getByRole("tab", { name: "Alpha" });
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: "ArrowDown" });
+    expect(screen.getByRole("tab", { name: "Beta" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Beta" }), { key: "ArrowUp" });
+    expect(screen.getByRole("tab", { name: "Alpha" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("defaults to horizontal", () => {
+    render(() => <Tabs items={verticalTabItems} defaultValue="a" />);
+    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "horizontal");
+  });
+});
+
 describe("AlertDialog", () => {
   it("renders an alertdialog with its title and description, driven by `open`", async () => {
     const [open, setOpen] = createSignal(true);

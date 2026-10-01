@@ -20,6 +20,7 @@ import type { ImportSelectionSummary } from "./library/types";
 import { startSlicing } from "./slicing/slicing-store";
 import { startHostOperations } from "./host-ops/host-operations-store";
 import { syncCapabilities } from "./host-ops/capabilities-store";
+import { historyKnownIds } from "./history/known-ids";
 import { queue, startQueue } from "./queue/queue-store";
 import { jobStateLabel } from "./queue/presentation";
 import { attention, requestAttentionCenterOpen, startAttention } from "./attention/attention-store";
@@ -28,8 +29,6 @@ import type { PrinterRosterEntry } from "./design-system";
 import {
   dismissPrinterArchiveNotice,
   dismissPrinterStoreError,
-  exportPrinters,
-  importPrinters,
   loadDuplicateHostArchives,
   loadPrinters,
   printerArchiveNotice,
@@ -51,11 +50,14 @@ import {
   serializeNavigationTarget,
   type NavigationDestination,
 } from "./navigation/navigation-store";
+import { settingsCategorySlugs } from "./screens/settings/categories";
 
 // The Spools screen and its dialogs load on first visit, keeping them out of
 // the main chunk.
 const SpoolInventory = lazy(() => import("./screens/SpoolInventory").then((m) => ({ default: m.SpoolInventory })));
 const QueueScreen = lazy(() => import("./screens/QueueScreen").then((m) => ({ default: m.QueueScreen })));
+// The Settings workspace loads on first visit; its categories are chunks of their own.
+const SettingsWorkspace = lazy(() => import("./screens/settings/SettingsWorkspace").then((m) => ({ default: m.SettingsWorkspace })));
 
 const SCREEN_TITLE: Record<NavigationDestination, string> = {
   monitor: "Monitor",
@@ -89,7 +91,7 @@ function App() {
   const active = () => navigation.target().destination;
   const shellActive = () => {
     const destination = active();
-    return (destination === "queue" || destination === "library" || destination === "spools" ? destination : "monitor") satisfies ScreenId;
+    return (destination === "queue" || destination === "library" || destination === "spools" || destination === "settings" ? destination : "monitor") satisfies ScreenId;
   };
   const shell = () => monitorStore()?.shell() ?? EMPTY_SHELL;
   // Until the Library's first load settles, a Library selection is pending,
@@ -116,14 +118,18 @@ function App() {
     ...attention.openIncidents().map((incident) => incident.id),
     ...attentionEvents().flatMap((event) => (event.incidentId ? [event.incidentId] : [])),
   ];
+  // Jobs and Incidents the History view lists may be older than the Queue
+  // and Attention stores hold; a listed row is still a valid deep-link target.
   const navigationContext = (target: Parameters<typeof navigation.navigate>[0]) => ({
-    availableDestinations: ["monitor", "queue", "library", "spools"] as NavigationDestination[],
+    availableDestinations: ["monitor", "queue", "library", "spools", "settings"] as NavigationDestination[],
     availableIds: [
+      ...settingsCategorySlugs(),
       ...printers().map((printer) => printer.id),
       ...spoolState.spools.map((spool) => spool.id),
       ...library.projects().map((project) => project.id),
       ...library.models().map((model) => model.id),
       ...queueIds(),
+      ...historyKnownIds(),
       ...attentionIds(),
       ...(target.destination === "library" && target.selection && libraryPending() ? [target.selection.id] : []),
       ...(target.destination === "queue" && target.selection && queuePending() ? [target.selection.id] : []),
@@ -467,6 +473,27 @@ function App() {
                 <QueueScreen />
               </Suspense>
             </Match>
+            <Match when={active() === "settings"}>
+              <Suspense fallback={<p class={styles.loading} role="status">Loading Settings…</p>}>
+                <SettingsWorkspace
+                  category={(() => {
+                    const selection = navigation.target().selection;
+                    return selection?.kind === "settingsCategory" ? selection.id : undefined;
+                  })()}
+                  onCategoryChange={(slug) => navigate({
+                    version: 1,
+                    destination: "settings",
+                    selection: { kind: "settingsCategory", id: slug },
+                  })}
+                  monitor={monitorStore()}
+                  onOpenQueue={() => navigate({ version: 1, destination: "queue" })}
+                  onPrintersImported={() => {
+                    setIsFirstRun(false);
+                    reconcileNavigation();
+                  }}
+                />
+              </Suspense>
+            </Match>
             <Match when={active() === "spools"}>
               <Suspense fallback={<p class={styles.loading} role="status">Loading Spools…</p>}>
                 <SpoolInventory />
@@ -499,11 +526,6 @@ function App() {
               onIncidentClose={() => navigate({ version: 1, destination: "monitor" })}
               existingPrinters={printers()}
               onPrinterCreated={() => setIsFirstRun(false)}
-              onImport={() => void importPrinters().then(() => {
-                setIsFirstRun(false);
-                reconcileNavigation();
-              })}
-              onExport={() => void exportPrinters()}
               // The Setup tab's guarded Archive -> Delete... flow already
               // called `removePrinter` itself (spec D7's typed-name confirm)
               // before this fires -- this only reconciles navigation and

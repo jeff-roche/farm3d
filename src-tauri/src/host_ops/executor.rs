@@ -182,7 +182,7 @@ async fn mark_sent<R: tauri::Runtime>(
             true
         }
         Err(error) => {
-            super::log_commit_failure(id, "`dispatched_at`", &error);
+            super::log_commit_failure(id, "hostOps.commitDispatchedAtFailed", &error);
             // If this fails too (logged), startup recovery finds the row
             // unsent.
             services.commit_outcome(printer_id, id, never_sent()).await;

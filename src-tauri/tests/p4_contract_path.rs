@@ -48,6 +48,19 @@ const P7_COMMAND_COUNT: usize = 11 + 4 + 1 + 2;
 /// (`tests/p8_notifications.rs`).
 const P8_COMMAND_COUNT: usize = 7 + 6 + 5 + 4;
 
+/// Commands P9 added so far: Task 4's `list_job_history` and
+/// `get_job_timeline` (`tests/p9_history.rs`), plus Task 5's
+/// `backup_inventory`, `create_backup`, `list_backups`, and
+/// `delete_backup` (`tests/p9_backup.rs`), plus Task 6's `preview_restore`
+/// and `discard_restore_preview` (`tests/p9_restore_preview.rs`), plus Task
+/// 7's `apply_restore`, `restore_status`, and `acknowledge_restore_status`
+/// (`tests/p9_installer.rs`), plus Task 8's `reset_preview` and
+/// `reset_farm` (`tests/p9_reset.rs`), plus Task 9's `diagnostics_preview`,
+/// `export_diagnostics`, and `about_farm3d` (`tests/p9_diagnostics.rs`),
+/// plus Task 10's `storage_usage` and `clear_storage`
+/// (`tests/p9_storage.rs`).
+const P9_COMMAND_COUNT: usize = 2 + 4 + 2 + 3 + 2 + 3 + 2;
+
 const P4_COMMANDS: &[&str] = &[
     "pick_model_files",
     "inspect_import_selection",
@@ -80,6 +93,7 @@ fn every_p4_command_is_registered_with_a_contract() {
             + P6_COMMAND_COUNT
             + P7_COMMAND_COUNT
             + P8_COMMAND_COUNT
+            + P9_COMMAND_COUNT
     );
     let manifest = farm3d_lib::contracts::inventory::command_contract_inventory();
     assert_eq!(manifest.len(), farm3d_lib::COMMAND_NAMES.len());

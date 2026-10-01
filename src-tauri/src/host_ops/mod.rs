@@ -286,10 +286,14 @@ pub(crate) fn repository_error(error: RepositoryError) -> CommandError {
 
 /// Logs a commit that failed after the host may have been contacted. The
 /// row keeps its last committed state, and startup recovery is the
-/// backstop. Rows and repository errors carry no credential (D2), so
-/// neither does this line.
-pub(crate) fn log_commit_failure(id: &str, what: &str, error: &RepositoryError) {
-    eprintln!("farm3d: host operation {id}: could not commit {what}: {error:?}");
+/// backstop. `code` names the commit; the error logs its variant only.
+pub(crate) fn log_commit_failure(id: &str, code: &'static str, error: &RepositoryError) {
+    crate::f3d_log!(
+        warn,
+        code,
+        host_operation_id = crate::diagnostics::log::LogId::host_operation(id),
+        error = error
+    );
 }
 
 /// A camelCase enum's wire spelling.

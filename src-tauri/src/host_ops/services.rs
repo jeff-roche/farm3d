@@ -612,7 +612,7 @@ impl<R: tauri::Runtime> HostOperationServices<R> {
         }) {
             Ok(row) => row,
             Err(error) => {
-                log_commit_failure(id, "its dispatch outcome", &error);
+                log_commit_failure(id, "hostOps.commitDispatchOutcomeFailed", &error);
                 return None;
             }
         };

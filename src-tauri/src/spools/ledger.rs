@@ -9,7 +9,7 @@
 //! 4's `consume`, Task 6's archive dispositions later) can call `resolve_entry`
 //! and `append` as part of one larger atomic write.
 
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -280,7 +280,7 @@ pub fn append(
 /// `is_correction` computed per row: true when the row is a `measurement`
 /// or `estimate` and an earlier row (any `sequence` strictly before it) is
 /// a `consumption`.
-pub fn history(tx: &Transaction<'_>, spool_id: &str) -> Result<Vec<AmountEvent>, StorageError> {
+pub fn history(tx: &Connection, spool_id: &str) -> Result<Vec<AmountEvent>, StorageError> {
     let mut statement = tx.prepare(
         "SELECT id, spool_id, sequence, kind, before_mg, after_mg, confidence_after,
                 gross_mg, tare_mg, reservation_id, note, occurred_at

@@ -206,6 +206,16 @@ impl MediaStore {
         }
     }
 
+    /// P9 D5: unlinks `rel_paths` after a commit, or, while the backup
+    /// lease is held, queues them until it drops.
+    fn unlink_after_commit(&self, janitor: &MediaJanitor, rel_paths: &[String]) {
+        let paths = rel_paths
+            .iter()
+            .filter_map(|rel_path| self.path_of(rel_path))
+            .collect();
+        janitor.backup_lease().unlink_or_defer(paths);
+    }
+
     /// Every entry of `tmp/`, removed.
     fn clear_tmp(&self) -> Result<(), StorageError> {
         let tmp = self.root.join(TMP_DIRECTORY);
@@ -602,7 +612,8 @@ impl Touched {
 }
 
 /// Marks `actions` pruned (skipping a row already pruned, or pinned since
-/// it was planned — except for `missingFile`, which a pinned row can get),
+/// it was planned — except for `missingFile` and P9's `reset`, which a
+/// pinned row can get; it keeps `pinned_at`),
 /// writes `evidencePruned` for each Incident-linked one, and returns the
 /// files to unlink after commit.
 fn mark_pruned(
@@ -618,7 +629,7 @@ fn mark_pruned(
             "UPDATE camera_snapshots
                 SET pruned_at = ?2, prune_reason = ?3, revision = revision + 1
               WHERE id = ?1 AND pruned_at IS NULL
-                AND (pinned_at IS NULL OR ?3 = 'missingFile')",
+                AND (pinned_at IS NULL OR ?3 IN ('missingFile', 'reset'))",
             params![action.id, timestamp(now), reason],
         )?;
         if changed == 0 {
@@ -913,7 +924,7 @@ pub async fn store_frame(
             Ok((touched.load(tx)?, rel_paths))
         })?;
         drop(guard);
-        store.unlink_all(&rel_paths);
+        store.unlink_after_commit(janitor, &rel_paths);
         return Ok(StoreOutcome::DiskCap { totals, changes });
     }
 
@@ -993,7 +1004,7 @@ pub async fn store_frame(
     match written {
         Ok(Written::Stored(snapshot, changes, rel_paths)) => {
             drop(guard);
-            store.unlink_all(&rel_paths);
+            store.unlink_after_commit(janitor, &rel_paths);
             Ok(StoreOutcome::Stored { snapshot, changes })
         }
         Ok(Written::Already(existing)) => {
@@ -1039,7 +1050,9 @@ pub fn mark_prunable(
 }
 
 /// D5 "`MediaJanitor`": one prune pass under the janitor lock; the files
-/// are unlinked after commit and after the lock is released.
+/// are unlinked after commit and after the lock is released. P9 D5: while
+/// the backup lease is held the pass is skipped (nothing marked, nothing
+/// unlinked); dropping the lease pokes the janitor for another.
 pub async fn prune_pass(
     storage: &Storage,
     janitor: &MediaJanitor,
@@ -1047,10 +1060,77 @@ pub async fn prune_pass(
     now: DateTime<Utc>,
 ) -> Result<MediaChanges, RepositoryError> {
     let guard = janitor.lock().await;
+    let Some(permit) = janitor.backup_lease().deletion_permit() else {
+        return Ok(MediaChanges::default());
+    };
     let commit = mark_prunable(storage, policy, now)?;
     drop(guard);
     MediaStore::for_storage(storage).unlink_all(&commit.rel_paths);
+    drop(permit);
     Ok(commit.changes)
+}
+
+/// P9 D15 tier (b): what a camera-media reset pruned.
+#[derive(Debug, Default)]
+pub struct MediaReset {
+    /// The rows it changed, to publish as a prune pass does.
+    pub changes: MediaChanges,
+    /// The image files to unlink (queued until the lease drops).
+    pub rel_paths: Vec<String>,
+    pub pruned_count: i64,
+    /// The pruned rows' stored `byte_len`.
+    pub freed_bytes: i64,
+}
+
+/// P9 D15 tier (b)'s transaction, in P8's prune order: claims
+/// `operation_id` (`resetCameraMedia`), marks every unpruned row (pinned
+/// ones only when `include_pinned`) `pruned: reset`, and appends
+/// `evidencePruned` for each Incident-linked one. Rows and earlier
+/// timeline entries stay; the files are **not** unlinked (the caller
+/// queues them with [`queue_unlinks`]). A replay prunes nothing.
+pub fn mark_reset(
+    storage: &Storage,
+    operation_id: &str,
+    digest: &str,
+    include_pinned: bool,
+    now: DateTime<Utc>,
+) -> Result<MediaReset, RepositoryError> {
+    storage.write_repo(|tx| {
+        if operations::claim(tx, operation_id, OperationKind::ResetCameraMedia, digest)?
+            == Claim::Replay
+        {
+            return Ok(MediaReset::default());
+        }
+        let selected: Vec<(String, i64)> = tx
+            .prepare(
+                "SELECT id, byte_len FROM camera_snapshots
+                  WHERE pruned_at IS NULL AND (?1 OR pinned_at IS NULL)
+                  ORDER BY captured_at, id",
+            )?
+            .query_map([include_pinned], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let actions: Vec<PruneAction> = selected
+            .iter()
+            .map(|(id, _)| PruneAction {
+                id: id.clone(),
+                reason: PruneReason::Reset,
+            })
+            .collect();
+        let mut touched = Touched::default();
+        let rel_paths = mark_pruned(tx, &actions, now, &mut touched)?;
+        Ok(MediaReset {
+            changes: touched.load(tx)?,
+            pruned_count: i64::try_from(rel_paths.len()).unwrap_or(i64::MAX),
+            rel_paths,
+            freed_bytes: selected.iter().map(|(_, bytes)| bytes).sum(),
+        })
+    })
+}
+
+/// Unlinks the image files of committed pruned rows now, or, while the
+/// backup lease is held (a reset holds it), queues them until it drops.
+pub fn queue_unlinks(storage: &Storage, janitor: &MediaJanitor, rel_paths: &[String]) {
+    MediaStore::for_storage(storage).unlink_after_commit(janitor, rel_paths);
 }
 
 /// A missing image found outside the sweep (`snapshot_image`): the row
@@ -1158,13 +1238,21 @@ pub fn set_pinned(
 
 /// The startup sweep again, at runtime, under the janitor lock (so no
 /// capture is between its file write and its commit): the janitor's retry
-/// while the media store is unavailable.
+/// while the media store is unavailable. P9 D5: the sweep deletes orphan
+/// files, so while the backup lease is held it doesn't run and fails
+/// `PersistenceUnavailable` (the store stays unavailable; dropping the
+/// lease pokes the janitor, which retries).
 pub async fn sweep_under_lock(
     storage: &Storage,
     janitor: &MediaJanitor,
     now: DateTime<Utc>,
 ) -> Result<MediaChanges, RepositoryError> {
     let _serialized = janitor.lock().await;
+    let Some(_permit) = janitor.backup_lease().deletion_permit() else {
+        return Err(RepositoryError::Storage(
+            StorageError::PersistenceUnavailable,
+        ));
+    };
     startup_sweep(storage, now)
 }
 

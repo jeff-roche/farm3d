@@ -4,7 +4,7 @@ import styles from "./Dialog.module.css";
 
 export interface DialogProps extends ParentProps {
   title: string;
-  description?: string;
+  description?: JSX.Element;
   /** Rendered as the content of Kobalte's own trigger <button> — pass text/icon content, not another button.
    *  Omit it for a dialog opened only through the controlled `open` prop (e.g. a confirmation raised
    *  from another dialog), which then renders no trigger at all. */
@@ -38,7 +38,9 @@ export function Dialog(props: DialogProps) {
             </KDialog.CloseButton>
           </div>
           {props.description && (
-            <KDialog.Description class={styles.description}>
+            // A `<p>` for text; a `<div>` for markup, which may hold block
+            // content such as a list.
+            <KDialog.Description as={typeof props.description === "string" ? "p" : "div"} class={styles.description}>
               {props.description}
             </KDialog.Description>
           )}

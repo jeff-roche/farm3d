@@ -887,7 +887,10 @@ mod dispatch {
         assert_eq!(job["state"], "assigned");
         assert_eq!(job["lastFailure"]["kind"], "refused");
         assert_eq!(job["lastFailure"]["code"], "CAPABILITY_UNSUPPORTED");
-        assert!(job["revision"].as_i64().unwrap() > 1, "the revision goes up");
+        assert!(
+            job["revision"].as_i64().unwrap() > 1,
+            "the revision goes up"
+        );
         assert_eq!(app.event_kinds(&job_id), ["assigned"], "no event row");
         assert!(app.ops(&job_id).is_empty());
 
@@ -927,7 +930,10 @@ mod dispatch {
             // past the test's own wait for the upload.
             let _ = released.recv_timeout(2 * WAIT);
         });
-        let upload = handoff.recv_timeout(WAIT).unwrap().expect("the stage handed off");
+        let upload = handoff
+            .recv_timeout(WAIT)
+            .unwrap()
+            .expect("the stage handed off");
         app.wait_until("the upload reached the host", || roots.uploads() == 1);
         let _ = release.send(());
         app.wait_resolved(&upload, HostOperationState::Succeeded);
@@ -960,7 +966,11 @@ mod dispatch {
         // The status change stages it: the driver's poll never ran again.
         app.status(OperationalState::Ready);
         app.wait_job(&job_id, "awaitingStart");
-        assert_eq!(app.services.jobs.resyncs(), 1, "no poll ran after the first pass");
+        assert_eq!(
+            app.services.jobs.resyncs(),
+            1,
+            "no poll ran after the first pass"
+        );
         app.quiesce();
         assert_eq!(roots.uploads(), 1);
     }
@@ -1019,7 +1029,9 @@ mod dispatch {
     fn start_from_finished_requires_prior_state_finished() {
         let (roots, app) = started(StartSafety::ConfirmBedClear);
         let job_id = app.awaiting_start();
-        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "complete".to_string());
         app.status(OperationalState::Finished);
 
         let refused = app.start("op-ready", &job_id, "ready").unwrap_err();
@@ -1034,7 +1046,9 @@ mod dispatch {
     #[test]
     fn unattended_printer_starts_without_confirmation_only_from_ready() {
         let (roots, app) = started(StartSafety::Unattended);
-        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "complete".to_string());
         app.status(OperationalState::Finished);
         let spool = app.spool();
         app.load(&spool);
@@ -1044,7 +1058,9 @@ mod dispatch {
         assert_eq!(roots.starts(), 0, "never from finished");
         assert_eq!(app.job(&job_id)["state"], "awaitingStart");
 
-        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "standby".to_string());
         app.status(OperationalState::Ready);
         let job = app.wait_job(&job_id, "printing");
         assert_eq!(job["startConfirmation"], "unattended");
@@ -1060,7 +1076,10 @@ mod dispatch {
                 start.id
             ))
             .unwrap();
-        assert!(ledger.starts_with("drv-") && ledger.ends_with("#hostOperation"), "{ledger}");
+        assert!(
+            ledger.starts_with("drv-") && ledger.ends_with("#hostOperation"),
+            "{ledger}"
+        );
         app.quiesce();
         assert_eq!(roots.starts(), 1);
     }
@@ -1071,7 +1090,9 @@ mod dispatch {
     #[test]
     fn unattended_start_refuses_a_host_that_reports_complete_behind_a_ready_status() {
         let (roots, app) = started(StartSafety::Unattended);
-        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "complete".to_string());
         app.status(OperationalState::Ready);
         let spool = app.spool();
         app.load(&spool);
@@ -1079,7 +1100,10 @@ mod dispatch {
         app.wait_job(&job_id, "awaitingStart");
         let refused = app.wait_job_until(&job_id, |job| job["lastFailure"] != Value::Null);
         assert_eq!(refused["lastFailure"]["kind"], "refused", "{refused}");
-        assert_eq!(refused["lastFailure"]["code"], "START_PRECONDITION_CHANGED", "{refused}");
+        assert_eq!(
+            refused["lastFailure"]["code"], "START_PRECONDITION_CHANGED",
+            "{refused}"
+        );
         app.quiesce();
         assert_eq!(roots.starts(), 0, "no start request reaches the host");
         assert_eq!(app.job(&job_id)["state"], "awaitingStart");
@@ -1141,7 +1165,10 @@ mod dispatch {
         let job_id = app.printing();
 
         let paused = app.job_command("pause_job", "op-pause", &job_id).unwrap();
-        let pause_op = paused["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        let pause_op = paused["jobs"][0]["activeHostOperationId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(app.row(&pause_op).job_id.as_deref(), Some(job_id.as_str()));
         app.wait_resolved(&pause_op, HostOperationState::Succeeded);
         let job = app.wait_job(&job_id, "paused");
@@ -1213,7 +1240,9 @@ mod dispatch {
             .fake
             .with_state(|state| state.print_filename = "someone/else.gcode".to_string());
 
-        let refused = app.job_command("pause_job", "op-pause", &job_id).unwrap_err();
+        let refused = app
+            .job_command("pause_job", "op-pause", &job_id)
+            .unwrap_err();
         assert_eq!(refused["code"], "JOB_NOT_ON_PRINTER", "{refused}");
         assert_eq!(refused["details"]["jobId"], json!(job_id));
         assert_eq!(refused["details"]["printerId"], PRINTER);
@@ -1239,7 +1268,9 @@ mod dispatch {
             assert_eq!(refused["details"]["action"], action);
             assert_eq!(refused["details"]["state"], "awaitingStart");
         }
-        let missing = app.job_command("stage_job", "op-y", "job-missing").unwrap_err();
+        let missing = app
+            .job_command("stage_job", "op-y", "job-missing")
+            .unwrap_err();
         assert_eq!(missing["code"], "NOT_FOUND");
     }
 
@@ -1280,7 +1311,10 @@ mod dispatch {
         assert_eq!(app.job(&job_id)["allowedActions"], json!([]));
 
         // P6's own exits are not JOB_ACTIVE-guarded.
-        app.ok("reconcile_host_operation", json!({"hostOperationId": upload.id}));
+        app.ok(
+            "reconcile_host_operation",
+            json!({"hostOperationId": upload.id}),
+        );
         app.wait_op(&upload.id, |row| {
             row.state == HostOperationState::Uncertain && row.attempts >= 1
         });
@@ -1303,15 +1337,22 @@ mod dispatch {
     fn abandoned_start_makes_the_job_outcome_unknown_with_a_requirement() {
         let (roots, app) = started(StartSafety::ConfirmBedClear);
         let job_id = app.awaiting_start();
-        roots
-            .fake
-            .fault(Route::Start, Fault::ApplyStartThenDrop(StartTrace::PrintingOnly));
+        roots.fake.fault(
+            Route::Start,
+            Fault::ApplyStartThenDrop(StartTrace::PrintingOnly),
+        );
 
         let change = app.start("op-start", &job_id, "ready").unwrap();
-        let start_op = change["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        let start_op = change["jobs"][0]["activeHostOperationId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         app.wait_op(&start_op, |row| row.state == HostOperationState::Uncertain);
         roots.fake.set_reachable(false);
-        app.ok("reconcile_host_operation", json!({"hostOperationId": start_op}));
+        app.ok(
+            "reconcile_host_operation",
+            json!({"hostOperationId": start_op}),
+        );
         app.wait_op(&start_op, |row| {
             row.state == HostOperationState::Uncertain && row.attempts >= 1
         });
@@ -1349,15 +1390,28 @@ mod dispatch {
         let events = app.job_events(&job_id).len();
         let replayed = app.job_command("stage_job", "op-stage", &job_id).unwrap();
         assert_eq!(replayed["jobs"][0]["id"], first["jobs"][0]["id"]);
-        assert_eq!(replayed["jobs"][0]["state"], "awaitingStart", "the current rows");
+        assert_eq!(
+            replayed["jobs"][0]["state"], "awaitingStart",
+            "the current rows"
+        );
         assert_eq!(roots.uploads(), 2, "a replay never re-stages");
         app.quiesce();
-        assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
+        assert_eq!(
+            app.job_events(&job_id).len(),
+            events,
+            "a replay publishes nothing"
+        );
 
         // The same id for another request is VALIDATION on operationId.
         for (command, body) in [
-            ("pause_job", json!({"operationId": "op-stage", "jobId": job_id})),
-            ("stage_job", json!({"operationId": "op-stage", "jobId": "job-other"})),
+            (
+                "pause_job",
+                json!({"operationId": "op-stage", "jobId": job_id}),
+            ),
+            (
+                "stage_job",
+                json!({"operationId": "op-stage", "jobId": "job-other"}),
+            ),
             (
                 "start_job",
                 json!({"operationId": "op-stage", "jobId": job_id, "priorState": "ready",
@@ -1405,7 +1459,9 @@ mod dispatch {
     /// An Unattended Printer's awaitingStart Job, staged while the Printer
     /// was `finished`, so the driver hasn't started it: the Job id.
     fn awaiting_unattended(roots: &Roots, app: &Running) -> String {
-        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "complete".to_string());
         app.status(OperationalState::Finished);
         let job_id = app.awaiting_start();
         app.quiesce();
@@ -1430,7 +1486,9 @@ mod dispatch {
         let job_id = awaiting_unattended(&roots, &app);
         // The host's re-read reports the last print failed; the live
         // status says Ready.
-        roots.fake.with_state(|state| state.print_state = "error".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "error".to_string());
         app.status(OperationalState::Ready);
         let job = app.wait_job_until(&job_id, |job| !job["lastFailure"].is_null());
         assert_eq!(job["state"], "awaitingStart");
@@ -1438,17 +1496,24 @@ mod dispatch {
         assert_eq!(job["lastFailure"]["code"], "START_NOT_ALLOWED");
         assert_eq!(start_ops(&app, &job_id), 0, "refused before any row");
 
-        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "standby".to_string());
         for _ in 0..3 {
             app.status(OperationalState::Ready);
             app.quiesce();
         }
-        assert_eq!(roots.starts(), 0, "a refused unattended start is not retried");
+        assert_eq!(
+            roots.starts(),
+            0,
+            "a refused unattended start is not retried"
+        );
         let job = app.job(&job_id);
         assert_eq!(job["state"], "awaitingStart");
         assert_eq!(job["lastFailure"]["kind"], "refused");
 
-        app.start("op-start", &job_id, "ready").expect("the operator's start");
+        app.start("op-start", &job_id, "ready")
+            .expect("the operator's start");
         let job = app.wait_job(&job_id, "printing");
         assert_eq!(job["startConfirmation"], "bedClear");
         assert_eq!(roots.starts(), 1);
@@ -1462,20 +1527,25 @@ mod dispatch {
         let (roots, app) = started(StartSafety::ConfirmBedClear);
         let job_id = app.awaiting_start();
         let spool_id = app.job(&job_id)["spoolId"].as_str().unwrap().to_string();
-        app.services.jobs.before_start_link(Box::new(move |storage| {
-            storage
-                .write_repo(|tx| {
-                    tx.execute(
+        app.services
+            .jobs
+            .before_start_link(Box::new(move |storage| {
+                storage
+                    .write_repo(|tx| {
+                        tx.execute(
                         "UPDATE spools SET slot_id = NULL, storage_label = 'Shelf' WHERE id = ?1",
                         [&spool_id],
                     )?;
-                    Ok(())
-                })
-                .unwrap();
-        }));
+                        Ok(())
+                    })
+                    .unwrap();
+            }));
         let error = app.start("op-start", &job_id, "ready").unwrap_err();
         assert_eq!(error["code"], "JOB_START_BLOCKED", "{error}");
-        assert_eq!(codes(&error["details"]["blockers"]), vec!["SPOOL_NOT_LOADED"]);
+        assert_eq!(
+            codes(&error["details"]["blockers"]),
+            vec!["SPOOL_NOT_LOADED"]
+        );
         let job = app.job(&job_id);
         assert_eq!(job["state"], "awaitingStart");
         assert_eq!(job["activeHostOperationId"], Value::Null);
@@ -1507,7 +1577,9 @@ mod dispatch {
                 })
                 .unwrap();
         }));
-        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "standby".to_string());
         app.status(OperationalState::Ready);
         let job = app.wait_job_until(&job_id, |job| !job["lastFailure"].is_null());
         assert_eq!(job["state"], "awaitingStart");
@@ -1533,10 +1605,10 @@ mod tracking {
     use farm3d_lib::printers::StartSafety;
     use serde_json::{json, Value};
 
-    use crate::common::fake_moonraker::{Fault, FakeMoonraker, Route, StartTrace};
+    use crate::common::fake_moonraker::{FakeMoonraker, Fault, Route, StartTrace};
     use crate::p7_dispatch_rig::{
-        boot_tuned, fast, id, no_poll, status_of, Driver, ManualClock, Roots, Running,
-        HOST_PATH, PRINTER, SECRET, SLR, WAIT,
+        boot_tuned, fast, id, no_poll, status_of, Driver, ManualClock, Roots, Running, HOST_PATH,
+        PRINTER, SECRET, SLR, WAIT,
     };
 
     fn strings(value: &Value) -> Vec<String> {
@@ -1584,7 +1656,10 @@ mod tracking {
     }
 
     fn posts(fake: &FakeMoonraker) -> usize {
-        fake.requests().iter().filter(|request| request.method == "POST").count()
+        fake.requests()
+            .iter()
+            .filter(|request| request.method == "POST")
+            .count()
     }
 
     fn entry_of(app: &Running, job_id: &str) -> Value {
@@ -1603,7 +1678,11 @@ mod tracking {
         let pin = pinned_id(&app, &job_id).expect("pinned on entering printing");
         assert_eq!(
             Some(pin),
-            roots.fake.history().last().map(|job| i64::from_str_radix(&job.job_id, 16).unwrap()),
+            roots
+                .fake
+                .history()
+                .last()
+                .map(|job| i64::from_str_radix(&job.job_id, 16).unwrap()),
             "the history job this start created"
         );
 
@@ -1613,14 +1692,21 @@ mod tracking {
         assert_eq!(job["settlementMethod"], "estimated");
         assert_eq!(job["cancelReason"], Value::Null);
         assert!(job["endedAt"].is_string());
-        assert_eq!(strings(&job["allowedActions"]), ["retry", "correctMaterial"]);
+        assert_eq!(
+            strings(&job["allowedActions"]),
+            ["retry", "correctMaterial"]
+        );
         let entry = entry_of(&app, &job_id);
         assert_eq!(entry["state"], "closed");
         assert_eq!(entry["closeReason"], "completed");
         assert_eq!(entry["position"], Value::Null);
 
         app.wait_passes(3);
-        assert_eq!(app.count_events(&job_id, "completed"), 1, "ended exactly once");
+        assert_eq!(
+            app.count_events(&job_id, "completed"),
+            1,
+            "ended exactly once"
+        );
         let events = app.history(&job_id)["events"].clone();
         let completed = events.as_array().unwrap().last().unwrap();
         assert_eq!(completed["kind"], "completed");
@@ -1641,7 +1727,11 @@ mod tracking {
         roots.fake.finish_print("completed");
         app.mirror(&roots.fake);
         app.wait_job(&job_id, "completed");
-        assert_eq!(app.services.jobs.resyncs(), 1, "no poll ran after the first pass");
+        assert_eq!(
+            app.services.jobs.resyncs(),
+            1,
+            "no poll ran after the first pass"
+        );
     }
 
     /// A status alone is never proof: finished on our file with history
@@ -1651,7 +1741,9 @@ mod tracking {
         let roots = roots();
         let app = fast_app(&roots);
         let job_id = app.printing();
-        roots.fake.with_state(|state| state.print_state = "complete".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "complete".to_string());
         app.mirror(&roots.fake);
         app.wait_passes(4);
         assert_eq!(app.job(&job_id)["state"], "printing");
@@ -1673,7 +1765,10 @@ mod tracking {
         assert_eq!(entry["state"], "closed");
         assert_eq!(entry["closeReason"], "failed");
         let events = app.history(&job_id)["events"].clone();
-        assert_eq!(events.as_array().unwrap().last().unwrap()["detail"]["status"], "klippy_shutdown");
+        assert_eq!(
+            events.as_array().unwrap().last().unwrap()["detail"]["status"],
+            "klippy_shutdown"
+        );
     }
 
     #[test]
@@ -1700,13 +1795,17 @@ mod tracking {
                    "policy": "recommended", "preference": "loadedFirst"}),
         )["entries"][0]);
         assert_eq!(
-            app.scalar(&format!("SELECT position FROM queue_entries WHERE id = '{later}'")),
+            app.scalar(&format!(
+                "SELECT position FROM queue_entries WHERE id = '{later}'"
+            )),
             2
         );
         roots.fake.finish_print("completed");
         app.wait_job(&job_id, "completed");
         assert_eq!(
-            app.scalar(&format!("SELECT position FROM queue_entries WHERE id = '{later}'")),
+            app.scalar(&format!(
+                "SELECT position FROM queue_entries WHERE id = '{later}'"
+            )),
             1
         );
     }
@@ -1772,13 +1871,21 @@ mod tracking {
         app.wait_passes(1);
 
         let paused = app.job_command("pause_job", "op-pause", &job_id).unwrap();
-        let pause_op = paused["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        let pause_op = paused["jobs"][0]["activeHostOperationId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         app.wait_resolved(&pause_op, HostOperationState::Succeeded);
         app.wait_job_until(&job_id, |job| job["activeHostOperationId"].is_null());
         // The cached status still reports our file printing.
         app.quiesce();
         app.wait_passes(1);
-        assert_eq!(app.count_events(&job_id, "resumed"), 0, "{:?}", app.event_kinds(&job_id));
+        assert_eq!(
+            app.count_events(&job_id, "resumed"),
+            0,
+            "{:?}",
+            app.event_kinds(&job_id)
+        );
         assert_eq!(app.job(&job_id)["state"], "paused");
 
         app.mirror(&roots.fake);
@@ -1824,7 +1931,11 @@ mod tracking {
             .unwrap()
             .clone();
         let printer_codes = codes(&printer["blockers"]);
-        assert_eq!(printer_codes.first().map(String::as_str), Some("JOB_ACTIVE"), "{printer}");
+        assert_eq!(
+            printer_codes.first().map(String::as_str),
+            Some("JOB_ACTIVE"),
+            "{printer}"
+        );
         assert!(!printer_codes.contains(&"PRINTER_BUSY_EXTERNAL".to_string()));
         app.wait_passes(2);
         assert_eq!(app.job(&waiting)["state"], "awaitingStart");
@@ -1835,11 +1946,15 @@ mod tracking {
         let roots = self::roots();
         let app = fast_app(&roots);
         let job_id = app.awaiting_start();
-        roots
-            .fake
-            .fault(Route::Start, Fault::ApplyStartThenDrop(StartTrace::PrintingOnly));
+        roots.fake.fault(
+            Route::Start,
+            Fault::ApplyStartThenDrop(StartTrace::PrintingOnly),
+        );
         let change = app.start("op-start", &job_id, "ready").unwrap();
-        let start_op = change["jobs"][0]["activeHostOperationId"].as_str().unwrap().to_string();
+        let start_op = change["jobs"][0]["activeHostOperationId"]
+            .as_str()
+            .unwrap()
+            .to_string();
         app.wait_op(&start_op, |row| row.state == HostOperationState::Uncertain);
         roots
             .fake
@@ -1847,14 +1962,21 @@ mod tracking {
         let mut foreign = status_of(OperationalState::Printing);
         foreign.telemetry.job_name = Some("someone/else.gcode".to_string());
         app.seed(foreign);
-        app.ok("reconcile_host_operation", json!({"hostOperationId": start_op}));
+        app.ok(
+            "reconcile_host_operation",
+            json!({"hostOperationId": start_op}),
+        );
         app.wait_resolved(&start_op, HostOperationState::Succeeded);
         let job = app.wait_job(&job_id, "outcomeUnknown");
         assert_eq!(pinned_id(&app, &job_id), None);
         assert_eq!(app.count_events(&job_id, "hostJobPinned"), 0);
         assert_eq!(strings(&job["allowedActions"]), ["declareOutcome"]);
         assert_eq!(job["settlement"], "open");
-        assert_eq!(entry_of(&app, &job_id)["state"], "assigned", "outcomeUnknown is still active");
+        assert_eq!(
+            entry_of(&app, &job_id)["state"],
+            "assigned",
+            "outcomeUnknown is still active"
+        );
         let requirements = app.history(&job_id)["requirements"].clone();
         assert_eq!(requirements.as_array().unwrap().len(), 1);
         assert_eq!(requirements[0]["kind"], "jobOutcomeUnknown");
@@ -1905,9 +2027,13 @@ mod tracking {
         let job_id = app.printing();
         let history = roots.fake.history();
         roots.fake.with_state(|state| state.history.clear());
-        app.wait_until("two inconclusive polls", || app.job_column(&job_id, "inconclusive_checks") >= Some(2));
+        app.wait_until("two inconclusive polls", || {
+            app.job_column(&job_id, "inconclusive_checks") >= Some(2)
+        });
         roots.fake.with_state(|state| state.history = history);
-        app.wait_until("the count reset", || app.job_column(&job_id, "inconclusive_checks") == Some(0));
+        app.wait_until("the count reset", || {
+            app.job_column(&job_id, "inconclusive_checks") == Some(0)
+        });
         assert_eq!(app.job(&job_id)["state"], "printing");
     }
 
@@ -1928,10 +2054,15 @@ mod tracking {
 
         clock.advance(Duration::from_secs(29 * 60));
         app.wait_passes(1);
-        assert!(!strings(&app.job(&job_id)["allowedActions"]).contains(&"declareOutcome".to_string()));
+        assert!(
+            !strings(&app.job(&job_id)["allowedActions"]).contains(&"declareOutcome".to_string())
+        );
         clock.advance(Duration::from_secs(60));
         let job = app.job(&job_id);
-        assert_eq!(strings(&job["allowedActions"]), ["pause", "cancel", "declareOutcome"]);
+        assert_eq!(
+            strings(&job["allowedActions"]),
+            ["pause", "cancel", "declareOutcome"]
+        );
         // The tracker republishes the Job when it crosses the mark.
         app.wait_until("republished with declareOutcome", || {
             app.job_events(&job_id).iter().any(|event| {
@@ -1947,7 +2078,11 @@ mod tracking {
         assert_eq!(declared["entries"][0]["closeReason"], "failed");
         assert_eq!(app.count_events(&job_id, "declaredFailed"), 1);
         assert!(
-            app.history(&job_id)["requirements"].as_array().unwrap().iter().all(|requirement| requirement["kind"] != "jobOutcomeUnknown"),
+            app.history(&job_id)["requirements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|requirement| requirement["kind"] != "jobOutcomeUnknown"),
             "no jobOutcomeUnknown requirement from printing"
         );
         roots.fake.set_reachable(true);
@@ -1976,7 +2111,11 @@ mod tracking {
         let job = app.job(&job_id);
         assert_eq!(job["hostUnreachableSince"], since, "status never clears it");
         assert_eq!(job["state"], "printing");
-        assert_eq!(app.job_column(&job_id, "inconclusive_checks"), Some(0), "an unrun poll counts as neither");
+        assert_eq!(
+            app.job_column(&job_id, "inconclusive_checks"),
+            Some(0),
+            "an unrun poll counts as neither"
+        );
 
         roots.fake.set_reachable(true);
         app.wait_job_until(&job_id, |job| job["hostUnreachableSince"].is_null());
@@ -2005,7 +2144,9 @@ mod tracking {
         assert_eq!(job["cancelReason"], "operatorDeclared");
         assert_eq!(job["hostUnreachableSince"], Value::Null);
         assert_eq!(
-            app.text(&format!("SELECT host_unreachable_since FROM jobs WHERE id = '{job_id}'")),
+            app.text(&format!(
+                "SELECT host_unreachable_since FROM jobs WHERE id = '{job_id}'"
+            )),
             None
         );
         roots.fake.set_reachable(true);
@@ -2035,10 +2176,21 @@ mod tracking {
         app.mirror(&other);
 
         let job = app.wait_job(&job_id, "outcomeUnknown");
-        assert_eq!(pinned_id(&app, &job_id), pin, "the old pin is kept, never replaced");
+        assert_eq!(
+            pinned_id(&app, &job_id),
+            pin,
+            "the old pin is kept, never replaced"
+        );
         assert_eq!(app.count_events(&job_id, "hostJobPinned"), 1);
-        assert_eq!(job["hostUnreachableSince"], Value::Null, "the new host answered");
-        assert!(other.requests().iter().any(|request| request.path() == "/server/history/list"));
+        assert_eq!(
+            job["hostUnreachableSince"],
+            Value::Null,
+            "the new host answered"
+        );
+        assert!(other
+            .requests()
+            .iter()
+            .any(|request| request.path() == "/server/history/list"));
         assert_eq!(posts(&other), 0);
         assert_eq!(posts(&roots.fake), posts_before);
     }
@@ -2060,7 +2212,10 @@ mod tracking {
         let app = fast_app(&roots);
         let job_id = app.printing();
         let refused = app.declare("op-early", &job_id, "completed").unwrap_err();
-        assert_eq!(refused["code"], "JOB_ACTION_NOT_ALLOWED", "reachable and printing");
+        assert_eq!(
+            refused["code"], "JOB_ACTION_NOT_ALLOWED",
+            "reachable and printing"
+        );
         roots.fake.with_state(|state| state.history.clear());
         app.wait_job(&job_id, "outcomeUnknown");
         let posts_before = posts(&roots.fake);
@@ -2089,7 +2244,10 @@ mod tracking {
         let requirement = &declared["requirements"][0];
         assert_eq!(requirement["kind"], "jobOutcomeUnknown");
         assert_eq!(requirement["status"], "resolved");
-        assert_eq!(requirement["resolution"], json!({"kind": "declared", "outcome": "completed"}));
+        assert_eq!(
+            requirement["resolution"],
+            json!({"kind": "declared", "outcome": "completed"})
+        );
         app.quiesce();
         let events = app.job_events(&job_id).len();
 
@@ -2097,14 +2255,22 @@ mod tracking {
         assert_eq!(replayed["jobs"][0]["id"], json!(job_id));
         assert_eq!(replayed["jobs"][0]["state"], "completed");
         app.quiesce();
-        assert_eq!(app.job_events(&job_id).len(), events, "a replay publishes nothing");
+        assert_eq!(
+            app.job_events(&job_id).len(),
+            events,
+            "a replay publishes nothing"
+        );
         let reused = app.declare("op-declare", &job_id, "failed").unwrap_err();
         assert_eq!(reused["code"], "VALIDATION");
         assert_eq!(reused["details"]["fieldPath"], "operationId");
         let again = app.declare("op-again", &job_id, "failed").unwrap_err();
         assert_eq!(again["code"], "JOB_ACTION_NOT_ALLOWED");
         assert_eq!(app.count_events(&job_id, "declaredCompleted"), 1);
-        assert_eq!(posts(&roots.fake), posts_before, "farm3d sends nothing to the host");
+        assert_eq!(
+            posts(&roots.fake),
+            posts_before,
+            "farm3d sends nothing to the host"
+        );
         let unknown = app.declare("op-x", "job-missing", "failed").unwrap_err();
         assert_eq!(unknown["code"], "NOT_FOUND");
     }
@@ -2150,9 +2316,10 @@ mod tracking {
             .rfind(|op| op.kind == farm3d_lib::host_ops::HostOperationKind::Start)
             .unwrap();
         let start = app.wait_resolved(&start.id, HostOperationState::Succeeded);
-        let dispatched = chrono::DateTime::parse_from_rfc3339(start.dispatched_at.as_deref().unwrap())
-            .unwrap()
-            .timestamp() as f64;
+        let dispatched =
+            chrono::DateTime::parse_from_rfc3339(start.dispatched_at.as_deref().unwrap())
+                .unwrap()
+                .timestamp() as f64;
         roots
             .fake
             .with_state(|state| state.history.last_mut().unwrap().start_time = dispatched - 31.0);
@@ -2163,15 +2330,24 @@ mod tracking {
         let app = boot_tuned(&roots, Driver::Started, ours, fast(), None);
         app.wait_job(&job_id, "printing");
         app.wait_passes(4);
-        assert_eq!(pinned_id(&app, &job_id), None, "started too early to be ours");
+        assert_eq!(
+            pinned_id(&app, &job_id),
+            None,
+            "started too early to be ours"
+        );
         assert_eq!(app.count_events(&job_id, "hostJobPinned"), 0);
-        assert_eq!(app.job(&job_id)["state"], "printing", "our file is still printing");
+        assert_eq!(
+            app.job(&job_id)["state"],
+            "printing",
+            "our file is still printing"
+        );
 
         roots
             .fake
             .with_state(|state| state.history.last_mut().unwrap().start_time = dispatched - 29.0);
         app.wait_until("pinned", || app.count_events(&job_id, "hostJobPinned") == 1);
-        let expected = i64::from_str_radix(&roots.fake.history().last().unwrap().job_id, 16).unwrap();
+        let expected =
+            i64::from_str_radix(&roots.fake.history().last().unwrap().job_id, 16).unwrap();
         assert_eq!(pinned_id(&app, &job_id), Some(expected));
     }
 
@@ -2194,7 +2370,9 @@ mod tracking {
         // Another Job's operations stay out of this Job's history.
         roots.fake.finish_print("completed");
         app.wait_job(&job_id, "completed");
-        roots.fake.with_state(|state| state.print_state = "standby".to_string());
+        roots
+            .fake
+            .with_state(|state| state.print_state = "standby".to_string());
         app.status(OperationalState::Ready);
         let spool = app.job(&job_id)["spoolId"].as_str().unwrap().to_string();
         let next = app.assign(&spool);

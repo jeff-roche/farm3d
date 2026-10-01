@@ -304,7 +304,9 @@ fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, Com
         return Err(CommandError::unsupported_schema(version));
     }
     if !(1..=i64::from(SETTINGS_SCHEMA_VERSION)).contains(&version) {
-        return Err(CommandError::validation("schemaVersion must be 1, 2, or 3."));
+        return Err(CommandError::validation(
+            "schemaVersion must be 1, 2, or 3.",
+        ));
     }
     let document: ImportedSettingsDocument = serde_json::from_value(raw).map_err(|_| {
         CommandError::validation("The selected Settings document has an invalid shape.")
@@ -328,6 +330,20 @@ fn parse_settings_document(bytes: &[u8]) -> Result<ImportedSettingsDocument, Com
         .validate()
         .map_err(CommandError::from_repository)?;
     Ok(document)
+}
+
+/// P9 D15 tier (a): every setting at the default `ensure_default` and the
+/// column defaults define: `theme_mode 'system'`, `monitor_section
+/// 'printerModel'`, `monitor_density 'comfortable'`, notify classes
+/// `1,1,1,0,0,0`, 30 days, 2048 MiB. Written through the save path.
+pub(crate) fn default_update() -> SettingsUpdate<'static> {
+    SettingsUpdate {
+        theme_mode: "system",
+        monitor_section: MonitorSection::default(),
+        monitor_density: MonitorDensity::default(),
+        notifications: Some(NotificationClassSettings::default()),
+        snapshot_retention: Some(SnapshotRetention::default()),
+    }
 }
 
 fn repository(storage: &Arc<Storage>) -> SettingsRepository {
@@ -589,7 +605,10 @@ mod tests {
             br#"{"schemaVersion":2,"exportedAt":"x","settings":{"themeMode":"system"}}"#,
         )
         .unwrap();
-        assert_eq!(document.settings.classes(), NotificationClassSettings::default());
+        assert_eq!(
+            document.settings.classes(),
+            NotificationClassSettings::default()
+        );
         assert_eq!(document.settings.retention(), SnapshotRetention::default());
         // Schema 2 can't carry the schema 3 fields; unknown fields stay out.
         for bad in [

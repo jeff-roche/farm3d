@@ -40,12 +40,12 @@ fn load_settings_from(config_dir: &Path) -> Result<Settings, String> {
         return Ok(defaults);
     }
     match fs::read_to_string(&path) {
-        Ok(contents) => Ok(serde_json::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("settings.json is not valid JSON ({e}); using defaults");
+        Ok(contents) => Ok(serde_json::from_str(&contents).unwrap_or_else(|_| {
+            crate::f3d_log!(warn, "settings.invalidJson");
             Settings::default()
         })),
-        Err(e) => {
-            eprintln!("Could not read settings.json ({e}); using defaults");
+        Err(_) => {
+            crate::f3d_log!(warn, "settings.unreadable");
             Ok(Settings::default())
         }
     }

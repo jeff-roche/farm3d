@@ -469,7 +469,12 @@ fn decode_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpoolRecord> {
     let printer_id: Option<String> = row.get(23)?;
     let reserved_mg: i64 = row.get(24)?;
     let has_unresolved: i64 = row.get(25)?;
-    Ok(to_record(stored, printer_id, reserved_mg, has_unresolved != 0))
+    Ok(to_record(
+        stored,
+        printer_id,
+        reserved_mg,
+        has_unresolved != 0,
+    ))
 }
 
 fn decode_stored(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredSpool> {

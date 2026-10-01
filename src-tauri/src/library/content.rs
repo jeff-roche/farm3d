@@ -32,6 +32,7 @@ use std::time::SystemTime;
 use rusqlite::{params, Transaction};
 use sha2::{Digest, Sha256};
 
+use crate::backup::lease::{BackupLease, LeaseGuard};
 use crate::contracts::command::CommandError;
 use crate::persistence::{create_contained_directory, RepositoryError, Storage, StorageError};
 use crate::printers::now_rfc3339;
@@ -218,6 +219,17 @@ pub struct SweepReport {
     pub orphans_failed: usize,
 }
 
+/// What [`ContentStore::clear_unreferenced`] removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClearedContent {
+    /// Blobs unlinked from `pending_blob_cleanup`.
+    pub released: usize,
+    /// Blob files no row named, deleted.
+    pub orphans_removed: usize,
+    /// Orphan files that could not be deleted.
+    pub orphans_failed: usize,
+}
+
 /// The store's totals, for the Library status line (`library_content_info`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContentInfo {
@@ -276,6 +288,10 @@ pub struct ContentStore {
     before_restat: Mutex<Option<SourceHook>>,
     pause: Mutex<Option<Arc<StagePause>>>,
     placement_pause: Mutex<Option<Arc<StagePause>>>,
+    /// P9 D5: while a backup (or any P9 file operation) holds this lease,
+    /// [`release_unreferenced`](Self::release_unreferenced) unlinks
+    /// nothing. A store built on its own gets a private lease.
+    lease: BackupLease,
 }
 
 impl ContentStore {
@@ -296,7 +312,20 @@ impl ContentStore {
             before_restat: Mutex::new(None),
             pause: Mutex::new(None),
             placement_pause: Mutex::new(None),
+            lease: BackupLease::new(),
         })
+    }
+
+    /// P9 D5: shares the process-wide `lease` (`RuntimeServices` builds
+    /// the store with it).
+    pub fn with_backup_lease(mut self, lease: BackupLease) -> Self {
+        self.lease = lease;
+        self
+    }
+
+    /// The lease this store honors.
+    pub fn backup_lease(&self) -> &BackupLease {
+        &self.lease
     }
 
     /// Test hook (S3): lowers the source size limit.
@@ -590,7 +619,18 @@ impl ContentStore {
     /// is dropped. A failed unlink leaves the row with `attempt_count`
     /// bumped for the startup sweep to retry. Returns the number of blobs
     /// unlinked.
+    ///
+    /// P9 D5: while the backup lease is held this returns `Ok(0)` without
+    /// unlinking; the pending rows stay, and dropping the lease runs this
+    /// again.
     pub fn release_unreferenced(&self, storage: &Storage) -> Result<usize, StorageError> {
+        let Some(_permit) = self.lease.deletion_permit() else {
+            return Ok(0);
+        };
+        self.release_pending(storage)
+    }
+
+    fn release_pending(&self, storage: &Storage) -> Result<usize, StorageError> {
         let _placement = self
             .placement
             .lock()
@@ -651,6 +691,50 @@ impl ContentStore {
         }
     }
 
+    /// P9 D14 `clear_storage(unreferencedContent)`, run by the holder of the
+    /// backup lease (`lease` proves it: while it is held no other deleter
+    /// runs, so this store deletes on the holder's behalf). Marks every
+    /// `content_blobs` row no table references (D4's rule, which re-checks
+    /// each candidate), releases the `pending_blob_cleanup` blobs, and
+    /// removes blob files no row names. Referenced blobs are never touched.
+    pub fn clear_unreferenced(
+        &self,
+        storage: &Storage,
+        lease: &LeaseGuard,
+    ) -> Result<ClearedContent, StorageError> {
+        debug_assert_eq!(self.lease.holder(), Some(lease.activity()));
+        let candidates = storage.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT sha256 FROM content_blobs
+                 WHERE NOT EXISTS(SELECT 1 FROM model_source_revisions WHERE content_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM model_revision_thumbnails WHERE content_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_revisions WHERE gcode_sha256 = sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_revision_blobs WHERE sha256 = content_blobs.sha256)
+                   AND NOT EXISTS(SELECT 1 FROM slice_operations WHERE log_sha256 = sha256)",
+            )?;
+            let hashes = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(hashes)
+        })?;
+        if !candidates.is_empty() {
+            // Under the placement lock: an import's rows and files land
+            // together.
+            let _placement = self
+                .placement
+                .lock()
+                .map_err(|_| StorageError::PersistenceUnavailable)?;
+            storage.write(|transaction| mark_unreferenced_blobs(transaction, &candidates))?;
+        }
+        let released = self.release_pending(storage)?;
+        let (orphans_removed, orphans_failed) = self.remove_orphans(storage)?;
+        Ok(ClearedContent {
+            released,
+            orphans_removed,
+            orphans_failed,
+        })
+    }
+
     /// D4 startup reconciliation, run before commands are served (the
     /// metadata-root lease guarantees no import is in flight): empties
     /// `staging/`, retries `pending_blob_cleanup`, and deletes blob files
@@ -678,8 +762,9 @@ impl ContentStore {
     fn clear_staging(&self) -> (usize, usize) {
         let entries = match fs::read_dir(&self.staging) {
             Ok(entries) => entries,
-            Err(error) => {
-                eprintln!("farm3d: content sweep could not list staging: {error}");
+            // The filesystem error can name a path, so only the code is logged.
+            Err(_) => {
+                crate::f3d_log!(warn, "library.sweepListStagingFailed");
                 return (0, 1);
             }
         };
@@ -692,12 +777,8 @@ impl ContentStore {
                 } else {
                     fs::remove_file(&path)
                 };
-                result.map_err(|error| {
-                    eprintln!(
-                        "farm3d: content sweep could not remove staging entry {:?}: {error}",
-                        entry.file_name()
-                    );
-                    error
+                result.inspect_err(|_| {
+                    crate::f3d_log!(warn, "library.sweepRemoveStagingFailed");
                 })
             });
             match outcome {
@@ -712,6 +793,12 @@ impl ContentStore {
     /// `pending_blob_cleanup` row is left to `release_unreferenced`, which
     /// already tried it and recorded the attempt.
     fn remove_orphans(&self, storage: &Storage) -> Result<(usize, usize), StorageError> {
+        // Under the placement lock, so a blob an import has placed and not
+        // yet committed is never taken for an orphan.
+        let _placement = self
+            .placement
+            .lock()
+            .map_err(|_| StorageError::PersistenceUnavailable)?;
         let (known, pending) = storage.read(|connection| {
             let hashes = |sql: &str| -> rusqlite::Result<HashSet<String>> {
                 let mut statement = connection.prepare(sql)?;
@@ -726,8 +813,8 @@ impl ContentStore {
         let (mut removed, mut failed) = (0, 0);
         let prefixes = match fs::read_dir(&self.blobs) {
             Ok(prefixes) => prefixes,
-            Err(error) => {
-                eprintln!("farm3d: content sweep could not list blobs: {error}");
+            Err(_) => {
+                crate::f3d_log!(warn, "library.sweepListBlobsFailed");
                 return Ok((0, 1));
             }
         };
@@ -745,10 +832,8 @@ impl ContentStore {
             let prefix_name = prefix.file_name();
             let blobs = match fs::read_dir(prefix.path()) {
                 Ok(blobs) => blobs,
-                Err(error) => {
-                    eprintln!(
-                        "farm3d: content sweep could not list blob prefix {prefix_name:?}: {error}"
-                    );
+                Err(_) => {
+                    crate::f3d_log!(warn, "library.sweepListBlobPrefixFailed");
                     failed += 1;
                     continue;
                 }
@@ -769,8 +854,8 @@ impl ContentStore {
                 }
                 match remove_blob_file(&blob.path()) {
                     Ok(()) => removed += 1,
-                    Err(error) => {
-                        eprintln!("farm3d: content sweep could not remove blob {name:?}: {error}");
+                    Err(_) => {
+                        crate::f3d_log!(warn, "library.sweepRemoveBlobFailed");
                         failed += 1;
                     }
                 }

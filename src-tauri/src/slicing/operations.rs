@@ -43,6 +43,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::contracts::command::CommandError;
+use crate::diagnostics::log::LogId;
 use crate::library::content::CancelFlag;
 use crate::persistence::{RepositoryError, Storage, StorageError};
 use crate::spools::encode_enum;
@@ -367,9 +368,11 @@ fn store_run<R: tauri::Runtime>(
         ],
         Ok(FinishedRun::Unpublished(operation)) => vec![events::operation_changed(&operation)],
         Err(error) => {
-            eprintln!(
-                "farm3d: slice {} could not be stored: {error}",
-                job.operation_id
+            crate::f3d_log!(
+                warn,
+                "slicing.storeFailed",
+                slice_operation_id = LogId::slice_operation(&job.operation_id),
+                error = error
             );
             fail_operation(
                 services,
@@ -1238,12 +1241,7 @@ pub fn recover_after_restart(storage: &Storage) -> Result<Recovery, StorageError
             };
             match removed {
                 Ok(()) => work_dirs_removed += 1,
-                Err(error) => {
-                    eprintln!(
-                        "farm3d: could not remove slicing work {:?}: {error}",
-                        entry.file_name()
-                    )
-                }
+                Err(_) => crate::f3d_log!(warn, "slicing.workDirRemoveFailed"),
             }
         }
     }

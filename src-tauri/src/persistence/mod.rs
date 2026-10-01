@@ -1,5 +1,6 @@
 mod database;
 mod error;
+pub mod integrity;
 mod legacy;
 mod migrations;
 pub mod snapshot;
@@ -12,6 +13,12 @@ pub use database::{
 pub use error::{RepositoryError, StorageError};
 pub use legacy::{migrate_legacy, LegacyMigrationOutcome};
 pub use migrations::CURRENT_SCHEMA_VERSION;
+/// P9 restore staging migrates and checks a staged copy with the same code
+/// the live database uses (D4).
+pub(crate) use migrations::{
+    apply as apply_migrations, apply_through, embedded as embedded_migrations,
+    has_foreign_key_violation,
+};
 pub use snapshot::{SnapshotKind, ValidationSummary};
 
 /// Migration internals integration tests need to build a fixture database
@@ -77,6 +84,68 @@ mod tests {
             .expect_err("collision must fail");
 
         assert!(matches!(error, StorageError::PathCollision));
+    }
+
+    #[test]
+    fn storage_paths_default_the_log_and_backup_roots_under_the_app_data_root() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let data = temp.path().join("data");
+        let paths = StoragePaths::new(temp.path().join("metadata"), &data).expect("storage paths");
+        let data = data.canonicalize().expect("canonical data");
+
+        assert_eq!(paths.log_root(), data.join("logs"));
+        assert_eq!(paths.backup_root(), data.join("farm3d-backups/v1"));
+    }
+
+    #[test]
+    fn with_log_root_replaces_the_root_and_reruns_the_collision_checks() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let metadata = temp.path().join("metadata");
+        let data = temp.path().join("data");
+        let paths = StoragePaths::new(&metadata, &data).expect("storage paths");
+
+        let moved = paths
+            .clone()
+            .with_log_root(temp.path().join("elsewhere/logs"))
+            .expect("a separate log root");
+        assert_eq!(
+            moved.log_root(),
+            temp.path().join("elsewhere/logs").canonicalize().unwrap()
+        );
+
+        for nested in [
+            data.join("farm3d-content/v1"),
+            data.join("farm3d-media/v1/sub"),
+            data.join("farm3d-backups/v1"),
+            metadata.join("snapshots"),
+            metadata.join("legacy"),
+            metadata.clone(),
+        ] {
+            let error = paths
+                .clone()
+                .with_log_root(&nested)
+                .expect_err("a colliding log root must fail");
+            assert!(matches!(error, StorageError::PathCollision), "{nested:?}");
+        }
+    }
+
+    #[test]
+    fn storage_paths_reject_a_backup_tree_nested_under_another_tree() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let data = temp.path().join("data");
+        fs::create_dir_all(data.join("farm3d-backups")).expect("backup parent");
+        // `farm3d-backups/v1` may not be a symlink into the content store.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                temp.path().join("metadata"),
+                data.join("farm3d-backups/v1"),
+            )
+            .expect("symlink");
+            let error = StoragePaths::new(temp.path().join("metadata"), &data)
+                .expect_err("aliased backup root must fail");
+            assert!(matches!(error, StorageError::PathCollision));
+        }
     }
 
     #[test]
@@ -949,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn open_removes_incomplete_restore_staging_but_keeps_valid_candidates() {
+    fn open_removes_every_restore_staging_no_pending_journal_names() {
         let (temp, paths, lease, storage) = open_storage();
         let snapshot = storage
             .create_snapshot(SnapshotKind::Settings)
@@ -965,10 +1034,31 @@ mod tests {
         fs::create_dir_all(&incomplete).expect("incomplete staging");
         drop(storage);
 
-        let reopened = Storage::open(paths, &lease).expect("reopen storage");
-
-        assert!(valid_directory.exists());
+        // P9 D8: a valid candidate is no longer kept for being valid...
+        let reopened = Storage::open(paths.clone(), &lease).expect("reopen storage");
+        assert!(!valid_directory.exists());
         assert!(!incomplete.exists());
+
+        // ...only for being named by a pending restore journal.
+        let staged = reopened
+            .stage_restore(snapshot.path())
+            .expect("staged restore");
+        let named = paths
+            .snapshot_root()
+            .join(".restore-staging")
+            .join(staged.staging_id());
+        fs::create_dir_all(paths.metadata_root().join("restore")).expect("restore directory");
+        fs::write(
+            paths.metadata_root().join("restore/journal.json"),
+            format!(
+                r#"{{"journalVersion":1,"phase":"pending","stagingId":"{}"}}"#,
+                staged.staging_id()
+            ),
+        )
+        .expect("journal");
+        drop(reopened);
+        let reopened = Storage::open(paths, &lease).expect("reopen storage");
+        assert!(named.join("candidate.sqlite3").exists());
         drop((reopened, temp));
     }
 
@@ -1203,6 +1293,8 @@ mod tests {
                     ("index", "incidents_one_per_job"),
                     ("index", "incidents_open"),
                     ("index", "incidents_printer"),
+                    ("index", "jobs_history"),
+                    ("index", "jobs_history_printer"),
                     ("index", "jobs_one_active_per_printer"),
                     ("index", "jobs_printer_ended"),
                     ("index", "jobs_slice_revision"),
@@ -1334,7 +1426,14 @@ mod tests {
             ("attention_events", "spool_id", "TEXT", 0, None, 0),
             ("attention_events", "requirement_id", "TEXT", 0, None, 0),
             ("attention_events", "incident_id", "TEXT", 0, None, 0),
-            ("attention_events", "subject_snapshot_json", "TEXT", 1, None, 0),
+            (
+                "attention_events",
+                "subject_snapshot_json",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             ("attention_events", "detail_json", "TEXT", 1, None, 0),
             ("attention_events", "summary", "TEXT", 1, None, 0),
             ("attention_events", "origin", "TEXT", 1, None, 0),
@@ -1722,7 +1821,14 @@ mod tests {
                 None,
                 0,
             ),
-            ("printer_alert_defaults", "notifications", "TEXT", 1, None, 0),
+            (
+                "printer_alert_defaults",
+                "notifications",
+                "TEXT",
+                1,
+                None,
+                0,
+            ),
             (
                 "printer_alert_defaults",
                 "snapshot_on_incident",
@@ -1897,10 +2003,31 @@ mod tests {
                 0,
             ),
             ("settings", "notify_fatal", "INTEGER", 1, Some("1"), 0),
-            ("settings", "notify_confirmation", "INTEGER", 1, Some("1"), 0),
+            (
+                "settings",
+                "notify_confirmation",
+                "INTEGER",
+                1,
+                Some("1"),
+                0,
+            ),
             ("settings", "notify_completion", "INTEGER", 1, Some("1"), 0),
-            ("settings", "notify_reconciliation", "INTEGER", 1, Some("0"), 0),
-            ("settings", "notify_connectivity", "INTEGER", 1, Some("0"), 0),
+            (
+                "settings",
+                "notify_reconciliation",
+                "INTEGER",
+                1,
+                Some("0"),
+                0,
+            ),
+            (
+                "settings",
+                "notify_connectivity",
+                "INTEGER",
+                1,
+                Some("0"),
+                0,
+            ),
             ("settings", "notify_inventory", "INTEGER", 1, Some("0"), 0),
             (
                 "settings",

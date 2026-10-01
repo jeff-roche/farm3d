@@ -64,7 +64,11 @@ impl NotifierUnavailableReason {
 /// `org.freedesktop.Notifications`; `unsupported` on every other target
 /// (the null sink).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "state", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "state",
     rename_all = "camelCase",

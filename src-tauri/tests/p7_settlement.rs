@@ -7,11 +7,10 @@
 mod common;
 mod p7_dispatch_rig;
 
-
 use farm3d_lib::jobs::estimated_use_mg;
 use farm3d_lib::printers::operational::OperationalState;
 use farm3d_lib::printers::StartSafety;
-use p7_dispatch_rig::{boot_tuned, fast, id, status_of, Driver, Roots, PRINTER, ESTIMATE_MG, SLR};
+use p7_dispatch_rig::{boot_tuned, fast, id, status_of, Driver, Roots, ESTIMATE_MG, PRINTER, SLR};
 use serde_json::{json, Value};
 
 fn roots() -> Roots {
@@ -19,11 +18,20 @@ fn roots() -> Roots {
 }
 
 fn fast_boot(roots: &Roots) -> p7_dispatch_rig::Running {
-    boot_tuned(roots, Driver::Started, status_of(OperationalState::Ready), fast(), None)
+    boot_tuned(
+        roots,
+        Driver::Started,
+        status_of(OperationalState::Ready),
+        fast(),
+        None,
+    )
 }
 
 fn requirements(app: &p7_dispatch_rig::Running, job_id: &str) -> Vec<Value> {
-    app.history(job_id)["requirements"].as_array().unwrap().clone()
+    app.history(job_id)["requirements"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 fn material_requirement(app: &p7_dispatch_rig::Running, job_id: &str) -> Value {
@@ -51,7 +59,11 @@ const DEFER: fn() -> Value = || json!({"kind": "defer"});
 #[test]
 fn estimated_use_is_progress_proportional_and_rounds_up() {
     assert_eq!(estimated_use_mg(12_500, 0), 0, "never printed");
-    assert_eq!(estimated_use_mg(12_501, 37), 4_626, "rounds up: ceil(4625.37)");
+    assert_eq!(
+        estimated_use_mg(12_501, 37),
+        4_626,
+        "rounds up: ceil(4625.37)"
+    );
     assert_eq!(estimated_use_mg(12_500, 100), 12_500, "the full estimate");
 }
 
@@ -70,7 +82,11 @@ fn completion_consumes_the_estimate_in_the_terminal_transaction() {
     let job = app.wait_job(&job_id, "completed");
     assert_eq!(job["settlement"], "settled");
     assert_eq!(job["settlementMethod"], "estimated");
-    assert_eq!(job["settlementPreview"], Value::Null, "ruling R4: settled, not previewed");
+    assert_eq!(
+        job["settlementPreview"],
+        Value::Null,
+        "ruling R4: settled, not previewed"
+    );
     assert_eq!(app.reservation_state(&reservation_id), "consumed");
 
     let consumptions: Vec<Value> = app
@@ -97,10 +113,20 @@ fn completion_correction_records_one_measurement_marked_as_correction() {
     roots.fake.finish_print("completed");
     app.wait_job(&job_id, "completed");
 
-    let corrected = app.correct("op-correct", &job_id, json!({"kind": "net", "netMg": 600_000, "confidence": "measured"})).unwrap();
+    let corrected = app
+        .correct(
+            "op-correct",
+            &job_id,
+            json!({"kind": "net", "netMg": 600_000, "confidence": "measured"}),
+        )
+        .unwrap();
     assert_eq!(corrected["jobs"][0]["corrected"], true);
     assert_eq!(corrected["jobs"][0]["state"], "completed", "unchanged");
-    assert_eq!(app.reservation_state(&reservation_id), "consumed", "unchanged");
+    assert_eq!(
+        app.reservation_state(&reservation_id),
+        "consumed",
+        "unchanged"
+    );
     assert_eq!(app.spool_current_mg(&spool_id), 600_000);
     assert_eq!(app.count_events(&job_id, "materialCorrected"), 1);
 
@@ -120,15 +146,28 @@ fn second_correction_is_rejected() {
     let job_id = app.printing();
     roots.fake.finish_print("completed");
     app.wait_job(&job_id, "completed");
-    app.correct("op-correct-1", &job_id, json!({"kind": "net", "netMg": 600_000, "confidence": "measured"})).unwrap();
+    app.correct(
+        "op-correct-1",
+        &job_id,
+        json!({"kind": "net", "netMg": 600_000, "confidence": "measured"}),
+    )
+    .unwrap();
 
     let again = app
-        .correct("op-correct-2", &job_id, json!({"kind": "net", "netMg": 500_000, "confidence": "measured"}))
+        .correct(
+            "op-correct-2",
+            &job_id,
+            json!({"kind": "net", "netMg": 500_000, "confidence": "measured"}),
+        )
         .unwrap_err();
     assert_eq!(again["code"], "JOB_ALREADY_SETTLED");
     assert_eq!(again["details"]["jobId"], json!(job_id));
     assert_eq!(again["details"]["reason"], "corrected");
-    assert_eq!(app.count_events(&job_id, "materialCorrected"), 1, "the second attempt wrote nothing");
+    assert_eq!(
+        app.count_events(&job_id, "materialCorrected"),
+        1,
+        "the second attempt wrote nothing"
+    );
 }
 
 /// A failed (or cancelled) Job after start marks its reservation
@@ -181,7 +220,10 @@ fn estimated_settlement_uses_the_progress_scaled_estimate() {
     let job = app.wait_job(&job_id, "failed");
     assert_eq!(job["maxProgressPct"], 37);
     let expected_used_mg = estimated_use_mg(ESTIMATE_MG, 37);
-    assert_ne!(expected_used_mg, ESTIMATE_MG, "sanity: distinct from the full estimate");
+    assert_ne!(
+        expected_used_mg, ESTIMATE_MG,
+        "sanity: distinct from the full estimate"
+    );
     assert_ne!(expected_used_mg, 0, "sanity: distinct from zero");
     assert_eq!(
         job["settlementPreview"],
@@ -189,7 +231,9 @@ fn estimated_settlement_uses_the_progress_scaled_estimate() {
         "ruling R4: settlementPreview matched it beforehand"
     );
 
-    let settled = app.settle("op-settle-progress", &job_id, ESTIMATED()).unwrap();
+    let settled = app
+        .settle("op-settle-progress", &job_id, ESTIMATED())
+        .unwrap();
     let requirement = settled["requirements"][0].clone();
     assert_eq!(
         requirement["resolution"],
@@ -203,8 +247,14 @@ fn estimated_settlement_uses_the_progress_scaled_estimate() {
         .filter(|event| event["kind"] == "consumption")
         .collect();
     assert_eq!(consumptions.len(), 1);
-    assert_eq!(consumptions[0]["afterMg"], json!(before_mg - expected_used_mg));
-    assert_eq!(app.spool_current_mg(&spool_id), before_mg - expected_used_mg);
+    assert_eq!(
+        consumptions[0]["afterMg"],
+        json!(before_mg - expected_used_mg)
+    );
+    assert_eq!(
+        app.spool_current_mg(&spool_id),
+        before_mg - expected_used_mg
+    );
 }
 
 /// Fix round 1 ruling R14(b)/(c): `settle_job_material`'s `measured`
@@ -222,16 +272,29 @@ fn settle_measured_rejects_a_non_measured_or_out_of_range_entry() {
     app.wait_job(&job_id, "failed");
 
     let not_measured = app
-        .settle("op-bad-confidence", &job_id, measured_with_confidence(100_000, "estimated"))
+        .settle(
+            "op-bad-confidence",
+            &job_id,
+            measured_with_confidence(100_000, "estimated"),
+        )
         .unwrap_err();
     assert_eq!(not_measured["code"], "VALIDATION");
-    assert_eq!(not_measured["details"]["fieldPath"], "choice.entry.confidence");
+    assert_eq!(
+        not_measured["details"]["fieldPath"],
+        "choice.entry.confidence"
+    );
 
-    let out_of_range = app.settle("op-bad-range", &job_id, measured(-1)).unwrap_err();
+    let out_of_range = app
+        .settle("op-bad-range", &job_id, measured(-1))
+        .unwrap_err();
     assert_eq!(out_of_range["code"], "VALIDATION");
     assert_eq!(out_of_range["details"]["fieldPath"], "choice.entry.netMg");
 
-    assert_eq!(app.job(&job_id)["settlement"], "pending", "neither attempt settled the Job");
+    assert_eq!(
+        app.job(&job_id)["settlement"],
+        "pending",
+        "neither attempt settled the Job"
+    );
 }
 
 /// Fix round 1 ruling R14(b)/(c): `correct_job_material`'s entry has the
@@ -246,18 +309,30 @@ fn correct_rejects_a_non_measured_or_out_of_range_entry() {
     app.wait_job(&job_id, "completed");
 
     let not_measured = app
-        .correct("op-bad-confidence", &job_id, json!({"kind": "net", "netMg": 100_000, "confidence": "estimated"}))
+        .correct(
+            "op-bad-confidence",
+            &job_id,
+            json!({"kind": "net", "netMg": 100_000, "confidence": "estimated"}),
+        )
         .unwrap_err();
     assert_eq!(not_measured["code"], "VALIDATION");
     assert_eq!(not_measured["details"]["fieldPath"], "entry.confidence");
 
     let out_of_range = app
-        .correct("op-bad-range", &job_id, json!({"kind": "net", "netMg": -1, "confidence": "measured"}))
+        .correct(
+            "op-bad-range",
+            &job_id,
+            json!({"kind": "net", "netMg": -1, "confidence": "measured"}),
+        )
         .unwrap_err();
     assert_eq!(out_of_range["code"], "VALIDATION");
     assert_eq!(out_of_range["details"]["fieldPath"], "entry.netMg");
 
-    assert_eq!(app.job(&job_id)["corrected"], false, "neither attempt recorded a correction");
+    assert_eq!(
+        app.job(&job_id)["corrected"],
+        false,
+        "neither attempt recorded a correction"
+    );
 }
 
 /// `measured` settlement consumes the reservation once (via the measured
@@ -274,7 +349,9 @@ fn measured_settlement_consumes_once_and_resolves_the_requirement() {
     roots.fake.finish_print("klippy_shutdown");
     app.wait_job(&job_id, "failed");
 
-    let settled = app.settle("op-settle", &job_id, measured(before_mg - 9_500)).unwrap();
+    let settled = app
+        .settle("op-settle", &job_id, measured(before_mg - 9_500))
+        .unwrap();
     assert_eq!(settled["jobs"][0]["settlement"], "settled");
     assert_eq!(settled["jobs"][0]["settlementMethod"], "measured");
     assert_eq!(app.reservation_state(&reservation_id), "consumed");
@@ -333,7 +410,10 @@ fn defer_keeps_the_amount_unavailable_and_blocks_over_reservation() {
         )
         .unwrap_err();
     assert_eq!(blocked["code"], "ASSIGNMENT_BLOCKED");
-    assert_eq!(blocked["details"]["blockers"][0]["code"], "INSUFFICIENT_MATERIAL");
+    assert_eq!(
+        blocked["details"]["blockers"][0]["code"],
+        "INSUFFICIENT_MATERIAL"
+    );
 }
 
 /// A deferred Job can later be settled by measurement, exactly once.
@@ -405,7 +485,9 @@ fn settle_replay_returns_the_same_result_and_writes_no_second_ledger_row() {
         .count();
     assert_eq!(ledger_after, ledger_before, "no second ledger row");
 
-    let again = app.settle("op-settle-again", &job_id, ESTIMATED()).unwrap_err();
+    let again = app
+        .settle("op-settle-again", &job_id, ESTIMATED())
+        .unwrap_err();
     assert_eq!(again["code"], "JOB_ALREADY_SETTLED");
     assert_eq!(again["details"]["reason"], "settled");
 }
@@ -417,7 +499,13 @@ fn cancelled_before_start_needs_no_settlement_and_releases_the_reservation() {
     let roots = roots();
     // The driver stays off, so nothing stages the Job before the cancel:
     // with it on, a stage that wins the race makes the cancel refused.
-    let app = boot_tuned(&roots, Driver::Off, status_of(OperationalState::Ready), fast(), None);
+    let app = boot_tuned(
+        &roots,
+        Driver::Off,
+        status_of(OperationalState::Ready),
+        fast(),
+        None,
+    );
     let spool = app.spool();
     let job_id = app.assign(&spool);
     let reservation_id = reservation_id_of(&app.job(&job_id));
@@ -426,7 +514,10 @@ fn cancelled_before_start_needs_no_settlement_and_releases_the_reservation() {
     let job = app.wait_job(&job_id, "cancelled");
     assert_eq!(job["settlement"], "notRequired");
     assert_eq!(job["cancelReason"], "cancelledBeforeStart");
-    assert!(!job["allowedActions"].as_array().unwrap().contains(&json!("settleMaterial")));
+    assert!(!job["allowedActions"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("settleMaterial")));
     assert_eq!(app.reservation_state(&reservation_id), "released");
 
     let refused = app.settle("op-settle", &job_id, ESTIMATED()).unwrap_err();
@@ -477,7 +568,10 @@ fn every_settlement_path_publishes_job_spool_and_requirement_changes_once() {
 
     // Path 1: automatic completion (the tracker's terminal transaction).
     let completed_job = app.printing();
-    let completed_spool = app.job(&completed_job)["spoolId"].as_str().unwrap().to_string();
+    let completed_spool = app.job(&completed_job)["spoolId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     app.quiesce();
     let before_job = app.count_stream_events("queue.job.changed", &completed_job);
     let before_spool = app.count_stream_events("spool.changed", &completed_spool);
@@ -502,47 +596,89 @@ fn every_settlement_path_publishes_job_spool_and_requirement_changes_once() {
     roots.fake.restart();
     app.status(OperationalState::Ready);
     let failed_job = app.printing();
-    let failed_spool = app.job(&failed_job)["spoolId"].as_str().unwrap().to_string();
+    let failed_spool = app.job(&failed_job)["spoolId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     roots.fake.finish_print("klippy_shutdown");
     app.wait_job(&failed_job, "failed");
     app.quiesce();
-    let requirement_id = material_requirement(&app, &failed_job)["id"].as_str().unwrap().to_string();
-    assert_eq!(app.count_stream_events("queue.requirement.changed", &requirement_id), 1);
+    let requirement_id = material_requirement(&app, &failed_job)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        app.count_stream_events("queue.requirement.changed", &requirement_id),
+        1
+    );
 
     // Path 3: `settle_job_material` (estimated).
     let before_job = app.count_stream_events("queue.job.changed", &failed_job);
     let before_req = app.count_stream_events("queue.requirement.changed", &requirement_id);
     let before_spool = app.count_stream_events("spool.changed", &failed_spool);
-    app.settle("op-settle-count", &failed_job, ESTIMATED()).unwrap();
-    assert_eq!(app.count_stream_events("queue.job.changed", &failed_job) - before_job, 1);
-    assert_eq!(app.count_stream_events("queue.requirement.changed", &requirement_id) - before_req, 1);
-    assert_eq!(app.count_stream_events("spool.changed", &failed_spool) - before_spool, 1);
+    app.settle("op-settle-count", &failed_job, ESTIMATED())
+        .unwrap();
+    assert_eq!(
+        app.count_stream_events("queue.job.changed", &failed_job) - before_job,
+        1
+    );
+    assert_eq!(
+        app.count_stream_events("queue.requirement.changed", &requirement_id) - before_req,
+        1
+    );
+    assert_eq!(
+        app.count_stream_events("spool.changed", &failed_spool) - before_spool,
+        1
+    );
 
     // Path 4: `settle_job_material` (defer), on a fresh failed Job.
     roots.fake.restart();
     app.status(OperationalState::Ready);
     let deferred_job = app.printing();
-    let deferred_spool = app.job(&deferred_job)["spoolId"].as_str().unwrap().to_string();
+    let deferred_spool = app.job(&deferred_job)["spoolId"]
+        .as_str()
+        .unwrap()
+        .to_string();
     roots.fake.finish_print("cancelled");
     app.wait_job(&deferred_job, "cancelled");
     app.quiesce();
-    let deferred_requirement_id =
-        material_requirement(&app, &deferred_job)["id"].as_str().unwrap().to_string();
+    let deferred_requirement_id = material_requirement(&app, &deferred_job)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let before_job = app.count_stream_events("queue.job.changed", &deferred_job);
     let before_req = app.count_stream_events("queue.requirement.changed", &deferred_requirement_id);
     let before_spool = app.count_stream_events("spool.changed", &deferred_spool);
-    app.settle("op-defer-count", &deferred_job, DEFER()).unwrap();
-    assert_eq!(app.count_stream_events("queue.job.changed", &deferred_job) - before_job, 1);
+    app.settle("op-defer-count", &deferred_job, DEFER())
+        .unwrap();
+    assert_eq!(
+        app.count_stream_events("queue.job.changed", &deferred_job) - before_job,
+        1
+    );
     assert_eq!(
         app.count_stream_events("queue.requirement.changed", &deferred_requirement_id) - before_req,
         1
     );
-    assert_eq!(app.count_stream_events("spool.changed", &deferred_spool) - before_spool, 1);
+    assert_eq!(
+        app.count_stream_events("spool.changed", &deferred_spool) - before_spool,
+        1
+    );
 
     // Path 5: `correct_job_material`, on the first (completed) Job.
     let before_job = app.count_stream_events("queue.job.changed", &completed_job);
     let before_spool = app.count_stream_events("spool.changed", &completed_spool);
-    app.correct("op-correct-count", &completed_job, json!({"kind": "net", "netMg": 100_000, "confidence": "measured"})).unwrap();
-    assert_eq!(app.count_stream_events("queue.job.changed", &completed_job) - before_job, 1);
-    assert_eq!(app.count_stream_events("spool.changed", &completed_spool) - before_spool, 1);
+    app.correct(
+        "op-correct-count",
+        &completed_job,
+        json!({"kind": "net", "netMg": 100_000, "confidence": "measured"}),
+    )
+    .unwrap();
+    assert_eq!(
+        app.count_stream_events("queue.job.changed", &completed_job) - before_job,
+        1
+    );
+    assert_eq!(
+        app.count_stream_events("spool.changed", &completed_spool) - before_spool,
+        1
+    );
 }

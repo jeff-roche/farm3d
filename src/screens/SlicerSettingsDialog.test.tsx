@@ -12,17 +12,13 @@ import { closeSlicerSettings, openSlicerSettings, slicerSettingsOpen } from "../
 import { NOTHING_TRIED, PRESETS_UNREADABLE } from "../slicing/slice-presentation";
 import { runtimeStatus } from "../slicing/test-records";
 import type { SlicerRuntimeStatus } from "../slicing/types";
-import { SettingsMenu } from "./SettingsMenu";
+import { ActivityBar } from "./ActivityBar";
 import { SlicerSettingsHost } from "./SlicerSettingsHost";
 
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 vi.mock("../settings/settings-store", () => ({
   exportSettings: vi.fn(),
   importSettings: vi.fn(),
-  // SettingsMenu always renders NotificationSettingsDialog (Task 15), whose
-  // body reads `settings()` at construction regardless of `open` — this
-  // file isn't exercising that dialog, so a settled "nothing loaded yet"
-  // stub is enough to let SettingsMenu render.
   settings: () => undefined,
   loadSettings: vi.fn(() => Promise.resolve(undefined)),
   updateSettings: vi.fn(() => Promise.resolve()),
@@ -58,7 +54,7 @@ function fellThroughRuntime(): SlicerRuntimeStatus {
 function renderHost() {
   return render(() => (
     <>
-      <SettingsMenu />
+      <ActivityBar active="monitor" onSelect={() => {}} />
       <SlicerSettingsHost />
     </>
   ));
@@ -115,14 +111,6 @@ afterEach(() => {
 });
 
 describe("opening the Slicer settings", () => {
-  it("opens from the Settings menu's Slicer item", async () => {
-    renderHost();
-    await fireEvent.pointerDown(screen.getByLabelText("Settings"), { pointerType: "mouse", button: 0 });
-    await fireEvent.pointerUp(await screen.findByText("Slicer..."), { button: 0 });
-    expect(await screen.findByRole("dialog", { name: "Slicer" })).toBeInTheDocument();
-    expect(slicerSettingsOpen()).toBe(true);
-  });
-
   it("opens from openSlicerSettings (the Preparation panel's link), and Close closes it through the opener", async () => {
     renderHost();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -135,8 +123,8 @@ describe("opening the Slicer settings", () => {
 });
 
 describe("returning focus when the Slicer settings close", () => {
-  /** The Settings menu's focusable button: Kobalte's trigger around the icon. */
-  const menuButton = () => screen.getByLabelText("Settings").closest<HTMLElement>("[aria-haspopup]")!;
+  /** The rail's Settings button, the fallback home. */
+  const menuButton = () => screen.getByRole("button", { name: "Settings" });
 
   async function closeWithEscape() {
     const dialog = await screen.findByRole("dialog", { name: "Slicer" });
@@ -145,10 +133,9 @@ describe("returning focus when the Slicer settings close", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   }
 
-  it("goes back to the Settings button after opening from the menu", async () => {
+  it("goes back to the Settings button after opening with no opener control", async () => {
     renderHost();
-    await fireEvent.pointerDown(screen.getByLabelText("Settings"), { pointerType: "mouse", button: 0 });
-    await fireEvent.pointerUp(await screen.findByText("Slicer..."), { button: 0 });
+    openSlicerSettings();
     await closeWithEscape();
     await waitFor(() => expect(menuButton()).toHaveFocus());
   });
@@ -157,7 +144,7 @@ describe("returning focus when the Slicer settings close", () => {
     const [linkShown, setLinkShown] = createSignal(true);
     render(() => (
       <>
-        <SettingsMenu />
+        <ActivityBar active="monitor" onSelect={() => {}} />
         <Show when={linkShown()}>
           <button onClick={(event) => openSlicerSettings(event.currentTarget)}>Open Slicer settings</button>
         </Show>
@@ -519,15 +506,10 @@ describe("Check again, live updates and web mode", () => {
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
 
-  it("works keyboard-only: open from the menu, reach each action in order, pick, and close with Escape", async () => {
+  it("works keyboard-only: open from the rail, reach each action in order, pick, and close with Escape", async () => {
     setSlicingState({ runtime: fellThroughRuntime() });
     renderHost();
-    const trigger = screen.getByLabelText("Settings");
-    trigger.focus();
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const item = await screen.findByRole("menuitem", { name: "Slicer..." });
-    item.focus();
-    fireEvent.keyDown(item, { key: "Enter" });
+    openSlicerSettings();
     const dialog = await screen.findByRole("dialog", { name: "Slicer" });
 
     const names = tabbables(dialog).map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim());

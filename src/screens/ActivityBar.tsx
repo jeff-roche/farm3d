@@ -1,10 +1,10 @@
-import { IconBox, IconDisc, IconPlaylist, IconPrinter } from "@tabler/icons-solidjs";
-import { Show } from "solid-js";
+import { IconBox, IconDisc, IconPlaylist, IconPrinter, IconSettings } from "@tabler/icons-solidjs";
+import { onCleanup, onMount, Show } from "solid-js";
 import { IconButton } from "../design-system";
-import { SettingsMenu } from "./SettingsMenu";
+import { registerSlicerSettingsHome } from "../slicing/slicer-settings-opener";
 import styles from "./ActivityBar.module.css";
 
-export type ScreenId = "monitor" | "queue" | "library" | "spools";
+export type ScreenId = "monitor" | "queue" | "library" | "spools" | "settings";
 
 export interface ActivityBarProps {
   active: ScreenId;
@@ -23,6 +23,13 @@ export interface ActivityBarProps {
 }
 
 export function ActivityBar(props: ActivityBarProps) {
+  let settingsButton: HTMLButtonElement | undefined;
+  // The Settings button is where focus returns from the Slicer settings
+  // when whatever opened them has gone.
+  onMount(() => {
+    if (settingsButton) onCleanup(registerSlicerSettingsHome(settingsButton));
+  });
+
   return (
     <nav class={styles.bar} aria-label="Primary">
       <div class={styles.iconWrap}>
@@ -74,7 +81,15 @@ export function ActivityBar(props: ActivityBarProps) {
         </Show>
       </div>
       <div class={styles.spacer} />
-      <SettingsMenu />
+      <IconButton
+        ref={settingsButton}
+        aria-label="Settings"
+        aria-current={props.active === "settings" ? "page" : undefined}
+        active={props.active === "settings"}
+        onClick={() => props.onSelect("settings")}
+      >
+        <IconSettings size={18} />
+      </IconButton>
     </nav>
   );
 }

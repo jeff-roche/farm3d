@@ -2,9 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MonitorPrinterView, MonitorRosterView } from "../monitor/monitor-store";
 import { resetAttentionStoreMock } from "../attention/attention-store-mock";
+import { resetDiagnosticsStoreMock, setDiagnosticsStoreState } from "../diagnostics/diagnostics-store-mock";
+import { webAboutInfo } from "../diagnostics/web-fixtures";
+import { backupStoreMock, resetBackupStoreMock, setBackupStoreState } from "../backup/backup-store-mock";
 import { AppShell } from "./AppShell";
 
 vi.mock("../attention/attention-store", async () => (await import("../attention/attention-store-mock")).attentionStoreMock);
+vi.mock("../backup/restore-status-store", async (importActual) => ({
+  ...(await importActual<typeof import("../backup/restore-status-store")>()),
+  ...(await import("../backup/backup-store-mock")).restoreStatusStoreMock,
+}));
+vi.mock("../diagnostics/about-store", async () =>
+  (await import("../diagnostics/diagnostics-store-mock")).aboutStoreMock);
 
 function printer(overrides: Partial<MonitorPrinterView> = {}): MonitorPrinterView {
   return {
@@ -42,7 +51,24 @@ afterEach(() => {
   document.body.innerHTML = "";
   vi.useRealTimers();
   resetAttentionStoreMock();
+  resetDiagnosticsStoreMock();
+  resetBackupStoreMock();
 });
+
+function renderShell() {
+  return render(() => (
+    <AppShell
+      active="monitor"
+      onSelect={vi.fn()}
+      title="Monitor"
+      printerRoster={roster()}
+      operationalRosters={[]}
+      adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
+    >
+      <p>Workspace</p>
+    </AppShell>
+  ));
+}
 
 describe("AppShell", () => {
   it("renders structured Printer rosters, health, last live-event age, and nav-main-footer source order", async () => {
@@ -162,5 +188,55 @@ describe("AppShell", () => {
     expect(screen.getByText("Bay One")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Queue (2 need attention)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Monitor (3 need attention)" })).toBeInTheDocument();
+  });
+
+  it("shows the version from About in the status bar, not a hard-coded one", async () => {
+    setDiagnosticsStoreState({ about: { ...webAboutInfo(), appVersion: "7.8.9" } });
+    render(() => (
+      <AppShell
+        active="monitor"
+        onSelect={vi.fn()}
+        title="Monitor"
+        printerRoster={roster()}
+        operationalRosters={[]}
+        adapterHealth={{ severity: "resolved", label: "All adapters connected" }}
+      >
+        <p>Workspace</p>
+      </AppShell>
+    ));
+
+    expect(await screen.findByText("farm3d 7.8.9")).toBeInTheDocument();
+    expect(screen.queryByText("farm3d 0.1.0")).not.toBeInTheDocument();
+  });
+
+  it("reads restore_status on mount and shows no banner when nothing finished", () => {
+    renderShell();
+    expect(backupStoreMock.loadRestoreStatus).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+  });
+
+  it("shows a finished restore's outcome until the operator dismisses it", async () => {
+    setBackupStoreState({
+      restoreStatus: {
+        state: "done", journalId: "rst-1", kind: "restore", finishedAt: "2026-09-30T12:00:00Z",
+        safetyBackupId: "sfb-1",
+      },
+    });
+    renderShell();
+    expect(screen.getByRole("status", { name: "Restore outcome" })).toHaveTextContent(
+      "The restore finished. You can restore from safety backup sfb-1.");
+    await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(backupStoreMock.acknowledgeRestoreStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces a failed reset as an alert", () => {
+    setBackupStoreState({
+      restoreStatus: {
+        state: "failed", journalId: "rsf-1", kind: "reset", finishedAt: "2026-09-30T12:00:00Z",
+        code: "RESTORE_FAILED", failedStep: null, safetyBackupId: null,
+      },
+    });
+    renderShell();
+    expect(screen.getByRole("alert", { name: "Restore outcome" })).toHaveTextContent("The reset did not finish, and your previous data was kept.");
   });
 });

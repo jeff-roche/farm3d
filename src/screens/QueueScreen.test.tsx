@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandError } from "../ipc/local-errors";
 import { navigation } from "../navigation/navigation-store";
 import {
   loadWebQueueFixture,
@@ -8,16 +9,19 @@ import {
   setQueueStoreState,
   setQueueStoreStatus,
 } from "../queue/queue-store-mock";
+import { historyStoreMock, loadWebHistoryFixture, resetHistoryStoreMock } from "../history/history-store-mock";
+import { webJobTimeline } from "../history/web-fixtures";
 import { eligibilitySummary, job, queueEntry } from "../queue/test-records";
 import {
   WEB_QUEUE_ENTRY_BLOCKED,
   WEB_QUEUE_ENTRY_BRACKET_IDS,
-  WEB_QUEUE_ENTRY_HISTORY_DEFERRED,
   WEB_QUEUE_ENTRY_PRINTING,
+  WEB_QUEUE_JOB_DEFERRED,
 } from "../queue/web-fixtures";
 import { MOVE_SETTLE_TIMEOUT_MS, QueueScreen } from "./QueueScreen";
 
 vi.mock("../queue/queue-store", async () => (await import("../queue/queue-store-mock")).queueStoreMock);
+vi.mock("../history/history-store", async () => (await import("../history/history-store-mock")).historyStoreMock);
 vi.mock("../library/library-store", async () => (await import("../library/library-store-mock")).libraryStoreMock);
 vi.mock("../slicing/slicing-store", async () => (await import("../slicing/slicing-store-mock")).slicingStoreMock);
 vi.mock("../printers/printer-store", () => ({ printers: () => [] }));
@@ -51,6 +55,7 @@ function rowFor(name: RegExp | string): HTMLElement {
 
 beforeEach(() => {
   resetQueueStoreMock();
+  resetHistoryStoreMock();
   openQueue();
   window.location.hash = "";
 });
@@ -91,15 +96,64 @@ describe("QueueScreen", () => {
     await waitFor(() => expect(bodyRows()[0]).toHaveAttribute("data-entry-id", WEB_QUEUE_ENTRY_PRINTING));
     expect(bodyRows()).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole("tab", { name: /^History/ }));
-    await waitFor(() => expect(bodyRows()[0]).toHaveAttribute("data-entry-id", WEB_QUEUE_ENTRY_HISTORY_DEFERRED));
-    // Three closed entries (deferred, hostCancelled, completed), newest first.
-    expect(bodyRows()).toHaveLength(3);
-    // A deferred settlement shows in the History view.
-    expect(bodyRows()[0]).toHaveTextContent("Deferred");
-
     fireEvent.click(screen.getByRole("tab", { name: /^Ready/ }));
     await waitFor(() => expect(screen.getByText("No entries in this view")).toBeInTheDocument());
+  });
+
+  it("shows the searchable Job history on the History tab, without the Dispatch Policy filter", async () => {
+    loadWebQueueFixture();
+    const rows = loadWebHistoryFixture();
+    render(() => <QueueScreen />);
+    expect(screen.getByRole("group", { name: "Filter by Dispatch Policy" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "History" }));
+    const table = await screen.findByRole("grid", { name: "Job history" });
+    expect(within(table).getAllByRole("row").filter((row) => row.closest("tbody"))).toHaveLength(rows.length);
+    expect(screen.getByRole("textbox", { name: "Search history" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Filter by Dispatch Policy" })).toBeNull();
+    expect(historyStoreMock.refreshHistory).toHaveBeenCalled();
+  });
+
+  it("opens a Job older than the Queue store holds from its timeline's entry", async () => {
+    loadWebQueueFixture();
+    const timeline = webJobTimeline(WEB_QUEUE_JOB_DEFERRED)!;
+    const older = { ...timeline.entry, id: "qen-older", jobId: "job-older", display: { ...timeline.entry.display, modelName: "Older Lid" } };
+    historyStoreMock.getJobTimeline.mockResolvedValueOnce({ ...timeline, entry: older });
+    navigation.navigate(
+      { version: 1, destination: "queue", selection: { kind: "job", id: "job-older" } },
+      { availableDestinations: ["queue"], availableIds: ["job-older"] },
+    );
+    render(() => <QueueScreen />);
+    expect(await screen.findByRole("heading", { name: /Older Lid/ })).toBeInTheDocument();
+    expect(historyStoreMock.getJobTimeline).toHaveBeenCalledWith("job-older");
+  });
+
+  it("says so when an older Job's timeline can't load", async () => {
+    loadWebQueueFixture();
+    historyStoreMock.getJobTimeline.mockRejectedValueOnce(commandError("NOT_FOUND", "That Job is gone."));
+    navigation.navigate(
+      { version: 1, destination: "queue", selection: { kind: "job", id: "job-gone" } },
+      { availableDestinations: ["queue"], availableIds: ["job-gone"] },
+    );
+    render(() => <QueueScreen />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("That Job is gone.");
+  });
+
+  it("retries an older Job's timeline from its error", async () => {
+    loadWebQueueFixture();
+    const timeline = webJobTimeline(WEB_QUEUE_JOB_DEFERRED)!;
+    const older = { ...timeline.entry, id: "qen-older", jobId: "job-older", display: { ...timeline.entry.display, modelName: "Older Lid" } };
+    historyStoreMock.getJobTimeline
+      .mockRejectedValueOnce(commandError("PERSISTENCE_UNAVAILABLE", "Try again."))
+      .mockResolvedValueOnce({ ...timeline, entry: older });
+    navigation.navigate(
+      { version: 1, destination: "queue", selection: { kind: "job", id: "job-older" } },
+      { availableDestinations: ["queue"], availableIds: ["job-older"] },
+    );
+    render(() => <QueueScreen />);
+    const alert = await screen.findByRole("alert");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: /Older Lid/ })).toBeInTheDocument();
+    expect(historyStoreMock.getJobTimeline).toHaveBeenCalledTimes(2);
   });
 
   it("lists an assigned entry whose Job isn't printing under Assigned", async () => {

@@ -1615,8 +1615,8 @@ fn assert_facts(facts: &HostFacts, tools: u32, bed: bool, cameras: u32) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the simulators: just sim-up && just test-sim"]
 async fn p6_capability_detection_on_every_simulator_variant() {
-    use farm3d_lib::connections::capabilities::{CameraDiscovery, CameraInfo};
     use farm3d_lib::connections::capabilities::KlippyState;
+    use farm3d_lib::connections::capabilities::{CameraDiscovery, CameraInfo};
 
     // P8: the camera query's non-empty simulator answer (names and
     // services only; the URL is never kept).
@@ -1710,10 +1710,9 @@ fn p7_printing(sim: &MoonrakerSim, rig: &SimRig, tag: &str) -> (SimRunning, Trac
     let row = running.wait_settled(&start);
     assert_eq!(row.state, HostOperationState::Succeeded, "{row:?}");
     wait_for_print_state(sim, &["printing"]);
-    let dispatched_at = chrono::DateTime::parse_from_rfc3339(
-        row.dispatched_at.as_deref().expect("a sent start"),
-    )
-    .expect("an RFC 3339 dispatched_at");
+    let dispatched_at =
+        chrono::DateTime::parse_from_rfc3339(row.dispatched_at.as_deref().expect("a sent start"))
+            .expect("an RFC 3339 dispatched_at");
     let tracked = TrackedJob {
         host_path: host_path_of(&slr),
         history_mark: row.history_mark.expect("the start's history mark") as u64,
@@ -1875,7 +1874,206 @@ fn p8_a_host_webcam_resolves_through_the_simulator_and_fetches_the_test_pattern(
     assert_eq!(camera.requests(), before + 1, "no fetch without a trigger");
     for error in [&missing, &cut, &unlisted] {
         let text = format!("{error} {error:?}");
-        assert!(!text.contains("127.0.0.1") && !text.contains("snapshot.jpg"), "{text}");
+        assert!(
+            !text.contains("127.0.0.1") && !text.contains("snapshot.jpg"),
+            "{text}"
+        );
     }
+    sim.reset();
+}
+
+// --- P9: backup, restore, and reconnect against the simulator -------------------------
+//
+// `p9_tracer.rs`'s flow with Printer B on the Moonraker simulator, in the
+// mode that demands an API key: back up, drift, preview, and restore onto a
+// machine with an empty credential store. The restored Printer is
+// `CREDENTIAL_REQUIRED` and does not connect; once the credential is
+// entered again the real supervisor reaches Online over the simulator's
+// WebSocket. The simulator's key is never in the archive.
+
+mod p9_farm;
+#[path = "common/p9_flow.rs"]
+mod p9_flow;
+#[path = "common/secrets.rs"]
+mod secrets;
+
+use farm3d_lib::backup::archive as p9_archive;
+use farm3d_lib::backup::installer::InstallOutcome;
+use farm3d_lib::backup::RestoreJournalKind;
+use farm3d_lib::connections::credentials::CredentialStore;
+use farm3d_lib::printers::setup::{supervise_printer, SupervisionOutcome};
+
+#[test]
+#[ignore = "needs the simulators: just sim-up && just test-sim"]
+fn p9_a_restored_printer_reconnects_to_the_simulator_once_its_credential_is_entered_again() {
+    let sim = require_sim!(MoonrakerSim::discover());
+    let _guard = sim::exclusive();
+    sim.reset();
+    sim.set_mode(Mode::ApiKey);
+    let key = sim.api_key().expect("the simulator's API key");
+
+    // The Farm: Printer B is the simulator, with its key in the store.
+    let farm = p9_farm::Farm::with_every_domain();
+    let sim_config = sim.config();
+    let connection = json!({
+        "kind": sim_config.kind,
+        "host": sim_config.host,
+        "port": sim_config.port,
+        "useTls": false,
+        "credentialRef": p9_farm::ids::CREDENTIAL_REF_B,
+    })
+    .to_string();
+    farm.storage
+        .write_repo(
+            |tx| -> Result<(), farm3d_lib::persistence::RepositoryError> {
+                tx.execute(
+                    "UPDATE printers SET connection_json = ?1 WHERE id = ?2",
+                    rusqlite::params![connection, p9_farm::ids::PRINTER_B],
+                )
+                .unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
+    CredentialStore::file_backed(farm.credentials_dir.clone())
+        .set(p9_farm::ids::CREDENTIAL_REF_B, &key)
+        .unwrap();
+    let exports = farm.temp.path().join("exports");
+    std::fs::create_dir_all(&exports).unwrap();
+
+    // Back up with every image.
+    let rig = p9_flow::Rig::new(Arc::clone(&farm.storage), farm.credentials_dir.clone());
+    let archive_path = exports.join("sim.farm3d-backup");
+    *rig.dialogs.save_backup.lock().unwrap() = Some(archive_path.clone());
+    let created = rig.ok(
+        "create_backup",
+        json!({ "operationId": "op-backup", "media": "all" }),
+    );
+    assert_eq!(created["status"], "exported", "{created}");
+    let manifest = p9_archive::open(&archive_path).unwrap().manifest().clone();
+    let bytes = std::fs::read(&archive_path).unwrap();
+    secrets::assert_no_backup_forbidden(&bytes, "backup");
+    secrets::assert_none_of(&[key.as_str()], &bytes, "the simulator's API key");
+
+    // The local Farm drifts, then the restore is previewed and applied on a
+    // machine whose credential store is empty.
+    p9_flow::sql(
+        &farm,
+        &format!(
+            "UPDATE printers SET name = 'Renamed after the backup', revision = revision + 1
+              WHERE id = 'prn-a';
+             UPDATE host_operations SET state = 'failed', resolved_at = '{now}',
+                    failure_json = '{{\"code\":\"neverSent\"}}'
+              WHERE state IN ('dispatching', 'uncertain', 'reconciling');
+             UPDATE jobs SET state = 'failed', ended_at = '{now}'
+              WHERE state NOT IN ('completed', 'failed', 'cancelled');
+             {job}",
+            now = p9_farm::ids::NOW,
+            job = p9_flow::finished_job("t18"),
+        ),
+    );
+    let machine = tempfile::tempdir().unwrap();
+    let empty_store = machine.path().join("credentials");
+    std::fs::create_dir_all(&empty_store).unwrap();
+    drop(rig);
+    let rig = p9_flow::Rig::new(Arc::clone(&farm.storage), empty_store.clone());
+    *rig.dialogs.open.lock().unwrap() = Some(archive_path);
+    let previewed = rig.ok("preview_restore", json!({ "source": { "kind": "file" } }));
+    assert_eq!(previewed["status"], "previewed", "{previewed}");
+    let preview = &previewed["preview"];
+    assert_eq!(preview["blockers"], json!([]), "{previewed}");
+    let classes: std::collections::BTreeSet<&str> = preview["conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| group["class"].as_str().unwrap())
+        .collect();
+    assert!(
+        classes.contains("onlyLocal") && classes.contains("changed"),
+        "{classes:?}"
+    );
+    let applied = rig
+        .call(
+            "apply_restore",
+            json!({
+                "operationId": "op-apply",
+                "stagingId": preview["stagingId"],
+                "confirmation": "restore",
+            }),
+        )
+        .unwrap_or_else(|error| panic!("apply_restore: {error}"));
+    assert_eq!(applied["status"], "restarting", "{applied}");
+    assert!(rig.restarter.wait_for(1, Duration::from_secs(5)));
+
+    // The next start installs it.
+    let closed = p9_flow::relocate(farm.paths());
+    let slot = Mutex::new(None);
+    let (storage, report) = p9_flow::start(&closed.paths, &slot, &empty_store);
+    assert_eq!(report.outcome, InstallOutcome::Installed, "{report:?}");
+    assert_eq!(report.kind, Some(RestoreJournalKind::Restore));
+    let restored = p9_flow::assert_integrity_clean(&closed.paths);
+    for (table, rows) in &restored {
+        if table == "pending_credential_cleanup" || table == "slicer_runtime_config" {
+            continue; // D8's two carried tables
+        }
+        assert_eq!(Some(rows), manifest.counts.get(table), "{table}");
+    }
+
+    // Printer B cannot connect without its credential; entering it again
+    // brings the real supervisor Online over the simulator's WebSocket.
+    let reconnect =
+        p9_flow::Rig::with_factory(Arc::clone(&storage), empty_store.clone(), |config, key| {
+            Some(Box::new(MoonrakerConnection::new(
+                config.clone(),
+                key.map(|key| key.to_string()),
+            )) as Box<dyn PrinterConnection>)
+        });
+    let store = CredentialStore::file_backed(empty_store);
+    let catalog = common::a_catalog();
+    let printer_b = PrinterRepository::new(Arc::clone(&storage))
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|printer| printer.id == p9_farm::ids::PRINTER_B)
+        .expect("Printer B was restored");
+    let outcome = block_on(supervise_printer(
+        &reconnect.services.manager,
+        &store,
+        &catalog,
+        &printer_b,
+    ));
+    assert_eq!(outcome, SupervisionOutcome::CredentialRequired);
+    assert!(!reconnect
+        .services
+        .manager
+        .statuses()
+        .get(p9_farm::ids::PRINTER_B)
+        .is_some_and(|status| status.connection_state == ConnectionState::Online));
+
+    store
+        .set(p9_farm::ids::CREDENTIAL_REF_B, &key)
+        .expect("the credential is entered again");
+    let outcome = block_on(supervise_printer(
+        &reconnect.services.manager,
+        &store,
+        &catalog,
+        &printer_b,
+    ));
+    assert_eq!(outcome, SupervisionOutcome::Started);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let online = reconnect
+            .services
+            .manager
+            .statuses()
+            .get(p9_farm::ids::PRINTER_B)
+            .is_some_and(|status| status.connection_state == ConnectionState::Online);
+        if online {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Printer B never came Online");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    block_on(reconnect.services.manager.stop(p9_farm::ids::PRINTER_B));
     sim.reset();
 }

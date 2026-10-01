@@ -1,6 +1,8 @@
-import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
-import { Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
+import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { Button, Logo, PrinterRoster, SeverityMarker, type PrinterRosterEntry } from "../design-system";
 import type { MonitorRosterView, MonitorSeverity } from "../monitor/monitor-store";
+import { about, loadAbout } from "../diagnostics/about-store";
+import { acknowledgeRestoreStatus, loadRestoreStatus, restoreBanner, restoreStatusText } from "../backup/restore-status-store";
 import { AttentionTrigger } from "./AttentionTrigger";
 import { ActivityBar, type ScreenId } from "./ActivityBar";
 import styles from "./AppShell.module.css";
@@ -37,7 +39,6 @@ export interface AdapterHealth {
   label: string;
 }
 
-const VERSION = "farm3d 0.1.0";
 const AGE_REFRESH_MS = 60_000;
 
 function rosterEntries(roster: PrinterRosterModel): PrinterRosterEntry[] {
@@ -68,6 +69,18 @@ export function AppShell(props: AppShellProps) {
   const [now, setNow] = createSignal(Date.now());
   const ageRefresh = window.setInterval(() => setNow(Date.now()), AGE_REFRESH_MS);
   onCleanup(() => window.clearInterval(ageRefresh));
+
+  // The status bar's version comes from `about_farm3d`.
+  onMount(() => {
+    void loadAbout().catch(() => {});
+    // Spec "Restore status banner": a finished restore or reset is shown
+    // once, until the operator acknowledges it.
+    void loadRestoreStatus();
+  });
+  const version = () => {
+    const appVersion = about()?.appVersion;
+    return appVersion ? `farm3d ${appVersion}` : "farm3d";
+  };
 
   const viewAll = () => props.onSelect("monitor");
 
@@ -112,6 +125,24 @@ export function AppShell(props: AppShellProps) {
         <AttentionTrigger />
       </header>
 
+      <Show when={restoreBanner()}>
+        {(status) => (
+          <div
+            class={styles.restoreBanner}
+            classList={{ [styles.restoreBannerFailed]: status().state === "failed" }}
+            role={status().state === "failed" ? "alert" : "status"}
+            aria-label="Restore outcome"
+          >
+            <span>{restoreStatusText(status())}</span>
+            {/* A failed acknowledgement keeps the banner (the store only clears
+                it on success), so Dismiss can simply be clicked again. */}
+            <Button size="sm" onClick={() => void acknowledgeRestoreStatus().catch(() => {})}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+      </Show>
+
       <ActivityBar
         active={props.active}
         onSelect={props.onSelect}
@@ -125,7 +156,7 @@ export function AppShell(props: AppShellProps) {
       <footer class={styles.statusBar}>
         <SeverityMarker severity={props.adapterHealth.severity} label={props.adapterHealth.label} />
         <span>{formatLastLiveEventAge(props.lastLiveEventAt, now())}</span>
-        <span class={styles.statusBarVersion}>{VERSION}</span>
+        <span class={styles.statusBarVersion}>{version()}</span>
       </footer>
     </div>
   );

@@ -1,11 +1,14 @@
 pub mod attention;
+pub mod backup;
 pub mod bootstrap;
 pub mod cameras;
 pub mod catalog;
 pub mod connections;
 pub mod contracts;
+pub mod diagnostics;
 pub mod document_io;
 mod file_links;
+pub mod history;
 pub mod host_ops;
 pub mod incidents;
 pub mod jobs;
@@ -21,6 +24,10 @@ pub mod spools;
 use attention::commands::{
     acknowledge_attention_event, list_attention, mark_attention_read, resolve_attention_event,
 };
+use backup::commands::{
+    acknowledge_restore_status, apply_restore, backup_inventory, create_backup, delete_backup,
+    discard_restore_preview, list_backups, preview_restore, restore_status,
+};
 use cameras::commands::{
     camera_preview_frame, capture_snapshot, clear_printer_camera, get_printer_camera,
     list_host_webcams, list_snapshots, media_usage, set_printer_camera, set_snapshot_pinned,
@@ -34,6 +41,11 @@ use connections::commands::{
     printer_capabilities, printer_statuses, set_printer_connection, test_printer_connection,
 };
 use connections::supervisor::ConnectionManager;
+use diagnostics::commands::{
+    about_farm3d, clear_storage, diagnostics_preview, export_diagnostics, reset_farm,
+    reset_preview, storage_usage,
+};
+use history::commands::{get_job_timeline, list_job_history};
 use host_ops::commands::{
     abandon_host_operation, cancel_host_print, list_host_operations, pause_host_print,
     reconcile_host_operation, resume_host_print, stage_slice_revision, start_staged_artifact,
@@ -43,13 +55,13 @@ use jobs::commands::{
     assign_queue_entry, cancel_job, correct_job_material, declare_job_outcome, get_job_history,
     pause_job, release_job, resume_job, retry_job, settle_job_material, stage_job, start_job,
 };
-use notifications::commands::{notification_status, send_test_notification};
 use library::commands::{
     cancel_import_selection, check_linked_sources, convert_model_to_managed, create_project,
     delete_model, delete_project, get_revision_thumbnail, import_models, inspect_import_selection,
     library_content_info, list_library, list_model_revisions, locate_linked_source,
     pick_model_files, rename_project, set_model_projects, update_model,
 };
+use notifications::commands::{notification_status, send_test_notification};
 use printers::alerts::{get_printer_alert_defaults, set_printer_alert_defaults};
 use printers::batch::{cancel_printer_batch, create_printers_batch};
 use printers::commands::{
@@ -110,6 +122,12 @@ pub struct RuntimeServices<R: tauri::Runtime> {
     /// P8 D6: the notify policy, the platform sink, focus, and click
     /// activation.
     pub notifications: Arc<notifications::services::NotificationService<R>>,
+    /// P9 D5/D18: the backup lease (shared with the content store and the
+    /// media janitor), the process-local operation ledger, and the
+    /// portability dialogs.
+    pub backup: Arc<backup::BackupServices>,
+    /// P9 D13: the diagnostics bundle's home directories and test hook.
+    pub diagnostics: Arc<diagnostics::DiagnosticsServices>,
     _lease: Option<RuntimeServicesLease>,
 }
 
@@ -138,10 +156,18 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
         manager: Arc<ConnectionManager<R>>,
         documents: Arc<dyn document_io::DocumentIo>,
     ) -> Self {
+        let backup_lease = backup::lease::BackupLease::new();
         let content = Arc::new(
             library::content::ContentStore::open(storage.paths().content_root())
-                .expect("content store"),
+                .expect("content store")
+                .with_backup_lease(backup_lease.clone()),
         );
+        let backup = Arc::new(backup::BackupServices::new(
+            backup_lease.clone(),
+            &storage,
+            &content,
+            Arc::new(backup::dialogs::CancelledPortabilityDialogs),
+        ));
         let slicing = Arc::new(slicing::SlicingServices::new(
             Arc::clone(&storage),
             Arc::clone(&content),
@@ -175,14 +201,18 @@ impl<R: tauri::Runtime> RuntimeServices<R> {
             jobs: Arc::new(jobs::JobServices::new(jobs::JobTimings::default())),
             evaluator: Arc::default(),
             attention: Arc::default(),
-            cameras: Arc::default(),
+            cameras: Arc::new(
+                cameras::services::CameraServices::default().with_backup_lease(backup_lease),
+            ),
             notifications: Arc::default(),
+            backup,
+            diagnostics: Arc::default(),
             _lease: None,
         }
     }
 }
 
-pub const COMMAND_NAMES: [&str; 129] = [
+pub const COMMAND_NAMES: [&str; 147] = [
     "load_settings",
     "save_settings",
     "export_settings",
@@ -312,6 +342,24 @@ pub const COMMAND_NAMES: [&str; 129] = [
     "set_printer_alert_defaults",
     "notification_status",
     "send_test_notification",
+    "list_job_history",
+    "get_job_timeline",
+    "backup_inventory",
+    "create_backup",
+    "list_backups",
+    "delete_backup",
+    "preview_restore",
+    "discard_restore_preview",
+    "apply_restore",
+    "restore_status",
+    "acknowledge_restore_status",
+    "reset_preview",
+    "reset_farm",
+    "diagnostics_preview",
+    "export_diagnostics",
+    "about_farm3d",
+    "storage_usage",
+    "clear_storage",
 ];
 
 /// `pub` (rather than crate-private) solely so `tests/p2_lifecycle.rs` can
@@ -450,10 +498,7 @@ fn notification_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
             .path()
             .resolve("resources/farm3d-notification.png", BaseDirectory::Resource)
             .ok();
-        notifications::dbus::resolve_icon(
-            &notifications::dbus::xdg_data_dirs(),
-            bundled.as_deref(),
-        )
+        notifications::dbus::resolve_icon(&notifications::dbus::xdg_data_dirs(), bundled.as_deref())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -462,7 +507,9 @@ fn notification_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     }
 }
 
-enum StartupFailure {
+/// Why startup stopped: unsupported locking is fatal; anything else enters
+/// the bootstrap `Failed` state with a retry.
+pub enum StartupFailure {
     Fatal,
     Recoverable(contracts::command::CommandError),
 }
@@ -487,6 +534,7 @@ pub fn startup_command_error(
         persistence::StorageError::PathCollision
         | persistence::StorageError::PersistenceUnavailable
         | persistence::StorageError::Filesystem
+        | persistence::StorageError::StorageFull
         | persistence::StorageError::OperationFailed => Ok(CommandError::persistence_unavailable()),
         // Startup only ever reads through storage (restoring persisted
         // Connections); this write-path variant cannot occur here.
@@ -495,10 +543,55 @@ pub fn startup_command_error(
 }
 
 fn startup_error(error: persistence::StorageError) -> StartupFailure {
+    f3d_log!(error, "startup.failed", error = error);
     match startup_command_error(error) {
         Ok(error) => StartupFailure::Recoverable(error),
         Err(()) => StartupFailure::Fatal,
     }
+}
+
+/// P9 D8 "Startup order", steps 2–5 up to `Storage::open`: the
+/// metadata-root lease (a busy lock retried for up to 10 s while
+/// `restore/journal.json` exists), the restore installer, the log, and
+/// `Storage::open`. The lease stays in `retained_lease` for the bootstrap
+/// retry, which re-runs the installer. Later steps (P4's content sweep and
+/// the rest) run after this returns, so the installer has consumed the
+/// staged content before the sweep empties `content_root/staging/`.
+pub fn open_storage(
+    paths: persistence::StoragePaths,
+    retained_lease: &std::sync::Mutex<Option<persistence::MetadataRootLease>>,
+    open_credentials: impl FnOnce() -> connections::credentials::CredentialStore,
+) -> Result<(Arc<persistence::Storage>, backup::installer::InstallReport), StartupFailure> {
+    let mut lease = retained_lease
+        .lock()
+        .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    if lease.is_none() {
+        match backup::installer::acquire_lease(&paths) {
+            Ok(acquired) => *lease = Some(acquired),
+            Err(error) => {
+                // The log isn't open yet; open it so the failure is on record.
+                diagnostics::log::init(paths.log_root());
+                return Err(startup_error(error));
+            }
+        }
+    }
+    let held = lease.as_ref().expect("lease was initialized");
+    let installed = backup::installer::run(&paths, held, open_credentials);
+    // P9 D12: the log starts after the installer (a reset moves
+    // `log_root`) and before `Storage::open`, so a failed open is on record.
+    diagnostics::log::init(paths.log_root());
+    let report = match installed {
+        Ok(report) => {
+            backup::installer::log_report(&report);
+            report
+        }
+        Err(error) => {
+            backup::installer::log_error(&error);
+            return Err(StartupFailure::Recoverable(error.to_command_error()));
+        }
+    };
+    let storage = Arc::new(persistence::Storage::open(paths, held).map_err(startup_error)?);
+    Ok((storage, report))
 }
 
 fn build_runtime_services<R: tauri::Runtime>(
@@ -513,27 +606,31 @@ fn build_runtime_services<R: tauri::Runtime>(
         .path()
         .app_data_dir()
         .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
-    let paths = persistence::StoragePaths::new(metadata_root, data_root).map_err(startup_error)?;
-    let storage = {
-        let mut lease = retained_lease.lock().map_err(|_| {
-            StartupFailure::Recoverable(contracts::command::CommandError::internal())
-        })?;
-        if lease.is_none() {
-            *lease = Some(persistence::MetadataRootLease::acquire(&paths).map_err(startup_error)?);
-        }
-        Arc::new(
-            persistence::Storage::open(paths, lease.as_ref().expect("lease was initialized"))
-                .map_err(startup_error)?,
-        )
-    };
+    let log_root = app
+        .path()
+        .app_log_dir()
+        .map_err(|_| StartupFailure::Recoverable(contracts::command::CommandError::internal()))?;
+    let paths = persistence::StoragePaths::new(metadata_root, data_root)
+        .and_then(|paths| paths.with_log_root(log_root))
+        .map_err(startup_error)?;
+    let credentials_root = paths.metadata_root().to_path_buf();
+    let (storage, _report) = open_storage(paths, retained_lease, move || {
+        connections::credentials::CredentialStore::detect(credentials_root)
+    })?;
     persistence::migrate_legacy(&storage).map_err(startup_error)?;
+    // P9 D9: what a crashed backup left in farm3d's own directories.
+    backup::writer::clear_working_files(storage.paths());
     settings::repository::SettingsRepository::new(Arc::clone(&storage))
         .ensure_default()
         .map_err(startup_error)?;
+    // P9 D5: one backup lease, shared by the content store, the media
+    // janitor, and the backup commands.
+    let backup_lease = backup::lease::BackupLease::new();
     // P4 D4: reconcile the content store before any command is served.
     let content = Arc::new(
         library::content::ContentStore::open(storage.paths().content_root())
-            .map_err(startup_error)?,
+            .map_err(startup_error)?
+            .with_backup_lease(backup_lease.clone()),
     );
     content.startup_sweep(&storage).map_err(startup_error)?;
     // P5 D10: interrupt what a previous run left queued or running, and
@@ -553,11 +650,12 @@ fn build_runtime_services<R: tauri::Runtime>(
     // P8 D2 "Startup backfill": project every durable Condition with live
     // status unknown, before any command is served. Published once the
     // attention runtime starts.
-    let backfilled =
-        attention::projector::backfill(&storage, chrono::Utc::now()).map_err(|error| match error {
+    let backfilled = attention::projector::backfill(&storage, chrono::Utc::now()).map_err(
+        |error| match error {
             persistence::RepositoryError::Storage(error) => startup_error(error),
             _ => StartupFailure::Recoverable(contracts::command::CommandError::internal()),
-        })?;
+        },
+    )?;
     // P8 D5 "Startup sweep": repair whatever a crash left in the media
     // store, before any command is served. Published once the camera
     // runtime starts. A failure never blocks startup (the camera is
@@ -637,6 +735,15 @@ fn build_runtime_services<R: tauri::Runtime>(
         attention::services::AttentionTimings::default(),
     ));
     attention.set_backfilled(backfilled);
+    let backup = Arc::new(
+        backup::BackupServices::new(
+            backup_lease.clone(),
+            &storage,
+            &content,
+            Arc::new(backup::dialogs::NativePortabilityDialogs::new(app.clone())),
+        )
+        .with_restarter(Arc::new(backup::restart::AppRestarter::new(app.clone()))),
+    );
     let services = Arc::new(RuntimeServices {
         storage: Arc::clone(&storage),
         catalog,
@@ -655,15 +762,18 @@ fn build_runtime_services<R: tauri::Runtime>(
         jobs,
         evaluator: Arc::default(),
         attention,
-        cameras: Arc::new(cameras::services::CameraServices::new(
-            cameras::services::CameraTimings::default(),
-        )),
+        cameras: Arc::new(
+            cameras::services::CameraServices::new(cameras::services::CameraTimings::default())
+                .with_backup_lease(backup_lease),
+        ),
         notifications: Arc::new(notifications::services::NotificationService::platform(
             app.try_state::<notifications::focus::Focus>()
                 .map(|focus| focus.inner().clone())
                 .unwrap_or_default(),
             notification_icon(app),
         )),
+        backup,
+        diagnostics: Arc::default(),
         _lease: Some(RuntimeServicesLease::new(Arc::clone(&storage), lease)),
     });
     start_library_runtime(&services, app, library::links::WatchPolicy::native());
@@ -830,10 +940,15 @@ pub fn run() {
                     }));
                     Ok(())
                 }
-                Err(StartupFailure::Fatal) => Err(std::io::Error::other(
+                Err(StartupFailure::Fatal) => {
+                    // The line `startup_error` logged must be on disk before
+                    // setup returns its error and the app exits.
+                    diagnostics::log::shutdown();
+                    Err(std::io::Error::other(
                     "Unsupported metadata locking. This platform or data location cannot run farm3d; contact support with the platform and filesystem type.",
-                )
-                .into()),
+                    )
+                    .into())
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -966,9 +1081,33 @@ pub fn run() {
             set_printer_alert_defaults,
             notification_status,
             send_test_notification,
+            list_job_history,
+            get_job_timeline,
+            backup_inventory,
+            create_backup,
+            list_backups,
+            delete_backup,
+            preview_restore,
+            discard_restore_preview,
+            apply_restore,
+            restore_status,
+            acknowledge_restore_status,
+            reset_preview,
+            reset_farm,
+            diagnostics_preview,
+            export_diagnostics,
+            about_farm3d,
+            storage_usage,
+            clear_storage,
             #[cfg(debug_assertions)]
             spools::commands::debug_seed_reservation,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // P9 D12: queued log lines reach disk before the process ends.
+            if matches!(event, tauri::RunEvent::Exit) {
+                diagnostics::log::shutdown();
+            }
+        });
 }

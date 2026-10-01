@@ -10,7 +10,7 @@ const allowed = {
   queue: new Set(["job"]),
   library: new Set(["model", "project"]),
   spools: new Set(["spool"]),
-  settings: new Set<string>(),
+  settings: new Set(["settingsCategory"]),
 } as const;
 
 const unreserved = /^[A-Za-z0-9._~-]$/;

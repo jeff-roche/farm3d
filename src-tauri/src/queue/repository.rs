@@ -33,8 +33,7 @@ use crate::spools::{decode_enum, encode_enum};
 use super::state::{self, EntryEvent};
 use super::{
     allowed_actions, CloseReason, DispatchPolicy, DispatchPreference, EstimateSource,
-    MaterialEstimate, OriginKind, QueueEntry, QueueEntryAction, QueueEntryDisplay,
-    QueueEntryState,
+    MaterialEstimate, OriginKind, QueueEntry, QueueEntryAction, QueueEntryDisplay, QueueEntryState,
 };
 
 const QUEUE_ENTRY_ID_PREFIX: &str = "qen";
@@ -54,9 +53,13 @@ fn not_found(id: &str) -> RepositoryError {
     }
 }
 
-fn decode_text_enum<T: serde::de::DeserializeOwned>(index: usize, text: &str) -> rusqlite::Result<T> {
-    decode_enum(text)
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+fn decode_text_enum<T: serde::de::DeserializeOwned>(
+    index: usize,
+    text: &str,
+) -> rusqlite::Result<T> {
+    decode_enum(text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
 }
 
 /// The raw `queue_entries` row, before the display join and the lineage's
@@ -238,7 +241,11 @@ pub fn list_history(conn: &Connection, limit: u32) -> Result<Vec<QueueEntry>, St
     rows.into_iter().map(|row| hydrate(conn, row)).collect()
 }
 
-fn list_positions(tx: &Transaction<'_>, lo: i64, hi: i64) -> Result<Vec<QueueEntry>, RepositoryError> {
+fn list_positions(
+    tx: &Transaction<'_>,
+    lo: i64,
+    hi: i64,
+) -> Result<Vec<QueueEntry>, RepositoryError> {
     let mut statement = tx.prepare(&format!(
         "SELECT {ENTRY_COLUMNS} FROM queue_entries WHERE position BETWEEN ?1 AND ?2 ORDER BY position"
     ))?;
@@ -251,7 +258,8 @@ fn list_positions(tx: &Transaction<'_>, lo: i64, hi: i64) -> Result<Vec<QueueEnt
 }
 
 fn current_max_position(tx: &Transaction<'_>) -> Result<i64, RepositoryError> {
-    let max: Option<i64> = tx.query_row("SELECT MAX(position) FROM queue_entries", [], |r| r.get(0))?;
+    let max: Option<i64> =
+        tx.query_row("SELECT MAX(position) FROM queue_entries", [], |r| r.get(0))?;
     Ok(max.unwrap_or(0))
 }
 
@@ -297,7 +305,12 @@ fn shift_range(
 /// is the same close plus the shift; [`apply`]'s `Release` branch calls
 /// this alone (D2: "nothing else moves" — the freed slot is filled by the
 /// replacement `create_linked` inserts next, in the same transaction).
-fn close_row(tx: &Transaction<'_>, id: &str, close_reason: CloseReason, now: &str) -> Result<i64, RepositoryError> {
+fn close_row(
+    tx: &Transaction<'_>,
+    id: &str,
+    close_reason: CloseReason,
+    now: &str,
+) -> Result<i64, RepositoryError> {
     let freed: i64 = tx.query_row(
         "SELECT position FROM queue_entries WHERE id = ?1",
         [id],
@@ -656,7 +669,10 @@ mod tests {
         assert_eq!(created.len(), 3);
         let lineage_id = created[0].lineage_id.clone();
         for (index, entry) in created.iter().enumerate() {
-            assert_eq!(entry.lineage_id, lineage_id, "every copy shares one lineage");
+            assert_eq!(
+                entry.lineage_id, lineage_id,
+                "every copy shares one lineage"
+            );
             assert_eq!(entry.copy_index, index as i64 + 1);
             assert_eq!(entry.copy_count, 3);
             assert_eq!(entry.position, Some(index as i64 + 1));
@@ -715,8 +731,14 @@ mod tests {
             .expect("read")
             .expect("list");
         assert_eq!(
-            open.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(),
-            vec![created[1].id.clone(), created[2].id.clone(), created[0].id.clone()]
+            open.iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                created[1].id.clone(),
+                created[2].id.clone(),
+                created[0].id.clone()
+            ]
         );
         let mover = open.iter().find(|entry| entry.id == first.id).unwrap();
         assert_eq!(mover.position, Some(3));
@@ -739,8 +761,7 @@ mod tests {
             .expect("create");
         let first = &created[0];
 
-        let result =
-            storage.write_repo(|tx| move_entry(tx, &first.id, first.revision + 1, 2, NOW));
+        let result = storage.write_repo(|tx| move_entry(tx, &first.id, first.revision + 1, 2, NOW));
 
         match result {
             Err(RepositoryError::Conflict {

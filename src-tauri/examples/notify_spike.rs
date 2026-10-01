@@ -39,8 +39,7 @@ mod spike {
     use futures_util::StreamExt;
     use gtk::prelude::GtkWindowExt;
     use tauri::{
-        AppHandle, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-        WindowEvent,
+        AppHandle, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
     };
     use zbus::fdo::DBusProxy;
     use zbus::message::Type as MessageType;
@@ -199,13 +198,14 @@ mod spike {
         let caps = proxy.get_capabilities().await?;
         log(format!("GetCapabilities: {caps:?}"));
         for c in ["actions", "body-markup", "persistence", "icon-static"] {
-            log(format!("  advertises {c:?}: {}", caps.iter().any(|x| x == c)));
+            log(format!(
+                "  advertises {c:?}: {}",
+                caps.iter().any(|x| x == c)
+            ));
         }
 
         let dbus = DBusProxy::new(&conn).await?;
-        let owner = dbus
-            .get_name_owner(BusName::try_from(SERVICE)?)
-            .await?;
+        let owner = dbus.get_name_owner(BusName::try_from(SERVICE)?).await?;
         log(format!("current owner of {SERVICE}: {owner}"));
 
         // The one listener D6 describes: signals from the server's unique
@@ -267,16 +267,16 @@ mod spike {
                     }
                     "ActionInvoked" => {
                         let token = tracked.tokens.lock().unwrap().remove(&id);
-                        log(format!("  token present at ActionInvoked: {}", token.is_some()));
+                        log(format!(
+                            "  token present at ActionInvoked: {}",
+                            token.is_some()
+                        ));
                         if let Some(cb) = &on_action {
                             cb(id, detail, token);
                         }
                     }
                     "NotificationClosed" => {
-                        let reason = detail
-                            .trim_start_matches("reason ")
-                            .parse()
-                            .unwrap_or(0);
+                        let reason = detail.trim_start_matches("reason ").parse().unwrap_or(0);
                         tracked.ids.lock().unwrap().remove(&id);
                         tracked.tokens.lock().unwrap().remove(&id);
                         tracked.closed.lock().unwrap().push((id, reason));
@@ -485,9 +485,15 @@ mod spike {
             let _ = w.unminimize();
         })
         .await;
-        step(app, window, focus, "set_focus (alone, after unminimize)", |w| {
-            let _ = w.set_focus();
-        })
+        step(
+            app,
+            window,
+            focus,
+            "set_focus (alone, after unminimize)",
+            |w| {
+                let _ = w.set_focus();
+            },
+        )
         .await;
         step(app, window, focus, "minimize", |w| {
             let _ = w.minimize();
@@ -499,7 +505,10 @@ mod spike {
             focus,
             "unminimize + show + set_focus in one tick",
             |w| {
-                log(format!("  before: is_minimized={:?}", w.is_minimized().ok()));
+                log(format!(
+                    "  before: is_minimized={:?}",
+                    w.is_minimized().ok()
+                ));
                 let _ = w.unminimize();
                 log(format!(
                     "  after unminimize, same tick: is_minimized={:?}",
@@ -550,29 +559,47 @@ mod spike {
             },
         )
         .await;
-        step(app, window, focus, "hide + show + set_focus in one tick", |w| {
-            let _ = w.hide();
-            let _ = w.show();
-            let _ = w.set_focus();
-        })
+        step(
+            app,
+            window,
+            focus,
+            "hide + show + set_focus in one tick",
+            |w| {
+                let _ = w.hide();
+                let _ = w.show();
+                let _ = w.set_focus();
+            },
+        )
         .await;
         step(app, window, focus, "minimize", |w| {
             let _ = w.minimize();
         })
         .await;
-        step(app, window, focus, "hide + show + set_focus in one tick", |w| {
-            let _ = w.hide();
-            let _ = w.show();
-            let _ = w.set_focus();
-        })
+        step(
+            app,
+            window,
+            focus,
+            "hide + show + set_focus in one tick",
+            |w| {
+                let _ = w.hide();
+                let _ = w.show();
+                let _ = w.set_focus();
+            },
+        )
         .await;
         step(app, window, focus, "minimize", |w| {
             let _ = w.minimize();
         })
         .await;
-        step(app, window, focus, "request_user_attention(Informational)", |w| {
-            let _ = w.request_user_attention(Some(UserAttentionType::Informational));
-        })
+        step(
+            app,
+            window,
+            focus,
+            "request_user_attention(Informational)",
+            |w| {
+                let _ = w.request_user_attention(Some(UserAttentionType::Informational));
+            },
+        )
         .await;
         step(app, window, focus, "request_user_attention(None)", |w| {
             let _ = w.request_user_attention(None);
@@ -592,7 +619,9 @@ mod spike {
         let focus_for_cb = focus.clone();
         let on_action: Arc<dyn Fn(u32, String, Option<String>) + Send + Sync> =
             Arc::new(move |id, action, token| {
-                log(format!("ActionInvoked({id}, {action:?}); raising the window"));
+                log(format!(
+                    "ActionInvoked({id}, {action:?}); raising the window"
+                ));
                 let w = window_for_cb.clone();
                 let mark = focus_for_cb.count();
                 let _ = app_for_cb.run_on_main_thread(move || {
@@ -653,7 +682,9 @@ mod spike {
             )
             .await?;
         bus.outstanding.ids.lock().unwrap().insert(id);
-        log(format!("Notify returned id {id}; waiting up to 120 s for a click"));
+        log(format!(
+            "Notify returned id {id}; waiting up to 120 s for a click"
+        ));
 
         let clicked = tokio::time::timeout(Duration::from_secs(120), done_rx.recv())
             .await

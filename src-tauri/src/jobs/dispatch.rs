@@ -45,8 +45,8 @@ use crate::RuntimeServices;
 use super::assign::JobDigest;
 use super::repository::{self as jobs_repository, JobChange};
 use super::{
-    Job, JobAction, JobEventKind, JobFailure, JobState, ReconciliationRequirement,
-    RequirementKind, StartConfirmation,
+    Job, JobAction, JobEventKind, JobFailure, JobState, ReconciliationRequirement, RequirementKind,
+    StartConfirmation,
 };
 
 // --- apply_host_outcome ------------------------------------------------------
@@ -233,16 +233,27 @@ pub(crate) fn open_outcome_unknown_requirement(
     if exists {
         return Ok(None);
     }
-    jobs_repository::open_requirement(tx, job_id, RequirementKind::JobOutcomeUnknown, None, None, now)
-        .map(Some)
+    jobs_repository::open_requirement(
+        tx,
+        job_id,
+        RequirementKind::JobOutcomeUnknown,
+        None,
+        None,
+        now,
+    )
+    .map(Some)
 }
 
 // --- start checks ------------------------------------------------------------
 
 fn any_start_offered(status: &PrinterStatus) -> bool {
-    [PriorState::Ready, PriorState::Finished, PriorState::Cancelled]
-        .into_iter()
-        .any(|prior| start_rule::check(status, prior).is_ok())
+    [
+        PriorState::Ready,
+        PriorState::Finished,
+        PriorState::Cancelled,
+    ]
+    .into_iter()
+    .any(|prior| start_rule::check(status, prior).is_ok())
 }
 
 /// D7's start blockers for an `awaitingStart` Job, in the table's order
@@ -473,7 +484,10 @@ pub(crate) fn present_jobs<R: tauri::Runtime>(services: &RuntimeServices<R>, job
     }
 }
 
-pub(crate) fn present_change<R: tauri::Runtime>(services: &RuntimeServices<R>, change: &mut QueueChange) {
+pub(crate) fn present_change<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    change: &mut QueueChange,
+) {
     present_jobs(services, &mut change.jobs);
 }
 
@@ -628,7 +642,12 @@ pub(crate) async fn stage_job<R: tauri::Runtime>(
     job_id: &str,
 ) -> Result<Handoff, CommandError> {
     let digest = operations::digest(&JobDigest { job_id });
-    if is_replay(&services.storage, &operation_id, OperationKind::StageJob, &digest)? {
+    if is_replay(
+        &services.storage,
+        &operation_id,
+        OperationKind::StageJob,
+        &digest,
+    )? {
         return Ok(Handoff {
             job: load_committed(&services.storage, job_id)?,
             replayed: true,
@@ -681,7 +700,10 @@ pub(crate) async fn stage_job<R: tauri::Runtime>(
         Some((job.id.clone(), link)),
     )
     .await?;
-    Ok(handed_off(load_committed(&services.storage, job_id)?, &linked))
+    Ok(handed_off(
+        load_committed(&services.storage, job_id)?,
+        &linked,
+    ))
 }
 
 /// D7 "Start": `start_blockers` must be empty (`JOB_START_BLOCKED`), then
@@ -700,7 +722,12 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
         prior_state: prior,
         acknowledgement: confirmation,
     });
-    if is_replay(&services.storage, &operation_id, OperationKind::StartJob, &digest)? {
+    if is_replay(
+        &services.storage,
+        &operation_id,
+        OperationKind::StartJob,
+        &digest,
+    )? {
         return Ok(Handoff {
             job: load_committed(&services.storage, job_id)?,
             replayed: true,
@@ -777,7 +804,10 @@ pub(crate) async fn start_job<R: tauri::Runtime>(
         Some((job.id.clone(), link)),
     )
     .await?;
-    Ok(handed_off(load_committed(&services.storage, job_id)?, &linked))
+    Ok(handed_off(
+        load_committed(&services.storage, job_id)?,
+        &linked,
+    ))
 }
 
 /// Ruling R13(a): what the start link re-checks inside the write-ahead
@@ -867,16 +897,8 @@ pub(crate) async fn control_job<R: tauri::Runtime>(
         let operation_id = operation_id.clone();
         let job_id = job_id.to_string();
         Box::new(move |tx, op| {
-            let job = claim_and_recheck(
-                tx,
-                op,
-                &operation_id,
-                kind,
-                &digest,
-                &job_id,
-                event,
-                action,
-            )?;
+            let job =
+                claim_and_recheck(tx, op, &operation_id, kind, &digest, &job_id, event, action)?;
             if job.host_path.as_deref() != Some(op.host_path.as_str()) {
                 return Err(RepositoryError::JobNotOnPrinter {
                     job_id: job.id,
@@ -907,7 +929,10 @@ pub(crate) async fn control_job<R: tauri::Runtime>(
         Some((job.id.clone(), link)),
     )
     .await?;
-    Ok(handed_off(load_committed(&services.storage, job_id)?, &linked))
+    Ok(handed_off(
+        load_committed(&services.storage, job_id)?,
+        &linked,
+    ))
 }
 
 #[cfg(test)]
@@ -948,11 +973,12 @@ mod tests {
     /// One `assigned` Job over a seeded revision, Printer, and Spool.
     fn rig() -> Rig {
         let (temp, lease, storage) = crate::test_storage();
-        storage.write(|tx| {
-            seed(tx);
-            Ok(())
-        })
-        .unwrap();
+        storage
+            .write(|tx| {
+                seed(tx);
+                Ok(())
+            })
+            .unwrap();
         storage
             .write_repo(|tx| insert_farm3d_revision(tx, &a_farm3d_revision(SLR, 1)))
             .unwrap();
@@ -1045,7 +1071,13 @@ mod tests {
                     },
                     NOW,
                 )?;
-                crate::queue::repository::apply(tx, &entry.id, &EntryEvent::Assign, Some(&job.id), NOW)?;
+                crate::queue::repository::apply(
+                    tx,
+                    &entry.id,
+                    &EntryEvent::Assign,
+                    Some(&job.id),
+                    NOW,
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -1158,7 +1190,14 @@ mod tests {
                  cancel_reason = CASE WHEN ?2 = 'cancelled' THEN 'hostCancelled' END,
                  ended_at = CASE WHEN ?6 THEN ?4 END
              WHERE id = ?1",
-            rusqlite::params![job_id, encode_enum(state), active, NOW, settlement, terminal],
+            rusqlite::params![
+                job_id,
+                encode_enum(state),
+                active,
+                NOW,
+                settlement,
+                terminal
+            ],
         )
         .unwrap();
     }
@@ -1181,9 +1220,11 @@ mod tests {
             (K::Start, O::Abandoned, J::Starting) => Some(JobEventKind::StartAbandoned),
             (K::Pause, O::Succeeded, J::Printing) => Some(JobEventKind::Paused),
             (K::Resume, O::Succeeded, J::Paused) => Some(JobEventKind::Resumed),
-            (K::Pause | K::Resume | K::Cancel, O::Failed | O::Abandoned, J::Printing | J::Paused) => {
-                Some(JobEventKind::ControlFailed)
-            }
+            (
+                K::Pause | K::Resume | K::Cancel,
+                O::Failed | O::Abandoned,
+                J::Printing | J::Paused,
+            ) => Some(JobEventKind::ControlFailed),
             _ => None,
         }
     }
@@ -1231,8 +1272,16 @@ mod tests {
                         );
                         match expected_event(kind, op_state, job_state) {
                             Some(event) => {
-                                assert_eq!(event_count(tx, &rig.job_id), events_before + 1, "{case}");
-                                assert_eq!(last_event(tx, &rig.job_id), encode_enum(event), "{case}");
+                                assert_eq!(
+                                    event_count(tx, &rig.job_id),
+                                    events_before + 1,
+                                    "{case}"
+                                );
+                                assert_eq!(
+                                    last_event(tx, &rig.job_id),
+                                    encode_enum(event),
+                                    "{case}"
+                                );
                                 let to = crate::jobs::state::transition(job_state, event).unwrap();
                                 assert_eq!(job.state, to, "{case}");
                             }
@@ -1249,7 +1298,10 @@ mod tests {
                         );
                         // Idempotent: a second call writes nothing.
                         let events = event_count(tx, &rig.job_id);
-                        assert!(apply_host_outcome(tx, &op, NOW).unwrap().is_none(), "{case}");
+                        assert!(
+                            apply_host_outcome(tx, &op, NOW).unwrap().is_none(),
+                            "{case}"
+                        );
                         assert_eq!(event_count(tx, &rig.job_id), events, "{case}");
                         Err::<(), _>(RepositoryError::Storage(StorageError::OperationFailed))
                     });
@@ -1262,13 +1314,26 @@ mod tests {
     fn an_op_that_is_not_the_jobs_active_one_is_ignored() {
         let rig = rig();
         let _ = rig.storage.write_repo(|tx| {
-            let stale = insert_op(tx, Some(&rig.job_id), HostOperationKind::Upload, HostOperationState::Failed);
-            let current = insert_op(tx, Some(&rig.job_id), HostOperationKind::Upload, HostOperationState::Dispatching);
+            let stale = insert_op(
+                tx,
+                Some(&rig.job_id),
+                HostOperationKind::Upload,
+                HostOperationState::Failed,
+            );
+            let current = insert_op(
+                tx,
+                Some(&rig.job_id),
+                HostOperationKind::Upload,
+                HostOperationState::Dispatching,
+            );
             force_state(tx, &rig.job_id, JobState::Staging, &current.id);
             assert!(apply_host_outcome(tx, &stale, NOW).unwrap().is_none());
             let job = jobs_repository::load_job(tx, &rig.job_id).unwrap().unwrap();
             assert_eq!(job.state, JobState::Staging);
-            assert_eq!(job.active_host_operation_id.as_deref(), Some(current.id.as_str()));
+            assert_eq!(
+                job.active_host_operation_id.as_deref(),
+                Some(current.id.as_str())
+            );
             Err::<(), _>(RepositoryError::Storage(StorageError::OperationFailed))
         });
     }
@@ -1277,7 +1342,12 @@ mod tests {
     fn an_unlinked_op_is_ignored() {
         let rig = rig();
         let _ = rig.storage.write_repo(|tx| {
-            let raw = insert_op(tx, None, HostOperationKind::Upload, HostOperationState::Succeeded);
+            let raw = insert_op(
+                tx,
+                None,
+                HostOperationKind::Upload,
+                HostOperationState::Succeeded,
+            );
             assert!(apply_host_outcome(tx, &raw, NOW).unwrap().is_none());
             Err::<(), _>(RepositoryError::Storage(StorageError::OperationFailed))
         });
@@ -1334,17 +1404,29 @@ mod tests {
     fn start_succeeded_sets_started_at_and_the_history_mark() {
         let rig = rig();
         let _ = rig.storage.write_repo(|tx| {
-            let mut op = insert_op(tx, Some(&rig.job_id), HostOperationKind::Start, HostOperationState::Succeeded);
+            let mut op = insert_op(
+                tx,
+                Some(&rig.job_id),
+                HostOperationKind::Start,
+                HostOperationState::Succeeded,
+            );
             // Ruling R13(b): the time the start was sent, not the apply time.
             op.dispatched_at = Some("2026-09-01T11:59:58Z".to_string());
             force_state(tx, &rig.job_id, JobState::Starting, &op.id);
-            tx.execute("UPDATE jobs SET started_at = NULL, history_mark = NULL WHERE id = ?1", [&rig.job_id])
-                .unwrap();
+            tx.execute(
+                "UPDATE jobs SET started_at = NULL, history_mark = NULL WHERE id = ?1",
+                [&rig.job_id],
+            )
+            .unwrap();
             let job = apply_host_outcome(tx, &op, NOW).unwrap().unwrap().job;
             assert_eq!(job.state, JobState::Printing);
             assert_eq!(job.started_at.as_deref(), Some("2026-09-01T11:59:58Z"));
             let mark: i64 = tx
-                .query_row("SELECT history_mark FROM jobs WHERE id = ?1", [&rig.job_id], |row| row.get(0))
+                .query_row(
+                    "SELECT history_mark FROM jobs WHERE id = ?1",
+                    [&rig.job_id],
+                    |row| row.get(0),
+                )
                 .unwrap();
             assert_eq!(mark, 7);
             Err::<(), _>(RepositoryError::Storage(StorageError::OperationFailed))
@@ -1355,12 +1437,20 @@ mod tests {
     fn an_abandoned_start_opens_exactly_one_outcome_unknown_requirement() {
         let rig = rig();
         let _ = rig.storage.write_repo(|tx| {
-            let op = insert_op(tx, Some(&rig.job_id), HostOperationKind::Start, HostOperationState::Abandoned);
+            let op = insert_op(
+                tx,
+                Some(&rig.job_id),
+                HostOperationKind::Start,
+                HostOperationState::Abandoned,
+            );
             force_state(tx, &rig.job_id, JobState::Starting, &op.id);
             let applied = apply_host_outcome(tx, &op, NOW).unwrap().unwrap();
             assert_eq!(applied.job.state, JobState::OutcomeUnknown);
             assert_eq!(applied.requirements.len(), 1);
-            assert_eq!(applied.requirements[0].kind, RequirementKind::JobOutcomeUnknown);
+            assert_eq!(
+                applied.requirements[0].kind,
+                RequirementKind::JobOutcomeUnknown
+            );
             assert_eq!(applied.requirements[0].status, RequirementStatus::Pending);
             assert!(apply_host_outcome(tx, &op, NOW).unwrap().is_none());
             let count: i64 = tx
@@ -1459,7 +1549,10 @@ mod tests {
         let blockers = start_blockers(
             &job,
             &a_printer(StartSafety::ConfirmBedClear),
-            Some(&status(OperationalState::Printing, TelemetryFreshness::Fresh)),
+            Some(&status(
+                OperationalState::Printing,
+                TelemetryFreshness::Fresh,
+            )),
             &[],
             &caps,
             true,
@@ -1474,11 +1567,19 @@ mod tests {
                 BlockerCode::PrinterNotReady,
             ]
         );
-        assert_eq!(blockers[0].message, "Awaiting material: load Spool #12 on Alpha.");
+        assert_eq!(
+            blockers[0].message,
+            "Awaiting material: load Spool #12 on Alpha."
+        );
         assert_eq!(blockers[0].recovery, Some(RecoveryCode::LoadSpool));
         assert_eq!(blockers[2].message, "No identity check here.");
-        assert_eq!(blockers[3].message, "The printer can't start now: it is printing.");
-        assert!(blockers.iter().all(|blocker| blocker.printer_ids == [PRINTER]));
+        assert_eq!(
+            blockers[3].message,
+            "The printer can't start now: it is printing."
+        );
+        assert!(blockers
+            .iter()
+            .all(|blocker| blocker.printer_ids == [PRINTER]));
     }
 
     /// P6's start rule: finished and cancelled offer a start too; stale
@@ -1488,10 +1589,28 @@ mod tests {
         let job = awaiting_job();
         let loaded = ["spl-a".to_string()];
         for (status, blocked) in [
-            (Some(status(OperationalState::Finished, TelemetryFreshness::Fresh)), false),
-            (Some(status(OperationalState::Cancelled, TelemetryFreshness::Fresh)), false),
-            (Some(status(OperationalState::Ready, TelemetryFreshness::Stale)), true),
-            (Some(status(OperationalState::Failed, TelemetryFreshness::Fresh)), true),
+            (
+                Some(status(
+                    OperationalState::Finished,
+                    TelemetryFreshness::Fresh,
+                )),
+                false,
+            ),
+            (
+                Some(status(
+                    OperationalState::Cancelled,
+                    TelemetryFreshness::Fresh,
+                )),
+                false,
+            ),
+            (
+                Some(status(OperationalState::Ready, TelemetryFreshness::Stale)),
+                true,
+            ),
+            (
+                Some(status(OperationalState::Failed, TelemetryFreshness::Fresh)),
+                true,
+            ),
             (None, true),
         ] {
             let blockers = start_blockers(
@@ -1534,7 +1653,14 @@ mod tests {
         let loaded = ["spl-a".to_string()];
         let unattended = a_printer(StartSafety::Unattended);
         let caps = sim_capabilities();
-        assert!(may_start_unattended(&job, &unattended, &ready(), &caps, &loaded, false));
+        assert!(may_start_unattended(
+            &job,
+            &unattended,
+            &ready(),
+            &caps,
+            &loaded,
+            false
+        ));
 
         // ConfirmBedClear never starts unattended.
         assert!(!may_start_unattended(
@@ -1551,11 +1677,32 @@ mod tests {
             status(OperationalState::Cancelled, TelemetryFreshness::Fresh),
             status(OperationalState::Ready, TelemetryFreshness::Stale),
         ] {
-            assert!(!may_start_unattended(&job, &unattended, &status, &caps, &loaded, false));
+            assert!(!may_start_unattended(
+                &job,
+                &unattended,
+                &status,
+                &caps,
+                &loaded,
+                false
+            ));
         }
         // The Spool must be loaded, and nothing unresolved.
-        assert!(!may_start_unattended(&job, &unattended, &ready(), &caps, &[], false));
-        assert!(!may_start_unattended(&job, &unattended, &ready(), &caps, &loaded, true));
+        assert!(!may_start_unattended(
+            &job,
+            &unattended,
+            &ready(),
+            &caps,
+            &[],
+            false
+        ));
+        assert!(!may_start_unattended(
+            &job,
+            &unattended,
+            &ready(),
+            &caps,
+            &loaded,
+            true
+        ));
         // Each of the four capabilities needs sim evidence.
         for weak in [
             CapabilityKey::Upload,
@@ -1583,6 +1730,13 @@ mod tests {
         // Only an awaitingStart Job.
         let mut assigned = awaiting_job();
         assigned.state = JobState::Assigned;
-        assert!(!may_start_unattended(&assigned, &unattended, &ready(), &caps, &loaded, false));
+        assert!(!may_start_unattended(
+            &assigned,
+            &unattended,
+            &ready(),
+            &caps,
+            &loaded,
+            false
+        ));
     }
 }

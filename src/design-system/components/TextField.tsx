@@ -19,7 +19,7 @@ export interface TextFieldProps {
   onChange?: (value: string) => void;
   disabled?: boolean;
   required?: boolean;
-  type?: "text" | "password" | "email" | "number" | "search" | "url" | "tel";
+  type?: "text" | "password" | "email" | "number" | "search" | "url" | "tel" | "date";
   class?: string;
 }
 

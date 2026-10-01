@@ -172,7 +172,11 @@ pub fn allowed_actions(
 /// unreachable for at least `declare_after` at `now` may have its end
 /// declared. An unparseable `host_unreachable_since` never qualifies
 /// (fail-safe).
-pub fn may_declare_while_unreachable(job: &Job, now: DateTime<Utc>, declare_after: Duration) -> bool {
+pub fn may_declare_while_unreachable(
+    job: &Job,
+    now: DateTime<Utc>,
+    declare_after: Duration,
+) -> bool {
     matches!(job.state, JobState::Printing | JobState::Paused)
         && job
             .host_unreachable_since
@@ -257,7 +261,6 @@ pub(crate) mod tests_support {
             ended_at: None,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -354,12 +357,21 @@ mod tests {
         for state in [Printing, Paused] {
             let mut job = a_job(state);
             job.host_unreachable_since = Some("2026-09-27T11:31:00Z".to_string());
-            assert!(!actions(&job).contains(&JobAction::DeclareOutcome), "{state:?} at 29 min");
+            assert!(
+                !actions(&job).contains(&JobAction::DeclareOutcome),
+                "{state:?} at 29 min"
+            );
             job.host_unreachable_since = Some("2026-09-27T11:30:00Z".to_string());
-            assert!(actions(&job).contains(&JobAction::DeclareOutcome), "{state:?} at 30 min");
+            assert!(
+                actions(&job).contains(&JobAction::DeclareOutcome),
+                "{state:?} at 30 min"
+            );
             // Unparseable timestamps never offer it (fail-safe).
             job.host_unreachable_since = Some("garbage".to_string());
-            assert!(!actions(&job).contains(&JobAction::DeclareOutcome), "{state:?}");
+            assert!(
+                !actions(&job).contains(&JobAction::DeclareOutcome),
+                "{state:?}"
+            );
         }
     }
 

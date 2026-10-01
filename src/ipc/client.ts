@@ -182,6 +182,24 @@ type CommandMap = {
   set_printer_alert_defaults: [Contracts.SetPrinterAlertDefaultsRequest, Contracts.SetPrinterAlertDefaultsResult];
   notification_status: [Contracts.NotificationStatusRequest, Contracts.NotificationStatusResult];
   send_test_notification: [Contracts.SendTestNotificationRequest, Contracts.SendTestNotificationResult];
+  list_job_history: [Contracts.ListJobHistoryRequest, Contracts.ListJobHistoryResult];
+  get_job_timeline: [Contracts.GetJobTimelineRequest, Contracts.GetJobTimelineResult];
+  backup_inventory: [Contracts.BackupInventoryRequest, Contracts.BackupInventoryResult];
+  create_backup: [Contracts.CreateBackupRequest, Contracts.CreateBackupResult];
+  list_backups: [Contracts.ListBackupsRequest, Contracts.ListBackupsResult];
+  delete_backup: [Contracts.DeleteBackupRequest, Contracts.DeleteBackupResult];
+  preview_restore: [Contracts.PreviewRestoreRequest, Contracts.PreviewRestoreResult];
+  discard_restore_preview: [Contracts.DiscardRestorePreviewRequest, Contracts.DiscardRestorePreviewResult];
+  apply_restore: [Contracts.ApplyRestoreRequest, Contracts.ApplyRestoreResult];
+  restore_status: [Contracts.RestoreStatusRequest, Contracts.RestoreStatusResult];
+  acknowledge_restore_status: [Contracts.AcknowledgeRestoreStatusRequest, Contracts.AcknowledgeRestoreStatusResult];
+  reset_preview: [Contracts.ResetPreviewRequest, Contracts.ResetPreviewResult];
+  reset_farm: [Contracts.ResetFarmRequest, Contracts.ResetFarmResult];
+  diagnostics_preview: [Contracts.DiagnosticsPreviewRequest, Contracts.DiagnosticsPreviewResult];
+  export_diagnostics: [Contracts.ExportDiagnosticsRequest, Contracts.ExportDiagnosticsResult];
+  about_farm3d: [Contracts.AboutFarm3dRequest, Contracts.AboutFarm3dResult];
+  storage_usage: [Contracts.StorageUsageRequest, Contracts.StorageUsageResult];
+  clear_storage: [Contracts.ClearStorageRequest, Contracts.ClearStorageResult];
 };
 
 /** Commands that answer with raw bytes rather than the JSON envelope. */

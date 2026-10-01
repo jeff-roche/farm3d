@@ -42,6 +42,7 @@ use tauri::{AppHandle, Runtime};
 use tokio::sync::{mpsc, watch};
 
 use crate::contracts::command::CommandError;
+use crate::diagnostics::log::LogId;
 use crate::persistence::{RepositoryError, Storage, StorageError};
 
 use super::content::{
@@ -1076,9 +1077,11 @@ impl<R: Runtime> LinkSupervisor<R> {
             match self.run_check(&id).await {
                 Ok(applied) => changed.extend(applied.record),
                 Err(error) => {
-                    eprintln!(
-                        "farm3d: checking linked Model {id} failed: {}",
-                        error.message
+                    crate::f3d_log!(
+                        warn,
+                        "library.linkCheckFailed",
+                        model_id = LogId::model(&id),
+                        error_code = error.code
                     );
                     failures.push(error);
                 }
@@ -1096,10 +1099,7 @@ impl<R: Runtime> LinkSupervisor<R> {
     /// Runs in the background after startup and never blocks it.
     pub async fn reconcile_all(&self) {
         let linked = self.linked_models().unwrap_or_else(|error| {
-            eprintln!(
-                "farm3d: linked sources could not be listed: {}",
-                error.message
-            );
+            crate::f3d_log!(warn, "library.linkListFailed", error_code = error.code);
             Vec::new()
         });
         for (id, path) in &linked {
@@ -1107,9 +1107,11 @@ impl<R: Runtime> LinkSupervisor<R> {
         }
         for (id, _) in &linked {
             if let Err(error) = self.run_check(id).await {
-                eprintln!(
-                    "farm3d: checking linked Model {id} failed: {}",
-                    error.message
+                crate::f3d_log!(
+                    warn,
+                    "library.linkCheckFailed",
+                    model_id = LogId::model(id),
+                    error_code = error.code
                 );
             }
         }
@@ -1213,9 +1215,11 @@ impl<R: Runtime> LinkSupervisor<R> {
         tauri::async_runtime::spawn(async move {
             if let Some(supervisor) = this.upgrade() {
                 if let Err(error) = supervisor.run_check(&id).await {
-                    eprintln!(
-                        "farm3d: checking linked Model {id} failed: {}",
-                        error.message
+                    crate::f3d_log!(
+                        warn,
+                        "library.linkCheckFailed",
+                        model_id = LogId::model(&id),
+                        error_code = error.code
                     );
                 }
                 supervisor.scheduled.fetch_sub(1, Ordering::SeqCst);

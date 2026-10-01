@@ -7,8 +7,8 @@ import { createSignal } from "solid-js";
 
 const [open, setOpen] = createSignal(false);
 
-/** The control that asked for the settings, and the Settings menu's own
- *  button, which is always there to fall back on. */
+/** The control that asked for the settings, and the Settings rail button,
+ *  which is always there to fall back on. */
 let openedFrom: HTMLElement | undefined;
 let home: HTMLElement | undefined;
 
@@ -27,7 +27,7 @@ export function closeSlicerSettings(): void {
   setOpen(false);
 }
 
-/** The Settings menu's button registers itself as the place focus returns
+/** The Settings rail button registers itself as the place focus returns
  *  to when the control that opened the settings has gone. Returns the
  *  unregistration. */
 export function registerSlicerSettingsHome(element: HTMLElement): () => void {

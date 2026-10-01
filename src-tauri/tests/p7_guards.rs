@@ -72,7 +72,10 @@ fn only_blocker(error: &RepositoryError) -> &LifecycleBlocker {
 /// optionally linked to a Job. Returns its `hop-*` id.
 fn unresolved_op(rig: &Rig, printer_id: &str, job_id: Option<&str>, operation_id: &str) -> String {
     let printer = repo(rig).get(printer_id).unwrap().unwrap();
-    let connection = printer.connection.as_ref().expect("Printer has a Connection");
+    let connection = printer
+        .connection
+        .as_ref()
+        .expect("Printer has a Connection");
     rig.storage
         .write_repo(|tx| {
             host_ops_repo::insert_dispatching(
@@ -120,7 +123,12 @@ fn archive_is_blocked_by_an_active_job_and_allowed_after_terminal() {
         "Finish, cancel, or release this Printer's Job before archiving."
     );
     assert!(
-        repo(&rig).get(PRINTER_A).unwrap().unwrap().archived_at.is_none(),
+        repo(&rig)
+            .get(PRINTER_A)
+            .unwrap()
+            .unwrap()
+            .archived_at
+            .is_none(),
         "nothing written"
     );
 
@@ -233,7 +241,10 @@ fn slice_revision_delete_is_blocked_by_any_entry_or_job() {
         let blocker = only_blocker(&error);
         assert_eq!(blocker.action, LifecycleAction::Delete);
         assert_eq!(blocker.code, LifecycleBlockerCode::QueueReferencesRevision);
-        assert_eq!(blocker.message, "Queue Entries or Jobs use this Slice Revision.");
+        assert_eq!(
+            blocker.message,
+            "Queue Entries or Jobs use this Slice Revision."
+        );
     };
 
     // A queued (unassigned) entry alone blocks it.
@@ -258,7 +269,10 @@ fn slice_revision_delete_is_blocked_by_any_entry_or_job() {
         .expect_err("still blocked by Job history and the closed entry");
     assert_blocked(error);
 
-    assert_eq!(rig.count("SELECT COUNT(*) FROM slice_revisions WHERE id = 'slr-farm3d'"), 1);
+    assert_eq!(
+        rig.count("SELECT COUNT(*) FROM slice_revisions WHERE id = 'slr-farm3d'"),
+        1
+    );
 }
 
 #[test]
@@ -306,7 +320,11 @@ fn printer_import_is_rejected_whole_while_any_job_exists() {
     ];
 
     let error = repo(&rig)
-        .replace_all(&expected, vec![printer_a.clone(), printer_b.clone()], &HashMap::new())
+        .replace_all(
+            &expected,
+            vec![printer_a.clone(), printer_b.clone()],
+            &HashMap::new(),
+        )
         .expect_err("rejected whole");
     let RepositoryError::JobsExist {
         printer_ids,
@@ -321,8 +339,14 @@ fn printer_import_is_rejected_whole_while_any_job_exists() {
     assert!(queue_entry_ids.is_empty());
 
     // Nothing written.
-    assert_eq!(repo(&rig).get(PRINTER_A).unwrap().unwrap().revision, printer_a.revision);
-    assert_eq!(repo(&rig).get(PRINTER_B).unwrap().unwrap().revision, printer_b.revision);
+    assert_eq!(
+        repo(&rig).get(PRINTER_A).unwrap().unwrap().revision,
+        printer_a.revision
+    );
+    assert_eq!(
+        repo(&rig).get(PRINTER_B).unwrap().unwrap().revision,
+        printer_b.revision
+    );
     assert_eq!(rig.count("SELECT COUNT(*) FROM printers"), 2);
 }
 
@@ -374,10 +398,21 @@ fn endpoint_change_is_blocked_only_by_an_unresolved_host_operation() {
 
     // R5: an active Job with no unresolved Host Operation never blocks a
     // Connection change.
-    let mut config = repo(&rig).get(PRINTER_A).unwrap().unwrap().connection.unwrap();
+    let mut config = repo(&rig)
+        .get(PRINTER_A)
+        .unwrap()
+        .unwrap()
+        .connection
+        .unwrap();
     config.host = "192.0.2.20".to_string();
     repo(&rig)
-        .set_connection(PRINTER_A, revision(&rig, PRINTER_A), Some(config.clone()), None, "changed")
+        .set_connection(
+            PRINTER_A,
+            revision(&rig, PRINTER_A),
+            Some(config.clone()),
+            None,
+            "changed",
+        )
         .expect("an active Job alone does not block");
 
     // A Job-linked unresolved Host Operation does, with the Job's own
@@ -386,7 +421,13 @@ fn endpoint_change_is_blocked_only_by_an_unresolved_host_operation() {
     let mut linked_config = config.clone();
     linked_config.host = "192.0.2.21".to_string();
     let error = repo(&rig)
-        .set_connection(PRINTER_A, revision(&rig, PRINTER_A), Some(linked_config), None, "changed")
+        .set_connection(
+            PRINTER_A,
+            revision(&rig, PRINTER_A),
+            Some(linked_config),
+            None,
+            "changed",
+        )
         .expect_err("blocked by the Job-linked op");
     let RepositoryError::ConnectionInUse {
         printer_id,
@@ -415,11 +456,22 @@ fn endpoint_change_is_blocked_only_by_an_unresolved_host_operation() {
 
     // A raw (unlinked) unresolved op on another Printer keeps P6's own
     // message -- unchanged.
-    let mut b_config = repo(&rig).get(PRINTER_B).unwrap().unwrap().connection.unwrap();
+    let mut b_config = repo(&rig)
+        .get(PRINTER_B)
+        .unwrap()
+        .unwrap()
+        .connection
+        .unwrap();
     unresolved_op(&rig, PRINTER_B, None, "op-raw");
     b_config.host = "192.0.2.22".to_string();
     let error = repo(&rig)
-        .set_connection(PRINTER_B, revision(&rig, PRINTER_B), Some(b_config), None, "changed")
+        .set_connection(
+            PRINTER_B,
+            revision(&rig, PRINTER_B),
+            Some(b_config),
+            None,
+            "changed",
+        )
         .expect_err("blocked by the raw op");
     let RepositoryError::ConnectionInUse { job_id, .. } = &error else {
         panic!("expected ConnectionInUse, got {error:?}");
@@ -449,7 +501,8 @@ fn spool_archive_is_blocked_by_an_unresolved_job_reservation() {
     let error = rig
         .storage
         .write_repo(|tx| {
-            let record = spools_repository::load_spool(tx, &spool).map_err(RepositoryError::from)?;
+            let record =
+                spools_repository::load_spool(tx, &spool).map_err(RepositoryError::from)?;
             let record = record.expect("spool");
             apply_lifecycle(
                 tx,
@@ -490,10 +543,21 @@ fn no_row_is_orphaned_after_every_allowed_lifecycle_action() {
         .expect("import allowed (no Jobs yet)");
 
     // Connection change: allowed while unreferenced by any Job/op.
-    let mut config = repo(&rig).get(PRINTER_A).unwrap().unwrap().connection.unwrap();
+    let mut config = repo(&rig)
+        .get(PRINTER_A)
+        .unwrap()
+        .unwrap()
+        .connection
+        .unwrap();
     config.host = "192.0.2.30".to_string();
     repo(&rig)
-        .set_connection(PRINTER_A, revision(&rig, PRINTER_A), Some(config), None, "changed")
+        .set_connection(
+            PRINTER_A,
+            revision(&rig, PRINTER_A),
+            Some(config),
+            None,
+            "changed",
+        )
         .expect("connection change allowed");
 
     // Assign + cancel before start: Job goes terminal, entry closes.

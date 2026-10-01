@@ -8,7 +8,7 @@ const SlicerSettingsDialog = lazy(() =>
 
 /** Mounted once at app level: shows the Slicer settings (D22) whenever
  *  anything asks for them through `slicer-settings-opener`, whether the
- *  Settings menu or the Preparation panel's **Open Slicer settings**. */
+ *  Settings workspace or the Preparation panel's **Open Slicer settings**. */
 export function SlicerSettingsHost() {
   return (
     <Show when={slicerSettingsOpen()}>

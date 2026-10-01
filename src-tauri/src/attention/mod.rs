@@ -111,8 +111,11 @@ pub enum ResolutionMode {
 }
 
 impl ResolutionMode {
-    pub const ALL: [ResolutionMode; 3] =
-        [ResolutionMode::Auto, ResolutionMode::Action, ResolutionMode::Manual];
+    pub const ALL: [ResolutionMode; 3] = [
+        ResolutionMode::Auto,
+        ResolutionMode::Action,
+        ResolutionMode::Manual,
+    ];
 }
 
 /// D1: why an Attention Event resolved. `operatorResolved` only ever
@@ -261,7 +264,11 @@ impl MaterialReconciliationStatus {
 /// D2 "Condition detail and subject": planner-owned, a pure function of
 /// the `FarmView` (only `Insert`/`Amend` ever write `detail_json`).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "kind",
     rename_all = "camelCase",
@@ -305,7 +312,11 @@ pub enum AttentionDetail {
 /// outcome, on its own column (`attention_events.evidence_json`), never
 /// planner-owned. Written once by `attention::repository::record_evidence`.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, TS)]
-#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(
     tag = "status",
     rename_all = "camelCase",

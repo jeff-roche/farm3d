@@ -74,6 +74,7 @@ fn storage_command_error(error: crate::persistence::StorageError) -> CommandErro
         | crate::persistence::StorageError::PersistenceUnavailable
         | crate::persistence::StorageError::UnsupportedLocking
         | crate::persistence::StorageError::Filesystem
+        | crate::persistence::StorageError::StorageFull
         | crate::persistence::StorageError::OperationFailed => {
             CommandError::persistence_unavailable()
         }

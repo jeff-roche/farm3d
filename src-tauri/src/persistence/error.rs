@@ -16,6 +16,10 @@ pub enum StorageError {
     InvalidSnapshot,
     Database,
     Filesystem,
+    /// P9 D8: out of disk space (`ENOSPC`, `SQLITE_FULL`). Kept apart from
+    /// `Filesystem` so the restore installer can fail `INSUFFICIENT_SPACE`;
+    /// every other caller treats it as `Filesystem`.
+    StorageFull,
     OperationFailed,
     /// Another active Printer already owns this host identity (D3). Carries
     /// the conflicting Printer's id, or an empty string when it's raised by
@@ -36,6 +40,7 @@ impl fmt::Display for StorageError {
             Self::InvalidSnapshot => "database snapshot validation failed",
             Self::Database => "database operation failed",
             Self::Filesystem => "storage filesystem operation failed",
+            Self::StorageFull => "there isn't enough free disk space",
             Self::OperationFailed => "storage operation was cancelled",
             Self::DuplicateHost(_) => "another active printer already uses this host and port",
         })
@@ -54,6 +59,11 @@ impl From<rusqlite::Error> for StorageError {
                 ) =>
             {
                 Self::PersistenceUnavailable
+            }
+            rusqlite::Error::SqliteFailure(code, _)
+                if code.code == rusqlite::ErrorCode::DiskFull =>
+            {
+                Self::StorageFull
             }
             rusqlite::Error::SqliteFailure(code, _)
                 if matches!(
@@ -203,11 +213,17 @@ pub enum RepositoryError {
     },
     /// P7 D4: assignment to a Printer that already has the active Job
     /// `job_id`. Nothing was written. `JOB_ACTIVE`.
-    JobActive { printer_id: String, job_id: String },
+    JobActive {
+        printer_id: String,
+        job_id: String,
+    },
     /// P7 D7: a pause, resume, or cancel handoff found the host printing a
     /// file other than the Job's own (`host_path`). The write-ahead rolled
     /// back; nothing was sent. `JOB_NOT_ON_PRINTER`.
-    JobNotOnPrinter { job_id: String, printer_id: String },
+    JobNotOnPrinter {
+        job_id: String,
+        printer_id: String,
+    },
     /// P7 D7, ruling R13(a): the start link found a start blocker the
     /// pre-checks didn't (the Spool left the Printer in between). The
     /// write-ahead rolled back; nothing was sent. `JOB_START_BLOCKED`.
@@ -218,7 +234,10 @@ pub enum RepositoryError {
     /// P7 D7, ruling R13(a): an unattended start's link found the Printer
     /// no longer `unattended`. The write-ahead rolled back; nothing was
     /// sent. `START_PRECONDITION_CHANGED`.
-    StartSafetyChanged { job_id: String, printer_id: String },
+    StartSafetyChanged {
+        job_id: String,
+        printer_id: String,
+    },
     /// P7 D5: the assign transaction's in-transaction `check_assignment`
     /// refused the pair. Nothing was written. `ASSIGNMENT_BLOCKED`.
     AssignmentBlocked {
@@ -310,8 +329,12 @@ impl From<rusqlite::Error> for RepositoryError {
 }
 
 impl From<std::io::Error> for StorageError {
-    fn from(_: std::io::Error) -> Self {
-        Self::Filesystem
+    fn from(error: std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::StorageFull {
+            Self::StorageFull
+        } else {
+            Self::Filesystem
+        }
     }
 }
 

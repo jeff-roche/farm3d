@@ -625,7 +625,7 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                 }
             }
             Err(error) => {
-                eprintln!("farm3d: cannot hydrate telemetry cache: {error}");
+                crate::f3d_log!(warn, "connections.cacheHydrateFailed", error = error);
                 record_cache_warning_in(
                     &cache_warnings,
                     None,
@@ -657,6 +657,15 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
     pub(crate) fn status_facts(&self) -> HashMap<String, PrinterStatusFacts> {
         self.statuses.facts()
     }
+    /// P9 D13: why each errored Printer's connection failed, by id (the
+    /// typed cause, never the message).
+    pub fn error_causes(&self, printer_ids: &[String]) -> HashMap<String, ConnectionErrorCause> {
+        printer_ids
+            .iter()
+            .filter_map(|id| self.statuses.cause(id).map(|cause| (id.clone(), cause)))
+            .collect()
+    }
+
     pub fn status_backfill(&self) -> PrinterStatusBackfill {
         let mut backfill = self.statuses.backfill();
         backfill.cache_warnings = self.cache_warnings();
@@ -751,7 +760,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
                     .unwrap_or_else(|| format_time(now)),
             };
             if let Err(error) = self.repository.save_if_due(&snapshot, write) {
-                eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+                crate::f3d_log!(
+                    warn,
+                    "connections.cacheSaveFailed",
+                    printer_id = crate::diagnostics::log::LogId::printer(printer_id),
+                    error = error
+                );
                 self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Save);
             } else {
                 self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Save);
@@ -781,7 +795,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
             self.now(),
         );
         next.cache_warnings = cache_warnings;
-        self.publish_changed(printer_id, next, hydrated, Some(ConnectionErrorCause::Protocol));
+        self.publish_changed(
+            printer_id,
+            next,
+            hydrated,
+            Some(ConnectionErrorCause::Protocol),
+        );
     }
 
     pub fn seed(&self, printer_id: &str, status: PrinterStatus) {
@@ -930,7 +949,12 @@ impl<R: tauri::Runtime> ConnectionManager<R> {
 
     fn delete_telemetry_snapshot(&self, printer_id: &str) {
         if let Err(error) = self.repository.delete(printer_id) {
-            eprintln!("farm3d: cannot clear telemetry cache: {error}");
+            crate::f3d_log!(
+                warn,
+                "connections.cacheDeleteFailed",
+                printer_id = crate::diagnostics::log::LogId::printer(printer_id),
+                error = error
+            );
             self.record_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
         } else {
             self.clear_cache_warning(Some(printer_id), StatusCacheWarningOperation::Delete);
@@ -1059,7 +1083,12 @@ fn apply_observation_to<R: tauri::Runtime>(
                 .unwrap_or_else(|| format_time(now)),
         };
         if let Err(error) = repository.save_if_due(&snapshot, write) {
-            eprintln!("farm3d: cannot cache Printer telemetry: {error}");
+            crate::f3d_log!(
+                warn,
+                "connections.cacheSaveFailed",
+                printer_id = crate::diagnostics::log::LogId::printer(id),
+                error = error
+            );
             record_cache_warning_in(cache_warnings, Some(id), StatusCacheWarningOperation::Save);
         } else {
             clear_cache_warning_in(cache_warnings, Some(id), StatusCacheWarningOperation::Save);
@@ -1410,7 +1439,12 @@ mod tests {
             },
         );
         manager
-            .start("prn-1".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .start(
+                "prn-1".to_string(),
+                a_config(),
+                None,
+                PrinterSetupFacts::complete(),
+            )
             .await;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -1477,7 +1511,12 @@ mod tests {
         assert_eq!(manager.status_facts()["prn-1"].cause, None);
 
         manager
-            .start("prn-2".to_string(), a_config(), None, PrinterSetupFacts::complete())
+            .start(
+                "prn-2".to_string(),
+                a_config(),
+                None,
+                PrinterSetupFacts::complete(),
+            )
             .await;
         tokio::task::yield_now().await;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1485,13 +1524,23 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "no error status");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert_eq!(manager.status_facts()["prn-2"].cause, None, "unsupported kind");
+        assert_eq!(
+            manager.status_facts()["prn-2"].cause,
+            None,
+            "unsupported kind"
+        );
 
-        manager.report_error("prn-1", "bad answer", PrinterSetupFacts::complete()).await;
+        manager
+            .report_error("prn-1", "bad answer", PrinterSetupFacts::complete())
+            .await;
         manager.stop("prn-1").await;
         assert!(!manager.status_facts().contains_key("prn-1"));
         manager.seed("prn-1", PrinterStatus::new(ConnectionState::Error));
-        assert_eq!(manager.status_facts()["prn-1"].cause, None, "removal forgot it");
+        assert_eq!(
+            manager.status_facts()["prn-1"].cause,
+            None,
+            "removal forgot it"
+        );
     }
 
     #[tokio::test]
@@ -1694,7 +1743,12 @@ mod tests {
     #[test]
     fn removal_publishes_a_tombstone_and_deletes_the_backfill_entry() {
         let statuses = StatusMap::default();
-        statuses.publish_changed("prn-1", PrinterStatus::new(ConnectionState::Online), false, None);
+        statuses.publish_changed(
+            "prn-1",
+            PrinterStatus::new(ConnectionState::Online),
+            false,
+            None,
+        );
 
         let event = statuses.publish_removed("prn-1");
 

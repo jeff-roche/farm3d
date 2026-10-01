@@ -14,6 +14,8 @@ export interface TabsProps {
   value?: string;
   defaultValue?: string;
   onChange?: (value: string) => void;
+  /** Vertical stacks the triggers in a column beside the content; arrow keys follow the axis (Kobalte). */
+  orientation?: "horizontal" | "vertical";
   class?: string;
 }
 

@@ -114,7 +114,12 @@ pub fn xdg_data_dirs() -> Vec<PathBuf> {
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
-    dirs.extend(system.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from));
+    dirs.extend(
+        system
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
     dirs
 }
 
@@ -263,8 +268,7 @@ impl DbusNotificationSink {
         };
         let proxy = bounded(NotificationsProxy::new(&connection)).await?;
         // Activates the server if it is D-Bus activatable.
-        let (name, vendor, version, spec_version) =
-            bounded(proxy.get_server_information()).await?;
+        let (name, vendor, version, spec_version) = bounded(proxy.get_server_information()).await?;
         let capabilities = bounded(proxy.get_capabilities()).await?;
         let owner = current_owner(&connection).await?;
         let rule = MatchRule::builder()
@@ -398,7 +402,11 @@ mod tests {
         let installed = temp.path().join("installed");
         let empty = temp.path().join("empty");
         std::fs::create_dir_all(installed.join("icons/hicolor/128x128/apps")).unwrap();
-        std::fs::write(installed.join("icons/hicolor/128x128/apps/farm3d.png"), b"png").unwrap();
+        std::fs::write(
+            installed.join("icons/hicolor/128x128/apps/farm3d.png"),
+            b"png",
+        )
+        .unwrap();
         std::fs::create_dir_all(empty.join("icons/hicolor/128x128/apps")).unwrap();
         let bundled = temp.path().join("farm3d-notification.png");
         std::fs::write(&bundled, b"png").unwrap();
@@ -444,10 +452,13 @@ mod tests {
                     reason: NotifierUnavailableReason::NoSessionBus
                 }
             );
-            let shown = tauri::async_runtime::block_on(sink.show(&super::super::Notification::test()));
+            let shown =
+                tauri::async_runtime::block_on(sink.show(&super::super::Notification::test()));
             assert_eq!(
                 shown,
-                Err(NotifyError::Unavailable(NotifierUnavailableReason::NoSessionBus))
+                Err(NotifyError::Unavailable(
+                    NotifierUnavailableReason::NoSessionBus
+                ))
             );
             return;
         }

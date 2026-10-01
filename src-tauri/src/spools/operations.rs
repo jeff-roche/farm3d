@@ -92,6 +92,10 @@ pub enum OperationKind {
     SetSnapshotPinned,
     /// P8 D9: `set_printer_alert_defaults`.
     SetPrinterAlertDefaults,
+    /// P9 D18: `reset_farm` tier `settings`.
+    ResetSettings,
+    /// P9 D18: `reset_farm` tier `cameraMedia`.
+    ResetCameraMedia,
 }
 
 /// What [`claim`] found.

@@ -11,11 +11,11 @@
 
 use chrono::{DateTime, Utc};
 
-use farm3d_lib::attention::{
-    repository as attention_repo, AttentionDetail, AttentionOrigin, AttentionResolution,
-    Condition, ConditionKind,
-};
 use farm3d_lib::attention::AttentionSubject;
+use farm3d_lib::attention::{
+    repository as attention_repo, AttentionDetail, AttentionOrigin, AttentionResolution, Condition,
+    ConditionKind,
+};
 use farm3d_lib::catalog::{BedShape, PrinterProfile};
 use farm3d_lib::incidents::{
     repository as incidents_repo, IncidentEntryDetail, IncidentKind, IncidentState,
@@ -263,12 +263,18 @@ fn a_jobs_incident_opens_links_closes_and_reopens_with_the_right_revision_math()
             );
 
             let cancelled_after = attention_repo::load_event(tx, &cancelled.id)?.unwrap();
-            assert_eq!(cancelled_after.incident_id.as_deref(), Some(opened.id.as_str()));
+            assert_eq!(
+                cancelled_after.incident_id.as_deref(),
+                Some(opened.id.as_str())
+            );
 
             // Still open: the new linked Event hasn't resolved yet.
             let still_open = incidents_repo::close_if_settled(tx, &opened.id, t1)?;
             assert_eq!(still_open.state, IncidentState::Open);
-            assert_eq!(still_open.revision, 4, "an unsettled close check is a no-op");
+            assert_eq!(
+                still_open.revision, 4,
+                "an unsettled close check is a no-op"
+            );
 
             // Resolve it too: closes again.
             attention_repo::resolve(tx, &cancelled.id, AttentionResolution::OperatorResolved, t1)?;
@@ -291,7 +297,14 @@ fn a_printer_host_failed_incident_has_no_job_and_never_reuses_an_earlier_one() {
             let t0 = now();
             let t1 = t0 + chrono::Duration::minutes(5);
 
-            let e1 = attention_repo::insert(tx, &host_failed("prn-a"), None, false, AttentionOrigin::Live, t0)?;
+            let e1 = attention_repo::insert(
+                tx,
+                &host_failed("prn-a"),
+                None,
+                false,
+                AttentionOrigin::Live,
+                t0,
+            )?;
             let first = incidents_repo::open(
                 tx,
                 IncidentKind::PrinterHostFailed,
@@ -337,7 +350,14 @@ fn append_entry_sequence_is_monotonic() {
     storage
         .write_repo(|tx| -> Result<(), RepositoryError> {
             seed_printer(tx, "prn-a");
-            let e1 = attention_repo::insert(tx, &host_failed("prn-a"), None, false, AttentionOrigin::Live, now())?;
+            let e1 = attention_repo::insert(
+                tx,
+                &host_failed("prn-a"),
+                None,
+                false,
+                AttentionOrigin::Live,
+                now(),
+            )?;
             let incident = incidents_repo::open(
                 tx,
                 IncidentKind::PrinterHostFailed,

@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use super::error::StorageError;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 /// A migration-specific Rust step, run in the same exclusive transaction
 /// right after its SQL. Only 0003 uses this: `host_identity` backfill needs
@@ -17,7 +17,7 @@ struct Migration {
     post: Option<MigrationPostStep>,
 }
 
-const MIGRATIONS: [Migration; 9] = [
+const MIGRATIONS: [Migration; 10] = [
     Migration {
         version: 1,
         name: "0001_foundation",
@@ -72,6 +72,12 @@ const MIGRATIONS: [Migration; 9] = [
         sql: include_str!("../../migrations/0009_p8_attention.sql"),
         post: None,
     },
+    Migration {
+        version: 10,
+        name: "0010_p9_portability",
+        sql: include_str!("../../migrations/0010_p9_portability.sql"),
+        post: None,
+    },
 ];
 
 pub(crate) fn apply(connection: &mut Connection) -> Result<(), StorageError> {
@@ -99,9 +105,17 @@ pub(crate) fn apply(connection: &mut Connection) -> Result<(), StorageError> {
     if has_foreign_key_violation(&transaction).map_err(|_| StorageError::MigrationFailed)? {
         return Err(StorageError::MigrationFailed);
     }
-    transaction
-        .commit()
-        .map_err(|_| StorageError::MigrationFailed)
+    transaction.commit().map_err(migration_failed)
+}
+
+/// A failed migration statement is `MigrationFailed`, except that running
+/// out of disk space stays `StorageFull` (P9 D8: the restore installer
+/// retries it rather than calling the database invalid).
+fn migration_failed(error: rusqlite::Error) -> StorageError {
+    match StorageError::from(error) {
+        StorageError::StorageFull => StorageError::StorageFull,
+        _ => StorageError::MigrationFailed,
+    }
 }
 
 /// Runs one migration's SQL, its optional Rust post-step, and records it in
@@ -113,9 +127,12 @@ fn apply_migration_step(
 ) -> Result<(), StorageError> {
     transaction
         .execute_batch(migration.sql)
-        .map_err(|_| StorageError::MigrationFailed)?;
+        .map_err(migration_failed)?;
     if let Some(post) = migration.post {
-        post(transaction).map_err(|_| StorageError::MigrationFailed)?;
+        post(transaction).map_err(|error| match error {
+            StorageError::StorageFull => StorageError::StorageFull,
+            _ => StorageError::MigrationFailed,
+        })?;
     }
     transaction
         .execute(
@@ -127,10 +144,10 @@ fn apply_migration_step(
                 migration_checksum(migration),
             ),
         )
-        .map_err(|_| StorageError::MigrationFailed)?;
+        .map_err(migration_failed)?;
     transaction
         .execute_batch(&format!("PRAGMA user_version = {}", migration.version))
-        .map_err(|_| StorageError::MigrationFailed)
+        .map_err(migration_failed)
 }
 
 /// Applies migrations up to (and including) `max_version`, adding whichever
@@ -442,6 +459,21 @@ fn validate_applied_migrations(
     } else {
         Err(StorageError::MigrationFailed)
     }
+}
+
+/// Every embedded migration as `(version, name, checksum)`, ascending: what
+/// a backup's `schema_migrations` rows must equal (P9 D4).
+pub(crate) fn embedded() -> Vec<(i64, &'static str, String)> {
+    MIGRATIONS
+        .iter()
+        .map(|migration| {
+            (
+                migration.version,
+                migration.name,
+                migration_checksum(migration),
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn has_foreign_key_violation(connection: &Connection) -> rusqlite::Result<bool> {

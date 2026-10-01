@@ -401,7 +401,10 @@ impl<R: tauri::Runtime> Driver<R> {
     }
 
     async fn next(&mut self) -> Wake {
-        let poll = self.poll.as_mut().expect("the poll interval exists once running");
+        let poll = self
+            .poll
+            .as_mut()
+            .expect("the poll interval exists once running");
         let stage_requests = &mut self.stage_requests;
         let next_stage = async {
             match stage_requests {
@@ -449,9 +452,10 @@ impl<R: tauri::Runtime> Driver<R> {
     }
 }
 
-fn log_failure(what: &str, error: &RepositoryError) {
-    // Repository errors carry no credential (D2), so neither does this.
-    eprintln!("farm3d: dispatch driver: could not {what}: {error:?}");
+/// Logs a failed repository step of the dispatch driver. `code` names the
+/// step; the error logs its variant only.
+fn log_failure(code: &'static str, error: &RepositoryError) {
+    crate::f3d_log!(warn, code, error = error);
 }
 
 /// Publishes `change` on the `queue` stream, with live `startBlockers`,
@@ -550,7 +554,11 @@ fn has_handed_off(
 
 /// Re-applies the Job-linked op `op_id`'s current state to its Job, under
 /// the Printer lock, and publishes what changed.
-async fn apply_linked<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id: &str, op_id: &str) {
+async fn apply_linked<R: tauri::Runtime>(
+    services: &RuntimeServices<R>,
+    printer_id: &str,
+    op_id: &str,
+) {
     apply_linked_job(services, printer_id, op_id).await;
 }
 
@@ -587,7 +595,7 @@ async fn apply_linked_job<R: tauri::Runtime>(
         }
         Ok(None) => None,
         Err(error) => {
-            log_failure("apply a Host Operation's outcome", &error);
+            log_failure("jobs.applyHostOperationOutcomeFailed", &error);
             None
         }
     }
@@ -618,7 +626,11 @@ async fn on_host_operation<R: tauri::Runtime>(services: &RuntimeServices<R>, op:
 async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id: &str) {
     let job = services
         .storage
-        .read(|connection| Ok(jobs_repository::active_job_for_printer(connection, printer_id)))
+        .read(|connection| {
+            Ok(jobs_repository::active_job_for_printer(
+                connection, printer_id,
+            ))
+        })
         .ok()
         .and_then(Result::ok)
         .flatten();
@@ -642,7 +654,7 @@ async fn on_printer<R: tauri::Runtime>(services: &RuntimeServices<R>, printer_id
         Ok(Some(context)) => context,
         Ok(None) => return,
         Err(error) => {
-            log_failure("read a Job's start context", &error);
+            log_failure("jobs.readStartContextFailed", &error);
             return;
         }
     };
@@ -673,7 +685,7 @@ async fn track<R: tauri::Runtime>(services: &RuntimeServices<R>, job_id: &str) {
     match tracker::check(services, job_id).await {
         Ok(Some(change)) => publish(services, change),
         Ok(None) => {}
-        Err(error) => log_failure("track a Job's history", &error),
+        Err(error) => log_failure("jobs.trackHistoryFailed", &error),
     }
 }
 
@@ -689,7 +701,7 @@ async fn follow_status<R: tauri::Runtime>(services: &RuntimeServices<R>, job: &J
             check_now
         }
         Err(error) => {
-            log_failure("follow a Job's status", &error);
+            log_failure("jobs.followStatusFailed", &error);
             false
         }
     };
@@ -773,8 +785,14 @@ async fn maybe_start_unattended<R: tauri::Runtime>(
         Ok(_) => {}
         Err(error) if is_not_yet(&error) => {}
         Err(error) => {
-            record_refusal(services, &job.id, JobState::AwaitingStart, HostOperationKind::Start, &error)
-                .await
+            record_refusal(
+                services,
+                &job.id,
+                JobState::AwaitingStart,
+                HostOperationKind::Start,
+                &error,
+            )
+            .await
         }
     }
     lock(&services.jobs.starting).remove(&job.id);
@@ -797,8 +815,14 @@ async fn stage_by_driver<R: tauri::Runtime>(services: &RuntimeServices<R>, job_i
         Ok(_) => {}
         Err(error) if is_not_yet(&error) => {}
         Err(error) => {
-            record_refusal(services, job_id, JobState::Assigned, HostOperationKind::Upload, &error)
-                .await
+            record_refusal(
+                services,
+                job_id,
+                JobState::Assigned,
+                HostOperationKind::Upload,
+                &error,
+            )
+            .await
         }
     }
 }
@@ -884,7 +908,7 @@ async fn record_refusal<R: tauri::Runtime>(
             },
         ),
         Ok(None) => {}
-        Err(error) => log_failure("record a refused handoff", &error),
+        Err(error) => log_failure("jobs.recordRefusedHandoffFailed", &error),
     }
 }
 

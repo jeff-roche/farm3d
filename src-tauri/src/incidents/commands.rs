@@ -147,8 +147,9 @@ pub async fn add_incident_note<R: tauri::Runtime>(
             let not_found = || RepositoryError::NotFound {
                 entity_id: incident_id.clone(),
             };
-            let replayed = operations::claim(tx, &operation_id, OperationKind::AddIncidentNote, &digest)?
-                == Claim::Replay;
+            let replayed =
+                operations::claim(tx, &operation_id, OperationKind::AddIncidentNote, &digest)?
+                    == Claim::Replay;
             if !replayed {
                 incidents_repository::get(tx, &incident_id)?.ok_or_else(not_found)?;
                 incidents_repository::append_entry(
