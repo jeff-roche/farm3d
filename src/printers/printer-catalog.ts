@@ -93,6 +93,7 @@ function toPrinterProfile(variant: RawCatalogVariant): PrinterProfile {
     supportsAirFiltration: variant.supportsAirFiltration,
     supportsMultiFilament: variant.supportsMultiFilament,
     suggestedHostType: variant.suggestedHostType,
+    ...(variant.suggestedPort === undefined ? {} : { suggestedPort: variant.suggestedPort }),
   };
 }
 

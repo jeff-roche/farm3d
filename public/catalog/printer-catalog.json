@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-20T19:55:10Z",
+  "generatedAt": "2026-10-01T16:21:58Z",
   "sourceTag": "v2.4.2",
   "notice": "Derived from OrcaSlicer's bundled printer profile data (https://github.com/OrcaSlicer/OrcaSlicer, AGPL-3.0-or-later). farm3d extracts only factual machine specifications (build volumes, nozzle diameters, capability flags); no G-code, scripts, assets, or descriptive text are included.",
   "models": [
@@ -10786,7 +10786,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri Carbon 2 0.2 nozzle",
@@ -10826,7 +10826,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri Carbon 2 0.6 nozzle",
@@ -10866,7 +10866,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri Carbon 2 0.8 nozzle",
@@ -10906,7 +10906,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -10953,7 +10953,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri 2 0.2 nozzle",
@@ -10993,7 +10993,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri 2 0.6 nozzle",
@@ -11033,7 +11033,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Centauri 2 0.8 nozzle",
@@ -11073,7 +11073,7 @@
           "hasAuxiliaryFan": true,
           "supportsAirFiltration": false,
           "supportsMultiFilament": true,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -11437,7 +11437,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo OrangeStorm Giga 0.6 nozzle",
@@ -11460,7 +11461,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo OrangeStorm Giga 0.8 nozzle",
@@ -11483,7 +11485,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo OrangeStorm Giga 1.0 nozzle",
@@ -11506,7 +11509,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         }
       ]
     },
@@ -11541,7 +11545,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Max 0.2 nozzle",
@@ -11569,7 +11574,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Max 0.6 nozzle",
@@ -11597,7 +11603,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Max 0.8 nozzle",
@@ -11625,7 +11632,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Max 1.0 nozzle",
@@ -11653,7 +11661,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         }
       ]
     },
@@ -11688,7 +11697,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Plus 0.2 nozzle",
@@ -11716,7 +11726,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Plus 0.6 nozzle",
@@ -11744,7 +11755,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Plus 0.8 nozzle",
@@ -11772,7 +11784,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Plus 1.0 nozzle",
@@ -11800,7 +11813,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         }
       ]
     },
@@ -11835,7 +11849,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Pro 0.2 nozzle",
@@ -11863,7 +11878,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Pro 0.6 nozzle",
@@ -11891,7 +11907,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Pro 0.8 nozzle",
@@ -11919,7 +11936,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 Pro 1.0 nozzle",
@@ -11947,7 +11965,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         }
       ]
     },
@@ -11982,7 +12001,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 0.2 nozzle",
@@ -12010,7 +12030,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 0.6 nozzle",
@@ -12038,7 +12059,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 0.8 nozzle",
@@ -12066,7 +12088,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         },
         {
           "variant": "Elegoo Neptune 4 1.0 nozzle",
@@ -12094,7 +12117,8 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": "moonraker",
+          "suggestedPort": 80
         }
       ]
     },
@@ -12129,7 +12153,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Max 0.2 nozzle",
@@ -12157,7 +12181,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Max 0.6 nozzle",
@@ -12185,7 +12209,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Max 0.8 nozzle",
@@ -12213,7 +12237,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Max 1.0 nozzle",
@@ -12241,7 +12265,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12276,7 +12300,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Plus 0.2 nozzle",
@@ -12304,7 +12328,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Plus 0.6 nozzle",
@@ -12332,7 +12356,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Plus 0.8 nozzle",
@@ -12360,7 +12384,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Plus 1.0 nozzle",
@@ -12388,7 +12412,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12423,7 +12447,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Pro 0.2 nozzle",
@@ -12451,7 +12475,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Pro 0.6 nozzle",
@@ -12479,7 +12503,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Pro 0.8 nozzle",
@@ -12507,7 +12531,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 Pro 1.0 nozzle",
@@ -12535,7 +12559,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12570,7 +12594,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 0.6 nozzle",
@@ -12598,7 +12622,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 3 0.8 nozzle",
@@ -12626,7 +12650,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12661,7 +12685,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune X 0.6 nozzle",
@@ -12689,7 +12713,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune X 0.8 nozzle",
@@ -12717,7 +12741,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12752,7 +12776,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2S 0.6 nozzle",
@@ -12780,7 +12804,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2S 0.8 nozzle",
@@ -12808,7 +12832,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12844,7 +12868,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2D 0.6 nozzle",
@@ -12872,7 +12896,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2D 0.8 nozzle",
@@ -12900,7 +12924,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -12935,7 +12959,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2 0.6 nozzle",
@@ -12963,7 +12987,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 2 0.8 nozzle",
@@ -12991,7 +13015,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },
@@ -13026,7 +13050,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 0.6 nozzle",
@@ -13054,7 +13078,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         },
         {
           "variant": "Elegoo Neptune 0.8 nozzle",
@@ -13082,7 +13106,7 @@
           "hasAuxiliaryFan": false,
           "supportsAirFiltration": false,
           "supportsMultiFilament": false,
-          "suggestedHostType": "elegoolink"
+          "suggestedHostType": null
         }
       ]
     },

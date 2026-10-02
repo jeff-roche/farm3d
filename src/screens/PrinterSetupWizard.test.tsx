@@ -295,6 +295,37 @@ describe("PrinterSetupWizard — Connect", () => {
     );
     expect(createPrinter).not.toHaveBeenCalled();
   });
+
+  // #26: the catalog corrects OrcaSlicer's blanket `elegoolink` for Elegoo
+  // models. A Neptune 4 suggests Moonraker behind nginx on port 80; a
+  // Centauri Carbon keeps `elegoolink`, and a Neptune 3 suggests nothing --
+  // neither of which this build can connect to, so the draft keeps its
+  // Moonraker default.
+  it.each([
+    ["a Neptune 4", { suggestedHostType: "moonraker", suggestedPort: 80 }, 80],
+    ["a Centauri Carbon", { suggestedHostType: "elegoolink" }, 7125],
+    ["a Neptune 3", { suggestedHostType: null }, 7125],
+  ])("pre-fills the Connect step from %s's catalog hint", async (_model, hint, port) => {
+    const original = previewProfile.getMockImplementation();
+    onTestFinished(() => void previewProfile.mockImplementation(original!));
+    previewProfile.mockImplementation((ref: { printerVariant: string }) =>
+      original!(ref).then((profile: object) => ({ ...profile, ...hint })),
+    );
+    probeCandidate.mockResolvedValueOnce({
+      kind: "moonraker", hostSoftware: "", firmware: "", reportedName: "", state: "online", stateMessage: "", reported: {},
+    });
+    render(() => <PrinterSetupWizard open onOpenChange={vi.fn()} existingPrinters={[]} />);
+    await pickCentauriCarbon();
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+
+    expect(screen.getByRole("button", { name: /Moonraker/ })).toBeInTheDocument();
+    expect((screen.getByLabelText("Port") as HTMLInputElement).value).toBe(String(port));
+    fireEvent.input(screen.getByLabelText("Host"), { target: { value: "printer.local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    await waitFor(() =>
+      expect(probeCandidate).toHaveBeenCalledWith(expect.objectContaining({ kind: "moonraker", port })),
+    );
+  });
 });
 
 describe("PrinterSetupWizard — Operate", () => {

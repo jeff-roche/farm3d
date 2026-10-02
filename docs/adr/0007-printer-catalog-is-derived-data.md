@@ -16,3 +16,14 @@ explicit allowlist (`extract_variant` in `catalog/ingest/mod.rs`), never via a
 blanket copy of the resolved preset object. `src-tauri/tests/snapshot.rs`
 enforces this mechanically by scanning the committed snapshot for known
 disallowed field markers.
+
+Where OrcaSlicer's connection hint is wrong for farm3d, the generator corrects
+it rather than anyone hand-editing the snapshot. OrcaSlicer's `host_type` names
+the upload target its own UI offers, not the protocol the printer speaks: it
+tags every Elegoo FDM model `elegoolink`, a label it uses for several unrelated
+protocols (#26). `HOST_OVERRIDES` in `catalog/ingest/overrides.rs` replaces
+`suggestedHostType`, and may set a `suggestedPort`, for one `(vendor, modelId)`
+at a time. Each entry records whether real hardware backs it or only public
+sources, and names those sources. `gen-catalog` applies the list after
+ingestion, so `just gen-catalog` keeps the corrections, and it fails if an
+entry matches no model, or more than one.

@@ -1037,6 +1037,7 @@ mod real {
             supports_air_filtration: false,
             supports_multi_filament: false,
             suggested_host_type: None,
+            suggested_port: None,
         };
         /// A profile field, the profile with its override, the machine key
         /// it maps to, and the header claim expected.

@@ -96,3 +96,47 @@ fn snapshot_carries_no_disallowed_fields() {
         );
     }
 }
+
+/// #26: OrcaSlicer tags every Elegoo FDM model `elegoolink`, but farm3d's
+/// ElegooLink means SDCP V3 only. `catalog::ingest::overrides` corrects the
+/// rest; this pins one model of each outcome in the committed snapshot.
+#[test]
+fn snapshot_carries_the_elegoo_host_corrections() {
+    let raw = load_snapshot_raw();
+    let catalog: Catalog = serde_json::from_str(&raw).expect("snapshot should be valid JSON");
+    let hints = |model_id: &str| -> Vec<(Option<String>, Option<u16>)> {
+        let model = catalog
+            .models
+            .iter()
+            .find(|m| m.vendor == "Elegoo" && m.model_id == model_id)
+            .unwrap_or_else(|| panic!("no Elegoo model {model_id}"));
+        model
+            .variants
+            .iter()
+            .map(|v| (v.suggested_host_type.clone(), v.suggested_port))
+            .collect()
+    };
+    let all = |model_id: &str, expected: (Option<&str>, Option<u16>)| {
+        for hint in hints(model_id) {
+            assert_eq!(
+                (hint.0.as_deref(), hint.1),
+                expected,
+                "{model_id} has the wrong connection hint"
+            );
+        }
+    };
+
+    all("Elegoo-CC", (Some("elegoolink"), None));
+    all("Elegoo-CC2", (None, None));
+    all("Elegoo-N4", (Some("moonraker"), Some(80)));
+    all("Elegoo-N3", (None, None));
+
+    // Only the corrections carry a port.
+    let ported = catalog
+        .models
+        .iter()
+        .flat_map(|m| m.variants.iter().map(move |v| (m, v)))
+        .filter(|(_, v)| v.suggested_port.is_some())
+        .all(|(m, _)| m.vendor == "Elegoo");
+    assert!(ported, "a non-Elegoo variant carries a suggested port");
+}
